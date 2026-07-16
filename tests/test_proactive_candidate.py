@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from core.database import OutboundDeliveryControl
 from core.proactive_research import ResearchResult, ResearchSource
 
 
@@ -15,6 +16,41 @@ def _judge(now, *, kind="message"):
         "research_query": "调查 Agent 记忆" if kind == "research" else "",
         "error_type": None,
     }
+
+
+def _seed_delivery_control(db_session):
+    db_session.add(OutboundDeliveryControl(
+        source_type="proactive_outreach",
+        mode="legacy_direct",
+        cutover_epoch=0,
+        effective_from=datetime(1970, 1, 1),
+        protocol_version=2,
+        writer_version=0,
+    ))
+    db_session.commit()
+
+
+def test_generation_failure_diagnostic_uses_only_whitelisted_error_types():
+    from core.proactive_diagnostics import (
+        OutreachModelContractError,
+        generation_failure_from_exception,
+    )
+
+    timeout = generation_failure_from_exception(
+        TimeoutError("UNTRUSTED-TIMEOUT-DETAIL")
+    )
+    unknown_contract = generation_failure_from_exception(
+        OutreachModelContractError(
+            "UNTRUSTED-CONTRACT-DETAIL",
+            error_type="attacker_controlled_type",
+        )
+    )
+
+    assert timeout.error_type == "generation_timeout"
+    assert timeout.summary == "主动外呼正文生成超时"
+    assert unknown_contract.error_type == "contract_error"
+    assert unknown_contract.summary == "主动外呼正文不符合生成契约"
+    assert "UNTRUSTED" not in timeout.summary + unknown_contract.summary
 
 
 @pytest.mark.asyncio
@@ -151,15 +187,17 @@ async def test_research_candidate_normalizes_verified_url_variant():
 
 
 @pytest.mark.asyncio
-async def test_production_outreach_uses_shared_candidate_evaluator(
+async def test_production_outreach_uses_split_shared_candidate_pipeline(
     monkeypatch,
     db_session,
 ):
     from core import proactive_candidate, proactive_outreach
 
+    _seed_delivery_control(db_session)
     now = datetime(2026, 7, 10, 12, 0, 0)
     grounding = {"user_id": "shared-user", "recent_messages": []}
-    evaluator_calls = []
+    judgement_calls = []
+    materialization_calls = []
     published = []
 
     monkeypatch.setattr(
@@ -168,8 +206,16 @@ async def test_production_outreach_uses_shared_candidate_evaluator(
         lambda *_args, **_kwargs: grounding,
     )
 
-    async def evaluator(**kwargs):
-        evaluator_calls.append(kwargs)
+    def evaluate_judgement(**kwargs):
+        judgement_calls.append(kwargs)
+        return {
+            "status": "generation_required",
+            "would_publish": True,
+            "judge": _judge(now),
+        }
+
+    async def materialize_candidate(**kwargs):
+        materialization_calls.append(kwargs)
         return {
             "status": "candidate",
             "would_publish": True,
@@ -181,7 +227,16 @@ async def test_production_outreach_uses_shared_candidate_evaluator(
         published.append((target_type, target_id, message))
         return True
 
-    monkeypatch.setattr(proactive_candidate, "evaluate_outreach_candidate", evaluator)
+    monkeypatch.setattr(
+        proactive_candidate,
+        "evaluate_outreach_judgement",
+        evaluate_judgement,
+    )
+    monkeypatch.setattr(
+        proactive_candidate,
+        "materialize_outreach_candidate",
+        materialize_candidate,
+    )
     result = await proactive_outreach.run_outreach_once(
         "shared-user",
         db=db_session,
@@ -192,8 +247,14 @@ async def test_production_outreach_uses_shared_candidate_evaluator(
     )
 
     assert result["status"] == "sent"
-    assert len(evaluator_calls) == 1
-    assert evaluator_calls[0]["request_id"].startswith("outreach:shared-user:")
+    assert len(judgement_calls) == 1
+    assert judgement_calls[0]["grounding"] == grounding
+    assert len(materialization_calls) == 1
+    assert materialization_calls[0]["request_id"].startswith(
+        "outreach:shared-user:"
+    )
+    assert materialization_calls[0]["grounding"] == grounding
+    assert materialization_calls[0]["judge"] == _judge(now)
     assert published == [("private", "shared-user", "共享内核生成的候选")]
 
 
@@ -232,4 +293,31 @@ async def test_research_candidate_rejects_url_reassembled_by_think_removal():
 
     assert result["status"] == "research_blocked"
     assert result["reason_code"] == "unverified_url"
+    assert result["error_type"] == "unverified_url"
+    assert result["reason"] == "主动研究草稿包含未核验链接"
     assert result["would_publish"] is False
+
+
+@pytest.mark.asyncio
+async def test_research_candidate_reports_fixed_diagnostic_without_runner():
+    from core.proactive_candidate import evaluate_outreach_candidate
+
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    result = await evaluate_outreach_candidate(
+        user_id="candidate-runner-unavailable",
+        request_id="candidate-runner-unavailable",
+        grounding={"recent_messages": []},
+        now=now,
+        judge_fn=lambda *_args, **_kwargs: _judge(now, kind="research"),
+        generator_fn=lambda *_args, **_kwargs: "不应调用",
+        research_fn=None,
+    )
+
+    assert result == {
+        "status": "research_blocked",
+        "would_publish": False,
+        "reason_code": "runner_unavailable",
+        "error_type": "runner_unavailable",
+        "reason": "主动研究运行器不可用",
+        "judge": _judge(now, kind="research"),
+    }

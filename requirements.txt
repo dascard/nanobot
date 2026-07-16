@@ -26,6 +26,7 @@ ImageHash
 
 # ── Tests ──
 pytest>=7.0.0
+pytest-asyncio>=0.23.0
 pytest-mock>=3.10.0
 httpx>=0.24.1
 lxml_html_clean

@@ -324,7 +324,7 @@ class NanobotBridge:
         self._output = BufferedOutput()
         self._agent: Agent | None = None
         self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session 分锁
-        self._last_prompt_render_meta: dict[str, str] = {}
+        self._last_prompt_render_meta: dict[str, Any] = {}
 
     def _disable_config_prompt(self, config: Any) -> None:
         """禁用 KT config 内置 prompt，主链路统一由 canonical prompt runtime 注入。"""
@@ -1549,7 +1549,7 @@ class NanobotBridge:
                 run_type="chat",
                 prompt_mode=prompt_mode,
                 prompt_key=prompt_key,
-                prompt_source="Prompt Runtime",
+                prompt_source="",
                 prompt_runtime_path="",
                 prompt_default_path="",
                 prompt_sha256="",
@@ -1715,6 +1715,7 @@ class NanobotBridge:
                 "prompt_runtime_path": prompt_build.prompt_runtime_path,
                 "prompt_default_path": prompt_build.prompt_default_path,
                 "prompt_sha256": prompt_build.prompt_sha256,
+                "prompt_template_resolutions": prompt_build.prompt_template_resolutions,
             }
             try:
                 RunTracer.update_prompt_source(

@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import threading
-import time
 from datetime import datetime, timedelta
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -22,9 +21,22 @@ from app.memory_digest.builder import MemoryDigestBuilder
 from app.memory_digest.llm_builder import build_memory_digest_with_llm, build_memory_digest_with_llm_async
 from app.memory_digest.renderer import render_recall_card
 from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
-from config import DAILY_DIGEST_HOUR
 from core.context_builder import sanitize_prompt_text
 from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
+from core.outbound_transport import (
+    DeliveryOutcome,
+    deliver_qq_push_with_session,
+    delivery_outcome_to_legacy,
+)
+from core.safe_diagnostics import safe_response_summary
+from core.scheduled_task_outbound import (
+    drain_due_legacy_scheduled_task_outboxes,
+    enqueue_scheduled_task_occurrence,
+    recover_expired_scheduled_task_occurrences,
+    scheduled_cron_matches,
+    scheduled_cron_occurrence,
+)
+from core.settings_service import settings
 from core.time_utils import db_now_naive
 
 logger = logging.getLogger("nanobot.daily_digest")
@@ -410,7 +422,7 @@ def _write_memory_digest_rows(
         start_id=int(start_id or 0),
         end_id=int(end_id or 0),
     )
-    if force:
+    if force and result.status == "active":
         _archive_existing_digests(db, session_id, target_date)
 
     d0 = MemoryDigest(
@@ -601,29 +613,62 @@ def run_daily_digest_once() -> int:
 
 
 def daily_digest_scheduler(stop_event: threading.Event) -> None:
-    """Background scheduler: run once at configured hour every day."""
-    logger.info(f"Daily digest scheduler started, run_hour={DAILY_DIGEST_HOUR}")
-
-    # Startup catch-up once.
-    run_daily_digest_once()
-
+    """常驻记忆折叠调度器，短轮询热加载启停状态和执行小时。"""
+    logger.info("Memory digest scheduler started")
+    poll_seconds = 30
+    catch_up_pending = True
+    last_run_day: str | None = None
     while not stop_event.is_set():
+        enabled = settings.get_bool("memory_digest.scheduler_enabled", True)
+        run_hour = max(
+            0,
+            min(23, settings.get_int("memory_digest.schedule_hour", 4)),
+        )
+        schedule = (enabled, run_hour)
         now = db_now_naive()
-        delay = _next_run_delay_seconds(now, DAILY_DIGEST_HOUR)
+        today = _to_day(now)
 
-        # Sleep in short chunks so shutdown remains responsive.
-        slept = 0
-        while slept < delay and not stop_event.is_set():
-            step = min(30, delay - slept)
-            time.sleep(step)
-            slept += step
+        if not enabled:
+            catch_up_pending = True
+            if stop_event.wait(poll_seconds):
+                break
+            continue
+
+        if catch_up_pending:
+            if last_run_day != today:
+                run_daily_digest_once()
+                last_run_day = today
+            catch_up_pending = False
+
+        delay = _next_run_delay_seconds(now, run_hour)
+        schedule_changed = False
+        while delay > 0 and not stop_event.is_set():
+            step = min(poll_seconds, delay)
+            if stop_event.wait(step):
+                break
+            refreshed = (
+                settings.get_bool("memory_digest.scheduler_enabled", True),
+                max(
+                    0,
+                    min(23, settings.get_int("memory_digest.schedule_hour", 4)),
+                ),
+            )
+            if refreshed != schedule:
+                schedule_changed = True
+                break
+            delay -= step
 
         if stop_event.is_set():
             break
+        if schedule_changed:
+            continue
 
-        run_daily_digest_once()
+        current_day = _to_day(db_now_naive())
+        if current_day != last_run_day:
+            run_daily_digest_once()
+            last_run_day = current_day
 
-    logger.info("Daily digest scheduler stopped")
+    logger.info("Memory digest scheduler stopped")
 
 
 # ── QQ 推送 ──
@@ -673,7 +718,7 @@ async def push_to_qq(target_type: str, target_id: str, message: str) -> bool | N
     try:
         session = await _get_push_session()
     except Exception as exc:
-        logger.error(f"Push error: {exc}")
+        logger.error("Push error: %s", safe_response_summary(exc))
         return None
     return await push_to_qq_with_session(
         session,
@@ -689,31 +734,33 @@ async def push_to_qq_with_session(
     target_id: str,
     message: str,
 ) -> bool | None:
-    """使用调用方拥有的 HTTP session 推送，供独立事件循环复用。"""
+    """使用调用方 session 推送，并保持旧调用方的精确三态语义。"""
 
-    try:
-        async with session.post(
-            QQBOT_PUSH_URL,
-            json={
-                "target_type": target_type,
-                "target_id": target_id,
-                "message": message,
-            },
-            timeout=aiohttp.ClientTimeout(total=QQBOT_PUSH_TIMEOUT),
-        ) as resp:
-            if resp.status == 200:
-                logger.info(
-                    f"Push OK: {target_type}/{target_id} len={len(message)}"
-                )
-                return True
-            logger.warning(
-                f"Push failed: status={resp.status}, body={await resp.text()}"
-            )
-            return False if 400 <= resp.status < 500 else None
-    except Exception as e:
-        logger.error(f"Push error: {e}")
-        # 网络异常无法证明远端没有处理；保留不确定态，避免主动外呼自动重复发送。
-        return None
+    outcome = await push_to_qq_outcome_with_session(
+        session,
+        target_type,
+        target_id,
+        message,
+    )
+    return delivery_outcome_to_legacy(outcome)
+
+
+async def push_to_qq_outcome_with_session(
+    session: aiohttp.ClientSession,
+    target_type: str,
+    target_id: str,
+    message: str,
+) -> DeliveryOutcome:
+    """使用调用方 session 推送并返回结构化传输结果。"""
+
+    return await deliver_qq_push_with_session(
+        session,
+        push_url=QQBOT_PUSH_URL,
+        target_type=target_type,
+        target_id=target_id,
+        message=message,
+        timeout_seconds=QQBOT_PUSH_TIMEOUT,
+    )
 
 
 async def push_envelope_to_qq(
@@ -738,17 +785,15 @@ def _render_qq_push_envelope(
     rendered = render_qq_outbound_envelope(envelope, allow_base64=False)
     if rendered.warnings:
         logger.warning(
-            "QQ outbound render warnings target_type=%s target_id=%s warnings=%s",
+            "QQ outbound render warnings target_type=%s warnings=%s",
             target_type,
-            target_id,
             rendered.warnings,
         )
     message = rendered.message
     if not message.strip():
         logger.warning(
-            "Skip empty QQ push envelope target_type=%s target_id=%s",
+            "Skip empty QQ push envelope target_type=%s",
             target_type,
-            target_id,
         )
         return None
     return message
@@ -760,11 +805,29 @@ async def push_envelope_to_qq_with_session(
     target_id: str,
     envelope: Mapping[str, Any] | None,
 ) -> bool | None:
-    """使用调用方 session 渲染并推送 envelope。"""
+    """使用调用方 session 渲染推送，并保持旧三态语义。"""
+    outcome = await push_envelope_to_qq_outcome_with_session(
+        session,
+        target_type,
+        target_id,
+        envelope,
+    )
+    if outcome is None:
+        return False
+    return delivery_outcome_to_legacy(outcome)
+
+
+async def push_envelope_to_qq_outcome_with_session(
+    session: aiohttp.ClientSession,
+    target_type: str,
+    target_id: str,
+    envelope: Mapping[str, Any] | None,
+) -> DeliveryOutcome | None:
+    """渲染 envelope，并返回结构化传输结果；空消息不发起请求。"""
     message = _render_qq_push_envelope(target_type, target_id, envelope)
     if message is None:
-        return False
-    return await push_to_qq_with_session(
+        return None
+    return await push_to_qq_outcome_with_session(
         session,
         target_type,
         target_id,
@@ -793,108 +856,115 @@ async def _generate_task_message(task: ScheduledTask) -> str | None:
             timeout=600,
         )
         return response or None
-    except asyncio.TimeoutError:
-        logger.error(f"Task [{task.name}] KT Agent call timed out (10min)")
-    except Exception as e:
-        logger.exception(f"Task [{task.name}] KT Agent call failed: {e}")
+    except Exception as exc:
+        logger.error(
+            "定时任务生成失败 task_id=%s error_type=%s",
+            task.id or "unknown",
+            type(exc).__name__,
+        )
+        raise
     finally:
         try:
             await bridge.stop()
-        except Exception as e:
-            logger.warning(f"Task [{task.name}] KT Agent stop failed: {e}")
-    return None
+        except Exception as exc:
+            logger.warning(
+                "定时任务 Bridge 停止失败 task_id=%s error_type=%s",
+                task.id or "unknown",
+                type(exc).__name__,
+            )
 
 
 async def run_scheduled_tasks() -> int:
-    """检查并执行到期的定时任务。返回执行数。"""
-    db = SessionLocal()
+    """检查到期任务并交给持久化出站 producer。"""
     executed = 0
     try:
-        now = db_now_naive()
-        tasks = db.query(ScheduledTask).filter(ScheduledTask.enabled == 1).all()
+        await drain_due_legacy_scheduled_task_outboxes(
+            session_factory=SessionLocal,
+        )
+    except Exception as exc:
+        logger.error(
+            "Scheduled task legacy drain failed error_type=%s",
+            type(exc).__name__,
+        )
 
-        for task in tasks:
-            if not _should_run(task, now):
-                continue
+    try:
+        recovered = await recover_expired_scheduled_task_occurrences(
+            session_factory=SessionLocal,
+            generator=_generate_task_message,
+        )
+        executed += sum(
+            1
+            for result in recovered
+            if not result.deduplicated
+            and result.status in {"queued", "delivered"}
+        )
+    except Exception as exc:
+        logger.error(
+            "Scheduled task recovery scan failed error_type=%s",
+            type(exc).__name__,
+        )
 
-            logger.info(f"Running scheduled task: {task.name}")
-            content = await _generate_task_message(task)
-            if not content:
-                logger.warning(
-                    f"Task [{task.name}] skipped: LLM returned empty/no content"
-                )
-                continue
-
-            task.last_run_at = now
-            db.commit()
-            from core.message_envelope import build_chat_response_envelope
-
-            envelope = build_chat_response_envelope(
-                status="ok",
-                answer=content,
-                meta={
-                    "platform": "qq",
-                    "chat_type": "scheduled_task",
-                    "task_id": task.id,
-                    "task_name": task.name,
-                    "target_type": task.target_type,
-                    "target_id": task.target_id,
-                },
+    local_now = db_now_naive()
+    discovery_db = SessionLocal()
+    try:
+        task_ids = [
+            int(row[0])
+            for row in (
+                discovery_db.query(ScheduledTask.id)
+                .filter(ScheduledTask.enabled == 1)
+                .all()
             )
-            ok = await push_envelope_to_qq(task.target_type, task.target_id, envelope)
-            if ok:
-                executed += 1
-                logger.info(f"Task [{task.name}] completed and pushed")
-            else:
-                logger.error(f"Task [{task.name}] push_envelope_to_qq failed")
-    except Exception as e:
-        logger.exception(f"Scheduled tasks runner failed: {e}")
+        ]
     finally:
-        db.close()
+        discovery_db.close()
+
+    for task_id in task_ids:
+        db = SessionLocal()
+        try:
+            task = db.get(ScheduledTask, task_id)
+            if task is None or not task.enabled or not _should_run(task, local_now):
+                continue
+            occurrence = scheduled_cron_occurrence(
+                task_id=task_id,
+                local_time=local_now,
+            )
+            logger.info("Running scheduled task task_id=%s", task_id)
+            result = await enqueue_scheduled_task_occurrence(
+                db,
+                task_id=task_id,
+                trigger_type="cron",
+                scheduled_for=occurrence.scheduled_for,
+                generator=_generate_task_message,
+                session_factory=SessionLocal,
+            )
+            if (
+                not result.deduplicated
+                and result.status in {"queued", "delivered"}
+            ):
+                executed += 1
+            logger.info(
+                "Scheduled task producer result task_id=%s run_id=%s status=%s "
+                "deduplicated=%s",
+                task_id,
+                result.run_id,
+                result.status,
+                result.deduplicated,
+            )
+        except Exception as exc:
+            db.rollback()
+            logger.error(
+                "Scheduled task producer failed task_id=%s error_type=%s",
+                task_id,
+                type(exc).__name__,
+            )
+        finally:
+            db.close()
     return executed
 
 
 def _should_run(task: ScheduledTask, now: datetime) -> bool:
     """简单 cron 匹配（只支持分 时 日 月 周）。"""
-    try:
-        parts = (task.cron_expr or "").strip().split()
-        if len(parts) != 5:
-            return False
-        minute, hour, day, month, dow = parts
-        if not _match(now.minute, minute):
-            return False
-        if not _match(now.hour, hour):
-            return False
-        if not _match(now.day, day):
-            return False
-        if not _match(now.month, month):
-            return False
-        if not _match(now.isoweekday(), dow):
-            return False
-        # 避免同一分钟内重复执行
-        if task.last_run_at and (now - task.last_run_at).total_seconds() < 60:
-            return False
-        return True
-    except Exception:
-        return False
-
-
-def _match(value: int, expr: str) -> bool:
-    if expr == "*":
-        return True
-    for part in expr.split(","):
-        part = part.strip()
-        if "-" in part:
-            lo, hi = part.split("-")
-            if int(lo) <= value <= int(hi):
-                return True
-        elif "/" in part and part.startswith("*/"):
-            step = int(part[2:])
-            if value % step == 0:
-                return True
-        elif part.isdigit() and int(part) == value:
-            return True
-    return False
+    return scheduled_cron_matches(task.cron_expr or "", now)
 
 
 async def scheduled_task_loop(stop_event: threading.Event, *, poll_interval_seconds: float = 60.0) -> None:

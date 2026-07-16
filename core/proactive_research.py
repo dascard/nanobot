@@ -20,6 +20,11 @@ from urllib.parse import parse_qsl, unquote_to_bytes, urlsplit
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError
 
 from clients.classifier_client import strip_think_blocks
+from core.proactive_diagnostics import (
+    generation_failure_from_exception,
+    normalize_research_reason_code,
+    safe_research_error,
+)
 from core.runtime_tool_service import RESEARCH_TOOL_NAMES
 from core.web_search.url_policy import canonicalize_http_url
 
@@ -191,6 +196,11 @@ class ResearchResult:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["sources"] = [source.to_dict() for source in self.sources]
+        payload["reason_code"] = normalize_research_reason_code(self.reason_code)
+        payload["error"] = safe_research_error(
+            reason_code=payload["reason_code"],
+            error=self.error,
+        )
         return payload
 
 
@@ -776,11 +786,11 @@ def _result(
         request_id=request.request_id,
         trace_id=trace_id,
         status=status,
-        reason_code=reason_code,
+        reason_code=normalize_research_reason_code(reason_code),
         draft=draft,
         sources=tuple(sources),
         exploration_calls=exploration_calls,
-        error=error[:1000],
+        error=safe_research_error(reason_code=reason_code, error=error),
     )
 
 
@@ -874,13 +884,14 @@ async def run_proactive_research(
             lifecycle_task.cancel()
         raise
     except Exception as exc:
+        diagnostic = generation_failure_from_exception(exc)
         return _result(
             request,
             trace_id,
             status="blocked",
             reason_code="runtime_error",
             exploration_calls=budget_plugin.exploration_calls,
-            error=str(exc),
+            error=diagnostic.summary,
         )
     finally:
         if lifecycle_task is not None and not lifecycle_task.done():

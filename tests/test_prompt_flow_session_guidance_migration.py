@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import copy
+from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import threading
@@ -75,6 +79,686 @@ def _write_flow(path: Path, flow: dict, *, compact: bool = False) -> bytes:
     data = text.encode("utf-8")
     path.write_bytes(data)
     return data
+
+
+def _flow_v1() -> dict:
+    flow = _canonical_flow()
+    flow["version"] = 1
+    private_edges = [
+        edge
+        for edge in flow["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    ]
+    assert len(private_edges) == 1
+    private_edges[0]["platforms"] = ["web"]
+    return flow
+
+
+def test_migrate_internal_private_flow_v2_only_extends_unique_core_edge():
+    from core.prompt_v2.flow_migrations import migrate_internal_private_flow_v2
+
+    original = _flow_v1()
+    original["custom_top_level"] = {"owner": "operator"}
+    private_edge = next(
+        edge
+        for edge in original["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    private_edge["custom_note"] = "preserve-this-field"
+    before = copy.deepcopy(original)
+
+    migrated, changed = migrate_internal_private_flow_v2(original)
+
+    assert changed is True
+    assert original == before
+    assert migrated["version"] == 2
+    migrated_edge = next(
+        edge
+        for edge in migrated["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    assert migrated_edge["platforms"] == ["web", "internal"]
+    assert migrated_edge["chat_types"] == ["private"]
+    assert migrated_edge["custom_note"] == "preserve-this-field"
+    assert migrated["custom_top_level"] == {"owner": "operator"}
+
+    expected = copy.deepcopy(before)
+    expected["version"] = 2
+    expected_edge = next(
+        edge
+        for edge in expected["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    expected_edge["platforms"] = ["web", "internal"]
+    assert migrated == expected
+
+
+def test_migrate_internal_private_flow_v2_is_idempotent():
+    from core.prompt_v2.flow_migrations import migrate_internal_private_flow_v2
+
+    migrated, changed = migrate_internal_private_flow_v2(_flow_v1())
+    repeated, repeated_changed = migrate_internal_private_flow_v2(migrated)
+
+    assert changed is True
+    assert repeated_changed is False
+    assert repeated == migrated
+    assert repeated is not migrated
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing_edge",
+        "duplicate_edge",
+        "changed_platforms",
+        "changed_chat_types",
+        "partial_v2",
+        "future_version",
+    ],
+)
+def test_migrate_internal_private_flow_v2_rejects_core_conflicts(case):
+    from core.prompt_v2.flow_migrations import (
+        PromptFlowMigrationError,
+        migrate_internal_private_flow_v2,
+    )
+
+    flow = _flow_v1()
+    private_edge = next(
+        edge
+        for edge in flow["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    if case == "missing_edge":
+        flow["edges"].remove(private_edge)
+    elif case == "duplicate_edge":
+        flow["edges"].append(copy.deepcopy(private_edge))
+    elif case == "changed_platforms":
+        private_edge["platforms"] = ["qq"]
+    elif case == "changed_chat_types":
+        private_edge["chat_types"] = ["group"]
+    elif case == "partial_v2":
+        private_edge["platforms"] = ["web", "internal"]
+    elif case == "future_version":
+        flow["version"] = 3
+    before = copy.deepcopy(flow)
+
+    with pytest.raises(PromptFlowMigrationError):
+        migrate_internal_private_flow_v2(flow)
+
+    assert flow == before
+
+
+def test_flow_v2_plan_then_apply_creates_exact_backup(tmp_path):
+    from core.prompt_v2.flow_migrations import (
+        apply_runtime_flow_v2,
+        plan_runtime_flow_v2,
+    )
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    backup_dir = tmp_path / "backups"
+    original = _write_flow(runtime_path, _flow_v1(), compact=True)
+
+    plan = plan_runtime_flow_v2(runtime_path, plan_dir=plan_dir)
+
+    assert runtime_path.read_bytes() == original
+    assert plan["changed"] is True
+    assert len(plan["plan_id"]) == 64
+    assert plan["source_sha256"] == hashlib.sha256(original).hexdigest()
+    plan_record = json.loads(Path(plan["plan_path"]).read_text(encoding="utf-8"))
+    assert "nodes" not in plan_record
+    assert "edges" not in plan_record
+
+    result = apply_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+        backup_dir=backup_dir,
+        plan_id=plan["plan_id"],
+    )
+
+    assert result["applied"] is True
+    assert Path(result["backup_path"]).read_bytes() == original
+    applied = json.loads(runtime_path.read_text(encoding="utf-8"))
+    assert applied["version"] == 2
+    applied_edge = next(
+        edge
+        for edge in applied["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    assert applied_edge["platforms"] == ["web", "internal"]
+
+    applied_bytes = runtime_path.read_bytes()
+    fixed_time_ns = 1_700_000_000_000_000_000
+    os.utime(runtime_path, ns=(fixed_time_ns, fixed_time_ns))
+    repeated_plan = plan_runtime_flow_v2(runtime_path, plan_dir=plan_dir)
+    assert repeated_plan["changed"] is False
+    repeated = apply_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+        backup_dir=backup_dir,
+        plan_id=repeated_plan["plan_id"],
+    )
+    assert repeated["applied"] is False
+    assert repeated["backup_path"] == ""
+    assert runtime_path.read_bytes() == applied_bytes
+    assert runtime_path.stat().st_mtime_ns == fixed_time_ns
+    assert len(list(backup_dir.glob("*.bak"))) == 1
+
+
+def test_flow_v2_apply_uses_atomic_replace_helper(tmp_path, monkeypatch):
+    from core.prompt_v2 import flow_migrations
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    backup_dir = tmp_path / "backups"
+    _write_flow(runtime_path, _flow_v1(), compact=True)
+    plan = flow_migrations.plan_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+    )
+    calls: list[tuple[Path, bytes]] = []
+    real_atomic_replace = flow_migrations.atomic_replace_bytes
+
+    def observed_atomic_replace(target, data):
+        calls.append((Path(target), data))
+        real_atomic_replace(target, data)
+
+    monkeypatch.setattr(
+        flow_migrations,
+        "atomic_replace_bytes",
+        observed_atomic_replace,
+    )
+
+    result = flow_migrations.apply_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+        backup_dir=backup_dir,
+        plan_id=plan["plan_id"],
+    )
+
+    assert result["applied"] is True
+    assert calls == [(runtime_path, runtime_path.read_bytes())]
+    assert hashlib.sha256(calls[0][1]).hexdigest() == plan["target_sha256"]
+
+
+def test_flow_v2_apply_atomic_replace_failure_preserves_runtime(tmp_path, monkeypatch):
+    from core.prompt_v2 import flow_migrations
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    backup_dir = tmp_path / "backups"
+    original = _write_flow(runtime_path, _flow_v1(), compact=True)
+    plan = flow_migrations.plan_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+    )
+    real_replace = Path.replace
+
+    def fail_runtime_replace(path, target):
+        if Path(target) == runtime_path and path.parent == runtime_path.parent:
+            raise OSError("注入原子替换失败")
+        return real_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_runtime_replace)
+
+    with pytest.raises(OSError, match="注入原子替换失败"):
+        flow_migrations.apply_runtime_flow_v2(
+            runtime_path,
+            plan_dir=plan_dir,
+            backup_dir=backup_dir,
+            plan_id=plan["plan_id"],
+        )
+
+    assert runtime_path.read_bytes() == original
+    backups = list(backup_dir.glob("*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
+    assert list(runtime_path.parent.glob(f".{runtime_path.name}.*.tmp")) == []
+
+
+def test_flow_v2_apply_replay_returns_already_applied_without_new_backup(tmp_path):
+    from core.prompt_v2.flow_migrations import (
+        apply_runtime_flow_v2,
+        plan_runtime_flow_v2,
+    )
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    backup_dir = tmp_path / "backups"
+    _write_flow(runtime_path, _flow_v1(), compact=True)
+    plan = plan_runtime_flow_v2(runtime_path, plan_dir=plan_dir)
+
+    first = apply_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+        backup_dir=backup_dir,
+        plan_id=plan["plan_id"],
+    )
+    applied_bytes = runtime_path.read_bytes()
+    replay = apply_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+        backup_dir=backup_dir,
+        plan_id=plan["plan_id"],
+    )
+
+    assert first["applied"] is True
+    assert first["already_applied"] is False
+    assert replay["applied"] is False
+    assert replay["already_applied"] is True
+    assert replay["backup_path"] == ""
+    assert runtime_path.read_bytes() == applied_bytes
+    assert len(list(backup_dir.glob("*.bak"))) == 1
+
+
+@pytest.mark.parametrize(
+    "field,value,error",
+    [
+        ("schema_version", True, "计划版本不支持"),
+        ("to_version", True, "计划状态非法"),
+        ("source_sha256", int("1" * 64), "文件摘要非法"),
+    ],
+)
+def test_flow_v2_replay_rejects_plan_fields_with_wrong_json_types(
+    tmp_path,
+    field,
+    value,
+    error,
+):
+    from core.prompt_v2 import flow_migrations
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    backup_dir = tmp_path / "backups"
+    _write_flow(runtime_path, _flow_v1(), compact=True)
+    plan = flow_migrations.plan_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+    )
+    flow_migrations.apply_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+        backup_dir=backup_dir,
+        plan_id=plan["plan_id"],
+    )
+
+    record = json.loads(Path(plan["plan_path"]).read_text(encoding="utf-8"))
+    record[field] = value
+    fields = {key: item for key, item in record.items() if key != "plan_id"}
+    forged_id = flow_migrations._flow_v2_plan_id(fields)
+    record["plan_id"] = forged_id
+    forged_path = plan_dir / f"flow-v2.{forged_id}.json"
+    forged_path.write_text(
+        json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(flow_migrations.PromptFlowMigrationError, match=error):
+        flow_migrations.apply_runtime_flow_v2(
+            runtime_path,
+            plan_dir=plan_dir,
+            backup_dir=backup_dir,
+            plan_id=forged_id,
+        )
+
+    assert len(list(backup_dir.glob("*.bak"))) == 1
+
+
+def test_flow_v2_concurrent_apply_replay_writes_once(tmp_path, monkeypatch):
+    from core.prompt_v2 import flow_migrations
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    backup_dir = tmp_path / "backups"
+    _write_flow(runtime_path, _flow_v1(), compact=True)
+    plan = flow_migrations.plan_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+    )
+
+    backup_ready = threading.Event()
+    release_first_apply = threading.Event()
+    second_lock_attempted = threading.Event()
+    second_lock_entered = threading.Event()
+    results: list[dict] = []
+    errors: list[BaseException] = []
+    real_create_backup = flow_migrations._create_exact_backup
+    real_flow_write_lock = flow_migrations.flow_write_lock
+    second_thread_name = "flow-v2-second-apply"
+
+    def paused_create_backup(*args, **kwargs):
+        backup_path = real_create_backup(*args, **kwargs)
+        backup_ready.set()
+        if not release_first_apply.wait(timeout=5):
+            raise TimeoutError("等待第二个 apply 超时")
+        return backup_path
+
+    monkeypatch.setattr(
+        flow_migrations,
+        "_create_exact_backup",
+        paused_create_backup,
+    )
+
+    @contextmanager
+    def observed_flow_write_lock(target):
+        is_second = threading.current_thread().name == second_thread_name
+        if is_second:
+            second_lock_attempted.set()
+        with real_flow_write_lock(target):
+            if is_second:
+                second_lock_entered.set()
+            yield
+
+    monkeypatch.setattr(
+        flow_migrations,
+        "flow_write_lock",
+        observed_flow_write_lock,
+    )
+
+    def run_apply():
+        try:
+            results.append(
+                flow_migrations.apply_runtime_flow_v2(
+                    runtime_path,
+                    plan_dir=plan_dir,
+                    backup_dir=backup_dir,
+                    plan_id=plan["plan_id"],
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - 仅用于跨线程传递
+            errors.append(exc)
+
+    first_thread = threading.Thread(target=run_apply)
+    second_thread = threading.Thread(
+        target=run_apply,
+        name=second_thread_name,
+    )
+    first_thread.start()
+    assert backup_ready.wait(timeout=5)
+    second_thread.start()
+    assert second_lock_attempted.wait(timeout=5)
+    assert not second_lock_entered.wait(timeout=0.05)
+    assert second_thread.is_alive()
+    release_first_apply.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert second_lock_entered.is_set()
+    assert errors == []
+    assert sorted(
+        (result["applied"], result["already_applied"])
+        for result in results
+    ) == [(False, True), (True, False)]
+    assert len(list(backup_dir.glob("*.bak"))) == 1
+    assert json.loads(runtime_path.read_text(encoding="utf-8"))["version"] == 2
+
+
+def test_flow_v2_apply_rejects_source_hash_change_without_writes(tmp_path):
+    from core.prompt_v2.flow_migrations import (
+        PromptFlowMigrationError,
+        apply_runtime_flow_v2,
+        plan_runtime_flow_v2,
+    )
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    backup_dir = tmp_path / "backups"
+    original = _write_flow(runtime_path, _flow_v1(), compact=True)
+    plan = plan_runtime_flow_v2(runtime_path, plan_dir=plan_dir)
+    changed_after_plan = original + b" "
+    runtime_path.write_bytes(changed_after_plan)
+
+    with pytest.raises(PromptFlowMigrationError, match="源文件.*变化"):
+        apply_runtime_flow_v2(
+            runtime_path,
+            plan_dir=plan_dir,
+            backup_dir=backup_dir,
+            plan_id=plan["plan_id"],
+        )
+
+    assert runtime_path.read_bytes() == changed_after_plan
+    assert not backup_dir.exists()
+
+
+def test_flow_v2_apply_rejects_malicious_plan_id_without_writes(tmp_path):
+    from core.prompt_v2.flow_migrations import (
+        PromptFlowMigrationError,
+        apply_runtime_flow_v2,
+    )
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    backup_dir = tmp_path / "backups"
+    original = _write_flow(runtime_path, _flow_v1(), compact=True)
+
+    with pytest.raises(PromptFlowMigrationError, match="plan_id 非法"):
+        apply_runtime_flow_v2(
+            runtime_path,
+            plan_dir=tmp_path / "plans",
+            backup_dir=backup_dir,
+            plan_id="../flow-v2-plan",
+        )
+
+    assert runtime_path.read_bytes() == original
+    assert not backup_dir.exists()
+
+
+def test_flow_v2_apply_rejects_symlinked_plan_directory_without_writes(tmp_path):
+    from core.prompt_v2.flow_migrations import (
+        PromptFlowMigrationError,
+        apply_runtime_flow_v2,
+        plan_runtime_flow_v2,
+    )
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    real_plan_dir = tmp_path / "real-plans"
+    linked_plan_dir = tmp_path / "linked-plans"
+    backup_dir = tmp_path / "backups"
+    original = _write_flow(runtime_path, _flow_v1(), compact=True)
+    plan = plan_runtime_flow_v2(runtime_path, plan_dir=real_plan_dir)
+    linked_plan_dir.symlink_to(real_plan_dir, target_is_directory=True)
+
+    with pytest.raises(PromptFlowMigrationError, match="迁移计划目录"):
+        apply_runtime_flow_v2(
+            runtime_path,
+            plan_dir=linked_plan_dir,
+            backup_dir=backup_dir,
+            plan_id=plan["plan_id"],
+        )
+
+    assert runtime_path.read_bytes() == original
+    assert not backup_dir.exists()
+
+
+def test_flow_v2_apply_rejects_symlinked_backup_directory_without_writes(tmp_path):
+    from core.prompt_v2.flow_migrations import (
+        PromptFlowMigrationError,
+        apply_runtime_flow_v2,
+        plan_runtime_flow_v2,
+    )
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    real_backup_dir = tmp_path / "real-backups"
+    linked_backup_dir = tmp_path / "linked-backups"
+    original = _write_flow(runtime_path, _flow_v1(), compact=True)
+    plan = plan_runtime_flow_v2(runtime_path, plan_dir=plan_dir)
+    real_backup_dir.mkdir()
+    linked_backup_dir.symlink_to(real_backup_dir, target_is_directory=True)
+
+    with pytest.raises(PromptFlowMigrationError, match="备份目录"):
+        apply_runtime_flow_v2(
+            runtime_path,
+            plan_dir=plan_dir,
+            backup_dir=linked_backup_dir,
+            plan_id=plan["plan_id"],
+        )
+
+    assert runtime_path.read_bytes() == original
+    assert list(real_backup_dir.iterdir()) == []
+
+
+def test_flow_v2_apply_and_admin_save_share_write_lock(tmp_path, monkeypatch):
+    from core.prompt_v2 import flow as flow_module
+    from core.prompt_v2 import flow_migrations
+
+    runtime_dir = tmp_path / "runtime"
+    runtime_path = runtime_dir / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    backup_dir = tmp_path / "backups"
+    _write_flow(runtime_path, _flow_v1(), compact=True)
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+    plan = flow_migrations.plan_runtime_flow_v2(
+        runtime_path,
+        plan_dir=plan_dir,
+    )
+
+    backup_ready = threading.Event()
+    release_apply = threading.Event()
+    save_lock_attempted = threading.Event()
+    save_lock_entered = threading.Event()
+    errors: list[BaseException] = []
+    real_create_backup = flow_migrations._create_exact_backup
+    real_save_flow_lock = flow_module.flow_write_lock
+
+    def paused_create_backup(*args, **kwargs):
+        backup_path = real_create_backup(*args, **kwargs)
+        backup_ready.set()
+        if not release_apply.wait(timeout=5):
+            raise TimeoutError("等待并发保存超时")
+        return backup_path
+
+    monkeypatch.setattr(
+        flow_migrations,
+        "_create_exact_backup",
+        paused_create_backup,
+    )
+
+    @contextmanager
+    def observed_save_flow_lock(target):
+        save_lock_attempted.set()
+        with real_save_flow_lock(target):
+            save_lock_entered.set()
+            yield
+
+    monkeypatch.setattr(
+        flow_module,
+        "flow_write_lock",
+        observed_save_flow_lock,
+    )
+
+    def run_apply():
+        try:
+            flow_migrations.apply_runtime_flow_v2(
+                runtime_path,
+                plan_dir=plan_dir,
+                backup_dir=backup_dir,
+                plan_id=plan["plan_id"],
+            )
+        except BaseException as exc:  # pragma: no cover - 仅用于跨线程传递
+            errors.append(exc)
+
+    concurrent_flow = _canonical_flow()
+    concurrent_node = next(
+        node
+        for node in concurrent_flow["nodes"]
+        if node["id"] == "session_guidance"
+    )
+    concurrent_node["concurrent_note"] = "admin-save-must-win"
+
+    def run_save():
+        try:
+            flow_module.save_flow(concurrent_flow)
+        except BaseException as exc:  # pragma: no cover - 仅用于跨线程传递
+            errors.append(exc)
+
+    apply_thread = threading.Thread(target=run_apply)
+    save_thread = threading.Thread(target=run_save)
+    apply_thread.start()
+    assert backup_ready.wait(timeout=5)
+    save_thread.start()
+    assert save_lock_attempted.wait(timeout=5)
+    assert not save_lock_entered.wait(timeout=0.05)
+    assert save_thread.is_alive()
+    release_apply.set()
+    apply_thread.join(timeout=5)
+    save_thread.join(timeout=5)
+
+    assert not apply_thread.is_alive()
+    assert not save_thread.is_alive()
+    assert save_lock_entered.is_set()
+    assert errors == []
+    final_flow = json.loads(runtime_path.read_text(encoding="utf-8"))
+    final_node = next(
+        node
+        for node in final_flow["nodes"]
+        if node["id"] == "session_guidance"
+    )
+    assert final_node["concurrent_note"] == "admin-save-must-win"
+    assert len(list(backup_dir.glob("*.bak"))) == 1
+
+
+def test_flow_v2_plan_conflict_preserves_original_bytes(tmp_path):
+    from core.prompt_v2.flow_migrations import (
+        PromptFlowMigrationError,
+        plan_runtime_flow_v2,
+    )
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    flow = _flow_v1()
+    private_edge = next(
+        edge
+        for edge in flow["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    private_edge["platforms"] = ["web", "internal"]
+    original = _write_flow(runtime_path, flow, compact=True)
+
+    with pytest.raises(PromptFlowMigrationError):
+        plan_runtime_flow_v2(runtime_path, plan_dir=plan_dir)
+
+    assert runtime_path.read_bytes() == original
+    assert not plan_dir.exists()
+
+
+def test_flow_v2_plan_rejects_pre_session_guidance_baseline_with_clear_error(
+    tmp_path,
+):
+    from core.prompt_v2.flow_migrations import (
+        PromptFlowMigrationError,
+        plan_runtime_flow_v2,
+    )
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    plan_dir = tmp_path / "plans"
+    legacy = _old_flow()
+    legacy["version"] = 1
+    private_edge = next(
+        edge
+        for edge in legacy["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    private_edge["platforms"] = ["web"]
+    original = _write_flow(runtime_path, legacy, compact=True)
+
+    with pytest.raises(
+        PromptFlowMigrationError,
+        match="先完成 session_guidance Flow 迁移",
+    ):
+        plan_runtime_flow_v2(runtime_path, plan_dir=plan_dir)
+
+    assert runtime_path.read_bytes() == original
+    assert not plan_dir.exists()
 
 
 def test_migrate_flow_inserts_guidance_after_identity_and_preserves_custom_node():
@@ -698,9 +1382,113 @@ def test_manage_prompt_flow_help_and_check_are_read_only(tmp_path):
     assert "check-session-guidance" in help_result.stdout
     assert "list-session-guidance-backups" in help_result.stdout
     assert "rollback-session-guidance" in help_result.stdout
+    assert "plan" in help_result.stdout
+    assert "apply" in help_result.stdout
     assert check_result.returncode == 0, check_result.stderr
     assert json.loads(check_result.stdout)["needs_migration"] is True
     assert runtime_path.read_bytes() == original
+
+
+def test_prompt_runtime_init_does_not_rewrite_existing_legacy_flow(
+    tmp_path,
+    monkeypatch,
+):
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    default_flow_path = default_dir / "chat" / "flow.json"
+    shutil.copytree(
+        Path("prompts.v2.default/chat"),
+        default_dir / "chat",
+        dirs_exist_ok=True,
+    )
+    default_flow_path.write_text(
+        Path("prompts.v2.default/chat/flow.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    shutil.copytree(
+        Path("prompts.v2.default/tasks"),
+        default_dir / "tasks",
+    )
+    shutil.copytree(
+        Path("prompts.v2.default/tools"),
+        default_dir / "tools",
+    )
+    runtime_path = runtime_dir / "chat" / "flow.json"
+    legacy = _old_flow()
+    legacy["version"] = 1
+    private_edge = next(
+        edge
+        for edge in legacy["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    private_edge["platforms"] = ["web"]
+    original = _write_flow(runtime_path, legacy, compact=True)
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    result = init_prompt_v2_runtime_dir()
+
+    assert result["flow_migrated"] is False
+    assert result["flow_backup_path"] == ""
+    assert runtime_path.read_bytes() == original
+    assert not (tmp_path / "prompt_template_backups").exists()
+
+
+def test_manage_prompt_flow_requires_plan_before_apply(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    runtime_path = runtime_dir / "chat" / "flow.json"
+    original = _write_flow(runtime_path, _flow_v1(), compact=True)
+    env = dict(os.environ)
+    env["NANOBOT_PROMPT_RUNTIME_DIR"] = str(runtime_dir)
+
+    missing_plan = subprocess.run(
+        [sys.executable, "scripts/manage_prompt_flow.py", "apply"],
+        cwd=Path.cwd(),
+        env=env,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert missing_plan.returncode != 0
+    assert runtime_path.read_bytes() == original
+
+    plan_result = subprocess.run(
+        [sys.executable, "scripts/manage_prompt_flow.py", "plan"],
+        cwd=Path.cwd(),
+        env=env,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert plan_result.returncode == 0, plan_result.stderr
+    plan = json.loads(plan_result.stdout)
+    assert len(plan["plan_id"]) == 64
+    assert plan["changed"] is True
+    assert runtime_path.read_bytes() == original
+    assert "nodes" not in plan
+    assert "edges" not in plan
+
+    apply_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/manage_prompt_flow.py",
+            "apply",
+            "--plan-id",
+            plan["plan_id"],
+        ],
+        cwd=Path.cwd(),
+        env=env,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert apply_result.returncode == 0, apply_result.stderr
+    applied = json.loads(apply_result.stdout)
+    assert applied["applied"] is True
+    assert json.loads(runtime_path.read_text(encoding="utf-8"))["version"] == 2
 
 
 def test_manage_prompt_flow_check_rejects_symlinked_runtime_parent(tmp_path):

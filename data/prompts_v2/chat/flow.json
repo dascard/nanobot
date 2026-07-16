@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "nodes": [
     {"id": "base_contract", "type": "template", "label": "system: base contract", "template_key": "chat/main"},
     {"id": "qq_common_policy", "type": "template", "label": "system: QQ platform policy", "template_key": "chat/platform/qq/common", "platforms": ["qq"]},
@@ -20,7 +20,7 @@
   "edges": [
     {"from": "base_contract", "to": "qq_common_policy", "platforms": ["qq"]},
     {"from": "base_contract", "to": "group_policy", "chat_types": ["group"], "platforms": ["web"]},
-    {"from": "base_contract", "to": "private_policy", "chat_types": ["private"], "platforms": ["web"]},
+    {"from": "base_contract", "to": "private_policy", "chat_types": ["private"], "platforms": ["web", "internal"]},
     {"from": "qq_common_policy", "to": "group_policy", "chat_types": ["group"], "platforms": ["qq"]},
     {"from": "qq_common_policy", "to": "private_policy", "chat_types": ["private"], "platforms": ["qq"]},
     {"from": "group_policy", "to": "qq_group_policy", "chat_types": ["group"], "platforms": ["qq"]},

@@ -1,6 +1,9 @@
 import dataclasses
+import hashlib
 import inspect
 import json
+import shutil
+from pathlib import Path
 
 import pytest
 
@@ -113,6 +116,272 @@ def test_prompt_request_metrics_ignore_non_wire_management_metadata():
         messages=[{"role": "user", "content": "你好"}],
         tools=[wire_b],
     )
+
+
+def test_prompt_template_resolution_uses_real_default_path_and_raw_file_hash(
+    tmp_path,
+    monkeypatch,
+):
+    from core.prompt_v2.template_loader import load_template
+
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    default_path = default_dir / "chat" / "main.md"
+    default_path.parent.mkdir(parents=True)
+    raw_bytes = "---\r\nname: 默认主模板\r\nversion: 7\r\n---\r\n同一正文\r\n".encode(
+        "utf-8"
+    )
+    default_path.write_bytes(raw_bytes)
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    template = load_template("chat/main")
+    resolution = template.resolution
+
+    assert resolution.template_key == "chat/main"
+    assert resolution.active_source == "default"
+    assert resolution.active_path == str(default_path)
+    assert resolution.runtime_path is None
+    assert resolution.default_path == str(default_path)
+    assert resolution.active_sha256 == hashlib.sha256(raw_bytes).hexdigest()
+    assert template.raw.encode("utf-8") == raw_bytes
+    assert resolution.runtime_sha256 is None
+    assert resolution.default_sha256 == resolution.active_sha256
+
+
+def test_prompt_template_resolution_hashes_both_runtime_and_default_raw_bytes(
+    tmp_path,
+    monkeypatch,
+):
+    from core.prompt_v2.template_loader import load_template
+
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    default_path = default_dir / "chat" / "main.md"
+    runtime_path = runtime_dir / "chat" / "main.md"
+    default_path.parent.mkdir(parents=True)
+    runtime_path.parent.mkdir(parents=True)
+    default_bytes = b"---\r\nversion: 1\r\n---\r\ndefault\r\n"
+    runtime_bytes = b"---\r\nversion: 2\r\n---\r\nruntime\r\n"
+    default_path.write_bytes(default_bytes)
+    runtime_path.write_bytes(runtime_bytes)
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    resolution = load_template("chat/main").resolution
+
+    assert resolution is not None
+    assert resolution.active_source == "runtime"
+    assert resolution.active_sha256 == hashlib.sha256(runtime_bytes).hexdigest()
+    assert resolution.runtime_sha256 == hashlib.sha256(runtime_bytes).hexdigest()
+    assert resolution.default_sha256 == hashlib.sha256(default_bytes).hexdigest()
+
+
+def test_prompt_template_resolution_explicit_directory_is_built_in(tmp_path):
+    from core.prompt_v2.template_loader import load_template
+    from core.prompt_v2.template_resolution import build_template_trace_fields
+
+    template_path = tmp_path / "chat" / "main.md"
+    template_path.parent.mkdir(parents=True)
+    raw_bytes = b"---\r\nversion: 1\r\n---\r\nbuilt in\r\n"
+    template_path.write_bytes(raw_bytes)
+
+    template = load_template("chat/main", template_dir=tmp_path)
+    resolution = template.resolution
+
+    assert resolution is not None
+    assert resolution.active_source == "built_in"
+    assert resolution.active_path == str(template_path)
+    assert resolution.runtime_path is None
+    assert resolution.default_path is None
+    assert resolution.active_sha256 == hashlib.sha256(raw_bytes).hexdigest()
+    trace_fields = build_template_trace_fields({"base_contract": resolution})
+    assert trace_fields == {
+        "prompt_source": "built_in",
+        "prompt_runtime_path": "",
+        "prompt_default_path": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_prompt_template_resolution_reports_mixed_sources_by_flow_node(
+    tmp_path,
+    monkeypatch,
+):
+    from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.schema import PromptCompileRequest
+    from core.prompt_v2.template_resolution import build_template_trace_fields
+
+    repo_root = Path(__file__).resolve().parents[1]
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    shutil.copytree(repo_root / "prompts.v2.default", default_dir)
+    shutil.copytree(repo_root / "data" / "prompts_v2", runtime_dir)
+    (runtime_dir / "chat" / "branch_private.md").unlink()
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    plan = await compile_prompt_plan(
+        PromptCompileRequest(
+            chat_type="private",
+            platform="web",
+            session_id="private-template-resolution",
+            user_id="template-resolution-user",
+            user_input="检查模板来源",
+            runtime_tool_prompt="[RuntimeTool]",
+            debug={
+                "template_path": "/forged/active.md",
+                "template_paths": {"base_contract": "/forged/base.md"},
+                "template_resolutions": {
+                    "base_contract": {"active_source": "built_in"}
+                },
+                "request_prompt_sha256": "forged",
+                "flow_path": "/forged/flow.json",
+            },
+        )
+    )
+
+    resolutions = plan.debug["template_resolutions"]
+    trace_fields = build_template_trace_fields(resolutions)
+    assert resolutions["base_contract"]["active_source"] == "runtime"
+    assert resolutions["private_policy"]["active_source"] == "default"
+    assert trace_fields["prompt_source"] == "mixed"
+    assert trace_fields["prompt_runtime_path"] == resolutions["base_contract"]["runtime_path"]
+    assert trace_fields["prompt_default_path"] == resolutions["base_contract"]["default_path"]
+    assert plan.prompt_sha256 != resolutions["base_contract"]["active_sha256"]
+    assert plan.debug["template_path"] != "/forged/active.md"
+    assert plan.debug["flow_path"] != "/forged/flow.json"
+    assert plan.debug["request_prompt_sha256"] == plan.prompt_sha256
+    assert all(
+        plan.debug["template_paths"][node_id] == resolution["active_path"]
+        for node_id, resolution in resolutions.items()
+    )
+    serialized = json.dumps(resolutions, ensure_ascii=False)
+    assert "同一正文" not in serialized
+    assert all(
+        not ({"body", "raw", "content"} & set(item))
+        for item in resolutions.values()
+    )
+
+
+@pytest.mark.asyncio
+async def test_prompt_template_resolution_metadata_does_not_change_wire_request_hash(
+    tmp_path,
+    monkeypatch,
+):
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.schema import PromptCompileRequest
+    from core.prompt_v2.template_resolution import build_template_trace_fields
+
+    repo_root = Path(__file__).resolve().parents[1]
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    shutil.copytree(repo_root / "prompts.v2.default", default_dir)
+    shutil.copytree(repo_root / "data" / "prompts_v2", runtime_dir)
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+    original_build_template_values = compiler.build_template_values
+    monkeypatch.setattr(
+        compiler,
+        "build_template_values",
+        lambda request: original_build_template_values(
+            request,
+            current_time="2026-07-14 12:00:00 CST",
+        ),
+    )
+    request = PromptCompileRequest(
+        chat_type="private",
+        platform="web",
+        session_id="private-resolution-hash",
+        user_id="resolution-hash-user",
+        user_input="请求哈希不能包含模板来源元数据",
+        runtime_tool_prompt="[RuntimeTool]",
+    )
+
+    runtime_plan = await compiler.compile_prompt_plan(request)
+    for runtime_template in runtime_dir.rglob("*.md"):
+        runtime_template.unlink()
+    default_plan = await compiler.compile_prompt_plan(request)
+
+    assert build_template_trace_fields(runtime_plan.template_resolutions)[
+        "prompt_source"
+    ] == "runtime"
+    assert build_template_trace_fields(default_plan.template_resolutions)[
+        "prompt_source"
+    ] == "default"
+    assert runtime_plan.template_resolutions != default_plan.template_resolutions
+    assert runtime_plan.request_json == default_plan.request_json
+    assert runtime_plan.prompt_sha256 == default_plan.prompt_sha256
+
+
+def test_template_resolution_trace_serializer_drops_non_contract_fields():
+    from core.prompt_v2.template_resolution import serialize_template_resolutions_json
+
+    sentinel = "TEMPLATE_BODY_MUST_NOT_BE_PERSISTED"
+    serialized = serialize_template_resolutions_json({
+        "base_contract": {
+            "template_key": "chat/main",
+            "active_source": "runtime",
+            "active_path": "/runtime/chat/main.md",
+            "runtime_path": "/runtime/chat/main.md",
+            "default_path": None,
+            "active_sha256": "a" * 64,
+            "runtime_sha256": "a" * 64,
+            "default_sha256": None,
+            "baseline_version": None,
+            "drift_status": "untracked_legacy",
+            "body": sentinel,
+            "raw": sentinel,
+            "content": sentinel,
+        }
+    })
+
+    assert sentinel not in serialized
+    assert set(json.loads(serialized)["base_contract"]) == {
+        "template_key",
+        "active_source",
+        "active_path",
+        "runtime_path",
+        "default_path",
+        "active_sha256",
+        "runtime_sha256",
+        "default_sha256",
+        "baseline_version",
+        "drift_status",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("template_key", ""),
+        ("active_sha256", "short"),
+        ("runtime_sha256", "not-a-sha"),
+        ("drift_status", "unknown"),
+    ],
+)
+def test_template_resolution_trace_serializer_rejects_invalid_contract_fields(
+    field,
+    value,
+):
+    from core.prompt_v2.template_resolution import serialize_template_resolutions_json
+
+    resolution = {
+        "template_key": "chat/main",
+        "active_source": "runtime",
+        "active_path": "/runtime/chat/main.md",
+        "runtime_path": "/runtime/chat/main.md",
+        "default_path": "/default/chat/main.md",
+        "active_sha256": "a" * 64,
+        "runtime_sha256": "a" * 64,
+        "default_sha256": "b" * 64,
+        "baseline_version": "1",
+        "drift_status": "local_override",
+    }
+    resolution[field] = value
+
+    with pytest.raises(ValueError):
+        serialize_template_resolutions_json({"base_contract": resolution})
 
 
 def test_prompt_v2_flow_selects_single_conditional_path_by_edge_condition():
@@ -1541,6 +1810,7 @@ async def test_prompt_v2_runtime_fact_survives_identity_template_without_placeho
         return SimpleNamespace(
             body="<identity_context>\n固定身份\n</identity_context>",
             path=loaded.path,
+            resolution=loaded.resolution,
         )
 
     monkeypatch.setattr(compiler, "load_template", load_template_without_authorization_placeholder)
@@ -1635,17 +1905,22 @@ def test_prompt_v2_renders_classifier_legacy_task_template(tmp_path, monkeypatch
     monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
 
-    from core.prompt_v2.task_templates import render_task_prompt
+    from core.prompt_v2.task_templates import TASK_PAYLOAD_MARKER, render_task_messages
 
-    rendered = render_task_prompt(
+    messages = render_task_messages(
         "classifier_legacy",
         {"system_prompt": "旧系统", "message": "ping"},
-        fallback_text="fallback",
+        fallback_messages=[
+            {"role": "system", "content": "fallback"},
+            {"role": "user", "content": "ping"},
+        ],
     )
 
-    assert "旧系统" in rendered
-    assert "待判定消息:" in rendered
-    assert "ping" in rendered
+    assert "旧系统" in messages[0]["content"]
+    assert "待判定消息:" in messages[0]["content"]
+    assert TASK_PAYLOAD_MARKER in messages[0]["content"]
+    assert "ping" not in messages[0]["content"]
+    assert messages[1] == {"role": "user", "content": "ping"}
 
 
 def test_prompt_v2_renders_memory_extract_task_template(tmp_path, monkeypatch):

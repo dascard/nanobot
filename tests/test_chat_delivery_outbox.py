@@ -457,6 +457,16 @@ def test_chat_delivery_outbox_migration_creates_and_accepts_orm_schema():
         with fresh_engine.begin() as conn:
             chat_delivery_outbox_table(conn, fresh_engine, None)
         assert "chat_delivery_outbox" in inspect(fresh_engine).get_table_names()
+        migration_checks = {
+            item["name"]
+            for item in inspect(fresh_engine).get_check_constraints(
+                "chat_delivery_outbox"
+            )
+        }
+        assert migration_checks == {
+            "ck_chat_delivery_outbox_attempt_count",
+            "ck_chat_delivery_outbox_status",
+        }
 
         Base.metadata.create_all(orm_engine)
         with orm_engine.begin() as conn:

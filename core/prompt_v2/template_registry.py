@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from core.prompt_v2.flow_storage import (
     assert_no_symlink_components,
-    atomic_replace_bytes,
     ensure_directory_without_symlinks,
-    flow_write_lock,
+    read_regular_bytes,
 )
 
 
@@ -60,6 +58,8 @@ _LEGACY_ALIASES: dict[str, str] = {
     "private_decision": "tasks/private_decision",
     "timing_gate": "tasks/timing_gate",
     "memory_extract": "tasks/memory_extract",
+    "memory_digest_system": "tasks/memory_digest_system",
+    "memory_digest_user": "tasks/memory_digest_user",
     "reply_contract_retry": "tasks/reply_contract_retry",
     "outreach_extract": "tasks/outreach_extract",
     "outreach_judge": "tasks/outreach_judge",
@@ -72,6 +72,8 @@ _TASK_TOOL_NAMES: dict[str, str] = {
     "tasks/private_decision": "private_decision",
     "tasks/timing_gate": "timing_gate",
     "tasks/memory_extract": "memory_extract",
+    "tasks/memory_digest_system": "memory_digest",
+    "tasks/memory_digest_user": "memory_digest",
     "tasks/reply_contract_retry": "reply",
     "tasks/outreach_extract": "outreach_extract",
     "tasks/outreach_judge": "outreach_judge",
@@ -79,12 +81,45 @@ _TASK_TOOL_NAMES: dict[str, str] = {
     "tasks/proactive_research": "web_search",
 }
 
-_LEGACY_SUPER_USER_LINE = re.compile(
-    r"(?m)^(?P<indent>\s*)super_user_id\s*:\s*"
-    r"{{\s*super_user_id\s*}}[ \t]*$"
-)
-_LEGACY_SUPER_USER_PLACEHOLDER = re.compile(r"{{\s*super_user_id\s*}}")
+_TOOL_WORKFLOW_TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
+    "group_analysis": (
+        "tools/group_analysis/system",
+        "tools/group_analysis/topics",
+        "tools/group_analysis/titles",
+        "tools/group_analysis/quotes",
+        "tools/group_analysis/quality",
+    ),
+    "image_summary": (
+        "tools/image_summary/system",
+        "tools/image_summary/user",
+    ),
+    "ai_daily": (
+        "tools/ai_daily/digest_system",
+        "tools/ai_daily/digest_user",
+        "tools/ai_daily/quality_system",
+        "tools/ai_daily/quality_user",
+    ),
+}
 
+_TOOL_USAGE_TEMPLATE_KEYS: dict[str, str] = {
+    tool_name: f"tools/{tool_name}/usage"
+    for tool_name in (
+        "reply",
+        "no_reply",
+        "sticker_search",
+        "image_generation",
+        "sql_analysis",
+        "python_sandbox",
+        "ai_daily",
+        "memory_query",
+        "knowledge_query",
+        "web_search",
+        "image_summary",
+        "group_analysis",
+        "persona_update",
+        "schedule_task",
+    )
+}
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -107,69 +142,129 @@ def runtime_template_dir() -> Path:
     )
 
 
+def _active_runtime_template_keys(
+) -> set[str]:
+    """返回当前 live flow 与已登记任务实际可能读取的模板 key。"""
+    from core.prompt_v2.flow import load_flow, ordered_nodes_for_chat
+    from core.prompt_v2.flow_contract import LIVE_PROMPT_BRANCHES
+    from core.prompt_v2.task_contracts import (
+        get_task_contract,
+        list_task_contract_keys,
+    )
+    from core.tool_registry import TOOL_METADATA
+
+    active_keys = {"chat/flow"}
+    active_flow = load_flow()
+    for platform, chat_type in LIVE_PROMPT_BRANCHES:
+        for node in ordered_nodes_for_chat(
+            active_flow.flow,
+            chat_type,
+            platform=platform,
+        ):
+            if str(node.get("type") or "") != "template":
+                continue
+            template_key = str(node.get("template_key") or "").strip()
+            if template_key:
+                active_keys.add(resolve_template_key(template_key))
+
+    for template_key in list_task_contract_keys():
+        contract = get_task_contract(template_key)
+        if contract is not None and contract.render_mode != "code_fallback_only":
+            active_keys.add(template_key)
+
+    for tool_name, definition in TOOL_METADATA.items():
+        if definition.force_disabled:
+            continue
+        if not (
+            definition.force_enabled
+            or definition.private_default
+            or definition.group_default
+        ):
+            continue
+        candidates = set(_TOOL_WORKFLOW_TEMPLATE_KEYS.get(tool_name, ()))
+        usage_key = _TOOL_USAGE_TEMPLATE_KEYS.get(tool_name)
+        if usage_key is not None:
+            candidates.add(usage_key)
+        active_keys.update(candidates)
+    return active_keys
+
+
 def init_prompt_v2_runtime_dir() -> dict[str, Any]:
     source_dir = default_template_dir()
     runtime_dir = ensure_directory_without_symlinks(runtime_template_dir())
+    from core.prompt_v2.template_baseline import (
+        TemplateBaselineError,
+        default_template_state_dir,
+    )
+    from core.prompt_v2.template_migration import TemplateMigrationService
+
+    migration_service = TemplateMigrationService(
+        default_dir=source_dir,
+        runtime_dir=runtime_dir,
+        state_dir=default_template_state_dir(runtime_dir),
+    )
+    template_recovery = migration_service.recover()
+    baseline_store = migration_service.store
+    active_template_keys = _active_runtime_template_keys()
     copied: list[str] = []
+    baseline_provisioned: list[str] = []
     if source_dir.exists():
         for source_path in sorted(source_dir.rglob("*")):
             if not source_path.is_file() or source_path.suffix not in {".md", ".json"}:
                 continue
             rel = source_path.relative_to(source_dir)
             target_path = runtime_dir / rel
-            if rel.as_posix() == "chat/flow.json":
-                with flow_write_lock(target_path):
-                    assert_no_symlink_components(target_path)
-                    if target_path.exists():
-                        continue
-                    atomic_replace_bytes(target_path, source_path.read_bytes())
-                    copied.append(rel.as_posix())
-                continue
             assert_no_symlink_components(target_path)
             if target_path.exists():
                 continue
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
-            copied.append(rel.as_posix())
+            template_key = rel.with_suffix("").as_posix()
+            preflight = baseline_store.audit(template_key)
+            if preflight.drift_status == "invalid":
+                continue
+            if migration_service.provision_missing(template_key):
+                copied.append(rel.as_posix())
+                baseline_provisioned.append(template_key)
 
     flow_result = {
         "flow_migrated": False,
         "flow_backup_path": "",
     }
-    runtime_flow = runtime_dir / "chat" / "flow.json"
-    if runtime_flow.exists() or runtime_flow.is_symlink():
-        from core.prompt_v2.flow_migrations import (
-            default_session_guidance_flow_backup_dir,
-            upgrade_runtime_flow_file,
-        )
-
-        flow_result = upgrade_runtime_flow_file(
-            runtime_flow,
-            backup_dir=default_session_guidance_flow_backup_dir(runtime_flow),
-        )
-
-    migrated: list[str] = []
-    for runtime_path in sorted(runtime_dir.rglob("*.md")):
-        assert_no_symlink_components(runtime_path)
-        original = runtime_path.read_text(encoding="utf-8")
-        updated = _LEGACY_SUPER_USER_LINE.sub(
-            r"\g<indent>is_super_user: {{ is_super_user }}",
-            original,
-        )
-        updated = _LEGACY_SUPER_USER_PLACEHOLDER.sub("{{ is_super_user }}", updated)
-        if updated == original:
-            continue
-        runtime_path.write_text(updated, encoding="utf-8")
-        migrated.append(runtime_path.relative_to(runtime_dir).as_posix())
 
     from core.prompt_v2.task_templates import inspect_live_task_templates
+
+    task_contracts = inspect_live_task_templates()
+    audit_keys = set(baseline_store.list_template_keys()) | active_template_keys
+    template_audit = [
+        baseline_store.audit(template_key).to_dict()
+        for template_key in sorted(audit_keys)
+    ]
+    invalid_templates = [
+        item["template_key"]
+        for item in template_audit
+        if item["template_key"] in active_template_keys
+        and (
+            item["drift_status"] == "invalid"
+            or (
+                item["default_sha256"] is None
+                and item["runtime_sha256"] is None
+            )
+        )
+    ]
+    if invalid_templates:
+        raise TemplateBaselineError(
+            "Prompt Runtime 模板基线 invalid: "
+            + ", ".join(invalid_templates)
+        )
 
     return {
         "source_dir": str(source_dir),
         "runtime_dir": str(runtime_dir),
         "copied": copied,
-        "migrated": migrated,
-        "task_contracts": inspect_live_task_templates(),
+        "migrated": [],
+        "baseline_provisioned": baseline_provisioned,
+        "template_audit": template_audit,
+        "template_recovery": template_recovery,
+        "task_contracts": task_contracts,
         "flow_migrated": flow_result["flow_migrated"],
         "flow_backup_path": flow_result["flow_backup_path"],
     }
@@ -290,9 +385,12 @@ def list_template_records() -> list[dict[str, Any]]:
             try:
                 from core.prompt_v2.template_loader import split_frontmatter_text
 
-                meta, _body = split_frontmatter_text(path.read_text(encoding="utf-8"))
+                raw_bytes = read_regular_bytes(path)
+                if raw_bytes is None:
+                    continue
+                meta, _body = split_frontmatter_text(raw_bytes.decode("utf-8"))
                 frontmatter.update(meta)
-            except Exception:
+            except (OSError, UnicodeError, ValueError):
                 continue
         record = classify_template(key, frontmatter).to_dict()
         record.update({

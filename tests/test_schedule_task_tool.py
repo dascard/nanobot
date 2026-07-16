@@ -1,12 +1,27 @@
 from tests.async_helpers import run_async
 from types import SimpleNamespace
+from datetime import datetime, timedelta
 
 
-def test_schedule_task_run_uses_push_envelope(monkeypatch, db_session):
-    from core import daily_digest
+def _seed_scheduled_outbox_control(db_session) -> None:
+    from core.database import OutboundDeliveryControl
+
+    now = datetime(2026, 7, 15, 4, 0, 0)
+    db_session.add(OutboundDeliveryControl(
+        source_type="scheduled_task",
+        mode="outbox_active",
+        cutover_epoch=1,
+        effective_from=now - timedelta(days=1),
+        protocol_version=2,
+        writer_version=0,
+        created_at=now - timedelta(days=1),
+        updated_at=now - timedelta(days=1),
+    ))
+    db_session.commit()
+
+
+def _seed_task(db_session):
     from core.database import ScheduledTask
-    from creatures.nanobot.prompts.skills.schedule_task import tool as schedule_tool_module
-    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
 
     task = ScheduledTask(
         name="即时推送",
@@ -15,22 +30,52 @@ def test_schedule_task_run_uses_push_envelope(monkeypatch, db_session):
         target_id="10001",
         prompt_template="生成今日简报",
         enabled=True,
+        delivery_status="idle",
     )
     db_session.add(task)
     db_session.commit()
     db_session.refresh(task)
+    return task
+
+
+def test_schedule_task_run_requires_explicit_idempotency_key(
+    monkeypatch,
+    db_session,
+):
+    from core import daily_digest
+    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+
+    _seed_scheduled_outbox_control(db_session)
+    task = _seed_task(db_session)
+
+    async def forbidden_generate(*_args, **_kwargs):
+        raise AssertionError("缺少幂等键时不得调用模型")
+
+    monkeypatch.setattr(daily_digest, "_generate_task_message", forbidden_generate)
+    result = run_async(ScheduleTaskTool().execute({
+        "action": "run",
+        "task_id": task.id,
+    }))
+
+    assert not result.success
+    assert "幂等" in str(result.error)
+
+
+def test_schedule_task_run_queues_and_reports_not_delivered(monkeypatch, db_session):
+    from core import daily_digest
+    from core.database import OutboundDeliveryOutbox, ScheduledTask
+    from creatures.nanobot.prompts.skills.schedule_task import tool as schedule_tool_module
+    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+
+    _seed_scheduled_outbox_control(db_session)
+    task = _seed_task(db_session)
     task_id = task.id
-    calls = []
 
     async def fake_generate(_task):
         return "今日简报内容"
 
-    async def fake_push_envelope_to_qq(target_type, target_id, envelope):
-        calls.append((target_type, target_id, envelope))
-        return True
-
-    async def forbidden_push_to_qq(*_args, **_kwargs):
-        raise AssertionError("schedule_task run must not call push_to_qq directly")
+    async def forbidden_push(*_args, **_kwargs):
+        raise AssertionError("schedule_task run 不得直接调用 QQ push")
 
     monkeypatch.setattr(daily_digest, "_generate_task_message", fake_generate)
     monkeypatch.setattr(
@@ -39,36 +84,90 @@ def test_schedule_task_run_uses_push_envelope(monkeypatch, db_session):
         fake_generate,
         raising=False,
     )
-    monkeypatch.setattr(daily_digest, "push_envelope_to_qq", fake_push_envelope_to_qq)
+    monkeypatch.setattr(daily_digest, "push_envelope_to_qq", forbidden_push)
     monkeypatch.setattr(
         schedule_tool_module,
         "push_envelope_to_qq",
-        fake_push_envelope_to_qq,
+        forbidden_push,
         raising=False,
     )
-    monkeypatch.setattr(daily_digest, "push_to_qq", forbidden_push_to_qq)
+    monkeypatch.setattr(daily_digest, "push_to_qq", forbidden_push)
     monkeypatch.setattr(
         schedule_tool_module,
         "push_to_qq",
-        forbidden_push_to_qq,
+        forbidden_push,
         raising=False,
     )
 
-    result = run_async(ScheduleTaskTool().execute({"action": "run", "task_id": task_id}))
+    result = run_async(ScheduleTaskTool().execute({
+        "action": "run",
+        "task_id": task_id,
+        "idempotency_key": "tool-request-1",
+    }))
 
     assert result.success
-    assert calls
-    target_type, target_id, envelope = calls[0]
-    assert target_type == "group"
-    assert target_id == "10001"
-    assert envelope["reply"] == "今日简报内容"
-    assert envelope["messages"] == [{"type": "text", "text": "今日简报内容"}]
-    assert envelope["meta"]["platform"] == "qq"
-    assert envelope["meta"]["chat_type"] == "group"
-    assert envelope["meta"]["source"] == "schedule_task_tool"
-    assert envelope["meta"]["task_id"] == task_id
+    assert "已入队" in result.output
+    assert "已执行并推送" not in result.output
+    assert db_session.query(OutboundDeliveryOutbox).count() == 1
     db_session.expire_all()
     assert db_session.get(ScheduledTask, task_id).last_run_at is not None
+    assert db_session.get(ScheduledTask, task_id).last_success_at is None
+
+
+def test_schedule_task_schema_declares_manual_idempotency_key():
+    from core.tool_schema_preview import STATIC_TOOL_SCHEMAS
+    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+
+    runtime_properties = ScheduleTaskTool().get_parameters_schema()["properties"]
+    preview_properties = STATIC_TOOL_SCHEMAS["schedule_task"]["parameters"]["properties"]
+    assert "idempotency_key" in runtime_properties
+    assert runtime_properties["idempotency_key"] == preview_properties["idempotency_key"]
+
+
+def test_schedule_task_toggle_cancels_pending_delivery(monkeypatch, db_session):
+    from core.database import OutboundDeliveryOutbox
+    from core.scheduled_task_outbound import (
+        ScheduledTaskProducerConfig,
+        enqueue_scheduled_task_occurrence,
+    )
+    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+
+    _seed_scheduled_outbox_control(db_session)
+    task = _seed_task(db_session)
+    queued = run_async(
+        enqueue_scheduled_task_occurrence(
+            db_session,
+            task_id=task.id,
+            trigger_type="manual",
+            manual_idempotency_key="tool-toggle-pending",
+            config=ScheduledTaskProducerConfig.for_tests(),
+            generator=lambda _snapshot: "禁用前生成的内容",
+        )
+    )
+
+    result = run_async(ScheduleTaskTool().execute({
+        "action": "toggle",
+        "task_id": task.id,
+    }))
+
+    assert result.success
+    db_session.expire_all()
+    assert not bool(db_session.get(type(task), task.id).enabled)
+    assert db_session.get(OutboundDeliveryOutbox, queued.outbox_id).status == "cancelled"
+
+
+def test_schedule_task_list_hides_target_id(db_session):
+    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+
+    task = _seed_task(db_session)
+
+    result = run_async(ScheduleTaskTool().execute({"action": "list"}))
+
+    assert result.success
+    assert task.target_id not in result.output
+    assert "最近尝试" in result.output
+    assert "最近成功" in result.output
+    assert "投递状态" in result.output
 
 
 def test_schedule_task_create_uses_runtime_context_target(monkeypatch):

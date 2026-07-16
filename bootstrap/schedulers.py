@@ -100,20 +100,19 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
         logger.info("NANOBOT_TESTING=1: skipped scheduler startup.")
         return SchedulerHandles()
 
-    from config import DAILY_DIGEST_ENABLED
+    from config import get_session_summary_worker_mode
     from core.daily_digest import daily_digest_scheduler, scheduled_task_runner
     from core.eval_sampling.scheduler import eval_sampling_scheduler
     from core.expression_learner import expression_learner_scheduler
     from core.proactive_outreach import proactive_outreach_scheduler
-    from core.settings_service import settings
 
+    session_summary_mode = get_session_summary_worker_mode()
     handles = SchedulerHandles()
-    if DAILY_DIGEST_ENABLED:
-        handles.digest = _start_thread(
-            name="daily-digest-scheduler",
-            target=daily_digest_scheduler,
-        )
-        logger.info("Daily digest scheduler initialized.")
+    handles.digest = _start_thread(
+        name="daily-digest-scheduler",
+        target=daily_digest_scheduler,
+    )
+    logger.info("Memory digest scheduler initialized.")
 
     handles.scheduled_tasks = _start_thread(
         name="scheduled-task-runner",
@@ -121,11 +120,17 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
     )
     logger.info("Scheduled task runner initialized.")
 
-    handles.session_summary = _start_thread(
-        name="session-summary-worker",
-        target=session_summary_worker_scheduler,
-    )
-    logger.info("Session summary worker initialized.")
+    if session_summary_mode == "embedded":
+        handles.session_summary = _start_thread(
+            name="session-summary-worker",
+            target=session_summary_worker_scheduler,
+        )
+        logger.info("Session summary worker initialized in embedded mode.")
+    else:
+        logger.info(
+            "Session summary worker not embedded mode=%s.",
+            session_summary_mode,
+        )
 
     handles.chat_delivery = _start_thread(
         name="chat-delivery-worker",
@@ -149,11 +154,10 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
     )
     logger.info("Eval sampling scheduler initialized.")
 
-    if settings.get_bool("proactive_outreach.enabled", False):
-        handles.proactive_outreach = _start_thread(
-            name="proactive-outreach-scheduler",
-            target=proactive_outreach_scheduler,
-        )
-        logger.info("Proactive outreach scheduler initialized.")
+    handles.proactive_outreach = _start_thread(
+        name="proactive-outreach-scheduler",
+        target=proactive_outreach_scheduler,
+    )
+    logger.info("Proactive outreach recovery scheduler initialized.")
 
     return handles

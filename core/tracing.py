@@ -1,11 +1,14 @@
+import hashlib
 import json
 import logging
-import hashlib
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from core.prompt_v2.template_resolution import serialize_template_resolutions_json
+from core.safe_diagnostics import safe_response_summary, safe_url_for_logging
 from core.time_utils import db_now_naive, to_db_naive
 
 logger = logging.getLogger("nanobot.tracing")
@@ -18,6 +21,9 @@ SAFE_NUMERIC_TOKEN_KEYS = frozenset({
 })
 MAX_PREVIEW_CHARS = 2000
 MAX_WEB_SEARCH_PREVIEW_CHARS = 40000
+MAX_LLM_REQUEST_JSON_CHARS = 256_000
+MAX_LLM_RESPONSE_JSON_CHARS = 64_000
+MAX_LLM_FAILURE_SUMMARY_CHARS = 4_000
 
 
 @dataclass
@@ -96,6 +102,77 @@ def _prompt_preview(content: str, *, max_chars: int = 1000) -> str:
     return f"{head}\n...[prompt_sha256:{digest} chars:{len(content)}]"
 
 
+def _serialized_payload(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        return str(value)
+
+
+def _response_body_audit(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping) and {
+        "response_body_omitted",
+        "response_body_chars",
+        "response_body_sha256",
+    }.issubset(value):
+        audit = {
+            "response_body_omitted": bool(value.get("response_body_omitted")),
+            "response_body_chars": max(0, int(value.get("response_body_chars") or 0)),
+            "response_body_sha256": str(value.get("response_body_sha256") or "")[:64],
+        }
+        if value.get("response_body_truncated") is not None:
+            audit["response_body_truncated"] = bool(
+                value.get("response_body_truncated")
+            )
+        return audit
+    raw = _serialized_payload(value)
+    return {
+        "response_body_omitted": bool(raw and raw not in {"{}", "null", ""}),
+        "response_body_chars": len(raw),
+        "response_body_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "safe_summary": safe_response_summary(
+            value,
+            max_chars=MAX_LLM_FAILURE_SUMMARY_CHARS,
+        ),
+    }
+
+
+def _bounded_payload_json(value: Any, *, max_chars: int) -> str:
+    text = _json_dumps(value, max_chars=0)
+    if len(text) <= max_chars:
+        return text
+    raw = _serialized_payload(value)
+    audit = {
+        "response_body_omitted": True,
+        "response_body_chars": len(raw),
+        "response_body_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "safe_summary": safe_response_summary(value, max_chars=4_000),
+    }
+    return json.dumps(audit, ensure_ascii=False, separators=(",", ":"))
+
+
+def sanitize_llm_log_payload(data: Mapping[str, Any]) -> dict[str, Any]:
+    """统一保护持久 Trace 与旧记录的 Admin 输出。"""
+
+    result = dict(data)
+    result["url"] = safe_url_for_logging(result.get("url", ""))
+    limits = {
+        "headers_json": 12_000,
+        "request_json": MAX_LLM_REQUEST_JSON_CHARS,
+        "request_preview": 4_000,
+        "response_json": MAX_LLM_RESPONSE_JSON_CHARS,
+        "response_preview": 4_000,
+        "error": 2_000,
+    }
+    for key, max_chars in limits.items():
+        if key in result:
+            result[key] = safe_response_summary(
+                result.get(key, ""),
+                max_chars=max_chars,
+            )
+    return result
+
+
 def _session():
     from core import database
 
@@ -129,6 +206,7 @@ class RunTracer:
         prompt_runtime_path: str = "",
         prompt_default_path: str = "",
         prompt_sha256: str = "",
+        prompt_template_resolutions: dict[str, Any] | None = None,
         model: str = "",
         input_preview: str = "",
         meta: dict[str, Any] | None = None,
@@ -155,6 +233,11 @@ class RunTracer:
                         prompt_runtime_path=str(prompt_runtime_path or ""),
                         prompt_default_path=str(prompt_default_path or ""),
                         prompt_sha256=str(prompt_sha256 or "")[:64],
+                        prompt_template_resolutions_json=(
+                            serialize_template_resolutions_json(
+                                prompt_template_resolutions
+                            )
+                        ),
                         model=str(model or "")[:160],
                         status="running",
                         input_preview=_preview(input_preview, max_chars=1000),
@@ -178,6 +261,7 @@ class RunTracer:
         prompt_runtime_path: str = "",
         prompt_default_path: str = "",
         prompt_sha256: str = "",
+        prompt_template_resolutions: dict[str, Any] | None = None,
     ) -> None:
         if not run_id:
             return
@@ -194,6 +278,11 @@ class RunTracer:
                     row.prompt_runtime_path = str(prompt_runtime_path or "")
                     row.prompt_default_path = str(prompt_default_path or "")
                     row.prompt_sha256 = str(prompt_sha256 or "")[:64]
+                    row.prompt_template_resolutions_json = (
+                        serialize_template_resolutions_json(
+                            prompt_template_resolutions
+                        )
+                    )
                     db.commit()
 
                 _run_db_write(db, operation, label="agent_run_prompt_source")
@@ -338,6 +427,7 @@ class PromptTracer:
         prompt_runtime_path: str = "",
         prompt_default_path: str = "",
         prompt_sha256: str = "",
+        prompt_template_resolutions: dict[str, Any] | None = None,
     ) -> None:
         try:
             from core.database import PromptRenderLog
@@ -354,6 +444,11 @@ class PromptTracer:
                         prompt_runtime_path=str(prompt_runtime_path or ""),
                         prompt_default_path=str(prompt_default_path or ""),
                         prompt_sha256=str(prompt_sha256 or "")[:64],
+                        prompt_template_resolutions_json=(
+                            serialize_template_resolutions_json(
+                                prompt_template_resolutions
+                            )
+                        ),
                         variables_json=_json_dumps(variables or {}, max_chars=6000),
                         rendered_preview=_prompt_preview(rendered_content, max_chars=1000),
                         token_estimate=int(token_estimate or 0),
@@ -420,14 +515,17 @@ class LLMRequestTracer:
                         source=str(source or "")[:64],
                         provider=str(provider or "")[:64],
                         model=str(model or "")[:160],
-                        url=str(url or ""),
+                        url=safe_url_for_logging(url),
                         method=str(method or "POST")[:16],
                         headers_json=_json_dumps(headers or {}, max_chars=12000),
-                        request_json=_json_dumps(request_payload, max_chars=0),
+                        request_json=_bounded_payload_json(
+                            request_payload,
+                            max_chars=MAX_LLM_REQUEST_JSON_CHARS,
+                        ),
                         request_preview=_preview(request_payload, max_chars=4000),
                         status=str(status or "created")[:32],
                         response_status=int(response_status or 0),
-                        error=_preview(error, max_chars=2000),
+                        error=safe_response_summary(error, max_chars=2000),
                         message_sources_json=_json_dumps(lint_result.get("message_sources") or [], max_chars=0),
                         request_lint_json=_json_dumps(lint_result, max_chars=0),
                         actual_sent_tools_json=_json_dumps(lint_result.get("actual_sent_tools") or [], max_chars=0),
@@ -470,11 +568,30 @@ class LLMRequestTracer:
                     log = db.query(LLMApiRequestLog).filter(LLMApiRequestLog.id == int(log_id)).first()
                     if log is None:
                         return
-                    log.response_json = _json_dumps(response or {}, max_chars=0)
-                    log.response_preview = _preview(response or {}, max_chars=4000)
+                    normalized_status = str(status or "success")[:32]
+                    if normalized_status in {"success", "stream_success"}:
+                        log.response_json = _bounded_payload_json(
+                            response or {},
+                            max_chars=MAX_LLM_RESPONSE_JSON_CHARS,
+                        )
+                        log.response_preview = safe_response_summary(
+                            response or {},
+                            max_chars=4000,
+                        )
+                    else:
+                        audit = _response_body_audit(response or {})
+                        log.response_json = json.dumps(
+                            audit,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        log.response_preview = safe_response_summary(
+                            audit,
+                            max_chars=4000,
+                        )
                     log.response_status = int(response_status or 0)
-                    log.status = str(status or "success")[:32]
-                    log.error = _preview(error, max_chars=2000)
+                    log.status = normalized_status
+                    log.error = safe_response_summary(error, max_chars=2000)
                     log.latency_ms = int(latency_ms or 0)
                     log.finished_at = db_now_naive()
                     db.commit()
@@ -557,4 +674,6 @@ def row_to_dict(row: Any) -> dict[str, Any]:
         if isinstance(value, datetime):
             value = value.isoformat()
         data[col.name] = value
+    if getattr(row, "__tablename__", "") == "llm_api_request_logs":
+        return sanitize_llm_log_payload(data)
     return data

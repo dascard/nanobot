@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -109,6 +110,17 @@ def allowed_variable_names(scope: str) -> set[str]:
 
 def referenced_variable_names(template_text: str) -> set[str]:
     return set(_VARIABLE_PATTERN.findall(str(template_text or "")))
+
+
+def is_empty_task_call_value(value: Any) -> bool:
+    """判断 task 动态调用值是否缺少可用内容。"""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, Collection):
+        return len(value) == 0
+    return False
 
 
 def validate_scoped_template(scope: str, template_text: str) -> None:

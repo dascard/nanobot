@@ -21,7 +21,7 @@ from core.semantic.adapters import (
 )
 from core.semantic.indexer import upsert_semantic_chunks
 from core.semantic.jobs import claim_next_job, finish_job, recover_timed_out_jobs
-from core.semantic.provider_factory import get_embedding_provider
+from core.semantic.provider_factory import get_embedding_provider, get_rag_runtime_config
 from core.semantic.schema import ensure_semantic_schema
 from core.time_utils import db_now_naive
 
@@ -155,6 +155,8 @@ def run_once(
     embedding_provider=None,
     recover_timeout_seconds: int = 900,
 ) -> bool:
+    if not get_rag_runtime_config().semantic_index_enabled:
+        return False
     close_db = db is None
     if db is None:
         db = SessionLocal()

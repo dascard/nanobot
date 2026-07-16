@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import subprocess
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
@@ -28,74 +26,9 @@ def admin_version(_auth=Depends(verify_admin)):
     if _VERSION_CACHE is not None:
         return _VERSION_CACHE
 
-    commit = os.environ.get("NANOBOT_GIT_COMMIT") or ""
-    branch = os.environ.get("NANOBOT_GIT_BRANCH") or ""
-    commit_date = os.environ.get("NANOBOT_GIT_COMMIT_DATE") or ""
-    dirty_raw = os.environ.get("NANOBOT_GIT_DIRTY") or ""
+    from core.build_info import resolve_build_info
 
-    if not commit or not branch:
-        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-        def _git(args: list[str]) -> str | None:
-            try:
-                return subprocess.check_output(
-                    ["git", *args],
-                    cwd=base,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                    timeout=3,
-                ).strip()
-            except Exception as exc:
-                logger.debug(
-                    "[AdminVersion] git probe failed args=%s cwd=%s: %s",
-                    args,
-                    base,
-                    exc,
-                    exc_info=True,
-                )
-                return None
-
-        commit = commit or _git(["rev-parse", "--short", "HEAD"]) or "unknown"
-        branch = branch or _git(["rev-parse", "--abbrev-ref", "HEAD"]) or ""
-        commit_date = commit_date or _git(["log", "-1", "--format=%ci", "--date=iso-strict"]) or ""
-
-        if not dirty_raw:
-            status = _git([
-                "status",
-                "--porcelain",
-                "--untracked-files=no",
-                "--",
-                ".",
-                ":(exclude)data",
-                ":(exclude).claude",
-                ":(exclude)sentinel/model.safetensors",
-                ":(exclude).env",
-                ":(exclude).vscode",
-                ":(exclude).idea",
-                ":(exclude)webui/node_modules",
-            ])
-            if status is None:
-                dirty_raw = "null"
-            elif status:
-                dirty_raw = "true"
-            else:
-                dirty_raw = "false"
-
-    if dirty_raw == "true":
-        dirty = True
-    elif dirty_raw == "false":
-        dirty = False
-    else:
-        dirty = None
-
-    _VERSION_CACHE = {
-        "commit": commit or "unknown",
-        "full_commit": os.environ.get("NANOBOT_GIT_FULL_COMMIT", "") or "",
-        "branch": branch or "",
-        "commit_date": commit_date or "",
-        "dirty": dirty,
-        "display": f"{commit}{'-dirty' if dirty and commit != 'unknown' else ''}",
-    }
+    _VERSION_CACHE = resolve_build_info(logger=logger).as_dict()
     return _VERSION_CACHE
 
 

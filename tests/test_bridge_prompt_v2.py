@@ -90,6 +90,23 @@ def _prompt_tool_plan(**overrides):
     return SimpleNamespace(**defaults)
 
 
+def _prompt_template_resolutions() -> dict:
+    return {
+        "base_contract": {
+            "template_key": "chat/main",
+            "active_source": "runtime",
+            "active_path": "/runtime/chat/main.md",
+            "runtime_path": "/runtime/chat/main.md",
+            "default_path": "/default/chat/main.md",
+            "active_sha256": "c" * 64,
+            "runtime_sha256": "c" * 64,
+            "default_sha256": "d" * 64,
+            "baseline_version": None,
+            "drift_status": "untracked_legacy",
+        }
+    }
+
+
 def test_bridge_prompt_runtime_engine_defaults_to_prompt_and_invalid_falls_back(monkeypatch):
     from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
@@ -223,6 +240,110 @@ def test_bridge_build_prompt_runtime_input_passes_platform(monkeypatch):
     assert prompt_input.platform == "web"
 
 
+@pytest.mark.asyncio
+async def test_research_metadata_reaches_real_internal_private_strict_compiler(
+    monkeypatch,
+    db_session,
+):
+    from core import database
+    from core.settings_service import settings
+    from nanobot_kt.bridge import NanobotBridge
+    from nanobot_kt.prompt_runtime import (
+        PromptRuntimeAuditFailure,
+        build_prompt_runtime as real_build_prompt_runtime,
+    )
+
+    settings.set_session_factory(database.SessionLocal)
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    bridge.creature_path = "creatures/nanobot"
+    bridge._output = _FakeOutput()
+    bridge._session_locks = {}
+    bridge._last_prompt_render_meta = {}
+    bridge._agent = SimpleNamespace(
+        controller=SimpleNamespace(conversation=_FakeConversation()),
+        registry=SimpleNamespace(_tools={}),
+        executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
+    )
+    monkeypatch.setattr(bridge, "_log_agent_result", lambda *_args, **_kwargs: None)
+    captured_renders = []
+    monkeypatch.setattr(
+        "core.tracing.PromptTracer.record_render",
+        lambda **kwargs: captured_renders.append(kwargs),
+    )
+
+    captured_inputs = []
+    captured_results = []
+    captured_plans = []
+    from core.prompt_v2.compiler import compile_prompt_plan as real_compile_prompt_plan
+
+    async def capture_real_compile(request, *, strict_audit=True):
+        plan = await real_compile_prompt_plan(request, strict_audit=strict_audit)
+        captured_plans.append(plan)
+        return plan
+
+    monkeypatch.setattr(
+        "core.prompt_v2.compiler.compile_prompt_plan",
+        capture_real_compile,
+    )
+
+    async def compile_then_stop(prompt_input):
+        captured_inputs.append(prompt_input)
+        result = await real_build_prompt_runtime(prompt_input)
+        captured_results.append(result)
+        raise PromptRuntimeAuditFailure(
+            "测试在真实严格编译后停止",
+            meta_update={"test_stop_after_compile": True},
+        )
+
+    monkeypatch.setattr(
+        "nanobot_kt.prompt_runtime.build_prompt_runtime",
+        compile_then_stop,
+    )
+
+    response = await bridge.handle_message(
+        "调查 Prompt Flow 的内部研究路径",
+        user_id="research-user",
+        session_id="research_flow-v2",
+        sender_name="主动研究任务",
+        metadata={
+            "platform": "internal",
+            "chat_type": "research",
+            "is_group": False,
+            "is_superuser": False,
+            "user_id": "research-user",
+            "runtime_preset": "research",
+            "dry_run": True,
+        },
+    )
+
+    assert response == ""
+    assert len(captured_inputs) == 1
+    assert captured_inputs[0].platform == "internal"
+    assert captured_inputs[0].chat_type == "private"
+    assert len(captured_results) == 1
+    assert len(captured_plans) == 1
+    flow_node_ids = [section["node_id"] for section in captured_plans[0].flow_sections]
+    assert "base_contract" in flow_node_ids
+    assert "private_policy" in flow_node_ids
+    assert "qq_common_policy" not in flow_node_ids
+    assert "qq_group_policy" not in flow_node_ids
+    template_resolutions = captured_plans[0].template_resolutions
+    base_resolution = template_resolutions["base_contract"]
+    assert captured_results[0].prompt_template_resolutions == template_resolutions
+    assert captured_results[0].prompt_runtime_path == (base_resolution["runtime_path"] or "")
+    assert captured_results[0].prompt_default_path == (base_resolution["default_path"] or "")
+    assert captured_results[0].prompt_sha256 == captured_plans[0].prompt_sha256
+    assert captured_renders[0]["prompt_template_resolutions"] == template_resolutions
+    assert captured_renders[0]["prompt_sha256"] == captured_plans[0].prompt_sha256
+    assert "template_resolutions" not in captured_renders[0]["variables"]
+    assert "template_paths" not in captured_renders[0]["variables"]
+    assert captured_results[0].prompt_key == "chat_private"
+    assert captured_results[0].meta_update["prompt_engine"] == "prompt"
+    runtime_context = bridge._agent.executor._session.extra["nanobot_runtime_context"]
+    assert runtime_context["platform"] == "internal"
+    assert runtime_context["chat_type"] == "private"
+
+
 def test_bridge_build_prompt_runtime_input_passes_explicit_super_user_fact(monkeypatch):
     from nanobot_kt.bridge import NanobotBridge, PromptRuntimeAssemblyContext
 
@@ -282,6 +403,7 @@ async def test_build_prompt_runtime_passes_super_user_fact_to_compile_request(mo
             tool_schema_token_estimate=4,
             warnings=[],
             debug={
+                "template_resolutions": _prompt_template_resolutions(),
                 "message_token_estimate": 7,
                 "tool_schema_token_estimate": 4,
                 "token_estimate": 11,
@@ -335,6 +457,72 @@ async def test_build_prompt_runtime_passes_super_user_fact_to_compile_request(mo
     assert recorded_render["token_estimate"] == 11
     assert recorded_render["variables"]["message_token_estimate"] == 7
     assert recorded_render["variables"]["tool_schema_token_estimate"] == 4
+
+
+@pytest.mark.asyncio
+async def test_build_prompt_runtime_rejects_missing_base_template_resolution(monkeypatch):
+    from core.prompt_v2.schema import PromptPlan
+    from nanobot_kt.prompt_runtime import (
+        PromptRuntimeAuditFailure,
+        PromptRuntimeInput,
+        build_prompt_runtime,
+    )
+
+    async def fake_compile_prompt_plan(_request, *, strict_audit=False):
+        assert strict_audit is True
+        return PromptPlan(
+            engine="prompt",
+            chat_type="private",
+            platform="qq",
+            prompt_key="chat_private",
+            messages=[{"role": "user", "content": "<user_input>hi</user_input>"}],
+            tool_schemas=[],
+            section_hashes={"base_contract": "a" * 64},
+            prompt_sha256="b" * 64,
+            token_estimate=1,
+            warnings=[],
+            debug={"template_resolutions": {}},
+        )
+
+    monkeypatch.setattr(
+        "core.prompt_v2.compiler.compile_prompt_plan",
+        fake_compile_prompt_plan,
+    )
+    monkeypatch.setattr(
+        "core.tracing.PromptTracer.record_render",
+        lambda **_kwargs: pytest.fail("来源合同失败时不应写渲染记录"),
+    )
+
+    with pytest.raises(PromptRuntimeAuditFailure, match="base_contract"):
+        await build_prompt_runtime(PromptRuntimeInput(
+            prompt_engine="prompt",
+            prompt_mode="prompt",
+            prompt_key="chat_private",
+            chat_type="private",
+            runtime_chat_type="private",
+            session_id="private-missing-resolution",
+            user_id="missing-resolution-user",
+            group_id="",
+            sender_name="用户",
+            sender_id="missing-resolution-user",
+            session_name="",
+            trigger_reason="",
+            timing_decision="",
+            current_message_id="",
+            source_message_ids=[],
+            self_id="",
+            bot_id="",
+            bot_name="",
+            bot_aliases=[],
+            user_input="hi",
+            persona_text="",
+            history_header="",
+            history_messages=[],
+            runtime_tool_prompt="[RuntimeTool]",
+            effort_constraint="",
+            trace_id="trace-missing-resolution",
+            run_id="run-missing-resolution",
+        ))
 
 
 def test_bridge_build_prompt_runtime_input_coerces_v1_to_canonical_runtime(monkeypatch):
@@ -432,7 +620,7 @@ async def test_build_prompt_runtime_passes_platform_to_compile_request(monkeypat
             prompt_sha256="a" * 64,
             token_estimate=1,
             warnings=[],
-            debug={},
+            debug={"template_resolutions": _prompt_template_resolutions()},
         )
 
     monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile_prompt_plan)
@@ -577,7 +765,7 @@ async def test_bridge_event_capabilities_reuse_validated_tool_schema_snapshot(
 async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event(monkeypatch, db_session):
     from core import database
     from core import tool_plan as tool_plan_module
-    from core.database import AgentRun, ChatStreamConfig, GroupMemory
+    from core.database import AgentRun, ChatStreamConfig, GroupMemory, PromptRenderLog
     from core.prompt_v2.schema import PromptCompileRequest, PromptPlan
     from core.session_guidance import resolve_session_guidance as real_resolve_guidance
     from core.settings_service import settings
@@ -646,6 +834,7 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
 
     captured_requests = []
     captured_guidance_calls = []
+    template_resolutions = _prompt_template_resolutions()
 
     def capture_resolve_guidance(db, *, platform, chat_type, session_id):
         captured_guidance_calls.append({
@@ -679,6 +868,9 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
             warnings=[],
             debug={
                 "template_path": "/tmp/chat_group.md",
+                "template_paths": {"base_contract": "/runtime/chat/main.md"},
+                "template_resolutions": template_resolutions,
+                "request_prompt_sha256": "b" * 64,
                 "session_guidance_chat_stream_id": request.session_guidance_chat_stream_id,
                 "session_guidance_configured": bool(request.session_guidance),
                 "session_guidance_chars": len(request.session_guidance),
@@ -776,6 +968,19 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     run = db_session.query(AgentRun).filter(AgentRun.session_id == "group_1001").first()
     assert run is not None
     assert run.group_id == "1001"
+    assert run.prompt_source == "runtime"
+    assert run.prompt_runtime_path == "/runtime/chat/main.md"
+    assert run.prompt_default_path == "/default/chat/main.md"
+    assert run.prompt_sha256 == "b" * 64
+    assert json.loads(run.prompt_template_resolutions_json) == template_resolutions
+    prompt_render = (
+        db_session.query(PromptRenderLog)
+        .filter(PromptRenderLog.run_id == run.run_id)
+        .one()
+    )
+    assert prompt_render.prompt_source == "runtime"
+    assert prompt_render.prompt_sha256 == "b" * 64
+    assert json.loads(prompt_render.prompt_template_resolutions_json) == template_resolutions
     assert '"group_memory_injected": true' in run.meta_json
     assert '"group_memory_ids": [11, 12]' in run.meta_json
     assert '"group_profile_mode": "on"' in run.meta_json
@@ -915,6 +1120,7 @@ async def test_bridge_engine_v2_maps_private_runtime_metadata(
             warnings=[],
             debug={
                 "template_path": "/tmp/chat_private.md",
+                "template_resolutions": _prompt_template_resolutions(),
                 "session_guidance_chat_stream_id": request.session_guidance_chat_stream_id,
                 "session_guidance_configured": bool(request.session_guidance),
                 "session_guidance_chars": len(request.session_guidance),
@@ -1319,7 +1525,10 @@ async def test_bridge_tool_plan_does_not_mutate_registry_tools(monkeypatch, db_s
             prompt_sha256="b" * 64,
             token_estimate=10,
             warnings=[],
-            debug={"template_path": "/tmp/chat_group.md"},
+            debug={
+                "template_path": "/tmp/chat_group.md",
+                "template_resolutions": _prompt_template_resolutions(),
+            },
         )
 
     monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile)

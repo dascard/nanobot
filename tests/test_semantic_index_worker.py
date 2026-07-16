@@ -109,6 +109,30 @@ def test_run_once_claims_and_processes_next_job(db_session):
     assert db_session.query(SemanticIndexItem).count() == 1
 
 
+def test_run_once_does_not_claim_job_when_semantic_index_is_disabled(
+    db_session,
+    monkeypatch,
+):
+    from core.semantic.jobs import enqueue_index_job
+    from workers.semantic_index_worker import run_once
+
+    ensure_semantic_schema(db_session.bind)
+    enqueue_index_job(
+        db_session,
+        source_type="memory_digest",
+        source_id="11",
+        index_version="fake:v1:v1",
+    )
+    monkeypatch.setenv("SEMANTIC_INDEX_ENABLED", "0")
+
+    processed = run_once(db=db_session, worker_id="worker-a")
+
+    assert processed is False
+    job = db_session.query(SemanticIndexJob).one()
+    assert job.status == "pending"
+    assert job.locked_by == ""
+
+
 def test_deleted_source_marks_index_deleted(db_session):
     from core.semantic.indexer import upsert_semantic_chunks
     from core.semantic.jobs import claim_next_job, enqueue_index_job

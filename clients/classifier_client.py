@@ -19,6 +19,7 @@ from typing import Any
 
 from config import CLASSIFIER_API_URL
 from core.model_route_options import apply_enable_thinking_to_payload, normalize_enable_thinking
+from core.safe_diagnostics import safe_response_summary
 
 logger = logging.getLogger("nanobot.classifier")
 
@@ -30,7 +31,7 @@ _OUTREACH_ROUTE_KEYS = {
     "outreach_judge",
     "outreach_generate",
 }
-_RAW_BODY_PREVIEW_LIMIT = 4096
+_MODEL_RESPONSE_MAX_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -231,7 +232,7 @@ def _resolve_classifier_route(route_key: str) -> dict:
 
 def ensure_model_route_enabled(route_key: str, route: dict | None = None) -> dict:
     """实际调用前强制检查 provider.enabled。展示/目录解析不调用此函数。"""
-    route = route or _resolve_classifier_route(route_key)
+    route = route or resolve_model_route(route_key)
     provider_id = str(route.get("provider_id") or "").strip()
     if provider_id and route.get("provider_enabled") is False:
         raise RuntimeError(f"provider disabled: {provider_id}")
@@ -259,13 +260,32 @@ def strip_think_blocks(text: str) -> str:
     return text
 
 
-def _raw_body_audit(raw_body: bytes) -> dict[str, Any]:
-    text = raw_body.decode("utf-8", errors="replace")
+def _raw_body_audit(
+    raw_body: bytes,
+    *,
+    truncated: bool = False,
+) -> dict[str, Any]:
     return {
-        "raw_body_preview": text[:_RAW_BODY_PREVIEW_LIMIT],
-        "raw_body_chars": len(text),
-        "raw_body_sha256": hashlib.sha256(raw_body).hexdigest(),
+        "response_body_omitted": True,
+        "response_body_chars": len(raw_body.decode("utf-8", errors="replace")),
+        "response_body_sha256": hashlib.sha256(raw_body).hexdigest(),
+        "response_body_truncated": bool(truncated),
     }
+
+
+def _read_bounded_model_response(response: Any) -> tuple[bytes, bool]:
+    try:
+        raw_body = response.read(_MODEL_RESPONSE_MAX_BYTES + 1)
+    except TypeError:
+        raw_body = response.read()
+    if isinstance(raw_body, str):
+        raw_bytes = raw_body.encode("utf-8")
+    elif isinstance(raw_body, (bytes, bytearray, memoryview)):
+        raw_bytes = bytes(raw_body)
+    else:
+        raise ValueError("model response body must be bytes or string")
+    truncated = len(raw_bytes) > _MODEL_RESPONSE_MAX_BYTES
+    return raw_bytes[:_MODEL_RESPONSE_MAX_BYTES], truncated
 
 
 def call_model_route_response(
@@ -287,8 +307,12 @@ def call_model_route_response(
     """
     route = ensure_model_route_enabled(route_key)
     base_url = str(route["base_url"]).rstrip("/")
-    logger.info("[call_model_route] route=%s provider=%s base_url=%s model=%s",
-                route_key, route.get("provider_id", ""), base_url[:80], route.get("model", ""))
+    logger.info(
+        "[call_model_route] route=%s provider=%s model=%s",
+        route_key,
+        route.get("provider_id", ""),
+        route.get("model", ""),
+    )
 
     if not messages:
         fallback_messages = [
@@ -296,32 +320,29 @@ def call_model_route_response(
             {"role": "user", "content": user_message},
         ]
         messages = fallback_messages
-        try:
-            from core.prompt_v2.task_templates import render_task_messages
+        from core.prompt_v2.task_templates import render_task_messages
 
-            prompt_key = {
-                "timing_gate": "timing_gate",
-                "private_decision": "private_decision",
-                "classifier_legacy": "classifier_legacy",
-                "outreach_extract": "outreach_extract",
-                "outreach_judge": "outreach_judge",
-                "outreach_generate": "outreach_generate",
-            }.get(route_key, "")
-            if prompt_key:
-                messages = render_task_messages(
-                    prompt_key,
-                    {
-                        "message": user_message,
-                        "system_prompt": system_prompt,
-                        "pending_text": user_message,
-                        "recent_context": "",
-                        "bot_name": "",
-                        "group_profile": "",
-                    },
-                    fallback_messages=fallback_messages,
-                )
-        except Exception as e:
-            logger.warning("[call_model_route] PromptV2 task fallback route=%s error=%s", route_key, e)
+        prompt_key = {
+            "timing_gate": "timing_gate",
+            "private_decision": "private_decision",
+            "classifier_legacy": "classifier_legacy",
+            "outreach_extract": "outreach_extract",
+            "outreach_judge": "outreach_judge",
+            "outreach_generate": "outreach_generate",
+        }.get(route_key, "")
+        if prompt_key:
+            messages = render_task_messages(
+                prompt_key,
+                {
+                    "message": user_message,
+                    "system_prompt": system_prompt,
+                    "pending_text": user_message,
+                    "recent_context": "",
+                    "bot_name": "",
+                    "group_profile": "",
+                },
+                fallback_messages=fallback_messages,
+            )
 
     payload: dict = {
         "messages": messages,
@@ -375,16 +396,22 @@ def call_model_route_response(
     opener = urllib.request.build_opener(proxy_handler)
     response_status = 0
     body: Any = {}
+    response_audit: dict[str, Any] = {}
     try:
         with opener.open(req, timeout=timeout_s) as response:
             response_status = getattr(response, "status", None) or (
                 response.getcode() if hasattr(response, "getcode") else 200
             )
-            raw_body = response.read()
+            raw_body, response_truncated = _read_bounded_model_response(response)
+            response_audit = _raw_body_audit(
+                raw_body,
+                truncated=response_truncated,
+            )
+            if response_truncated:
+                raise ValueError("model response exceeds size limit")
             try:
                 body = json.loads(raw_body.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                body = _raw_body_audit(raw_body)
                 raise ValueError(f"model response invalid JSON: {exc}") from exc
 
         choices = body.get("choices") if isinstance(body, dict) else None
@@ -444,10 +471,10 @@ def call_model_route_response(
             status = getattr(e, "code", 0) or response_status
             LLMRequestTracer.finish_request(
                 log_id=log_id,
-                response=body if isinstance(body, dict) else {},
+                response=response_audit,
                 response_status=status,
                 status="error",
-                error=str(e),
+                error=safe_response_summary(e, max_chars=1000),
                 latency_ms=int((time.time() - started) * 1000),
             )
         except Exception:
@@ -878,8 +905,13 @@ class Guardrail:
                 pipeline,
             )
 
-            model_path = os.environ.get("SENTINEL_MODEL_PATH", "./sentinel")
-            logger.info("Loading sentinel from: %s", model_path)
+            from config import get_sentinel_model_path
+
+            model_path = get_sentinel_model_path()
+            logger.info(
+                "Loading sentinel configured=%s",
+                str(bool(model_path)).lower(),
+            )
             tokenizer = AutoTokenizer.from_pretrained(
                 model_path,
                 trust_remote_code=True,
@@ -902,7 +934,10 @@ class Guardrail:
             logger.warning("transformers not installed, injection detection disabled")
             cls._sentinel = False
         except Exception as e:
-            logger.error("Failed to load sentinel: %s", e)
+            logger.error(
+                "Failed to load sentinel: error_type=%s",
+                type(e).__name__,
+            )
             cls._sentinel = False
         return cls._sentinel
 
@@ -1010,7 +1045,10 @@ class Guardrail:
         try:
             response_text = self._call_qwen(message)
         except Exception as exc:
-            logger.warning("Qwen call failed, fallback to reply: %s", exc)
+            logger.warning(
+                "Qwen call failed, fallback to reply: error_type=%s",
+                type(exc).__name__,
+            )
             return {"status": "reply", "complexity": 5}
         is_valid, type_str, complexity = self._validate_output(response_text)
         if not is_valid:
@@ -1116,7 +1154,7 @@ class PrivateDecisionClassifier:
             start = cleaned.find("{")
             end = cleaned.rfind("}") + 1
             data = json.loads(cleaned[start:end])
-        except Exception:
+        except json.JSONDecodeError:
             return self._parse_fallback(cleaned)
 
         action = str(data.get("action", "")).strip().lower()
@@ -1124,7 +1162,7 @@ class PrivateDecisionClassifier:
             action = "reply_now"
         try:
             complexity = int(data.get("complexity", 5))
-        except Exception:
+        except (TypeError, ValueError):
             complexity = 5
         complexity = max(1, min(10, complexity))
         if action in {"no_reply", "wait"}:
@@ -1178,45 +1216,16 @@ class PrivateDecisionClassifier:
                 "reason": "empty message",
                 "raw": "",
             }
-        try:
-            raw = self._call_qwen(message, has_files)
-            parsed = self._parse(raw)
-            logger.info(
-                "[private_decision] << action=%s complexity=%s raw=%.100s",
-                parsed["action"],
-                parsed["complexity"],
-                raw[:100],
-            )
-            return parsed
-        except Exception as e:
-            logger.warning("[private_decision] Qwen failed: %s", e)
-            # fallback: 纯传输内容 no_reply，其余 reply_now
-            import re as _re
-
-            t = (message or "").strip()
-            is_transport = (
-                (has_files and not t)
-                or bool(
-                    _re.match(
-                        r"^(https?://\S+|sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9_\-+/=]{32,})$",
-                        t,
-                    )
-                )
-                or (len(t) > 500 and "?" not in t and "？" not in t)
-            )
-            if is_transport:
-                return {
-                    "action": "no_reply",
-                    "complexity": 0,
-                    "reason": "fallback transport_only",
-                    "raw": "",
-                }
-            return {
-                "action": "reply_now",
-                "complexity": 3,
-                "reason": "classifier fallback",
-                "raw": "",
-            }
+        raw = self._call_qwen(message, has_files)
+        parsed = self._parse(raw)
+        logger.info(
+            "[private_decision] << action=%s complexity=%s raw_chars=%s raw_sha256=%s",
+            parsed["action"],
+            parsed["complexity"],
+            len(raw),
+            hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12],
+        )
+        return parsed
 
 
 _private_decision_instance: PrivateDecisionClassifier | None = None
@@ -1311,7 +1320,11 @@ class TimingGate:
             pass
 
         # 非法 → no_reply
-        logger.warning(f"[TimingGate] Invalid: {raw[:100]}")
+        logger.warning(
+            "[TimingGate] invalid output chars=%s sha256=%s",
+            len(raw),
+            hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12],
+        )
         return {
             "action": "no_reply",
             "delay_seconds": None,

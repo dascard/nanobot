@@ -72,6 +72,13 @@ class PromptPlan:
             "tools": copy.deepcopy(self.tool_schemas),
         }
 
+    @property
+    def template_resolutions(self) -> dict[str, dict[str, Any]]:
+        value = self.debug.get("template_resolutions", {})
+        if not isinstance(value, dict):
+            return {}
+        return copy.deepcopy(value)
+
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["messages_without_current_user"] = self.messages_without_current_user

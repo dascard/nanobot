@@ -11,6 +11,10 @@ from core.prompt_v2.template_registry import (
     runtime_template_dir as runtime_template_dir,
     template_path_for,
 )
+from core.prompt_v2.template_resolution import (
+    TemplateResolution,
+    resolve_template_files,
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,7 @@ class PromptV2Template:
     frontmatter: dict[str, Any]
     body: str
     raw: str
+    resolution: TemplateResolution | None = None
 
 
 def _safe_prompt_key(prompt_key: str) -> str:
@@ -85,16 +90,22 @@ def load_template(prompt_key: str, *, template_dir: str | Path | None = None) ->
     key = _safe_prompt_key(prompt_key)
     if template_dir:
         path = Path(template_dir) / f"{key}.md"
-        raw = path.read_text(encoding="utf-8")
+        resolved = resolve_template_files(key, built_in_path=path)
+        raw = resolved.active_bytes.decode("utf-8")
         frontmatter, body = _split_frontmatter(raw)
     else:
         runtime_path = first_existing_template_path(key, runtime=True)
         default_path = first_existing_template_path(key, runtime=False)
         path = runtime_path or default_path or template_path_for(key, runtime=False)
-        raw = path.read_text(encoding="utf-8")
+        resolved = resolve_template_files(
+            key,
+            runtime_path=runtime_path,
+            default_path=default_path,
+        )
+        raw = resolved.active_bytes.decode("utf-8")
         frontmatter, body = _split_frontmatter(raw)
-        if runtime_path and default_path:
-            default_raw = default_path.read_text(encoding="utf-8")
+        if runtime_path and resolved.default_bytes is not None:
+            default_raw = resolved.default_bytes.decode("utf-8")
             default_frontmatter, _default_body = _split_frontmatter(default_raw)
             frontmatter = {**default_frontmatter, **frontmatter}
     return PromptV2Template(
@@ -103,4 +114,5 @@ def load_template(prompt_key: str, *, template_dir: str | Path | None = None) ->
         frontmatter=frontmatter,
         body=body.strip(),
         raw=raw,
+        resolution=resolved.resolution,
     )

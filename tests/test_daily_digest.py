@@ -1,12 +1,21 @@
 import asyncio
 from tests.async_helpers import run_async
 import json
+import logging
 from datetime import datetime, timedelta
 
+import pytest
 from sqlalchemy import event
 
 from core import daily_digest
-from core.database import ChatLog, MemoryDigest, ScheduledTask
+from core.database import (
+    ChatLog,
+    MemoryDigest,
+    OutboundDeliveryControl,
+    OutboundDeliveryOutbox,
+    OutboundGenerationAttempt,
+    ScheduledTask,
+)
 
 
 # 日报 DB fixture 和定时任务 prompt 保持生产侧 naive 本地墙钟时间语义。
@@ -92,6 +101,90 @@ def test_generate_daily_digest_can_filter_specific_session(db_session, monkeypat
     assert created == 1
     assert db_session.query(MemoryDigest).filter_by(session_id="private_a").count() >= 3
     assert db_session.query(MemoryDigest).filter_by(session_id="private_b").count() == 0
+
+
+def test_memory_digest_scheduler_reloads_schedule_without_restart(monkeypatch):
+    schedule_values = [(True, 4), (True, 8), (True, 8)]
+    state = {"index": 0, "stopped": False}
+    observed_hours: list[int] = []
+    runs = {"count": 0}
+
+    class FakeSettings:
+        def get_bool(self, key, default=False):
+            assert key == "memory_digest.scheduler_enabled"
+            return schedule_values[min(state["index"], len(schedule_values) - 1)][0]
+
+        def get_int(self, key, default=0):
+            assert key == "memory_digest.schedule_hour"
+            value = schedule_values[min(state["index"], len(schedule_values) - 1)][1]
+            state["index"] += 1
+            return value
+
+    class FakeStopEvent:
+        def is_set(self):
+            return state["stopped"]
+
+        def wait(self, _timeout):
+            return state["stopped"]
+
+    def fake_next_delay(_now, hour):
+        observed_hours.append(hour)
+        if len(observed_hours) == 2:
+            state["stopped"] = True
+        return 30
+
+    def fake_run_once():
+        runs["count"] += 1
+        return 0
+
+    monkeypatch.setattr(daily_digest, "settings", FakeSettings(), raising=False)
+    monkeypatch.setattr(daily_digest, "_next_run_delay_seconds", fake_next_delay)
+    monkeypatch.setattr(daily_digest, "run_daily_digest_once", fake_run_once)
+
+    daily_digest.daily_digest_scheduler(FakeStopEvent())
+
+    assert observed_hours == [4, 8]
+    assert runs["count"] == 1
+
+
+def test_memory_digest_scheduler_can_be_enabled_without_restart(monkeypatch):
+    schedule_values = [(False, 4), (True, 4), (True, 4)]
+    state = {"index": 0, "stopped": False}
+    run_at_schedule_indexes: list[int] = []
+
+    class FakeSettings:
+        def get_bool(self, key, default=False):
+            assert key == "memory_digest.scheduler_enabled"
+            return schedule_values[min(state["index"], len(schedule_values) - 1)][0]
+
+        def get_int(self, key, default=0):
+            assert key == "memory_digest.schedule_hour"
+            value = schedule_values[min(state["index"], len(schedule_values) - 1)][1]
+            state["index"] += 1
+            return value
+
+    class FakeStopEvent:
+        def is_set(self):
+            return state["stopped"]
+
+        def wait(self, _timeout):
+            return state["stopped"]
+
+    def fake_next_delay(_now, _hour):
+        state["stopped"] = True
+        return 30
+
+    def fake_run_once():
+        run_at_schedule_indexes.append(state["index"])
+        return 0
+
+    monkeypatch.setattr(daily_digest, "settings", FakeSettings(), raising=False)
+    monkeypatch.setattr(daily_digest, "_next_run_delay_seconds", fake_next_delay)
+    monkeypatch.setattr(daily_digest, "run_daily_digest_once", fake_run_once)
+
+    daily_digest.daily_digest_scheduler(FakeStopEvent())
+
+    assert run_at_schedule_indexes == [2]
 
 
 def test_generate_daily_digest_filters_target_date_in_sql(db_session, monkeypatch):
@@ -236,43 +329,263 @@ def test_generate_task_message_uses_group_session_for_group_target(monkeypatch):
     assert calls["metadata"]["is_group"] is True
 
 
-def test_run_scheduled_tasks_advances_last_run_when_push_fails(db_session, monkeypatch):
+@pytest.mark.parametrize(
+    "error",
+    [TimeoutError("exception-secret"), RuntimeError("exception-secret")],
+    ids=["timeout", "generic"],
+)
+def test_generate_task_message_reraises_after_cleanup_with_safe_log(
+    monkeypatch,
+    caplog,
+    error,
+):
+    calls = {}
+
+    class FakeBridge:
+        async def start(self):
+            calls["started"] = True
+
+        async def stop(self):
+            calls["stopped"] = True
+
+        async def handle_message(self, *_args, **_kwargs):
+            raise error
+
+    monkeypatch.setattr("nanobot_kt.bridge.NanobotBridge", FakeBridge)
+    caplog.set_level(logging.ERROR, logger="nanobot.daily_digest")
     task = ScheduledTask(
-        name="失败推送",
+        id=9,
+        name="task-name-secret",
+        target_type="private",
+        target_id="opaque-target",
+        prompt_template="生成日报",
+    )
+
+    with pytest.raises(type(error)):
+        run_async(daily_digest._generate_task_message(task))
+
+    assert calls == {"started": True, "stopped": True}
+    assert f"error_type={type(error).__name__}" in caplog.text
+    assert "task-name-secret" not in caplog.text
+    assert "exception-secret" not in caplog.text
+
+
+def _seed_scheduled_task_outbox_control(db_session, now: datetime) -> None:
+    from core.scheduled_task_outbound import scheduled_cron_occurrence
+
+    scheduled_for = scheduled_cron_occurrence(
+        task_id=1,
+        local_time=now,
+    ).scheduled_for
+    db_session.add(OutboundDeliveryControl(
+        source_type="scheduled_task",
+        mode="outbox_active",
+        cutover_epoch=1,
+        effective_from=scheduled_for - timedelta(minutes=1),
+        protocol_version=2,
+        writer_version=0,
+        created_at=now - timedelta(days=1),
+        updated_at=now - timedelta(days=1),
+    ))
+    db_session.commit()
+
+
+def test_run_scheduled_tasks_generation_failure_records_attempt_without_outbox(
+    db_session,
+    monkeypatch,
+):
+    now = _local_time(2026, 7, 15, 12, 0, 20)
+    _seed_scheduled_task_outbox_control(db_session, now)
+    task = ScheduledTask(
+        name="生成失败",
         cron_expr="* * * * *",
         target_type="private",
         target_id="0000000000",
         prompt_template="生成日报",
         enabled=True,
-        last_run_at=None,
+        delivery_status="idle",
     )
     db_session.add(task)
     db_session.commit()
     task_id = task.id
-    calls = {"generate": 0, "push": 0}
+    calls = {"generate": 0}
 
     async def fake_generate(_task):
         calls["generate"] += 1
-        return "已生成内容"
+        return None
 
-    async def fake_push(*_args, **_kwargs):
-        calls["push"] += 1
-        return False
+    async def forbidden_push(*_args, **_kwargs):
+        raise AssertionError("生成失败不得发起直接 HTTP")
 
     monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: now)
     monkeypatch.setattr(daily_digest, "_generate_task_message", fake_generate)
-    monkeypatch.setattr(daily_digest, "push_to_qq", fake_push)
+    monkeypatch.setattr(daily_digest, "push_to_qq", forbidden_push)
+    monkeypatch.setattr(daily_digest, "push_envelope_to_qq", forbidden_push)
 
-    first = run_async(daily_digest.run_scheduled_tasks())
+    executed = run_async(daily_digest.run_scheduled_tasks())
+
+    db_session.expire_all()
     task = db_session.get(ScheduledTask, task_id)
-    first_run_at = task.last_run_at
-    second = run_async(daily_digest.run_scheduled_tasks())
+    assert executed == 0
+    assert calls == {"generate": 1}
+    assert task.last_attempt_at is not None
+    assert task.last_run_at == task.last_attempt_at
+    assert task.last_success_at is None
+    assert task.delivery_status == "failed"
+    assert db_session.query(OutboundGenerationAttempt).count() == 1
+    assert db_session.query(OutboundDeliveryOutbox).count() == 0
 
-    assert first == 0
-    assert second == 0
-    assert first_run_at is not None
-    assert first_run_at > _local_now() - timedelta(seconds=30)
-    assert calls == {"generate": 1, "push": 1}
+
+def test_run_scheduled_tasks_success_only_queues_without_direct_http(
+    db_session,
+    monkeypatch,
+):
+    now = _local_time(2026, 7, 15, 12, 0, 20)
+    _seed_scheduled_task_outbox_control(db_session, now)
+    task = ScheduledTask(
+        name="成功生成",
+        cron_expr="* * * * *",
+        target_type="private",
+        target_id="0000000000",
+        prompt_template="生成日报",
+        enabled=True,
+        delivery_status="idle",
+    )
+    db_session.add(task)
+    db_session.commit()
+    task_id = task.id
+    calls = {"generate": 0}
+
+    async def fake_generate(_task):
+        assert db_session.in_transaction() is False
+        calls["generate"] += 1
+        return "已生成内容"
+
+    async def forbidden_push(*_args, **_kwargs):
+        raise AssertionError("outbox 模式不得直接发起 HTTP")
+
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: now)
+    monkeypatch.setattr(daily_digest, "_generate_task_message", fake_generate)
+    monkeypatch.setattr(daily_digest, "push_to_qq", forbidden_push)
+    monkeypatch.setattr(daily_digest, "push_envelope_to_qq", forbidden_push)
+
+    executed = run_async(daily_digest.run_scheduled_tasks())
+    repeated = run_async(daily_digest.run_scheduled_tasks())
+
+    db_session.expire_all()
+    task = db_session.get(ScheduledTask, task_id)
+    outbox = db_session.query(OutboundDeliveryOutbox).one()
+    assert executed == 1
+    assert repeated == 0
+    assert calls == {"generate": 1}
+    assert outbox.status == "pending"
+    assert task.delivery_status == "queued"
+    assert task.last_success_at is None
+
+
+def test_run_scheduled_tasks_recovers_expired_generation_from_old_slot(
+    db_session,
+    monkeypatch,
+):
+    from core.scheduled_task_outbound import (
+        ScheduledTaskProducerConfig,
+        enqueue_scheduled_task_occurrence,
+    )
+
+    class SimulatedProducerCrash(BaseException):
+        pass
+
+    local_now = _local_time(2026, 7, 15, 12, 5, 0)
+    _seed_scheduled_task_outbox_control(db_session, local_now)
+    control = db_session.query(OutboundDeliveryControl).one()
+    control.effective_from = datetime(2026, 7, 15, 3, 59, 0)
+    db_session.commit()
+    task = ScheduledTask(
+        name="恢复旧槽",
+        cron_expr="0 0 1 1 *",
+        target_type="private",
+        target_id="0000000000",
+        prompt_template="恢复生成",
+        enabled=True,
+        delivery_status="idle",
+    )
+    db_session.add(task)
+    db_session.commit()
+    task_id = task.id
+
+    async def crash_after_attempt_started(_snapshot):
+        raise SimulatedProducerCrash()
+
+    with pytest.raises(SimulatedProducerCrash):
+        run_async(
+            enqueue_scheduled_task_occurrence(
+                db_session,
+                task_id=task_id,
+                trigger_type="manual",
+                manual_idempotency_key="old-slot-crash",
+                config=ScheduledTaskProducerConfig(
+                    endpoint_config_revision="1",
+                    producer_owner="old-producer",
+                    writer_token="old-writer-token",
+                    claim_lease_seconds=1,
+                    writer_lease_seconds=1,
+                ),
+                generator=crash_after_attempt_started,
+                now=datetime(2026, 7, 15, 4, 0, 0),
+            )
+        )
+
+    generated = []
+
+    async def recovered_generate(snapshot):
+        generated.append(snapshot.task_id)
+        return "恢复后的正文"
+
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: local_now)
+    monkeypatch.setattr(daily_digest, "_generate_task_message", recovered_generate)
+
+    executed = run_async(daily_digest.run_scheduled_tasks())
+
+    assert executed == 1
+    assert generated == [task_id]
+    assert db_session.query(OutboundDeliveryOutbox).count() == 1
+
+
+def test_run_scheduled_tasks_invokes_legacy_compatibility_drain(
+    db_session,
+    monkeypatch,
+):
+    now = _local_time(2026, 7, 15, 12, 5, 0)
+    calls = []
+
+    async def fake_legacy_drain(**kwargs):
+        calls.append(kwargs["session_factory"])
+        return []
+
+    async def fake_generation_recovery(**_kwargs):
+        return []
+
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: now)
+    monkeypatch.setattr(
+        daily_digest,
+        "drain_due_legacy_scheduled_task_outboxes",
+        fake_legacy_drain,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        daily_digest,
+        "recover_expired_scheduled_task_occurrences",
+        fake_generation_recovery,
+    )
+
+    executed = run_async(daily_digest.run_scheduled_tasks())
+
+    assert executed == 0
+    assert len(calls) == 1
 
 
 def test_scheduled_task_runner_does_not_require_asyncio_runner(monkeypatch):
@@ -426,3 +739,57 @@ def test_push_to_qq_preserves_unknown_network_outcome(monkeypatch):
     monkeypatch.setattr(daily_digest, "_get_push_session", failing_session)
 
     assert run_async(daily_digest.push_to_qq("private", "u1", "测试消息")) is None
+
+
+def test_push_failure_log_is_redacted_and_bounded(caplog):
+    secret = "push-response-secret"
+    body = ('{"token":"' + secret + '","detail":"' + "x" * 5000 + '"}').encode()
+    text_calls = {"count": 0}
+
+    class FakeContent:
+        def iter_chunked(self, _size):
+            async def chunks():
+                yield body
+
+            return chunks()
+
+    class FakeResponse:
+        status = 400
+        headers = {}
+        content = FakeContent()
+
+        async def text(self):
+            text_calls["count"] += 1
+            raise AssertionError("结构化 transport 禁止调用 response.text()")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class FakeSession:
+        def post(self, _url, **_kwargs):
+            return FakeResponse()
+
+    with caplog.at_level(logging.WARNING, logger="nanobot.outbound_transport"):
+        result = run_async(
+            daily_digest.push_to_qq_with_session(
+                FakeSession(),
+                "private",
+                "test-target",
+                "测试消息",
+            )
+        )
+
+    message = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "nanobot.outbound_transport"
+        and "QQ push transport result" in record.getMessage()
+    )
+    assert result is False
+    assert secret not in message
+    assert "响应正文已省略" in message
+    assert len(message) <= 800
+    assert text_calls["count"] == 0

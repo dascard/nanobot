@@ -1,4 +1,5 @@
 import importlib
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -54,10 +55,14 @@ async def test_lifespan_calls_bootstrap_facades(monkeypatch):
         "start_schedulers",
         lambda *, testing, logger: calls.append(f"start_schedulers:{testing}") or Handles(),
     )
+    async def fake_run_startup_network_check(logger, *, session):
+        assert session is new_api_session
+        calls.append("network_check")
+
     monkeypatch.setattr(
         bootstrap_lifespan,
         "run_startup_network_check",
-        lambda logger: calls.append("network_check"),
+        fake_run_startup_network_check,
     )
     monkeypatch.setattr(
         bootstrap_lifespan,
@@ -109,6 +114,138 @@ async def test_lifespan_calls_bootstrap_facades(monkeypatch):
     assert app.state.new_api_session is None
 
 
+@pytest.mark.asyncio
+async def test_startup_network_check_uses_resolved_routes_and_redacts_sensitive_logs(
+    monkeypatch,
+    caplog,
+):
+    import config
+    from bootstrap import network_check
+    from clients import classifier_client
+    from core import model_route_health
+
+    admin_secret = "startup-admin-secret"
+    api_secret = "startup-api-secret"
+    route_secret = "startup-route-secret"
+    credential_url = (
+        "https://startup-user:startup-password@model.test/v1?token=startup-query-secret"
+    )
+    routes = {
+        route_key: {
+            "route_key": route_key,
+            "base_url": credential_url,
+            "api_key": route_secret,
+            "model": f"{route_key}-model",
+            "provider_enabled": True,
+        }
+        for route_key in ("reply", "timing_gate", "sticker_describe")
+    }
+    resolve_calls = []
+    probe_calls = []
+
+    def fake_resolve(route_key):
+        resolve_calls.append(route_key)
+        return dict(routes[route_key])
+
+    async def fake_probe(route, session):
+        probe_calls.append((dict(route), session))
+        return SimpleNamespace(
+            status="ready",
+            reachable=True,
+            usable=True,
+            status_code=200,
+            latency_ms=2,
+        )
+
+    class FakePublicResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class FakeSession:
+        def get(self, _url, **_kwargs):
+            return FakePublicResponse()
+
+    session = FakeSession()
+    monkeypatch.setattr(config, "NANOBOT_ADMIN_TOKEN", admin_secret)
+    monkeypatch.setattr(config, "NANOBOT_API_TOKEN", api_secret)
+    monkeypatch.setenv("NANOBOT_GIT_COMMIT", "image-commit")
+    monkeypatch.setenv("NANOBOT_GIT_BRANCH", "image-branch")
+    monkeypatch.setenv("NANOBOT_GIT_COMMIT_DATE", "2026-07-14T00:00:00Z")
+    monkeypatch.setenv("NANOBOT_GIT_DIRTY", "false")
+    monkeypatch.setattr(classifier_client, "resolve_model_route", fake_resolve)
+    monkeypatch.setattr(model_route_health, "probe_model_route", fake_probe)
+
+    logger = logging.getLogger("nanobot.startup.test")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await network_check.run_startup_network_check(logger, session=session)
+
+    assert resolve_calls == ["reply", "timing_gate", "sticker_describe"]
+    assert [route for route, _session in probe_calls] == [
+        routes["reply"],
+        routes["timing_gate"],
+        routes["sticker_describe"],
+    ]
+    assert all(probe_session is session for _route, probe_session in probe_calls)
+    assert "server version=image-commit" in caplog.text
+    assert "configured=true" in caplog.text
+    for secret in (
+        admin_secret,
+        api_secret,
+        route_secret,
+        "startup-user",
+        "startup-password",
+        "startup-query-secret",
+    ):
+        assert secret not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_route_resolution_failure_is_nonfatal_and_redacted(
+    monkeypatch,
+    caplog,
+):
+    from bootstrap import network_check
+    from clients import classifier_client
+
+    secret = "route-resolution-secret"
+
+    def broken_resolve(route_key):
+        if route_key == "timing_gate":
+            raise RuntimeError(secret)
+        return {
+            "route_key": route_key,
+            "base_url": "",
+            "provider_enabled": True,
+        }
+
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class FakeSession:
+        def get(self, _url, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(classifier_client, "resolve_model_route", broken_resolve)
+    logger = logging.getLogger("nanobot.startup.resolve-failure")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await network_check.run_startup_network_check(logger, session=FakeSession())
+
+    assert secret not in caplog.text
+    assert "route=timing_gate status=network_error" in caplog.text
+
+
 def test_cors_default_allows_any_origin():
     import server
 
@@ -155,8 +292,7 @@ def test_cors_origins_can_be_configured(monkeypatch):
     assert "access-control-allow-origin" not in denied.headers
 
 
-def test_start_schedulers_starts_session_summary_worker(monkeypatch):
-    import config
+def test_start_schedulers_starts_embedded_session_summary_worker(monkeypatch):
     import bootstrap.schedulers as schedulers
 
     calls: list[str] = []
@@ -172,7 +308,7 @@ def test_start_schedulers_starts_session_summary_worker(monkeypatch):
         calls.append(name)
         return object()
 
-    monkeypatch.setattr(config, "DAILY_DIGEST_ENABLED", False)
+    monkeypatch.setenv("NANOBOT_SESSION_SUMMARY_WORKER_MODE", "embedded")
     monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
     monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
 
@@ -182,7 +318,71 @@ def test_start_schedulers_starts_session_summary_worker(monkeypatch):
     assert handles.session_summary is not None
 
 
-def test_start_schedulers_starts_chat_delivery_worker(monkeypatch):
+@pytest.mark.parametrize("mode", ["external", "disabled"])
+def test_start_schedulers_skips_embedded_session_summary_worker(monkeypatch, mode):
+    import bootstrap.schedulers as schedulers
+
+    calls: list[str] = []
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    def fake_start_thread(*, name, target):
+        calls.append(name)
+        return object()
+
+    monkeypatch.setenv("NANOBOT_SESSION_SUMMARY_WORKER_MODE", mode)
+    monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
+    monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
+
+    handles = schedulers.start_schedulers(testing=False, logger=Logger())
+
+    assert "session-summary-worker" not in calls
+    assert handles.session_summary is None
+
+
+def test_session_summary_worker_mode_rejects_unknown_value(monkeypatch):
+    import config
+
+    monkeypatch.setenv("NANOBOT_SESSION_SUMMARY_WORKER_MODE", "sidecar")
+    resolver = getattr(config, "get_session_summary_worker_mode", None)
+
+    assert resolver is not None
+    with pytest.raises(ValueError, match="NANOBOT_SESSION_SUMMARY_WORKER_MODE"):
+        resolver()
+
+
+def test_invalid_session_summary_worker_mode_starts_no_threads(monkeypatch):
+    import bootstrap.schedulers as schedulers
+
+    calls: list[str] = []
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setenv("NANOBOT_SESSION_SUMMARY_WORKER_MODE", "sidecar")
+    monkeypatch.setattr(
+        schedulers,
+        "_start_thread",
+        lambda **kwargs: calls.append(kwargs["name"]),
+    )
+    monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
+
+    with pytest.raises(ValueError, match="NANOBOT_SESSION_SUMMARY_WORKER_MODE"):
+        schedulers.start_schedulers(testing=False, logger=Logger())
+
+    assert calls == []
+
+
+def test_start_schedulers_keeps_memory_digest_thread_for_hot_reload(monkeypatch):
     import config
     import bootstrap.schedulers as schedulers
 
@@ -199,7 +399,32 @@ def test_start_schedulers_starts_chat_delivery_worker(monkeypatch):
         calls.append(name)
         return object()
 
-    monkeypatch.setattr(config, "DAILY_DIGEST_ENABLED", False)
+    monkeypatch.setattr(config, "DAILY_DIGEST_ENABLED", False, raising=False)
+    monkeypatch.setenv("NANOBOT_SESSION_SUMMARY_WORKER_MODE", "disabled")
+    monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
+    monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
+
+    schedulers.start_schedulers(testing=False, logger=Logger())
+
+    assert "daily-digest-scheduler" in calls
+
+
+def test_start_schedulers_starts_chat_delivery_worker(monkeypatch):
+    import bootstrap.schedulers as schedulers
+
+    calls: list[str] = []
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    def fake_start_thread(*, name, target):
+        calls.append(name)
+        return object()
+
     monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
     monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
 
@@ -236,8 +461,9 @@ def test_start_schedulers_testing_mode_skips_chat_delivery_worker():
     assert handles.chat_delivery is None
 
 
-def test_start_schedulers_skips_proactive_outreach_when_disabled(monkeypatch):
-    import config
+def test_start_schedulers_keeps_proactive_recovery_when_generation_disabled(
+    monkeypatch,
+):
     import bootstrap.schedulers as schedulers
     from core.settings_service import settings
 
@@ -259,19 +485,17 @@ def test_start_schedulers_skips_proactive_outreach_when_disabled(monkeypatch):
             return False
         return default
 
-    monkeypatch.setattr(config, "DAILY_DIGEST_ENABLED", False)
     monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
     monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
     monkeypatch.setattr(settings, "get_bool", fake_get_bool)
 
     handles = schedulers.start_schedulers(testing=False, logger=Logger())
 
-    assert "proactive-outreach-scheduler" not in calls
-    assert handles.proactive_outreach is None
+    assert "proactive-outreach-scheduler" in calls
+    assert handles.proactive_outreach is not None
 
 
 def test_start_schedulers_starts_proactive_outreach_when_enabled(monkeypatch):
-    import config
     import bootstrap.schedulers as schedulers
     from core.settings_service import settings
 
@@ -293,7 +517,6 @@ def test_start_schedulers_starts_proactive_outreach_when_enabled(monkeypatch):
             return True
         return default
 
-    monkeypatch.setattr(config, "DAILY_DIGEST_ENABLED", False)
     monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
     monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
     monkeypatch.setattr(settings, "get_bool", fake_get_bool)

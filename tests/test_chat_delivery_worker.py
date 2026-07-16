@@ -31,6 +31,67 @@ def _envelope(message: str = "worker 待投递回复") -> dict:
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "category", "expected"),
+    [
+        (200, "success", True),
+        (204, "success", None),
+        (429, "transient", False),
+    ],
+)
+async def test_default_worker_publisher_preserves_legacy_transport_result(
+    monkeypatch,
+    status_code,
+    category,
+    expected,
+):
+    from core import daily_digest
+    from core.outbound_transport import DeliveryOutcome
+    from workers import chat_delivery_worker
+
+    class FakeClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    async def fake_push_outcome(session, target_type, target_id, envelope):
+        assert isinstance(session, FakeClientSession)
+        assert (target_type, target_id) == ("private", "worker-target")
+        assert envelope == _envelope()
+        return DeliveryOutcome(
+            category=category,
+            error_type="test",
+            status_code=status_code,
+            retry_after_seconds=None,
+            duration_ms=1,
+            safe_summary="",
+            transport_phase="response_received",
+        )
+
+    monkeypatch.setattr(
+        daily_digest,
+        "push_envelope_to_qq_outcome_with_session",
+        fake_push_outcome,
+    )
+    monkeypatch.setattr(
+        chat_delivery_worker.aiohttp,
+        "ClientSession",
+        FakeClientSession,
+    )
+
+    async with chat_delivery_worker._publisher_scope(None) as publisher:
+        result = await publisher(
+            "private",
+            "worker-target",
+            _envelope(),
+        )
+
+    assert result is expected
+
+
 @pytest.fixture
 def worker_session_factory(tmp_path):
     from core.database import Base

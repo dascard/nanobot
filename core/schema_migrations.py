@@ -18,6 +18,11 @@ from sqlalchemy import inspect, text
 
 from core.chat_delivery_outbox_schema import chat_delivery_outbox_table
 from core.chat_stream_identity import canonicalize_legacy_chat_stream_id
+from core.outbound_delivery_schema import (
+    OUTBOUND_DELIVERY_SCHEMA_VERSION,
+    create_outbound_delivery_schema,
+    outbound_delivery_schema_needs_backup,
+)
 from core.proactive_outreach_schema import proactive_outreach_leases_table
 from core.schema_validation import (
     SchemaMigrationValidationError as SchemaMigrationValidationError,
@@ -545,6 +550,18 @@ def _agent_prompt_trace_columns(conn: Any, engine: Any, db_path: str | None) -> 
             "CREATE INDEX IF NOT EXISTS idx_prompt_render_source ON prompt_render_logs(prompt_source)",
             "CREATE INDEX IF NOT EXISTS idx_prompt_render_sha256 ON prompt_render_logs(prompt_sha256)",
         ])
+
+
+def _prompt_template_resolution_columns(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    columns = {
+        "prompt_template_resolutions_json": "TEXT NOT NULL DEFAULT '{}'",
+    }
+    _add_missing_columns(conn, "agent_runs", columns)
+    _add_missing_columns(conn, "prompt_render_logs", columns)
 
 
 def _llm_request_log_columns(conn: Any, engine: Any, db_path: str | None) -> None:
@@ -1628,6 +1645,16 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "chat stream identity normalization",
         _chat_stream_identity_normalization,
     ),
+    (
+        "20260714_prompt_template_resolution_columns",
+        "prompt template resolution trace columns",
+        _prompt_template_resolution_columns,
+    ),
+    (
+        OUTBOUND_DELIVERY_SCHEMA_VERSION,
+        "outbound delivery ledger and source projections",
+        create_outbound_delivery_schema,
+    ),
 ]
 
 
@@ -1645,9 +1672,13 @@ def _prepare_schema_migration_backup(
         _CHAT_STREAM_IDENTITY_VERSION not in applied_before_transaction
         and _chat_stream_identity_needs_backup(conn)
     )
+    outbound_backup_needed = (
+        OUTBOUND_DELIVERY_SCHEMA_VERSION not in applied_before_transaction
+        and outbound_delivery_schema_needs_backup(conn)
+    )
     drivername = str(getattr(getattr(engine, "url", None), "drivername", ""))
     if drivername.startswith("sqlite") and (
-        chat_log_backup_needed or identity_backup_needed
+        chat_log_backup_needed or identity_backup_needed or outbound_backup_needed
     ):
         backup_path = _migration_backup_path(engine, db_path)
         if backup_path is not None:
@@ -1671,6 +1702,7 @@ def run_schema_migrations(engine: Any, *, db_path: str | None = None) -> None:
     drivername = str(getattr(getattr(engine, "url", None), "drivername", ""))
     if drivername.startswith("sqlite"):
         with engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
             run_sqlite_locked_retry(
                 lambda: conn.exec_driver_sql("BEGIN IMMEDIATE"),
                 rollback=conn.rollback,

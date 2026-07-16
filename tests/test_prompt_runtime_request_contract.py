@@ -189,6 +189,7 @@ def prompt_runtime_sdk_harness(monkeypatch, db_session):
         return SimpleNamespace(
             body="<identity_context>\n固定身份\n</identity_context>",
             path=loaded.path,
+            resolution=loaded.resolution,
         )
 
     monkeypatch.setattr(

@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 
 from api.common_auth import verify_token
 from config import EVOLUTION_THRESHOLD
+from core import outbound_delivery
 from core.compaction import run_autocompact_circuit_breaker
 from core.database import (
     ChatLog,
     ConversationTurn,
+    OutboundRun,
     Persona,
     ProactiveOutreachLease,
     ProactiveOutreachLog,
@@ -51,21 +53,69 @@ def mark_clear(
     """
     try:
         now = db_now_naive()
+        outbound_delivery.lock_outbound_source_control(
+            db,
+            source_type="proactive_outreach",
+            now=now,
+        )
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             db.add(User(id=user_id, history_clear_at=now))
         else:
             user.history_clear_at = now
+        db.flush()
 
         # 删除旧 ConversationTurn，保留 ChatLog 做进化素材
         deleted = db.query(ConversationTurn).filter(
             ConversationTurn.user_id == user_id,
             ConversationTurn.created_at <= now,
         ).delete()
+        cancelled_deliveries = 0
+        unsafe_deliveries = 0
+        linked_rows = (
+            db.query(ProactiveOutreachLog)
+            .filter(
+                ProactiveOutreachLog.user_id == user_id,
+                ProactiveOutreachLog.outbound_run_id.isnot(None),
+            )
+            .order_by(ProactiveOutreachLog.id.asc())
+            .all()
+        )
+        for outreach_row in linked_rows:
+            run = db.get(OutboundRun, int(outreach_row.outbound_run_id))
+            if (
+                run is None
+                or run.source_type != "proactive_outreach"
+                or run.source_id != str(outreach_row.id)
+                or not str(run.source_revision or "").strip()
+            ):
+                unsafe_deliveries += 1
+                continue
+            try:
+                with db.begin_nested():
+                    summary = outbound_delivery.cancel_safe_deliveries_for_source(
+                        db,
+                        source_type="proactive_outreach",
+                        source_id=str(outreach_row.id),
+                        expected_source_revision=str(run.source_revision),
+                        reason_type="history_cleared",
+                        safe_summary="用户历史已清除",
+                        now=now,
+                    )
+            except (
+                outbound_delivery.OutboundFencingError,
+                outbound_delivery.OutboundConflictError,
+            ):
+                unsafe_deliveries += 1
+                continue
+            cancelled_deliveries += int(summary.cancelled)
+            unsafe_deliveries += int(summary.unsafe)
         cancelled_outreach = db.query(ProactiveOutreachLog).filter(
             ProactiveOutreachLog.user_id == user_id,
-            ProactiveOutreachLog.status.in_(("pending", "candidate")),
-            ProactiveOutreachLog.created_at <= now,
+            ProactiveOutreachLog.outbound_run_id.is_(None),
+            ProactiveOutreachLog.status.in_(
+                ("pending", "candidate", "evaluation_error")
+            ),
         ).update(
             {ProactiveOutreachLog.status: "cancelled"},
             synchronize_session=False,
@@ -81,8 +131,12 @@ def mark_clear(
             archived = 0
         db.commit()
         logger.info(
-            f"[/mark-clear] Clear marker set for user={user_id}, "
-            f"deleted {deleted} ConversationTurn rows, archived {archived} rolling summaries"
+            "[/mark-clear] 清除点已设置，删除上下文=%s，归档摘要=%s，"
+            "取消投递=%s，风险投递=%s",
+            deleted,
+            archived,
+            cancelled_deliveries,
+            unsafe_deliveries,
         )
         return {
             "status": "success",
@@ -91,8 +145,13 @@ def mark_clear(
             "archived_rolling_summaries": archived,
             "cancelled_outreach_candidates": cancelled_outreach,
             "cancelled_outreach_evaluations": cancelled_evaluations,
+            "cancelled_outreach_deliveries": cancelled_deliveries,
+            "unsafe_outreach_deliveries": unsafe_deliveries,
         }
     except Exception:
+        rollback = getattr(db, "rollback", None)
+        if callable(rollback):
+            rollback()
         logger.exception("[/mark-clear] Failed")
         raise HTTPException(status_code=500, detail="内部错误")
 

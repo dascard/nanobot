@@ -14,6 +14,72 @@ def test_push_envelope_to_qq_keeps_legacy_push_signature():
     ]
 
 
+def test_push_to_qq_with_session_uses_explicit_legacy_outcome_adapter(monkeypatch):
+    from core import daily_digest
+    from core.outbound_transport import DeliveryOutcome
+
+    outcomes = [
+        DeliveryOutcome(
+            category="success",
+            error_type="",
+            status_code=200,
+            retry_after_seconds=None,
+            duration_ms=1,
+            safe_summary="",
+            transport_phase="response_received",
+        ),
+        DeliveryOutcome(
+            category="success",
+            error_type="",
+            status_code=204,
+            retry_after_seconds=None,
+            duration_ms=1,
+            safe_summary="",
+            transport_phase="response_received",
+        ),
+        DeliveryOutcome(
+            category="transient",
+            error_type="rate_limited",
+            status_code=429,
+            retry_after_seconds=30,
+            duration_ms=1,
+            safe_summary="",
+            transport_phase="response_received",
+        ),
+    ]
+    calls = []
+
+    async def fake_deliver(session, **kwargs):
+        calls.append((session, kwargs))
+        return outcomes.pop(0)
+
+    monkeypatch.setattr(
+        daily_digest,
+        "deliver_qq_push_with_session",
+        fake_deliver,
+    )
+    session = object()
+
+    results = [
+        run_async(
+            daily_digest.push_to_qq_with_session(
+                session,
+                "private",
+                "u1",
+                "测试消息",
+            )
+        )
+        for _ in range(3)
+    ]
+
+    assert results == [True, None, False]
+    assert len(calls) == 3
+    assert all(call[0] is session for call in calls)
+    assert calls[0][1]["target_type"] == "private"
+    assert calls[0][1]["target_id"] == "u1"
+    assert calls[0][1]["message"] == "测试消息"
+
+
 def test_push_envelope_to_qq_renders_structured_messages(monkeypatch):
     from core import daily_digest
 
@@ -125,6 +191,7 @@ def test_push_envelope_to_qq_keeps_generated_image_token_without_base64(
     from core import qq_outbound_renderer
 
     calls = []
+    target_secret = "generated-image-target-secret"
 
     async def fake_push(target_type, target_id, message):
         calls.append((target_type, target_id, message))
@@ -141,21 +208,23 @@ def test_push_envelope_to_qq_keeps_generated_image_token_without_base64(
     result = run_async(
         daily_digest.push_envelope_to_qq(
             "group",
-            "123",
+            target_secret,
             {"reply": "[generated_image:img_1]", "messages": []},
         )
     )
 
     assert result is True
-    assert calls == [("group", "123", "[generated_image:img_1]")]
+    assert calls == [("group", target_secret, "[generated_image:img_1]")]
     assert "base64://" not in calls[0][2]
     assert "generated_image_without_public_url:img_1" in caplog.text
+    assert target_secret not in caplog.text
 
 
-def test_push_envelope_to_qq_skips_empty_message(monkeypatch):
+def test_push_envelope_to_qq_skips_empty_message(monkeypatch, caplog):
     from core import daily_digest
 
     calls = []
+    target_secret = "empty-envelope-target-secret"
 
     async def fake_push(target_type, target_id, message):
         calls.append((target_type, target_id, message))
@@ -163,7 +232,15 @@ def test_push_envelope_to_qq_skips_empty_message(monkeypatch):
 
     monkeypatch.setattr(daily_digest, "push_to_qq", fake_push)
 
-    result = run_async(daily_digest.push_envelope_to_qq("group", "g1", {"messages": []}))
+    with caplog.at_level(logging.WARNING, logger="nanobot.daily_digest"):
+        result = run_async(
+            daily_digest.push_envelope_to_qq(
+                "group",
+                target_secret,
+                {"messages": []},
+            )
+        )
 
     assert result is False
     assert calls == []
+    assert target_secret not in caplog.text

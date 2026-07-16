@@ -2,6 +2,8 @@ from tests.async_helpers import run_async
 import json
 from datetime import datetime
 
+import pytest
+
 from core.database import ChatLog, MemoryDigest, RollingSessionSummary
 
 
@@ -178,14 +180,16 @@ def test_memory_digest_prompt_v2_templates_load_without_hardcoded_main_prompt():
     assert prompt_meta["system_source"] in {"default", "runtime"}
 
 
-def test_memory_digest_prompt_v2_missing_template_uses_short_fallback(monkeypatch):
+def test_memory_digest_prompt_v2_missing_template_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
     from app.memory_digest.llm_builder import build_llm_digest_messages
     from app.memory_digest.builder import MemoryDigestBuilder
+    from core.prompt_v2.task_templates import TaskTemplateUnavailableError
 
-    def missing_template(*_args, **_kwargs):
-        raise FileNotFoundError("template missing")
-
-    monkeypatch.setattr("app.memory_digest.llm_builder.load_template", missing_template)
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(tmp_path / "default"))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(tmp_path / "runtime"))
 
     fallback = MemoryDigestBuilder().build(
         user_id="group_42",
@@ -194,21 +198,18 @@ def test_memory_digest_prompt_v2_missing_template_uses_short_fallback(monkeypatc
         logs=[_log(id=1, content="模板缺失时不能让 daily digest 崩溃")],
     )
 
-    messages, prompt_meta = build_llm_digest_messages(
-        session_id="group_42",
-        digest_date="2026-05-22",
-        fallback=fallback,
-        source_rows=[
-            {
-                "log_id": 1,
-                "line": "[log_id=1][12:00] 甲: 模板缺失时不能让 daily digest 崩溃",
-            }
-        ],
-    )
-
-    assert messages[0]["content"].startswith("生成长期记忆摘要")
-    assert prompt_meta["system_source"] == "fallback"
-    assert prompt_meta["user_source"] == "fallback"
+    with pytest.raises(TaskTemplateUnavailableError):
+        build_llm_digest_messages(
+            session_id="group_42",
+            digest_date="2026-05-22",
+            fallback=fallback,
+            source_rows=[
+                {
+                    "log_id": 1,
+                    "line": "[log_id=1][12:00] 甲: 模板缺失时不能继续调用模型",
+                }
+            ],
+        )
 
 
 def test_llm_memory_digest_builder_promotes_clean_llm_summary():
@@ -345,6 +346,52 @@ def test_llm_memory_digest_async_builder_awaits_async_summarizer():
     assert result.meta["generator"] == "llm"
     assert result.meta["llm_status"] == "success"
     assert "async builder" in result.level_contents[2]
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [TypeError, ValueError, RuntimeError, FileNotFoundError],
+)
+def test_llm_memory_digest_sync_propagates_summarizer_programming_error(
+    error_type,
+):
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm
+
+    def broken_summarizer(_messages):
+        raise error_type("PROGRAMMING_BUG")
+
+    with pytest.raises(error_type, match="PROGRAMMING_BUG"):
+        build_memory_digest_with_llm(
+            user_id="group_42",
+            session_id="group_42",
+            digest_date="2026-05-22",
+            logs=[_log(id=1, content="同步摘要器编程错误不能变成成功摘要")],
+            summarizer=broken_summarizer,
+        )
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [TypeError, ValueError, RuntimeError, FileNotFoundError],
+)
+def test_llm_memory_digest_async_propagates_summarizer_programming_error(
+    error_type,
+):
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm_async
+
+    async def broken_summarizer(_messages):
+        raise error_type("PROGRAMMING_BUG")
+
+    with pytest.raises(error_type, match="PROGRAMMING_BUG"):
+        run_async(
+            build_memory_digest_with_llm_async(
+                user_id="group_42",
+                session_id="group_42",
+                digest_date="2026-05-22",
+                logs=[_log(id=1, content="异步摘要器编程错误不能变成成功摘要")],
+                summarizer=broken_summarizer,
+            )
+        )
 
 
 def test_llm_memory_digest_builder_accepts_goal_string_json_shape_and_records_prompt_metadata():
@@ -617,6 +664,82 @@ def test_generate_daily_digest_uses_llm_memory_digest_by_default(db_session, mon
     assert "KohakuVQ、Discrete AR" in row.content
 
 
+def test_generate_daily_digest_contract_failure_remains_retryable(
+    db_session,
+    monkeypatch,
+):
+    from core import daily_digest
+
+    calls = 0
+
+    def forbidden_summarizer(_messages):
+        nonlocal calls
+        calls += 1
+        return "{}"
+
+    db_session.add(_log(id=1, content="有效日志应保留确定性摘要但不能绕过输入合同"))
+    db_session.commit()
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(
+        "app.memory_digest.llm_builder._collect_source_rows",
+        lambda _logs: [{"log_id": 1, "line": ""}],
+    )
+
+    created = daily_digest.generate_daily_digest_for_date(
+        "2026-05-22",
+        llm_summarizer=forbidden_summarizer,
+    )
+
+    rows = db_session.query(MemoryDigest).filter_by(session_id="group_42").all()
+    assert calls == 0
+    assert created == 0
+    assert rows
+    assert {json.loads(row.meta_json)["status"] for row in rows} == {"failed"}
+    assert daily_digest._already_digested(db_session, "group_42", "2026-05-22") is False
+
+
+def test_generate_daily_digest_force_failure_preserves_existing_active_digest(
+    db_session,
+    monkeypatch,
+):
+    from core import daily_digest
+
+    calls = 0
+
+    def forbidden_summarizer(_messages):
+        nonlocal calls
+        calls += 1
+        return "{}"
+
+    existing = _add_digest(db_session, status="active")
+    existing_id = existing.id
+    db_session.add(_log(id=1, content="强制重建失败时不能归档既有有效摘要"))
+    db_session.commit()
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(
+        "app.memory_digest.llm_builder._collect_source_rows",
+        lambda _logs: [{"log_id": 1, "line": ""}],
+    )
+
+    created = daily_digest.generate_daily_digest_for_date(
+        "2026-05-22",
+        force=True,
+        llm_summarizer=forbidden_summarizer,
+    )
+
+    rows = db_session.query(MemoryDigest).filter_by(session_id="group_42").all()
+    existing_meta = json.loads(db_session.get(MemoryDigest, existing_id).meta_json)
+    new_statuses = {
+        json.loads(row.meta_json)["status"]
+        for row in rows
+        if row.id != existing_id
+    }
+    assert calls == 0
+    assert created == 0
+    assert existing_meta["status"] == "active"
+    assert new_statuses == {"failed"}
+
+
 def test_generate_daily_digest_sync_without_summarizer_does_not_call_default_async(
     db_session,
     monkeypatch,
@@ -746,9 +869,10 @@ def test_generate_daily_digest_writes_one_level0_one_level1_and_multiple_level2_
 
 def test_generate_daily_digest_falls_back_when_llm_summarizer_raises(db_session, monkeypatch):
     from core import daily_digest
+    from app.memory_digest.llm_builder import MemoryDigestModelError
 
     def broken_summarizer(_messages):
-        raise RuntimeError("llm gateway unavailable")
+        raise MemoryDigestModelError("llm gateway unavailable")
 
     db_session.add_all([
         _log(id=1, content="KohakuVQ 技术预览里提到了 VQ codebook usage"),

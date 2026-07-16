@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.prompt_v2.flow_storage import (
+    read_regular_bytes,
+    template_governance_read_lock,
+)
 from core.prompt_v2.section_renderer import sha256_text
 from core.prompt_v2.template_loader import (
     default_template_dir,
@@ -28,16 +32,22 @@ def _validate_template_for_save(key: str, text: str) -> None:
 
 
 def _read_body(path: Path | None) -> str:
-    if not path or not path.exists():
+    if not path:
         return ""
-    _frontmatter, body = split_frontmatter_text(path.read_text(encoding="utf-8"))
+    raw_bytes = read_regular_bytes(path, missing_ok=True)
+    if raw_bytes is None:
+        return ""
+    _frontmatter, body = split_frontmatter_text(raw_bytes.decode("utf-8"))
     return body.strip()
 
 
 def _read_frontmatter(path: Path | None) -> dict[str, Any]:
-    if not path or not path.exists():
+    if not path:
         return {}
-    frontmatter, _body = split_frontmatter_text(path.read_text(encoding="utf-8"))
+    raw_bytes = read_regular_bytes(path, missing_ok=True)
+    if raw_bytes is None:
+        return {}
+    frontmatter, _body = split_frontmatter_text(raw_bytes.decode("utf-8"))
     return frontmatter
 
 
@@ -84,6 +94,7 @@ def _template_record(key: str, *, db=None) -> dict[str, Any]:
             tool_schema = build_tool_schema(classified.tool_name, db=db)
         except Exception:
             tool_schema = None
+    resolution = template.resolution.to_dict() if template.resolution is not None else None
     return {
         "template_key": canonical,
         "name": str(frontmatter.get("name") or classified.display_name or canonical),
@@ -98,6 +109,12 @@ def _template_record(key: str, *, db=None) -> dict[str, Any]:
         "runtime_path": str(runtime_path or template_path_for(canonical, runtime=True)),
         "default_path": str(default_path or template_path_for(canonical, runtime=False)),
         "sha256": sha256_text(template.body),
+        "raw_sha256": (
+            str(resolution.get("active_sha256") or "")
+            if resolution is not None
+            else ""
+        ),
+        "resolution": resolution,
         "size": len(template.body.encode("utf-8")),
         "variables": list_variables(canonical),
         "frontmatter": frontmatter,
@@ -127,7 +144,8 @@ def _build_tree(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def list_templates(*, db=None) -> dict[str, Any]:
-    items = [_template_record(key, db=db) for key in list_template_keys()]
+    with template_governance_read_lock(runtime_template_dir()):
+        items = [_template_record(key, db=db) for key in list_template_keys()]
     items = sorted(items, key=lambda item: item["template_key"])
     return {
         "items": items,
@@ -139,15 +157,16 @@ def list_templates(*, db=None) -> dict[str, Any]:
 
 def get_template(template_key: str, *, db=None) -> dict[str, Any]:
     key = resolve_template_key(template_key)
-    record = _template_record(key, db=db)
-    default_path = first_existing_template_path(key, runtime=False)
-    runtime_path = first_existing_template_path(key, runtime=True)
-    return {
-        **record,
-        "content": _read_body(runtime_path or default_path),
-        "default_content": _read_body(default_path),
-        "runtime_content": _read_body(runtime_path),
-    }
+    with template_governance_read_lock(runtime_template_dir()):
+        record = _template_record(key, db=db)
+        default_path = first_existing_template_path(key, runtime=False)
+        runtime_path = first_existing_template_path(key, runtime=True)
+        return {
+            **record,
+            "content": _read_body(runtime_path or default_path),
+            "default_content": _read_body(default_path),
+            "runtime_content": _read_body(runtime_path),
+        }
 
 
 def create_template(
@@ -163,9 +182,6 @@ def create_template(
     text = str(content or "")
     _validate_template_for_save(key, text)
     path = template_path_for(key, runtime=True)
-    if path.exists():
-        raise ValueError("运行时模板已存在")
-    path.parent.mkdir(parents=True, exist_ok=True)
     frontmatter = {
         "name": name or key,
         "version": 1,
@@ -174,7 +190,16 @@ def create_template(
         "description": description,
     }
     normalized = text.rstrip() + "\n"
-    path.write_text(_frontmatter_text(frontmatter) + normalized, encoding="utf-8")
+    payload = (_frontmatter_text(frontmatter) + normalized).encode("utf-8")
+    from core.prompt_v2.template_migration import TemplateMigrationService
+
+    TemplateMigrationService.from_environment().apply_runtime_change(
+        key,
+        target_bytes=payload,
+        modified_by="admin",
+        operation_type="admin-create",
+        require_absent=True,
+    )
     from core.prompt_v2.tool_templates import clear_tool_template_policy_cache
 
     clear_tool_template_policy_cache()
@@ -192,10 +217,22 @@ def save_template(template_key: str, content: str) -> dict[str, Any]:
     text = str(content or "")
     _validate_template_for_save(key, text)
     path = template_path_for(key, runtime=True)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    before = _read_body(path)
     normalized = text.rstrip() + "\n"
-    path.write_text(normalized, encoding="utf-8")
+    from core.prompt_v2.template_migration import TemplateMigrationService
+
+    change = TemplateMigrationService.from_environment().apply_runtime_change(
+        key,
+        target_bytes=normalized.encode("utf-8"),
+        modified_by="admin",
+        operation_type="admin-save",
+    )
+    before_raw = change.pop("_before_bytes", None)
+    before = ""
+    if before_raw is not None:
+        _frontmatter, before = split_frontmatter_text(
+            before_raw.decode("utf-8", errors="replace")
+        )
+        before = before.strip()
     from core.prompt_v2.tool_templates import clear_tool_template_policy_cache
 
     clear_tool_template_policy_cache()
@@ -211,9 +248,16 @@ def save_template(template_key: str, content: str) -> dict[str, Any]:
 def delete_runtime_template(template_key: str) -> dict[str, Any]:
     key = resolve_template_key(template_key)
     path = template_path_for(key, runtime=True)
-    existed = path.exists()
+    from core.prompt_v2.template_migration import TemplateMigrationService
+
+    change = TemplateMigrationService.from_environment().apply_runtime_change(
+        key,
+        target_bytes=None,
+        modified_by="admin",
+        operation_type="admin-delete",
+    )
+    existed = change.pop("_before_bytes", None) is not None
     if existed:
-        path.unlink()
         from core.prompt_v2.tool_templates import clear_tool_template_policy_cache
 
         clear_tool_template_policy_cache()

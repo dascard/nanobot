@@ -47,6 +47,22 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
     Base.metadata.create_all(bind=engine)
     monkeypatch.setattr(database, "SessionLocal", TestingSessionLocal)
 
+    long_path = "/runtime/" + ("resolution-path-" * 500) + "main.md"
+    template_resolutions = {
+        "base_contract": {
+            "template_key": "chat/main",
+            "active_source": "runtime",
+            "active_path": long_path,
+            "runtime_path": long_path,
+            "default_path": "/default/chat/main.md",
+            "active_sha256": "a" * 64,
+            "runtime_sha256": "a" * 64,
+            "default_sha256": "b" * 64,
+            "baseline_version": None,
+            "drift_status": "untracked_legacy",
+        }
+    }
+
     run = RunTracer.start_run(
         trace_id="trace-a",
         session_id="group_1001",
@@ -58,6 +74,7 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         prompt_runtime_path="/runtime/prompt.md",
         prompt_default_path="/default/prompt.md",
         prompt_sha256="a" * 64,
+        prompt_template_resolutions=template_resolutions,
         model="model-a",
         input_preview="你好",
     )
@@ -86,6 +103,7 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         prompt_runtime_path="/runtime/group_chat.md",
         prompt_default_path="/default/group_chat.md",
         prompt_sha256="b" * 64,
+        prompt_template_resolutions=template_resolutions,
     )
     guidance_body = "TRACE_META_GUIDANCE_BODY_SENTINEL"
     RunTracer.finish_run(
@@ -119,6 +137,8 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         assert log.prompt_runtime_path == "/runtime/group_chat.md"
         assert log.prompt_default_path == "/default/group_chat.md"
         assert log.prompt_sha256 == "b" * 64
+        assert json.loads(log.prompt_template_resolutions_json) == template_resolutions
+        assert "truncated" not in log.prompt_template_resolutions_json
         assert json.loads(log.variables_json)["message_token_estimate"] == 6
         assert json.loads(log.variables_json)["tool_schema_token_estimate"] == 2
         assert json.loads(log.variables_json)["token_estimate"] == 8
@@ -128,6 +148,8 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
 
         run_row = db.query(database.AgentRun).first()
         assert run_row.status == "success"
+        assert json.loads(run_row.prompt_template_resolutions_json) == template_resolutions
+        assert "truncated" not in run_row.prompt_template_resolutions_json
         assert run_row.latency_ms == 12
         assert run_row.prompt_source == "Legacy runtime prompt"
         assert run_row.prompt_sha256 == "a" * 64
@@ -294,6 +316,16 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     assert effective_v2_json["request_json"]["messages"] == effective_v2_json["messages"]
     assert effective_v2_json["request_json"]["tools"] == effective_v2_json["tool_schemas"]
     assert len(effective_v2_json["prompt_sha256"]) == 64
+    template_resolutions = effective_v2_json["template_resolutions"]
+    base_resolution = template_resolutions["base_contract"]
+    assert effective_v2_json["prompt_source"] in {"runtime", "default", "mixed"}
+    assert effective_v2_json["prompt_runtime_path"] == (base_resolution["runtime_path"] or "")
+    assert effective_v2_json["prompt_default_path"] == (base_resolution["default_path"] or "")
+    assert effective_v2_json["request_prompt_sha256"] == effective_v2_json["debug"][
+        "request_prompt_sha256"
+    ]
+    assert effective_v2_json["request_prompt_sha256"] == effective_v2_json["prompt_sha256"]
+    assert effective_v2_json["prompt_sha256"] != base_resolution["active_sha256"]
     assert effective_v2_json["section_hashes"]["base_contract"]
     assert "history_message_count" in effective_v2_json["debug"]
     rendered_v2_request = json.dumps(effective_v2_json["request_json"], ensure_ascii=False)

@@ -5,15 +5,19 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from starlette.requests import Request
 
 from core.database import (
+    AdminAuditLog,
     Base,
     LLMApiRequestLog,
+    OutboundDeliveryControl,
     ProactiveOutreachLog,
     SystemSetting,
     get_db,
 )
 from server import app
+from tests.async_helpers import run_async
 
 
 @pytest.fixture
@@ -211,6 +215,132 @@ def test_proactive_outreach_logs_filter_by_status_and_target_fingerprint(
     assert data["items"][0]["target_fingerprint"] == target_fingerprint
 
 
+def test_proactive_outreach_status_exposes_safe_outbox_linkage(
+    proactive_client,
+    monkeypatch,
+):
+    from core.proactive_outreach import deliver_outreach_once
+
+    db = next(app.dependency_overrides[get_db]())
+    db.add(OutboundDeliveryControl(
+        source_type="proactive_outreach",
+        mode="outbox_active",
+        cutover_epoch=1,
+        effective_from=datetime(1970, 1, 1),
+        protocol_version=2,
+        writer_version=0,
+    ))
+    db.commit()
+    monkeypatch.setenv(
+        "NANOBOT_QQ_PUSH_CONFIG_REVISION",
+        "admin-proactive-revision",
+    )
+    queued = run_async(deliver_outreach_once(
+        user_id="u-proactive",
+        idempotency_key="outreach:u-proactive:queued",
+        grounding={"recent_messages": []},
+        judge_should=True,
+        judge_reason="管理页关联测试",
+        next_check_at=None,
+        next_intent="",
+        message="只用于管理页关联测试的正文",
+        forced=False,
+        db=db,
+    ))
+
+    status_response = proactive_client.get(
+        "/api/v1/admin/proactive-outreach/status",
+        headers=_auth_header(),
+    )
+    logs_response = proactive_client.get(
+        "/api/v1/admin/proactive-outreach/logs",
+        headers=_auth_header(),
+    )
+
+    assert status_response.status_code == 200, status_response.text
+    assert logs_response.status_code == 200, logs_response.text
+    status_data = status_response.json()
+    status_item = status_data["latest_logs"][0]
+    logs_item = logs_response.json()["items"][0]
+    assert status_data["delivery_stats"]["runs"]["by_status"] == {"queued": 1}
+    assert status_data["delivery_stats"]["active_outboxes"]["by_status"] == {
+        "pending": 1
+    }
+    for item in (status_item, logs_item):
+        assert item["outbound_run_id"] == queued["run_id"]
+        assert item["run_status"] == "queued"
+        assert item["active_outbox_id"] == queued["outbox_id"]
+        assert item["outbox_status"] == "pending"
+        assert item["payload_sha256_prefix"]
+        assert item["delivery_error_type"] == ""
+        for forbidden in (
+            "payload_json",
+            "destination_snapshot_json",
+            "source_snapshot_json",
+            "lease_token",
+            "idempotency_key",
+        ):
+            assert forbidden not in item
+
+
+def test_proactive_outreach_status_marks_changed_source_as_fenced(
+    proactive_client,
+    monkeypatch,
+):
+    from core.proactive_outreach import deliver_outreach_once
+
+    db = next(app.dependency_overrides[get_db]())
+    db.add(OutboundDeliveryControl(
+        source_type="proactive_outreach",
+        mode="outbox_active",
+        cutover_epoch=1,
+        effective_from=datetime(1970, 1, 1),
+        protocol_version=2,
+        writer_version=0,
+    ))
+    db.commit()
+    monkeypatch.setenv(
+        "NANOBOT_QQ_PUSH_CONFIG_REVISION",
+        "admin-proactive-revision",
+    )
+    queued = run_async(deliver_outreach_once(
+        user_id="u-proactive",
+        idempotency_key="outreach:u-proactive:fenced",
+        grounding={"recent_messages": []},
+        judge_should=True,
+        judge_reason="管理页 fenced 关联测试",
+        next_check_at=None,
+        next_intent="",
+        message="入队时的正文",
+        forced=False,
+        db=db,
+    ))
+    row = db.get(ProactiveOutreachLog, queued["log_id"])
+    row.message = "入队后已变化的正文"
+    db.commit()
+
+    status_response = proactive_client.get(
+        "/api/v1/admin/proactive-outreach/status",
+        headers=_auth_header(),
+    )
+    logs_response = proactive_client.get(
+        "/api/v1/admin/proactive-outreach/logs",
+        headers=_auth_header(),
+    )
+
+    assert status_response.status_code == 200, status_response.text
+    assert logs_response.status_code == 200, logs_response.text
+    for item in (
+        status_response.json()["latest_logs"][0],
+        logs_response.json()["items"][0],
+    ):
+        assert item["outbound_run_id"] == queued["run_id"]
+        assert item["run_status"] == "fenced"
+        assert item["active_outbox_id"] is None
+        assert item["outbox_status"] == ""
+        assert item["payload_sha256_prefix"] == ""
+
+
 def test_proactive_outreach_setting_update_is_scoped(proactive_client):
     ok = proactive_client.put(
         "/api/v1/admin/proactive-outreach/settings/proactive_outreach.enabled",
@@ -258,7 +388,16 @@ def test_proactive_outreach_run_once_uses_existing_runtime(proactive_client, mon
 
     async def fake_once(user_id, **kwargs):
         calls.append(("check", user_id, kwargs))
-        return {"status": "pending", "log_id": 7}
+        return {
+            "status": "queued",
+            "log_id": 7,
+            "run_id": 8,
+            "outbox_id": 9,
+            "deduplicated": False,
+            "payload_json": "不得返回的 payload",
+            "message": "不得返回的正文",
+            "idempotency_key": "不得返回的业务键",
+        }
 
     monkeypatch.setattr(
         "api.admin.proactive_outreach_routes.run_outreach_due_once",
@@ -284,12 +423,165 @@ def test_proactive_outreach_run_once_uses_existing_runtime(proactive_client, mon
     assert check.status_code == 200, check.text
     assert due.json()["result"]["status"] == "skipped_not_due"
     assert check.json()["result"]["log_id"] == 7
+    assert check.json()["result"] == {
+        "status": "queued",
+        "log_id": 7,
+        "run_id": 8,
+        "outbox_id": 9,
+        "deduplicated": False,
+    }
     assert "user_id" not in due.json()
     assert due.json()["target_fingerprint"]
     assert "u-proactive" not in due.text
     assert "other-user" not in due.text
     assert [item[0] for item in calls] == ["due", "check"]
     assert calls[0][1] == "u-proactive"
+    db = next(app.dependency_overrides[get_db]())
+    audit_row = (
+        db.query(AdminAuditLog)
+        .filter(AdminAuditLog.action == "run_proactive_outreach_once")
+        .order_by(AdminAuditLog.id.desc())
+        .first()
+    )
+    assert audit_row is not None
+    assert audit_row.target_id == check.json()["target_fingerprint"]
+    assert "u-proactive" not in audit_row.detail_json
+    assert "payload" not in audit_row.detail_json
+    assert "不得返回" not in audit_row.detail_json
+
+
+@pytest.mark.parametrize("failure_point", ["add", "commit"])
+def test_proactive_outreach_run_once_requires_durable_request_audit(
+    proactive_client,
+    monkeypatch,
+    failure_point,
+):
+    from api.admin import proactive_outreach_routes
+
+    runtime_calls = []
+
+    async def fake_once(*args, **kwargs):
+        runtime_calls.append((args, kwargs))
+        return {"status": "queued"}
+
+    class FailingAuditSession:
+        def add(self, _row):
+            if failure_point == "add":
+                raise RuntimeError("审计写入失败")
+
+        def commit(self):
+            if failure_point == "commit":
+                raise RuntimeError("审计提交失败")
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(proactive_outreach_routes, "run_outreach_once", fake_once)
+    request = Request({
+        "type": "http",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+    })
+
+    with pytest.raises(RuntimeError, match="审计"):
+        run_async(proactive_outreach_routes.proactive_outreach_run_once(
+            proactive_outreach_routes.ProactiveRunOnceRequest(mode="check"),
+            request,
+            db=FailingAuditSession(),
+            _auth="admin",
+        ))
+
+    assert runtime_calls == []
+
+
+def test_proactive_outreach_run_once_records_failed_runtime_attempt(
+    proactive_client,
+    monkeypatch,
+):
+    from api.admin import proactive_outreach_routes
+
+    async def fail_once(*_args, **_kwargs):
+        raise RuntimeError("不得进入审计的运行时异常正文")
+
+    monkeypatch.setattr(proactive_outreach_routes, "run_outreach_once", fail_once)
+    db = next(app.dependency_overrides[get_db]())
+    request = Request({
+        "type": "http",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+    })
+
+    with pytest.raises(RuntimeError, match="运行时异常正文"):
+        run_async(proactive_outreach_routes.proactive_outreach_run_once(
+            proactive_outreach_routes.ProactiveRunOnceRequest(mode="check"),
+            request,
+            db=db,
+            _auth="admin",
+        ))
+
+    db.expire_all()
+    rows = (
+        db.query(AdminAuditLog)
+        .filter(AdminAuditLog.target_type == "proactive_outreach")
+        .order_by(AdminAuditLog.id.asc())
+        .all()
+    )
+    assert [row.action for row in rows] == [
+        "run_proactive_outreach_once_requested",
+        "run_proactive_outreach_once_failed",
+    ]
+    assert all("u-proactive" not in row.detail_json for row in rows)
+    assert all("运行时异常正文" not in row.detail_json for row in rows)
+    assert '\"error_type\": \"runtime_error\"' in rows[-1].detail_json
+
+
+def test_proactive_outreach_run_once_does_not_commit_runtime_dirty_state(
+    proactive_client,
+    monkeypatch,
+):
+    from api.admin import proactive_outreach_routes
+
+    async def leave_dirty_state(*_args, **kwargs):
+        kwargs["db"].add(SystemSetting(
+            key="test.run_once.runtime_pollution",
+            value="should-not-persist",
+            description="运行时未提交脏状态",
+        ))
+        return {"status": "queued"}
+
+    monkeypatch.setattr(
+        proactive_outreach_routes,
+        "run_outreach_once",
+        leave_dirty_state,
+    )
+    db = next(app.dependency_overrides[get_db]())
+    request = Request({
+        "type": "http",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+    })
+
+    response = run_async(proactive_outreach_routes.proactive_outreach_run_once(
+        proactive_outreach_routes.ProactiveRunOnceRequest(mode="check"),
+        request,
+        db=db,
+        _auth="admin",
+    ))
+
+    verify = next(app.dependency_overrides[get_db]())
+    assert response["result"]["status"] == "queued"
+    assert (
+        verify.query(SystemSetting)
+        .filter(SystemSetting.key == "test.run_once.runtime_pollution")
+        .count()
+        == 0
+    )
+    assert (
+        verify.query(AdminAuditLog)
+        .filter(AdminAuditLog.target_type == "proactive_outreach")
+        .count()
+        == 2
+    )
 
 
 def test_proactive_outreach_scripted_simulation_never_external_publishes(proactive_client):

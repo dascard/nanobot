@@ -36,11 +36,16 @@ def client(tmp_path, monkeypatch):
         finally:
             db.close()
 
+    from core.settings_service import settings
+
+    original_settings_factory = settings._session_factory
+    settings.set_session_factory(TestingSessionLocal)
     app.dependency_overrides[get_db] = override_get_db
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
+        settings.set_session_factory(original_settings_factory)
 
 
 @pytest.fixture
@@ -80,9 +85,11 @@ class TestAuth:
 
     def test_version_git_probe_failure_logs_debug(self, client, auth_header, monkeypatch, caplog):
         from api.admin import system_routes
+        from core import build_info
 
         for key in (
             "NANOBOT_GIT_COMMIT",
+            "NANOBOT_GIT_FULL_COMMIT",
             "NANOBOT_GIT_BRANCH",
             "NANOBOT_GIT_COMMIT_DATE",
             "NANOBOT_GIT_DIRTY",
@@ -93,7 +100,7 @@ class TestAuth:
         def broken_check_output(*_args, **_kwargs):
             raise OSError("git missing")
 
-        monkeypatch.setattr(system_routes.subprocess, "check_output", broken_check_output)
+        monkeypatch.setattr(build_info.subprocess, "check_output", broken_check_output)
 
         with caplog.at_level(logging.DEBUG, logger="nanobot.admin"):
             response = client.get("/api/v1/admin/version", headers=auth_header)
@@ -101,8 +108,9 @@ class TestAuth:
         data = _ok(response)
         assert data["commit"] == "unknown"
         assert data["dirty"] is None
-        assert "git missing" in caplog.text
-        assert "rev-parse" in caplog.text
+        assert "git missing" not in caplog.text
+        assert "command=rev-parse" in caplog.text
+        assert "error_type=OSError" in caplog.text
 
     def test_no_token_configured_returns_503(self, client, monkeypatch):
         monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "")
@@ -171,6 +179,170 @@ class TestSettingsAudit:
         assert "value" not in detail
         assert detail["changed"] is True
         assert detail["fingerprint"] == hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12]
+
+
+class TestSettingsResponseContract:
+    @staticmethod
+    def _setting_item(payload, key):
+        return next(item for item in payload["settings"] if item["key"] == key)
+
+    def test_sensitive_setting_get_put_and_reset_never_return_raw_value(
+        self,
+        client,
+        auth_header,
+        monkeypatch,
+    ):
+        from core.settings_service import settings
+
+        key = "model.providers.newapi.api_key"
+        environment_secret = "environment-secret-for-response-test"
+        database_secret = "database-secret-for-response-test"
+        monkeypatch.setenv("NEW_API_KEY", environment_secret)
+        settings.invalidate()
+
+        get_before = client.get("/api/v1/admin/settings", headers=auth_header)
+        put = client.put(
+            f"/api/v1/admin/settings/{key}",
+            json={"value": database_secret},
+            headers=auth_header,
+        )
+        get_after_put = client.get("/api/v1/admin/settings", headers=auth_header)
+        reset = client.post(
+            f"/api/v1/admin/settings/{key}/reset",
+            headers=auth_header,
+        )
+        get_after_reset = client.get("/api/v1/admin/settings", headers=auth_header)
+
+        for response in (get_before, put, get_after_put, reset, get_after_reset):
+            assert response.status_code == 200, response.text
+        combined = "\n".join(
+            response.text
+            for response in (get_before, put, get_after_put, reset, get_after_reset)
+        )
+        assert environment_secret not in combined
+        assert database_secret not in combined
+
+        before_item = self._setting_item(get_before.json(), key)
+        database_item = self._setting_item(get_after_put.json(), key)
+        reset_item = self._setting_item(get_after_reset.json(), key)
+        for item in (before_item, database_item, reset_item):
+            assert item["value"] is None
+            assert item["display_value"] == "****"
+            assert item["configured"] is True
+            assert item["default"] is None
+
+        assert before_item["source"] == "environment"
+        assert database_item["source"] == "database"
+        assert reset_item["source"] == "environment"
+        assert put.json() == {
+            "key": key,
+            "value": None,
+            "display_value": "****",
+            "configured": True,
+            "source": "database",
+            "restart_required": False,
+            "version": put.json()["version"],
+        }
+        assert reset.json() == {
+            "key": key,
+            "value": None,
+            "display_value": "****",
+            "configured": True,
+            "source": "environment",
+            "reset_to": "environment",
+            "version": reset.json()["version"],
+        }
+
+    def test_non_sensitive_reset_reports_effective_environment_fallback(
+        self,
+        client,
+        auth_header,
+        monkeypatch,
+    ):
+        from core.settings_service import settings
+
+        key = "new_api.timeout"
+        monkeypatch.setenv("NEW_API_TIMEOUT", "123")
+        settings.invalidate()
+
+        put = client.put(
+            f"/api/v1/admin/settings/{key}",
+            json={"value": 456},
+            headers=auth_header,
+        )
+        reset = client.post(
+            f"/api/v1/admin/settings/{key}/reset",
+            headers=auth_header,
+        )
+
+        assert put.status_code == 200, put.text
+        assert reset.status_code == 200, reset.text
+        assert reset.json()["value"] == 123
+        assert reset.json()["display_value"] == "123"
+        assert reset.json()["configured"] is True
+        assert reset.json()["source"] == "environment"
+        assert reset.json()["reset_to"] == "environment"
+
+    def test_memory_digest_legacy_api_writes_canonical_setting(
+        self,
+        client,
+        auth_header,
+        monkeypatch,
+    ):
+        from core.database import SystemSetting
+        from core.settings_service import settings
+
+        monkeypatch.delenv("MEMORY_DIGEST_SCHEDULE_HOUR", raising=False)
+        monkeypatch.delenv("DAILY_DIGEST_HOUR", raising=False)
+        settings.invalidate()
+
+        response = client.put(
+            "/api/v1/admin/settings/daily_digest.hour",
+            json={"value": 6},
+            headers=auth_header,
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["key"] == "memory_digest.schedule_hour"
+        with next(app.dependency_overrides[get_db]()) as db:
+            assert db.get(SystemSetting, "memory_digest.schedule_hour").value == "6"
+            assert db.get(SystemSetting, "daily_digest.hour") is None
+
+    def test_memory_digest_canonical_reset_removes_legacy_database_override(
+        self,
+        client,
+        auth_header,
+        monkeypatch,
+    ):
+        from core.database import SystemSetting
+        from core.settings_service import settings
+
+        monkeypatch.delenv("MEMORY_DIGEST_SCHEDULE_HOUR", raising=False)
+        monkeypatch.delenv("DAILY_DIGEST_HOUR", raising=False)
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.merge(SystemSetting(key="daily_digest.hour", value="6"))
+            db.commit()
+        settings.invalidate()
+
+        before = client.get("/api/v1/admin/settings", headers=auth_header)
+        reset = client.post(
+            "/api/v1/admin/settings/memory_digest.schedule_hour/reset",
+            headers=auth_header,
+        )
+
+        assert before.status_code == 200, before.text
+        assert reset.status_code == 200, reset.text
+        assert self._setting_item(
+            before.json(), "memory_digest.schedule_hour"
+        )["source"] == "legacy_database"
+        assert all(
+            item["key"] not in {"daily_digest.enabled", "daily_digest.hour"}
+            for item in before.json()["settings"]
+        )
+        assert reset.json()["value"] == 4
+        assert reset.json()["source"] == "default"
+        with next(app.dependency_overrides[get_db]()) as db:
+            assert db.get(SystemSetting, "daily_digest.hour") is None
 
 
 class TestWebUIStatic:
@@ -1688,12 +1860,29 @@ class TestModelRoutes:
 class TestModelHealthCheck:
     """模型连通性健康检查"""
 
+    @staticmethod
+    def _use_test_routes(monkeypatch):
+        monkeypatch.setattr(
+            "clients.classifier_client.resolve_model_route",
+            lambda route_key: {
+                "route_key": route_key,
+                "base_url": f"http://{route_key}.test/v1",
+                "api_key": "",
+                "model": "test-model",
+                "provider_enabled": True,
+                "timeout": 3,
+            },
+        )
+
     def test_health_check_returns_all_endpoints(self, client, auth_header, monkeypatch):
         """健康检查返回三个端点（new_api/classifier/image_summary）"""
         import aiohttp
 
+        self._use_test_routes(monkeypatch)
+
         class FakeResponse:
             status = 200
+            async def json(self, **_kwargs): return {"data": [{"id": "test-model"}]}
             async def __aenter__(self): return self
             async def __aexit__(self, *a): pass
 
@@ -1714,14 +1903,18 @@ class TestModelHealthCheck:
         assert eps["new_api"]["reachable"] is True
         assert eps["new_api"]["usable"] is True
         assert eps["new_api"]["auth_error"] is False
-        assert eps["new_api"]["status"] == 200
+        assert eps["new_api"]["status"] == "ready"
+        assert eps["new_api"]["status_code"] == 200
 
     def test_health_check_401_is_reachable_not_usable(self, client, auth_header, monkeypatch):
         """401 可达但不可用，且 auth_error=true"""
         import aiohttp
 
+        self._use_test_routes(monkeypatch)
+
         class FakeResponse:
             status = 401
+            async def json(self, **_kwargs): return {}
             async def __aenter__(self): return self
             async def __aexit__(self, *a): pass
 
@@ -1738,10 +1931,14 @@ class TestModelHealthCheck:
         assert ep["reachable"] is True
         assert ep["usable"] is False
         assert ep["auth_error"] is True
+        assert ep["status"] == "auth_failed"
+        assert ep["status_code"] == 401
 
     def test_health_check_unreachable(self, client, auth_header, monkeypatch):
         """不可达端点返回 reachable=False + usable=False"""
         import aiohttp
+
+        self._use_test_routes(monkeypatch)
 
         class FakeSession:
             async def __aenter__(self): return self
@@ -1756,7 +1953,8 @@ class TestModelHealthCheck:
         data = r.json()
         assert data["endpoints"]["new_api"]["reachable"] is False
         assert data["endpoints"]["new_api"]["usable"] is False
-        assert "Connection refused" in data["endpoints"]["new_api"]["error"]
+        assert data["endpoints"]["new_api"]["status"] == "network_error"
+        assert "error" not in data["endpoints"]["new_api"]
 
 
 class TestModelRouteV2:

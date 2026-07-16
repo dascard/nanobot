@@ -29,6 +29,39 @@ def _create_legacy_chat_database(path: Path) -> None:
         conn.commit()
 
 
+def _create_legacy_outbound_database(path: Path, *, include_chat_tables: bool = False) -> None:
+    with closing(sqlite3.connect(path)) as conn:
+        if include_chat_tables:
+            conn.execute("CREATE TABLE chat_logs (id INTEGER PRIMARY KEY)")
+            conn.execute("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY)")
+        conn.execute(
+            "CREATE TABLE scheduled_tasks ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR, cron_expr VARCHAR, "
+            "target_type VARCHAR DEFAULT 'private', target_id VARCHAR, "
+            "prompt_template TEXT, enabled INTEGER DEFAULT 1, "
+            "last_run_at DATETIME, created_at DATETIME)"
+        )
+        conn.execute(
+            "INSERT INTO scheduled_tasks (name, last_run_at) "
+            "VALUES ('legacy', '2026-07-13 08:00:00')"
+        )
+        conn.execute(
+            "CREATE TABLE proactive_outreach_log ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id VARCHAR, "
+            "idempotency_key VARCHAR UNIQUE, grounding_json TEXT DEFAULT '{}', "
+            "judge_should BOOLEAN DEFAULT 0, judge_reason TEXT DEFAULT '', "
+            "next_check_at DATETIME, next_intent TEXT DEFAULT '', "
+            "message TEXT DEFAULT '', status VARCHAR DEFAULT 'pending', "
+            "forced BOOLEAN DEFAULT 0, created_at DATETIME)"
+        )
+        conn.execute(
+            "INSERT INTO proactive_outreach_log "
+            "(user_id, idempotency_key, status) "
+            "VALUES ('opaque-user', 'legacy-outreach', 'sending')"
+        )
+        conn.commit()
+
+
 def _create_legacy_chat_stream_database(
     path: Path,
     rows: list[tuple[str, float]],
@@ -531,6 +564,97 @@ def test_schema_migration_snapshot_failure_keeps_schema_and_versions_unchanged(
             "WHERE type = 'table' AND name = 'schema_migrations'"
         ).fetchone()[0]
     assert version_table == 0
+
+
+def test_outbound_migration_snapshot_failure_keeps_legacy_sources_unchanged(
+    tmp_path,
+    monkeypatch,
+):
+    from core import schema_migrations
+
+    db_path = tmp_path / "legacy-outbound-snapshot-failure.db"
+    _create_legacy_outbound_database(db_path)
+    schema_before = _database_schema(db_path)
+    with closing(sqlite3.connect(db_path)) as conn:
+        rows_before = conn.execute(
+            "SELECT idempotency_key, status FROM proactive_outreach_log"
+        ).fetchall()
+    engine = create_engine(f"sqlite:///{db_path}")
+
+    def fail_snapshot(*_args, **_kwargs):
+        raise OSError("outbound snapshot unavailable")
+
+    monkeypatch.setattr(
+        schema_migrations,
+        "create_sqlite_snapshot",
+        fail_snapshot,
+    )
+
+    try:
+        with pytest.raises(OSError, match="outbound snapshot unavailable"):
+            schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+    finally:
+        engine.dispose()
+
+    assert _database_schema(db_path) == schema_before
+    with closing(sqlite3.connect(db_path)) as conn:
+        rows_after = conn.execute(
+            "SELECT idempotency_key, status FROM proactive_outreach_log"
+        ).fetchall()
+        version_table = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'schema_migrations'"
+        ).fetchone()[0]
+        outbound_tables = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type = 'table' AND name LIKE 'outbound_%'"
+        ).fetchone()[0]
+    assert rows_after == rows_before
+    assert version_table == 0
+    assert outbound_tables == 0
+
+
+def test_outbound_and_chat_migrations_share_one_prechange_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    from core import schema_migrations
+    from core.sqlite_backup import create_sqlite_snapshot
+
+    db_path = tmp_path / "legacy-chat-and-outbound.db"
+    _create_legacy_outbound_database(db_path, include_chat_tables=True)
+    engine = create_engine(f"sqlite:///{db_path}")
+    calls: list[tuple[Path, Path]] = []
+
+    def tracking_snapshot(source_path, target_path, **kwargs):
+        result = create_sqlite_snapshot(source_path, target_path, **kwargs)
+        calls.append((Path(source_path), Path(target_path)))
+        return result
+
+    monkeypatch.setattr(schema_migrations, "create_sqlite_snapshot", tracking_snapshot)
+
+    try:
+        schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+        schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+    finally:
+        engine.dispose()
+
+    assert len(calls) == 1
+    _source_path, backup_path = calls[0]
+    with closing(sqlite3.connect(backup_path)) as backup_conn:
+        scheduled_columns = {
+            row[1]
+            for row in backup_conn.execute("PRAGMA table_info(scheduled_tasks)")
+        }
+        proactive_status = backup_conn.execute(
+            "SELECT status FROM proactive_outreach_log"
+        ).fetchone()[0]
+        chat_columns = {
+            row[1] for row in backup_conn.execute("PRAGMA table_info(chat_logs)")
+        }
+    assert "last_attempt_at" not in scheduled_columns
+    assert proactive_status == "sending"
+    assert chat_columns == {"id"}
 
 
 def test_chat_stream_identity_migration_snapshot_is_recoverable(

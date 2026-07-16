@@ -1,7 +1,11 @@
 import json
-from pathlib import Path
+import os
+import shutil
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +34,48 @@ def _write_template(path: Path, *, kind: str = "tool", tool_name: str = "group_a
         f"---\nname: {path.stem}\nversion: 1\nkind: {kind}\ntool_name: {tool_name}\n---\n{body}\n",
         encoding="utf-8",
     )
+
+
+def _copy_runtime_task_templates(runtime_dir: Path) -> None:
+    shutil.copytree(
+        Path("prompts.v2.default/tasks"),
+        runtime_dir / "tasks",
+        dirs_exist_ok=True,
+    )
+
+
+def _copy_runtime_tool_templates(runtime_dir: Path) -> None:
+    shutil.copytree(
+        Path("prompts.v2.default/tools"),
+        runtime_dir / "tools",
+        dirs_exist_ok=True,
+    )
+
+
+def _copy_active_chat_templates(
+    runtime_dir: Path,
+    *,
+    exclude: set[str] | None = None,
+    include_flow: bool = False,
+) -> None:
+    excluded = exclude or set()
+    template_paths = [
+        "main.md",
+        "branch_group.md",
+        "branch_private.md",
+        "identity_context.md",
+        "platform/qq/common.md",
+        "platform/qq/group.md",
+    ]
+    if include_flow:
+        template_paths.append("flow.json")
+    for relative_path in template_paths:
+        if relative_path in excluded:
+            continue
+        source = Path("prompts.v2.default/chat") / relative_path
+        target = runtime_dir / "chat" / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
 
 
 def test_prompt_v2_registry_resolves_slash_keys_aliases_and_paths(tmp_path, monkeypatch):
@@ -78,6 +124,9 @@ def test_prompt_v2_init_runtime_dir_copies_missing_files_without_overwrite(tmp_p
     )
     (runtime_dir / "chat").mkdir(parents=True)
     (runtime_dir / "chat" / "main.md").write_text("RUNTIME MAIN\n", encoding="utf-8")
+    _copy_active_chat_templates(runtime_dir, exclude={"main.md"})
+    _copy_runtime_task_templates(runtime_dir)
+    _copy_runtime_tool_templates(runtime_dir)
 
     monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
@@ -97,7 +146,7 @@ def test_prompt_v2_init_runtime_dir_copies_missing_files_without_overwrite(tmp_p
     ).read_text(encoding="utf-8") == canonical_flow
 
 
-def test_prompt_v2_init_runtime_dir_migrates_existing_legacy_flow(
+def test_prompt_v2_init_runtime_dir_preserves_existing_legacy_flow(
     tmp_path,
     monkeypatch,
 ):
@@ -119,6 +168,9 @@ def test_prompt_v2_init_runtime_dir_migrates_existing_legacy_flow(
         + "\n"
     )
     runtime_flow.write_text(original, encoding="utf-8")
+    _copy_active_chat_templates(runtime_dir)
+    _copy_runtime_task_templates(runtime_dir)
+    _copy_runtime_tool_templates(runtime_dir)
     monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
 
@@ -126,16 +178,10 @@ def test_prompt_v2_init_runtime_dir_migrates_existing_legacy_flow(
 
     result = init_prompt_v2_runtime_dir()
 
-    assert result["flow_migrated"] is True
-    backup_path = Path(result["flow_backup_path"])
-    assert backup_path.parent == (
-        tmp_path / "prompt_template_backups" / "session_guidance_flow"
-    )
-    assert backup_path.read_text(encoding="utf-8") == original
-    migrated = json.loads(runtime_flow.read_text(encoding="utf-8"))
-    assert sum(
-        node["id"] == "session_guidance" for node in migrated["nodes"]
-    ) == 1
+    assert result["flow_migrated"] is False
+    assert result["flow_backup_path"] == ""
+    assert runtime_flow.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "prompt_template_backups").exists()
 
 
 def test_prompt_v2_init_runtime_dir_rejects_broken_flow_symlink_before_copy(
@@ -209,6 +255,9 @@ def test_prompt_v2_init_runtime_flow_copy_and_admin_save_share_write_lock(
     )
     runtime_flow = runtime_dir / "chat" / "flow.json"
     runtime_flow.parent.mkdir(parents=True)
+    _copy_active_chat_templates(runtime_dir)
+    _copy_runtime_task_templates(runtime_dir)
+    _copy_runtime_tool_templates(runtime_dir)
     monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
 
@@ -275,7 +324,7 @@ def test_prompt_v2_init_runtime_flow_copy_and_admin_save_share_write_lock(
     assert final_node["concurrent_note"] == "admin-save-must-win"
 
 
-def test_prompt_v2_init_runtime_dir_migrates_legacy_super_user_placeholder(
+def test_prompt_v2_init_runtime_dir_preserves_legacy_super_user_placeholder(
     tmp_path,
     monkeypatch,
 ):
@@ -288,6 +337,13 @@ def test_prompt_v2_init_runtime_dir_migrates_legacy_super_user_placeholder(
         "super_user_id: {{ super_user_id }}\n",
         encoding="utf-8",
     )
+    _copy_active_chat_templates(
+        runtime_dir,
+        exclude={"identity_context.md"},
+        include_flow=True,
+    )
+    _copy_runtime_task_templates(runtime_dir)
+    _copy_runtime_tool_templates(runtime_dir)
     monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
 
@@ -295,10 +351,303 @@ def test_prompt_v2_init_runtime_dir_migrates_legacy_super_user_placeholder(
 
     result = init_prompt_v2_runtime_dir()
 
-    assert result["migrated"] == ["chat/identity_context.md"]
+    assert result["migrated"] == []
     assert identity_path.read_text(encoding="utf-8") == (
-        "is_super_user: {{ is_super_user }}\n"
+        "super_user_id: {{ super_user_id }}\n"
     )
+
+
+def test_prompt_v2_init_runtime_dir_fails_closed_when_active_tasks_are_missing(
+    tmp_path,
+    monkeypatch,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    default_dir.mkdir()
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.task_contracts import TaskContractError
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    with pytest.raises(TaskContractError, match="active task contract missing template"):
+        init_prompt_v2_runtime_dir()
+
+
+@pytest.mark.parametrize("invalid_source", ["runtime", "default"])
+def test_prompt_v2_init_runtime_dir_warns_for_inactive_invalid_template(
+    tmp_path,
+    monkeypatch,
+    invalid_source,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    state_dir = tmp_path / "template-state"
+    shutil.copytree(Path("prompts.v2.default"), default_dir)
+    shutil.copytree(Path("prompts.v2.default"), runtime_dir)
+    invalid_path = (
+        runtime_dir if invalid_source == "runtime" else default_dir
+    ) / "tools" / "never_registered" / "usage.md"
+    invalid_path.parent.mkdir(parents=True, exist_ok=True)
+    invalid_path.write_bytes(b"\xff\xfeinactive invalid")
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_TEMPLATE_STATE_DIR", str(state_dir))
+
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    result = init_prompt_v2_runtime_dir()
+
+    report = next(
+        item
+        for item in result["template_audit"]
+        if item["template_key"] == "tools/never_registered/usage"
+    )
+    assert report["drift_status"] == "invalid"
+    expected_component = (
+        "runtime_content" if invalid_source == "runtime" else "canonical_content"
+    )
+    assert report["invalid_component"] == expected_component
+    if invalid_source == "default":
+        assert not (
+            runtime_dir / "tools" / "never_registered" / "usage.md"
+        ).exists()
+
+
+@pytest.mark.parametrize(
+    "template_key",
+    [
+        "chat/main",
+        "tasks/memory_extract",
+        "tools/reply/usage",
+        "tools/group_analysis/system",
+    ],
+)
+def test_prompt_v2_init_runtime_dir_fails_closed_for_active_invalid_template(
+    tmp_path,
+    monkeypatch,
+    template_key,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    state_dir = tmp_path / "template-state"
+    shutil.copytree(Path("prompts.v2.default"), default_dir)
+    shutil.copytree(Path("prompts.v2.default"), runtime_dir)
+    (runtime_dir / f"{template_key}.md").write_bytes(b"\xff\xfeactive invalid")
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_TEMPLATE_STATE_DIR", str(state_dir))
+
+    from core.prompt_v2.template_baseline import TemplateBaselineError
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    with pytest.raises(TemplateBaselineError, match=template_key):
+        init_prompt_v2_runtime_dir()
+
+
+def test_prompt_v2_init_runtime_dir_warns_for_force_disabled_tool_template(
+    tmp_path,
+    monkeypatch,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    state_dir = tmp_path / "template-state"
+    shutil.copytree(Path("prompts.v2.default"), default_dir)
+    shutil.copytree(Path("prompts.v2.default"), runtime_dir)
+    runtime_path = runtime_dir / "tools" / "python_sandbox" / "usage.md"
+    runtime_path.write_bytes(b"\xff\xfeforce disabled invalid")
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_TEMPLATE_STATE_DIR", str(state_dir))
+
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    result = init_prompt_v2_runtime_dir()
+
+    report = next(
+        item
+        for item in result["template_audit"]
+        if item["template_key"] == "tools/python_sandbox/usage"
+    )
+    assert report["drift_status"] == "invalid"
+    assert report["invalid_component"] == "runtime_content"
+
+
+@pytest.mark.parametrize(
+    "template_key",
+    [
+        "chat/main",
+        "chat/identity_context",
+        "tools/reply/usage",
+        "tools/group_analysis/system",
+    ],
+)
+def test_prompt_v2_init_runtime_dir_fails_closed_for_active_template_missing_both_sources(
+    tmp_path,
+    monkeypatch,
+    template_key,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    state_dir = tmp_path / "template-state"
+    shutil.copytree(Path("prompts.v2.default"), default_dir)
+    shutil.copytree(Path("prompts.v2.default"), runtime_dir)
+    (default_dir / f"{template_key}.md").unlink()
+    (runtime_dir / f"{template_key}.md").unlink()
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_TEMPLATE_STATE_DIR", str(state_dir))
+
+    from core.prompt_v2.template_baseline import TemplateBaselineError
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    with pytest.raises(TemplateBaselineError, match=template_key):
+        init_prompt_v2_runtime_dir()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="平台不支持 FIFO")
+@pytest.mark.parametrize(
+    "surface",
+    [
+        "task_startup",
+        "template_loader",
+        "template_records",
+        "template_store_detail",
+    ],
+)
+def test_prompt_template_public_readers_do_not_block_on_fifo(
+    tmp_path,
+    surface,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    state_dir = tmp_path / "template-state"
+    shutil.copytree(Path("prompts.v2.default"), default_dir)
+    shutil.copytree(Path("prompts.v2.default"), runtime_dir)
+
+    if surface == "task_startup":
+        fifo_path = runtime_dir / "tasks" / "memory_extract.md"
+    elif surface == "template_loader":
+        fifo_path = runtime_dir / "chat" / "main.md"
+    else:
+        fifo_path = runtime_dir / "tools" / "custom_fifo" / "usage.md"
+        fifo_path.parent.mkdir(parents=True, exist_ok=True)
+    fifo_path.unlink(missing_ok=True)
+    os.mkfifo(fifo_path)
+
+    probe = """
+import os
+
+surface = os.environ["PROBE_SURFACE"]
+try:
+    if surface == "task_startup":
+        from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+        init_prompt_v2_runtime_dir()
+    elif surface == "template_loader":
+        from core.prompt_v2.template_loader import load_template
+        load_template("chat/main")
+    elif surface == "template_records":
+        from core.prompt_v2.template_registry import list_template_records
+        records = list_template_records()
+        if not any(
+            item["template_key"] == "tools/custom_fifo/usage"
+            for item in records
+        ):
+            raise SystemExit(2)
+        print("completed")
+        raise SystemExit(0)
+    else:
+        from core.prompt_v2.template_store import get_template
+        get_template("tools/custom_fifo/usage")
+except Exception:
+    if surface == "template_records":
+        raise
+    print("rejected")
+    raise SystemExit(0)
+raise SystemExit(2)
+"""
+    env = os.environ.copy()
+    env.update(
+        {
+            "NANOBOT_PROMPT_DEFAULT_DIR": str(default_dir),
+            "NANOBOT_PROMPT_RUNTIME_DIR": str(runtime_dir),
+            "NANOBOT_PROMPT_TEMPLATE_STATE_DIR": str(state_dir),
+            "PROBE_SURFACE": surface,
+        }
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=Path.cwd(),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    expected = "completed" if surface == "template_records" else "rejected"
+    assert result.stdout.strip() == expected
+
+
+def test_prompt_v2_init_runtime_dir_fails_closed_for_custom_live_flow_template_missing(
+    tmp_path,
+    monkeypatch,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    state_dir = tmp_path / "template-state"
+    shutil.copytree(Path("prompts.v2.default"), default_dir)
+    shutil.copytree(Path("prompts.v2.default"), runtime_dir)
+    for root in (default_dir, runtime_dir):
+        flow_path = root / "chat" / "flow.json"
+        flow = json.loads(flow_path.read_text(encoding="utf-8"))
+        current_index = next(
+            index
+            for index, node in enumerate(flow["nodes"])
+            if node["id"] == "current_user_event"
+        )
+        flow["nodes"].insert(
+            current_index,
+            {
+                "id": "custom_live_policy",
+                "type": "template",
+                "label": "system: custom live policy",
+                "template_key": "chat/custom_live_policy",
+            },
+        )
+        flow["edges"] = [
+            edge
+            for edge in flow["edges"]
+            if (edge["from"], edge["to"])
+            != ("runtime_tool_prompt", "current_user_event")
+        ]
+        flow["edges"].extend(
+            [
+                {
+                    "from": "runtime_tool_prompt",
+                    "to": "custom_live_policy",
+                },
+                {
+                    "from": "custom_live_policy",
+                    "to": "current_user_event",
+                },
+            ]
+        )
+        flow_path.write_text(
+            json.dumps(flow, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_TEMPLATE_STATE_DIR", str(state_dir))
+
+    from core.prompt_v2.template_baseline import TemplateBaselineError
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    with pytest.raises(TemplateBaselineError, match="chat/custom_live_policy"):
+        init_prompt_v2_runtime_dir()
 
 
 def test_prompt_template_registry_prefers_canonical_env_names(tmp_path, monkeypatch):

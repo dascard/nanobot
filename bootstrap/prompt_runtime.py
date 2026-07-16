@@ -37,6 +37,22 @@ def init_prompt_runtimes(logger: logging.Logger) -> None:
             "[PromptRuntime] migrated %d legacy identity placeholders",
             len(runtime_result["migrated"]),
         )
+    recovery = dict(runtime_result.get("template_recovery") or {})
+    if recovery.get("status") not in {None, "clean"}:
+        logger.warning(
+            "[PromptRuntime] template migration recovered: status=%s operation_id=%s",
+            recovery.get("status", ""),
+            recovery.get("operation_id", ""),
+        )
+    for audit in runtime_result.get("template_audit", []):
+        drift_status = str(audit.get("drift_status") or "")
+        if drift_status == "in_sync":
+            continue
+        logger.warning(
+            "[PromptRuntime] template drift: key=%s status=%s",
+            audit.get("template_key", ""),
+            drift_status,
+        )
     for status in runtime_result.get("task_contracts", []):
         invalid_sources = list(status.get("invalid_sources") or [])
         if not invalid_sources:

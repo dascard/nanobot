@@ -13,6 +13,7 @@ from core.prompt_v2.context_adapters import (
     jsonable,
 )
 from core.prompt_v2.flow import load_flow, ordered_nodes_for_chat
+from core.prompt_v2.flow_storage import template_governance_read_lock
 from core.prompt_v2.request_metrics import calculate_request_metrics
 from core.prompt_v2.schema import (
     PromptCompileRequest,
@@ -55,6 +56,20 @@ def _extract_marked_sections(text: str, start: str, end: str) -> tuple[list[str]
 
 
 async def compile_prompt_plan(
+    request: PromptCompileRequest | dict[str, Any],
+    *,
+    strict_audit: bool = True,
+) -> PromptPlan:
+    from core.prompt_v2.template_registry import runtime_template_dir
+
+    with template_governance_read_lock(runtime_template_dir()):
+        return await _compile_prompt_plan_locked(
+            request,
+            strict_audit=strict_audit,
+        )
+
+
+async def _compile_prompt_plan_locked(
     request: PromptCompileRequest | dict[str, Any],
     *,
     strict_audit: bool = True,
@@ -118,6 +133,7 @@ async def compile_prompt_plan(
     section_hashes: dict[str, str] = {}
     messages: list[dict[str, Any]] = []
     template_paths: dict[str, str] = {}
+    template_resolutions: dict[str, dict[str, Any]] = {}
     seen_current_user = False
     seen_runtime_keys: set[str] = set()
     singleton_runtime_keys = {
@@ -178,6 +194,9 @@ async def compile_prompt_plan(
                 continue
             rendered = render_scoped_template(template_key, template.body, template_values).strip()
             template_paths[node_id] = str(template.path)
+            if template.resolution is None:
+                raise RuntimeError(f"Prompt 模板缺少来源解析记录: {template_key}")
+            template_resolutions[node_id] = template.resolution.to_dict()
             message_indexes = append_system(node_id, rendered)
             flow_sections.append(
                 section_metadata(
@@ -288,6 +307,7 @@ async def compile_prompt_plan(
     session_guidance_configured = bool(normalized_session_guidance)
     session_guidance_status = "emitted" if session_guidance_configured else "empty"
     debug = {
+        **dict(request.debug or {}),
         "template_path": next(iter(template_paths.values()), ""),
         "template_paths": template_paths,
         "flow_path": str(flow_state.path),
@@ -299,7 +319,8 @@ async def compile_prompt_plan(
         "history_message_count": len(history_messages),
         "has_group_context": bool(group_context),
         "tool_schema_count": len(request.tool_schemas or []),
-        **dict(request.debug or {}),
+        "template_resolutions": template_resolutions,
+        "request_prompt_sha256": metrics.prompt_sha256,
         "session_guidance_chat_stream_id": str(
             request.session_guidance_chat_stream_id or ""
         ).strip(),

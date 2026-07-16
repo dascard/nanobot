@@ -1,7 +1,116 @@
 """Tests for the private chat classifier guardrail."""
 
+import asyncio
 import json
+import logging
+import socket
+import sys
+import urllib.error
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+def test_private_decision_classifier_propagates_programming_error(monkeypatch):
+    from clients.classifier_client import PrivateDecisionClassifier
+
+    classifier = PrivateDecisionClassifier()
+
+    def fail_with_programming_error(*_args, **_kwargs):
+        raise TypeError("private decision programming error")
+
+    monkeypatch.setattr(classifier, "_call_qwen", fail_with_programming_error)
+
+    with pytest.raises(TypeError, match="programming error"):
+        classifier.classify("帮我看看这个链接")
+
+
+def test_private_decision_classifier_keeps_invalid_model_output_parser_fallback(
+    monkeypatch,
+):
+    from clients.classifier_client import PrivateDecisionClassifier
+
+    classifier = PrivateDecisionClassifier()
+    monkeypatch.setattr(classifier, "_call_qwen", lambda *_args: "不是合法 JSON")
+
+    result = classifier.classify("帮我看看这个链接")
+
+    assert result["action"] == "reply_now"
+    assert result["reason"] == "invalid output fallback"
+
+
+@pytest.mark.asyncio
+async def test_private_timing_gate_owns_expected_network_fallback_once():
+    from core.private_timing import PrivateTimingGate
+
+    class OfflineClassifier:
+        def __init__(self):
+            self.calls = 0
+
+        def classify(self, *_args, **_kwargs):
+            self.calls += 1
+            raise urllib.error.URLError("offline")
+
+    classifier = OfflineClassifier()
+    decision = await PrivateTimingGate(classifier=classifier).classify(
+        "帮我看看 https://example.com",
+        user_id="u-private",
+    )
+
+    assert classifier.calls == 1
+    assert decision.raw_label in {"fallback", "fallback_scoring"}
+
+
+@pytest.mark.asyncio
+async def test_private_timing_gate_does_not_convert_programming_error_to_decision():
+    from core.private_timing import PrivateTimingGate
+
+    class BrokenClassifier:
+        def classify(self, *_args, **_kwargs):
+            raise TypeError("classifier programming error")
+
+    with pytest.raises(TypeError, match="programming error"):
+        await PrivateTimingGate(classifier=BrokenClassifier()).classify(
+            "帮我看看 https://example.com",
+            user_id="u-private",
+        )
+
+
+def test_model_route_task_renderer_programming_error_is_not_silently_fallback(
+    monkeypatch,
+):
+    from clients import classifier_client
+
+    monkeypatch.setattr(
+        classifier_client,
+        "ensure_model_route_enabled",
+        lambda _route_key: {
+            "base_url": "http://classifier.invalid/v1",
+            "provider_id": "local_llama",
+            "model": "classifier",
+            "max_tokens": 120,
+            "temperature": 0,
+            "timeout": 1,
+            "enable_thinking": "false",
+            "api_key": "",
+        },
+    )
+
+    def fail_render(*_args, **_kwargs):
+        raise TypeError("task renderer programming error")
+
+    monkeypatch.setattr(
+        "core.prompt_v2.task_templates.render_task_messages",
+        fail_render,
+    )
+
+    with pytest.raises(TypeError, match="task renderer programming error"):
+        classifier_client.call_model_route_response(
+            route_key="private_decision",
+            system_prompt="fallback",
+            user_message="message",
+        )
 
 
 
@@ -22,6 +131,338 @@ def _patch_qwen_opener(mock_response: MagicMock):
     mock_opener = MagicMock()
     mock_opener.open.return_value = mock_response
     return patch("urllib.request.build_opener", return_value=mock_opener)
+
+
+def test_model_route_runtime_uses_public_resolver_snapshot(monkeypatch):
+    from clients import classifier_client
+
+    resolver_calls: list[str] = []
+    public_route = {
+        "route_key": "timing_gate",
+        "base_url": "http://public-resolver.test/v1",
+        "api_key": "",
+        "provider_id": "local_llama",
+        "provider_enabled": True,
+        "model": "resolver-model",
+        "max_tokens": 30,
+        "temperature": 0,
+        "timeout": 1,
+        "enable_thinking": "false",
+    }
+
+    def resolve(route_key: str):
+        resolver_calls.append(route_key)
+        return dict(public_route)
+
+    monkeypatch.setattr(classifier_client, "resolve_model_route", resolve)
+    monkeypatch.setattr(
+        classifier_client,
+        "_resolve_classifier_route",
+        lambda _route_key: {
+            **public_route,
+            "base_url": "http://private-resolver.invalid/v1",
+        },
+    )
+    response = _mock_qwen_response("是,5")
+    opener = MagicMock()
+    opener.open.return_value = response
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_args: opener)
+
+    result = classifier_client.call_model_route_response(
+        route_key="timing_gate",
+        user_message="测试公共路由入口",
+    )
+
+    assert result.content == "是,5"
+    assert resolver_calls == ["timing_gate"]
+    request = opener.open.call_args.args[0]
+    assert request.full_url == "http://public-resolver.test/v1/chat/completions"
+
+
+def test_classifier_failure_never_persists_credential_url_or_raw_body(
+    monkeypatch,
+    caplog,
+    db_session,
+):
+    from clients import classifier_client
+    from core.database import LLMApiRequestLog
+
+    url_user = "classifier-user"
+    url_password = "classifier-password-secret"
+    query_secret = "classifier-query-secret"
+    body_secret = "classifier-response-secret"
+    monkeypatch.setattr(
+        classifier_client,
+        "resolve_model_route",
+        lambda route_key: {
+            "route_key": route_key,
+            "base_url": (
+                f"http://{url_user}:{url_password}@classifier.test/v1"
+                f"?token={query_secret}"
+            ),
+            "api_key": "",
+            "provider_id": "local_llama",
+            "provider_enabled": True,
+            "model": "classifier-model",
+            "max_tokens": 30,
+            "temperature": 0,
+            "timeout": 1,
+            "enable_thinking": "false",
+        },
+    )
+    response = MagicMock()
+    response.status = 502
+    response.read.return_value = (
+        f"not-json token={body_secret}".encode("utf-8")
+    )
+    response.__enter__ = MagicMock(return_value=response)
+    response.__exit__ = MagicMock(return_value=False)
+    opener = MagicMock()
+    opener.open.return_value = response
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_args: opener)
+
+    with caplog.at_level(logging.INFO, logger="nanobot.classifier"):
+        with pytest.raises(ValueError, match="invalid JSON"):
+            classifier_client.call_model_route_response(
+                route_key="timing_gate",
+                user_message="触发失败响应审计",
+            )
+
+    row = (
+        db_session.query(LLMApiRequestLog)
+        .order_by(LLMApiRequestLog.id.desc())
+        .first()
+    )
+    assert row is not None
+    persisted = "\n".join([
+        caplog.text,
+        row.url or "",
+        row.response_json or "",
+        row.response_preview or "",
+        row.error or "",
+    ])
+    for secret in (url_user, url_password, query_secret, body_secret):
+        assert secret not in persisted
+    assert "raw_body_preview" not in persisted
+    response_audit = json.loads(row.response_json)
+    assert response_audit["response_body_omitted"] is True
+    assert response_audit["response_body_chars"] > 0
+    assert len(response_audit["response_body_sha256"]) == 64
+
+
+class _HealthResponse:
+    def __init__(self, status: int, payload):
+        self.status = status
+        self._payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def json(self, **_kwargs):
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+class _HealthSession:
+    def __init__(self, response=None, error: Exception | None = None):
+        self.response = response
+        self.error = error
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "payload", "model", "expected_status", "reachable"),
+    [
+        (200, {"data": [{"id": "target-model"}]}, "target-model", "ready", True),
+        (401, {}, "target-model", "auth_failed", True),
+        (429, {}, "target-model", "client_error", True),
+        (503, {}, "target-model", "server_error", True),
+        (200, {"items": []}, "target-model", "invalid_models_response", True),
+        (200, ValueError("invalid-json-secret"), "target-model", "invalid_models_response", True),
+        (200, {"data": [{"id": "other-model"}]}, "target-model", "model_not_ready", True),
+        (200, {"data": []}, "target-model", "model_not_ready", True),
+    ],
+)
+async def test_probe_model_route_classifies_http_and_model_states(
+    status_code,
+    payload,
+    model,
+    expected_status,
+    reachable,
+):
+    from core.model_route_health import probe_model_route
+
+    session = _HealthSession(_HealthResponse(status_code, payload))
+    route = {
+        "route_key": "timing_gate",
+        "base_url": "http://classifier.test/v1",
+        "api_key": "route-secret",
+        "model": model,
+        "provider_enabled": True,
+        "timeout": 3,
+    }
+
+    health = await probe_model_route(route, session)
+
+    assert health.status == expected_status
+    assert health.reachable is reachable
+    assert health.usable is (expected_status == "ready")
+    assert health.status_code == status_code
+    assert health.latency_ms >= 0
+    if status_code == 200:
+        url, kwargs = session.calls[0]
+        assert url == "http://classifier.test/v1/models"
+        assert kwargs["headers"] == {"Authorization": "Bearer route-secret"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (asyncio.TimeoutError(), "timeout"),
+        (ConnectionRefusedError("refused-secret"), "connection_refused"),
+        (socket.gaierror("dns-secret"), "dns_error"),
+        (RuntimeError("network-response-secret"), "network_error"),
+    ],
+)
+async def test_probe_model_route_classifies_network_errors_without_echoing_exception(
+    error,
+    expected_status,
+):
+    from dataclasses import asdict
+
+    from core.model_route_health import probe_model_route
+
+    health = await probe_model_route(
+        {
+            "route_key": "timing_gate",
+            "base_url": "http://classifier.test/v1",
+            "api_key": "route-secret",
+            "model": "target-model",
+            "provider_enabled": True,
+        },
+        _HealthSession(error=error),
+    )
+
+    assert health.status == expected_status
+    assert health.reachable is False
+    assert health.usable is False
+    assert health.status_code is None
+    serialized = repr(asdict(health))
+    assert "secret" not in serialized
+    assert "classifier.test" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_probe_model_route_short_circuits_unconfigured_and_disabled_routes():
+    from core.model_route_health import probe_model_route
+
+    session = _HealthSession(error=AssertionError("network must not run"))
+
+    unconfigured = await probe_model_route(
+        {"route_key": "timing_gate", "base_url": "", "provider_enabled": True},
+        session,
+    )
+    disabled = await probe_model_route(
+        {
+            "route_key": "timing_gate",
+            "base_url": "http://classifier.test/v1",
+            "provider_enabled": False,
+        },
+        session,
+    )
+
+    assert unconfigured.status == "not_configured"
+    assert disabled.status == "provider_disabled"
+    assert session.calls == []
+
+
+def test_sentinel_loader_uses_config_path_resolver(monkeypatch):
+    import config
+    from clients.classifier_client import Guardrail
+
+    paths = []
+    model = SimpleNamespace(config=SimpleNamespace(id2label={0: "benign"}))
+
+    class FakeTokenizer:
+        @classmethod
+        def from_pretrained(cls, path, **_kwargs):
+            paths.append(("tokenizer", path))
+            return object()
+
+    class FakeModel:
+        @classmethod
+        def from_pretrained(cls, path, **_kwargs):
+            paths.append(("model", path))
+            return model
+
+    sentinel = object()
+    transformers = SimpleNamespace(
+        AutoModelForSequenceClassification=FakeModel,
+        AutoTokenizer=FakeTokenizer,
+        pipeline=lambda *_args, **_kwargs: sentinel,
+    )
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setattr(config, "get_sentinel_model_path", lambda: "./sentinel-contract")
+    monkeypatch.setattr(Guardrail, "_sentinel", None)
+
+    loaded = Guardrail._load_sentinel()
+
+    assert loaded is sentinel
+    assert paths == [
+        ("tokenizer", "./sentinel-contract"),
+        ("model", "./sentinel-contract"),
+    ]
+
+
+def test_sentinel_load_failure_does_not_log_path_or_exception_secrets(
+    monkeypatch,
+    caplog,
+):
+    import logging
+
+    import config
+    from clients.classifier_client import Guardrail
+
+    credential_path = (
+        "https://sentinel-user:sentinel-password@example.test/model?token=sentinel-query"
+    )
+    exception_secret = "sentinel-exception-secret"
+
+    class FailingTokenizer:
+        @classmethod
+        def from_pretrained(cls, _path, **_kwargs):
+            raise RuntimeError(exception_secret)
+
+    transformers = SimpleNamespace(
+        AutoModelForSequenceClassification=object(),
+        AutoTokenizer=FailingTokenizer,
+        pipeline=lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setattr(config, "get_sentinel_model_path", lambda: credential_path)
+    monkeypatch.setattr(Guardrail, "_sentinel", None)
+
+    with caplog.at_level(logging.INFO, logger="nanobot.classifier"):
+        loaded = Guardrail._load_sentinel()
+
+    assert loaded is False
+    assert "sentinel-user" not in caplog.text
+    assert "sentinel-password" not in caplog.text
+    assert "sentinel-query" not in caplog.text
+    assert exception_secret not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
 
 
 class TestGuardrailFormatValidation:

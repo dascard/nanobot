@@ -1,4 +1,7 @@
+import json
 import logging
+import shutil
+from pathlib import Path
 
 import pytest
 
@@ -132,3 +135,64 @@ def test_init_prompt_runtimes_re_raises_runtime_migration_failure(
     assert "init_runtime_dir failed" in caplog.text
     assert downstream_calls == []
     assert any(record.exc_info for record in caplog.records)
+
+
+def test_init_prompt_runtimes_rejects_v1_flow_without_rewriting_bytes(
+    tmp_path,
+    monkeypatch,
+):
+    from bootstrap import prompt_runtime
+    from core.prompt_v2.flow import PromptFlowError
+
+    canonical = json.loads(
+        Path("prompts.v2.default/chat/flow.json").read_text(encoding="utf-8")
+    )
+    legacy = json.loads(json.dumps(canonical, ensure_ascii=False))
+    legacy["version"] = 1
+    private_edge = next(
+        edge
+        for edge in legacy["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    private_edge["platforms"] = ["web"]
+
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    default_flow = default_dir / "chat" / "flow.json"
+    runtime_flow = runtime_dir / "chat" / "flow.json"
+    default_flow.parent.mkdir(parents=True)
+    runtime_flow.parent.mkdir(parents=True)
+    shutil.copytree(
+        Path("prompts.v2.default/chat"),
+        runtime_dir / "chat",
+        dirs_exist_ok=True,
+    )
+    default_flow.write_text(
+        json.dumps(canonical, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    original = (
+        json.dumps(legacy, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    runtime_flow.write_bytes(original)
+    shutil.copytree(
+        Path("prompts.v2.default/tasks"),
+        runtime_dir / "tasks",
+        dirs_exist_ok=True,
+    )
+    shutil.copytree(
+        Path("prompts.v2.default/tools"),
+        runtime_dir / "tools",
+        dirs_exist_ok=True,
+    )
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    with pytest.raises(PromptFlowError, match="active flow.version 必须为 2"):
+        prompt_runtime.init_prompt_runtimes(
+            logging.getLogger("test.prompt_runtime.v1-flow")
+        )
+
+    assert runtime_flow.read_bytes() == original
+    assert not (tmp_path / "prompt_template_backups").exists()

@@ -14,6 +14,8 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      NANOBOT_SESSION_SUMMARY_WORKER_MODE: external
     volumes:
       - ./data:/app/data
       - ./sentinel:/app/sentinel
@@ -24,22 +26,58 @@ services:
     image: nanobot-runtime:latest
     container_name: nanobot-session-summary-worker
     command: python -m workers.session_summary_worker --loop --interval 10
-    env_file:
-      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./data/nanobot.db}
+      LOG_DIR: ${LOG_DIR:-./data}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NEW_API_BASE_URL: ${NEW_API_BASE_URL:-https://api.new-api.com/v1}
+      NEW_API_KEY: ${NEW_API_KEY:-}
+      NEW_API_TIMEOUT: ${NEW_API_TIMEOUT:-300}
+      NEW_API_MAX_RETRIES: ${NEW_API_MAX_RETRIES:-3}
+      LLM_MODEL_SESSION_SUMMARY: ${LLM_MODEL_SESSION_SUMMARY:-}
+      LLM_MODEL_FAST: ${LLM_MODEL_FAST:-}
+      CLASSIFIER_API_URL: ${CLASSIFIER_API_URL:-http://172.17.0.1:9999/v1}
+      NANOBOT_PROMPT_DEFAULT_DIR: ${NANOBOT_PROMPT_DEFAULT_DIR:-./prompts.v2.default}
+      NANOBOT_PROMPT_RUNTIME_DIR: ${NANOBOT_PROMPT_RUNTIME_DIR:-./data/prompts_v2}
     volumes:
       - ./data:/app/data
       - ./sentinel:/app/sentinel
       - ./models:/app/models
     depends_on:
       - nanobot-server
+    restart: unless-stopped
+
+  outbound-delivery-worker:
+    image: nanobot-runtime:latest
+    container_name: nanobot-outbound-delivery-worker
+    command: python -m workers.outbound_delivery_worker --loop
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./data/nanobot.db}
+      LOG_DIR: ${LOG_DIR:-./data}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      QQBOT_PUSH_URL: ${QQBOT_PUSH_URL:-http://172.17.0.1:8082/nanobot/push}
+      QQBOT_PUSH_TIMEOUT: ${QQBOT_PUSH_TIMEOUT:-180}
+      NANOBOT_QQ_PUSH_CONFIG_REVISION: ${NANOBOT_QQ_PUSH_CONFIG_REVISION:-1}
+      NANOBOT_OUTBOUND_BATCH_SIZE: ${NANOBOT_OUTBOUND_BATCH_SIZE:-20}
+      NANOBOT_OUTBOUND_LEASE_SECONDS: ${NANOBOT_OUTBOUND_LEASE_SECONDS:-240}
+      NANOBOT_OUTBOUND_POLL_INTERVAL: ${NANOBOT_OUTBOUND_POLL_INTERVAL:-1}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - nanobot-server
+    stop_grace_period: 5m
     restart: unless-stopped
 
   semantic-index-worker:
     image: nanobot-runtime:latest
     container_name: nanobot-semantic-index-worker
     command: python -m workers.semantic_index_worker --loop --interval 10 --owner semantic-index-worker
-    env_file:
-      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./data/nanobot.db}
+      LOG_DIR: ${LOG_DIR:-./data}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SEMANTIC_INDEX_ENABLED: ${SEMANTIC_INDEX_ENABLED:-1}
+      RAG_EMBEDDING_PROVIDER: ${RAG_EMBEDDING_PROVIDER:-}
     volumes:
       - ./data:/app/data
       - ./sentinel:/app/sentinel
@@ -47,9 +85,3 @@ services:
     depends_on:
       - nanobot-server
     restart: unless-stopped
-
-# ── 如需与 Dify 同网段通信，取消下方注释 ──
-# networks:
-#   default:
-#     external:
-#       name: docker_default   # 替换为 Dify 的 docker network 名称

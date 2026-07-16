@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -161,6 +162,129 @@ def test_admin_model_routes_do_not_import_parent_admin_routes_or_sync_awaitable(
     assert "import api.admin_routes" not in source
     assert "asyncio.run" not in source
     assert "run_awaitable_sync" not in source
+
+
+@pytest.mark.asyncio
+async def test_admin_health_check_uses_shared_probe_with_resolved_route_snapshots(monkeypatch):
+    import aiohttp
+
+    from api.admin import model_routes
+    from clients import classifier_client
+    from core import model_route_health
+
+    resolved = {
+        "reply": {
+            "route_key": "reply",
+            "base_url": "http://reply.test/v1",
+            "api_key": "reply-secret",
+            "model": "reply-model",
+            "provider_enabled": True,
+        },
+        "timing_gate": {
+            "route_key": "timing_gate",
+            "base_url": "http://runtime-classifier.test/v1",
+            "api_key": "classifier-secret",
+            "model": "classifier-model",
+            "provider_enabled": True,
+        },
+        "sticker_describe": {
+            "route_key": "sticker_describe",
+            "base_url": "http://vision.test/v1",
+            "api_key": "vision-secret",
+            "model": "vision-model",
+            "provider_enabled": True,
+        },
+    }
+    resolve_calls = []
+    probe_calls = []
+
+    def fake_resolve(route_key):
+        resolve_calls.append(route_key)
+        return dict(resolved[route_key])
+
+    async def fake_probe(route, session):
+        probe_calls.append((dict(route), session))
+        return SimpleNamespace(
+            as_dict=lambda: {
+                "status": "ready",
+                "reachable": True,
+                "usable": True,
+                "status_code": 200,
+                "latency_ms": 1,
+                "auth_error": False,
+            }
+        )
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(classifier_client, "resolve_model_route", fake_resolve)
+    monkeypatch.setattr(model_route_health, "probe_model_route", fake_probe)
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+
+    result = await model_routes.model_health_check(_auth="admin")
+
+    assert resolve_calls == ["reply", "timing_gate", "sticker_describe"]
+    assert list(result["endpoints"]) == ["new_api", "classifier", "image_summary"]
+    assert [route for route, _session in probe_calls] == [
+        resolved["reply"],
+        resolved["timing_gate"],
+        resolved["sticker_describe"],
+    ]
+    assert len({id(session) for _route, session in probe_calls}) == 1
+    serialized = repr(result)
+    assert "reply-secret" not in serialized
+    assert "classifier-secret" not in serialized
+    assert "vision-secret" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_admin_health_check_route_resolution_failure_is_isolated_and_redacted(
+    monkeypatch,
+):
+    import aiohttp
+
+    from api.admin import model_routes
+    from clients import classifier_client
+    from core import model_route_health
+
+    secret = "admin-route-resolution-secret"
+
+    def fake_resolve(route_key):
+        if route_key == "timing_gate":
+            raise RuntimeError(secret)
+        return {
+            "route_key": route_key,
+            "base_url": "",
+            "provider_enabled": True,
+        }
+
+    async def fake_probe(_route, _session):
+        return model_route_health.ModelRouteHealth(
+            "not_configured", False, False, None, 0
+        )
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(classifier_client, "resolve_model_route", fake_resolve)
+    monkeypatch.setattr(model_route_health, "probe_model_route", fake_probe)
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+
+    result = await model_routes.model_health_check(_auth="admin")
+
+    assert result["endpoints"]["classifier"]["status"] == "network_error"
+    assert result["endpoints"]["new_api"]["status"] == "not_configured"
+    assert result["endpoints"]["image_summary"]["status"] == "not_configured"
+    assert secret not in repr(result)
 
 
 @pytest.mark.asyncio

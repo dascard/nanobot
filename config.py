@@ -4,6 +4,7 @@ Nanobot 集中配置模块。
 """
 
 import os
+from typing import Literal
 
 from dotenv import load_dotenv
 
@@ -134,9 +135,21 @@ MODEL_MAX_CONSECUTIVE_FAILURES = int(
 MODEL_COOLDOWN_BASE_SECONDS = int(os.environ.get("MODEL_COOLDOWN_BASE_SECONDS", "300"))
 MODEL_COOLDOWN_MAX_SECONDS = int(os.environ.get("MODEL_COOLDOWN_MAX_SECONDS", "1800"))
 
-# ── 每日记忆折叠 ──
-DAILY_DIGEST_ENABLED = os.environ.get("DAILY_DIGEST_ENABLED", "1") == "1"
-DAILY_DIGEST_HOUR = int(os.environ.get("DAILY_DIGEST_HOUR", "4"))
+# ── 会话摘要 worker 部署模式 ──
+SessionSummaryWorkerMode = Literal["embedded", "external", "disabled"]
+
+
+def get_session_summary_worker_mode() -> SessionSummaryWorkerMode:
+    value = os.environ.get(
+        "NANOBOT_SESSION_SUMMARY_WORKER_MODE",
+        "embedded",
+    ).strip()
+    if value not in {"embedded", "external", "disabled"}:
+        raise ValueError(
+            "NANOBOT_SESSION_SUMMARY_WORKER_MODE 必须是 "
+            "embedded、external 或 disabled"
+        )
+    return value
 
 # ── 统一 RAG / 语义索引 ──
 NANOBOT_TESTING = os.environ.get("NANOBOT_TESTING", "0") == "1"
@@ -162,7 +175,15 @@ RAG_EMBEDDING_PROVIDER = os.environ.get("RAG_EMBEDDING_PROVIDER", "").strip()
 
 # ── 私聊分类器 ──
 CLASSIFIER_API_URL = os.environ.get("CLASSIFIER_API_URL", "http://172.17.0.1:9999/v1")
-SENTINEL_MODEL_PATH = os.environ.get("SENTINEL_MODEL_PATH", "./models/sentinel")
+
+
+def get_sentinel_model_path() -> str:
+    """返回 Sentinel 唯一运行目录；空环境变量同样回退默认值。"""
+
+    return os.environ.get("SENTINEL_MODEL_PATH", "").strip() or "./sentinel"
+
+
+SENTINEL_MODEL_PATH = get_sentinel_model_path()
 CLASSIFIER_TIMEOUT = float(os.environ.get("CLASSIFIER_TIMEOUT", "15.0"))
 
 # ── 图片摘要（复用本地 Qwen 视觉模型） ──

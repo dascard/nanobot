@@ -21,6 +21,37 @@ class SettingDef:
     dangerous: bool = False
 
 
+@dataclass(frozen=True)
+class LegacySettingAlias:
+    """一个发布周期内保留的旧设置入口。"""
+
+    key: str
+    env_name: str
+
+
+LEGACY_SETTING_ALIASES: dict[str, LegacySettingAlias] = {
+    "memory_digest.scheduler_enabled": LegacySettingAlias(
+        key="daily_digest.enabled",
+        env_name="DAILY_DIGEST_ENABLED",
+    ),
+    "memory_digest.schedule_hour": LegacySettingAlias(
+        key="daily_digest.hour",
+        env_name="DAILY_DIGEST_HOUR",
+    ),
+}
+
+LEGACY_SETTING_CANONICAL_KEYS: dict[str, str] = {
+    alias.key: canonical_key
+    for canonical_key, alias in LEGACY_SETTING_ALIASES.items()
+}
+
+
+def canonical_setting_key(key: str) -> str:
+    """把兼容期旧键归一为唯一 canonical key。"""
+
+    return LEGACY_SETTING_CANONICAL_KEYS.get(str(key), str(key))
+
+
 SETTING_DEFS: dict[str, SettingDef] = {
     "database.url": SettingDef(
         key="database.url", env_name="DATABASE_URL",
@@ -62,7 +93,6 @@ SETTING_DEFS: dict[str, SettingDef] = {
         value_type="bool",
         category="proactive",
         description="主动情感外呼总开关；单用户自用场景下为纯布尔开关",
-        restart_required=True,
     ),
     "proactive_outreach.fallback_interval_min": SettingDef(
         key="proactive_outreach.fallback_interval_min",
@@ -258,7 +288,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="", value_type="str", category="model", description="快速模型",
     ),
     "model.session_summary": SettingDef(
-        key="model.session_summary", env_name="",
+        key="model.session_summary", env_name="LLM_MODEL_SESSION_SUMMARY",
         default="", value_type="str",
         category="model", description="近期摘要模型",
     ),
@@ -722,15 +752,17 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="data/nanobot.log", value_type="str", category="eval",
         description="采样日志路径",
     ),
-    "daily_digest.enabled": SettingDef(
-        key="daily_digest.enabled", env_name="DAILY_DIGEST_ENABLED",
+    "memory_digest.scheduler_enabled": SettingDef(
+        key="memory_digest.scheduler_enabled",
+        env_name="MEMORY_DIGEST_SCHEDULER_ENABLED",
         default=True, value_type="bool",
-        category="scheduler", description="启用日报定时推送",
+        category="scheduler", description="启用每日记忆折叠",
     ),
-    "daily_digest.hour": SettingDef(
-        key="daily_digest.hour", env_name="DAILY_DIGEST_HOUR",
-        default=8, value_type="int",
-        category="scheduler", description="日报推送小时", min_value=0, max_value=23,
+    "memory_digest.schedule_hour": SettingDef(
+        key="memory_digest.schedule_hour",
+        env_name="MEMORY_DIGEST_SCHEDULE_HOUR",
+        default=4, value_type="int",
+        category="scheduler", description="每日记忆折叠小时", min_value=0, max_value=23,
     ),
 }
 

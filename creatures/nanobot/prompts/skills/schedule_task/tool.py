@@ -61,6 +61,12 @@ class ScheduleTaskTool(BaseTool):
                     "type": "string",
                     "description": "LLM 生成推送内容的提示模板，不是直接发送的固定文本",
                 },
+                "idempotency_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "手动 run 必填；同一请求重试必须复用同一幂等键",
+                },
             },
             "required": ["action"],
         }
@@ -81,50 +87,69 @@ class ScheduleTaskTool(BaseTool):
                     lines = []
                     for t in tasks:
                         s = "启用" if t.enabled else "禁用"
-                        last = t.last_run_at.strftime("%m-%d %H:%M") if t.last_run_at else "从未"
+                        attempted = (
+                            t.last_attempt_at.strftime("%m-%d %H:%M")
+                            if t.last_attempt_at
+                            else "从未"
+                        )
+                        succeeded = (
+                            t.last_success_at.strftime("%m-%d %H:%M")
+                            if t.last_success_at
+                            else "从未"
+                        )
                         lines.append(
                             f"[{t.id}] {s} {t.name} | cron={t.cron_expr} "
-                            f"| ->{t.target_type}/{t.target_id} | 上次={last}"
+                            f"| 最近尝试={attempted} | 最近成功={succeeded} "
+                            f"| 投递状态={t.delivery_status}"
                         )
                     return ToolResult(output="\n".join(lines), exit_code=0)
 
                 if action == "run":
                     if not task_id:
                         return ToolResult(error="run 需要 task_id")
-                    t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
-                    if not t:
-                        return ToolResult(error=f"任务 {task_id} 不存在")
-                    from core.daily_digest import _generate_task_message, push_envelope_to_qq
-                    from core.message_envelope import build_chat_response_envelope
-
-                    logger.info(f"[schedule_task] Manual run: {t.name}")
-                    content = await _generate_task_message(t)
-                    if not content:
-                        return ToolResult(error=f"任务 {t.name} 生成内容失败")
-                    target_type = str(t.target_type or "").strip()
-                    target_id = str(t.target_id or "").strip()
-                    envelope = build_chat_response_envelope(
-                        status="ok",
-                        answer=content,
-                        meta={
-                            "platform": "qq",
-                            "chat_type": "private" if target_type == "private" else "group",
-                            "source": "schedule_task_tool",
-                            "task_id": t.id,
-                        },
+                    idempotency_key = str(args.get("idempotency_key") or "").strip()
+                    if not idempotency_key:
+                        return ToolResult(error="run 需要显式幂等键")
+                    from core.scheduled_task_outbound import (
+                        ScheduledTaskNotFoundError,
+                        enqueue_scheduled_task_occurrence,
                     )
-                    ok = await push_envelope_to_qq(target_type, target_id, envelope)
-                    if ok:
-                        from core.time_utils import db_now_naive
-
-                        t.last_run_at = db_now_naive()
-                        db.commit()
-                        preview = content[:200] + ("..." if len(content) > 200 else "")
+                    try:
+                        result = await enqueue_scheduled_task_occurrence(
+                            db,
+                            task_id=int(task_id),
+                            trigger_type="manual",
+                            manual_idempotency_key=idempotency_key,
+                            session_factory=SessionLocal,
+                        )
+                    except ScheduledTaskNotFoundError:
+                        return ToolResult(error=f"任务 {task_id} 不存在")
+                    if result.status in {"queued", "pending"}:
                         return ToolResult(
-                            output=f"任务 {t.name} 已执行并推送 → {t.target_type}/{t.target_id}\n预览: {preview}",
+                            output=(
+                                f"任务已入队 run_id={result.run_id} "
+                                f"outbox_id={result.outbox_id}"
+                            ),
                             exit_code=0,
                         )
-                    return ToolResult(error=f"任务 {t.name} 推送失败")
+                    if result.status == "delivered":
+                        return ToolResult(
+                            output=f"任务已确认投递 run_id={result.run_id}",
+                            exit_code=0,
+                        )
+                    if result.status in {"retry_wait", "delivering"}:
+                        return ToolResult(
+                            output=(
+                                f"相同请求已存在 当前状态={result.status} "
+                                f"run_id={result.run_id}"
+                            ),
+                            exit_code=0,
+                        )
+                    if result.status == "ambiguous":
+                        return ToolResult(error="投递结果不确定 需要人工核验")
+                    if result.status == "blocked":
+                        return ToolResult(error="投递通道当前已阻断")
+                    return ToolResult(error="任务生成或入队失败")
 
                 if action == "delete":
                     if not task_id:
@@ -132,9 +157,23 @@ class ScheduleTaskTool(BaseTool):
                     t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
                     if not t:
                         return ToolResult(error=f"任务 {task_id} 不存在")
+                    from core.scheduled_task_outbound import (
+                        cancel_scheduled_task_deliveries,
+                    )
+
+                    cancellation = cancel_scheduled_task_deliveries(
+                        db,
+                        task=t,
+                        reason_type="task_deleted",
+                        safe_summary="任务已删除",
+                    )
+                    if cancellation.unsafe:
+                        db.rollback()
+                        return ToolResult(error="任务仍有投递中或结果不确定记录")
+                    task_name = str(t.name)
                     db.delete(t)
                     db.commit()
-                    return ToolResult(output=f"任务 {task_id} ({t.name}) 已删除", exit_code=0)
+                    return ToolResult(output=f"任务 {task_id} ({task_name}) 已删除", exit_code=0)
 
                 if action == "toggle":
                     if not task_id:
@@ -142,6 +181,19 @@ class ScheduleTaskTool(BaseTool):
                     t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
                     if not t:
                         return ToolResult(error=f"任务 {task_id} 不存在")
+                    from core.scheduled_task_outbound import (
+                        cancel_scheduled_task_deliveries,
+                    )
+
+                    cancellation = cancel_scheduled_task_deliveries(
+                        db,
+                        task=t,
+                        reason_type="task_toggled",
+                        safe_summary="任务启停状态已修改",
+                    )
+                    if cancellation.unsafe:
+                        db.rollback()
+                        return ToolResult(error="任务仍有投递中或结果不确定记录")
                     t.enabled = 0 if t.enabled else 1
                     db.commit()
                     s = "启用" if t.enabled else "禁用"
@@ -153,6 +205,19 @@ class ScheduleTaskTool(BaseTool):
                     t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
                     if not t:
                         return ToolResult(error=f"任务 {task_id} 不存在")
+                    from core.scheduled_task_outbound import (
+                        cancel_scheduled_task_deliveries,
+                    )
+
+                    cancellation = cancel_scheduled_task_deliveries(
+                        db,
+                        task=t,
+                        reason_type="task_updated",
+                        safe_summary="任务定义已修改",
+                    )
+                    if cancellation.unsafe:
+                        db.rollback()
+                        return ToolResult(error="任务仍有投递中或结果不确定记录")
                     for f in ("name", "cron_expr", "target_type", "target_id", "prompt_template"):
                         v = args.get(f)
                         if v is not None and str(v).strip():
@@ -188,10 +253,13 @@ class ScheduleTaskTool(BaseTool):
                 t = ScheduledTask(name=name, cron_expr=cron, target_type=ttype, target_id=tid, prompt_template=prompt)
                 db.add(t)
                 db.commit()
-                logger.info(f"[schedule_task] Created: {name} cron={cron} -> {ttype}/{tid}")
+                logger.info("[schedule_task] Created id=%s cron=%s", t.id, cron)
                 return ToolResult(output=f"已创建 (id={t.id}): {name} | cron={cron}", exit_code=0)
             finally:
                 db.close()
-        except Exception as e:
-            logger.error(f"[schedule_task] Failed: {e}", exc_info=True)
-            return ToolResult(error=str(e))
+        except Exception as exc:
+            logger.error(
+                "[schedule_task] Failed error_type=%s",
+                type(exc).__name__,
+            )
+            return ToolResult(error="定时任务操作失败")

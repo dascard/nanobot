@@ -7,7 +7,16 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, ProactiveOutreachLease, ProactiveOutreachLog, User
+from core.database import (
+    Base,
+    OutboundDeliveryControl,
+    OutboundDeliveryOutbox,
+    OutboundGenerationAttempt,
+    OutboundRun,
+    ProactiveOutreachLease,
+    ProactiveOutreachLog,
+    User,
+)
 from tests.async_helpers import run_async
 
 
@@ -24,6 +33,16 @@ def _session_factory(tmp_path, name):
 
     factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
+    with factory() as setup:
+        setup.add(OutboundDeliveryControl(
+            source_type="proactive_outreach",
+            mode="legacy_direct",
+            cutover_epoch=0,
+            effective_from=datetime(1970, 1, 1),
+            protocol_version=2,
+            writer_version=0,
+        ))
+        setup.commit()
     return engine, factory
 
 
@@ -604,7 +623,16 @@ def test_expired_evaluation_lease_owner_is_fenced_before_publish(tmp_path):
         assert takeover_done.is_set()
         assert result["status"] == "lease_lost"
         assert published == []
-        assert session.query(ProactiveOutreachLog).count() == 0
+        row = session.query(ProactiveOutreachLog).one()
+        run = session.query(OutboundRun).one()
+        attempt = session.query(OutboundGenerationAttempt).one()
+        assert row.status == "candidate"
+        assert row.message == ""
+        assert row.outbound_run_id == run.id
+        assert run.status == "generating"
+        assert attempt.run_id == run.id
+        assert attempt.status == "started"
+        assert session.query(OutboundDeliveryOutbox).count() == 0
     finally:
         session.close()
         cleanup = session_factory()
@@ -625,23 +653,36 @@ def test_research_candidate_from_replaced_lease_owner_cannot_be_published(
 
     engine, session_factory = _session_factory(tmp_path, "research-owner-fence.db")
     published = []
+    research_calls = []
     current = datetime(2026, 7, 10, 12, 0, 0)
 
     async def research(request):
-        takeover = session_factory()
-        try:
-            lease = takeover.get(ProactiveOutreachLease, "research-fence-user")
-            assert lease is not None
-            lease.owner_token = "new-owner"
-            lease.lease_expires_at = datetime.now() + timedelta(minutes=15)
-            takeover.commit()
-        finally:
-            takeover.close()
+        research_calls.append(request)
+        if len(research_calls) == 1:
+            takeover = session_factory()
+            try:
+                lease = takeover.get(
+                    ProactiveOutreachLease,
+                    "research-fence-user",
+                )
+                run = takeover.query(OutboundRun).one()
+                assert lease is not None
+                lease.owner_token = "new-owner"
+                lease.lease_expires_at = datetime.now() + timedelta(minutes=15)
+                run.claim_expires_at = datetime.now() - timedelta(seconds=1)
+                takeover.commit()
+            finally:
+                takeover.close()
+        draft = (
+            "旧 owner 研究候选"
+            if len(research_calls) == 1
+            else "新 owner 研究候选"
+        )
         return ResearchResult(
             request_id=request.request_id,
-            trace_id="trace-research-owner-fence",
+            trace_id=f"trace-research-owner-fence-{len(research_calls)}",
             status="draft_ready",
-            draft="旧 owner 研究候选",
+            draft=draft,
             sources=(
                 ResearchSource("tool-1", "来源一", "https://example.test/one"),
                 ResearchSource("tool-2", "来源二", "https://example.test/two"),
@@ -683,29 +724,47 @@ def test_research_candidate_from_replaced_lease_owner_cannot_be_published(
                 "research-fence-user",
                 db=second_session,
                 now=current + timedelta(seconds=1),
-                thread_extractor=lambda _messages: [],
-                judge_fn=lambda _grounding, *, now, **_kwargs: {
-                    "should_reach_out": False,
-                    "reason": "新 owner 不发送旧研究",
-                    "next_check_at": (now + timedelta(hours=2)).isoformat(),
-                    "next_intent": "新 owner 计划",
-                    "outreach_kind": "message",
-                    "research_query": "",
-                    "error_type": None,
-                },
+                thread_extractor=lambda _messages: pytest.fail(
+                    "恢复冻结 occurrence 不得重建 grounding"
+                ),
+                judge_fn=lambda *_args, **_kwargs: pytest.fail(
+                    "恢复冻结 occurrence 不得重新调用 Judge"
+                ),
+                research_fn=research,
                 publisher=publisher,
                 evaluation_owner_token="new-owner",
             )
         )
+        second_session.expire_all()
+        row = second_session.query(ProactiveOutreachLog).one()
+        attempts = (
+            second_session.query(OutboundGenerationAttempt)
+            .order_by(OutboundGenerationAttempt.attempt_no.asc())
+            .all()
+        )
+        outbox = second_session.query(OutboundDeliveryOutbox).one()
         candidate_rows = second_session.query(ProactiveOutreachLog).filter(
             ProactiveOutreachLog.status == "candidate",
             ProactiveOutreachLog.message == "旧 owner 研究候选",
         ).count()
 
         assert first["status"] == "lease_lost"
-        assert second["status"] == "pending"
+        assert second["status"] == "sent"
+        assert len(research_calls) == 2
         assert candidate_rows == 0
-        assert published == []
+        assert row.status == "sent"
+        assert "新 owner 研究候选" in row.message
+        assert "旧 owner 研究候选" not in row.message
+        assert [(item.attempt_no, item.status) for item in attempts] == [
+            (1, "abandoned"),
+            (2, "succeeded"),
+        ]
+        assert attempts[0].error_type == "claim_expired"
+        assert outbox.status == "delivered"
+        assert "旧 owner 研究候选" not in outbox.payload_json
+        assert len(published) == 1
+        assert "新 owner 研究候选" in published[0][2]
+        assert "旧 owner 研究候选" not in published[0][2]
     finally:
         second_session.close()
         cleanup = session_factory()
@@ -778,7 +837,7 @@ def test_no_candidate_from_replaced_lease_owner_cannot_persist_pending(
         engine.dispose()
 
 
-def test_lease_loss_after_delivery_claim_requeues_unpublished_candidate(
+def test_lease_loss_before_atomic_enqueue_discards_unpublished_candidate(
     tmp_path,
     monkeypatch,
 ):
@@ -824,13 +883,11 @@ def test_lease_loss_after_delivery_claim_requeues_unpublished_candidate(
         ))
 
         session.expire_all()
-        row = session.query(ProactiveOutreachLog).filter_by(
-            idempotency_key="claim-lease-loss-key"
-        ).one()
         assert result["status"] == "lease_lost"
-        assert row.status == "candidate"
-        assert row.message == "尚未调用 publisher 的完整候选"
         assert published == []
+        assert session.query(ProactiveOutreachLog).count() == 0
+        assert session.query(OutboundRun).count() == 0
+        assert session.query(OutboundDeliveryOutbox).count() == 0
     finally:
         session.close()
         Base.metadata.drop_all(bind=engine)
@@ -937,6 +994,184 @@ def test_history_clear_during_judge_invalidates_evaluation_lease(tmp_path):
         assert session.query(ProactiveOutreachLog).filter(
             ProactiveOutreachLog.status.in_(("pending", "candidate"))
         ).count() == 0
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+def test_history_clear_during_generator_terminalizes_generation_ledger(
+    tmp_path,
+    monkeypatch,
+):
+    from api.history_log_routes import mark_clear
+    from core import proactive_outreach
+
+    engine, session_factory = _session_factory(
+        tmp_path,
+        "clear-terminalizes-generation.db",
+    )
+    user_id = "clear-terminalizes-generation-user"
+    current = datetime.now() + timedelta(days=365)
+    clear_responses = []
+    published = []
+
+    def generator(_grounding, _reason):
+        clear_session = session_factory()
+        try:
+            clear_responses.append(mark_clear(
+                user_id,
+                db=clear_session,
+                _auth="test",
+            ))
+        finally:
+            clear_session.close()
+        return "清除前生成的正文不得进入投递队列"
+
+    async def publisher(*args):
+        published.append(args)
+        return True
+
+    session = session_factory()
+    try:
+        first = run_async(
+            proactive_outreach.run_outreach_once(
+                user_id,
+                db=session,
+                now=current,
+                max_silence_min=999999,
+                thread_extractor=lambda _messages: [],
+                judge_fn=lambda _grounding, *, now, **_kwargs: {
+                    "should_reach_out": True,
+                    "reason": "验证生成期间历史清除",
+                    "next_check_at": (now + timedelta(hours=2)).isoformat(),
+                    "next_intent": "",
+                    "outreach_kind": "message",
+                    "research_query": "",
+                    "error_type": None,
+                },
+                generator_fn=generator,
+                publisher=publisher,
+            )
+        )
+
+        session.expire_all()
+        row = session.query(ProactiveOutreachLog).one()
+        run = session.query(OutboundRun).one()
+        attempt = session.query(OutboundGenerationAttempt).one()
+
+        assert first["status"] == "lease_lost"
+        assert clear_responses[0]["cancelled_outreach_deliveries"] == 1
+        assert clear_responses[0]["unsafe_outreach_deliveries"] == 0
+        assert published == []
+        assert row.status == "cancelled"
+        assert row.message == ""
+        assert row.outbound_run_id == run.id
+        assert run.status == "failed"
+        assert run.failure_type == "history_cleared"
+        assert run.claim_owner is None
+        assert run.claim_token is None
+        assert run.claim_expires_at is None
+        assert run.active_outbox_id is None
+        assert attempt.run_id == run.id
+        assert attempt.status == "abandoned"
+        assert attempt.error_type == "history_cleared"
+        assert attempt.completed_at is not None
+        assert session.query(OutboundDeliveryOutbox).count() == 0
+
+        second = run_async(
+            proactive_outreach.run_outreach_once(
+                user_id,
+                db=session,
+                now=current + timedelta(minutes=1),
+                max_silence_min=999999,
+                thread_extractor=lambda _messages: [],
+                judge_fn=lambda _grounding, *, now, **_kwargs: {
+                    "should_reach_out": False,
+                    "reason": "清除后重新建立调度",
+                    "next_check_at": (now + timedelta(hours=2)).isoformat(),
+                    "next_intent": "",
+                    "outreach_kind": "message",
+                    "research_query": "",
+                    "error_type": None,
+                },
+            )
+        )
+
+        session.expire_all()
+        rows = (
+            session.query(ProactiveOutreachLog)
+            .order_by(ProactiveOutreachLog.id.asc())
+            .all()
+        )
+        assert second["status"] == "pending"
+        assert len(rows) == 2
+        assert rows[0].status == "cancelled"
+        assert rows[0].outbound_run_id == run.id
+        assert rows[1].status == "pending"
+        assert rows[1].outbound_run_id is None
+        assert session.get(OutboundRun, run.id).status == "failed"
+        assert session.get(
+            OutboundGenerationAttempt,
+            attempt.id,
+        ).status == "abandoned"
+
+        pre_clear_key = rows[0].idempotency_key
+        monkeypatch.setattr(
+            proactive_outreach,
+            "_outreach_key",
+            lambda *_args, **_kwargs: pre_clear_key,
+        )
+
+        def no_candidate(_grounding, *, now, **_kwargs):
+            return {
+                "should_reach_out": False,
+                "reason": "同 key 清除后调度",
+                "next_check_at": (now + timedelta(hours=2)).isoformat(),
+                "next_intent": "",
+                "outreach_kind": "message",
+                "research_query": "",
+                "error_type": None,
+            }
+
+        same_key = run_async(
+            proactive_outreach.run_outreach_once(
+                user_id,
+                db=session,
+                now=current + timedelta(minutes=2),
+                max_silence_min=999999,
+                thread_extractor=lambda _messages: [],
+                judge_fn=no_candidate,
+            )
+        )
+        repeated = run_async(
+            proactive_outreach.run_outreach_once(
+                user_id,
+                db=session,
+                now=current + timedelta(minutes=3),
+                max_silence_min=999999,
+                thread_extractor=lambda _messages: [],
+                judge_fn=no_candidate,
+            )
+        )
+
+        session.expire_all()
+        rows = (
+            session.query(ProactiveOutreachLog)
+            .order_by(ProactiveOutreachLog.id.asc())
+            .all()
+        )
+        assert same_key["status"] == "pending"
+        assert repeated["status"] == "pending"
+        assert repeated["log_id"] == same_key["log_id"]
+        assert len(rows) == 2
+        assert rows[0].status == "cancelled"
+        assert rows[0].idempotency_key == pre_clear_key
+        assert rows[0].outbound_run_id == run.id
+        assert rows[1].status == "pending"
+        assert rows[1].idempotency_key != pre_clear_key
+        assert rows[1].outbound_run_id is None
+        assert same_key["log_id"] == rows[1].id
     finally:
         session.close()
         Base.metadata.drop_all(bind=engine)

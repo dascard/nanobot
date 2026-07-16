@@ -55,6 +55,45 @@ def ensure_directory_without_symlinks(path: Path) -> Path:
     return absolute
 
 
+def read_regular_bytes(path: Path, *, missing_ok: bool = False) -> bytes | None:
+    """非阻塞打开并读取普通文件，避免 FIFO/设备路径挂住进程。"""
+    absolute = assert_no_symlink_components(Path(path))
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        descriptor = os.open(absolute, flags)
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise
+    except OSError as exc:
+        raise FlowStorageError(f"无法安全打开 Prompt 存储文件: {absolute}") from exc
+
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise FlowStorageError(
+                f"Prompt 存储输入必须是普通文件: {absolute}"
+            )
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except FlowStorageError:
+        raise
+    except OSError as exc:
+        raise FlowStorageError(f"无法安全读取 Prompt 存储文件: {absolute}") from exc
+    finally:
+        os.close(descriptor)
+
+
 def _thread_lock_for(path: Path) -> threading.RLock:
     key = str(_absolute_without_resolving(path))
     with _THREAD_LOCKS_GUARD:
@@ -87,6 +126,52 @@ def flow_write_lock(target: Path) -> Iterator[None]:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
             finally:
                 os.close(descriptor)
+
+
+@contextmanager
+def _template_governance_lock(
+    runtime_root: Path,
+    *,
+    exclusive: bool,
+) -> Iterator[None]:
+    """对一次完整模板快照施加跨线程、跨进程治理锁。"""
+    runtime_root = _absolute_without_resolving(Path(runtime_root))
+    lock_parent = ensure_directory_without_symlinks(runtime_root.parent)
+    lock_path = lock_parent / ".prompt-template-governance.lock"
+    thread_lock = _thread_lock_for(lock_path)
+    with thread_lock:
+        assert_no_symlink_components(lock_path)
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(lock_path, flags, 0o600)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise FlowStorageError(f"模板治理锁文件不是普通文件: {lock_path}")
+            fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+
+@contextmanager
+def template_governance_read_lock(runtime_root: Path) -> Iterator[None]:
+    """持有一次完整模板读取所需的共享治理锁。"""
+    with _template_governance_lock(runtime_root, exclusive=False):
+        yield
+
+
+@contextmanager
+def template_governance_write_lock(runtime_root: Path) -> Iterator[None]:
+    """持有模板 provision、管理写入或迁移所需的排他治理锁。"""
+    with _template_governance_lock(runtime_root, exclusive=True):
+        yield
 
 
 def fsync_directory(path: Path) -> None:
@@ -129,3 +214,19 @@ def atomic_replace_bytes(target: Path, data: bytes) -> None:
         fsync_directory(parent)
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def atomic_remove_regular_file(target: Path) -> bool:
+    """拒绝 symlink/非普通文件并持久删除；不存在时返回 False。"""
+    target = _absolute_without_resolving(Path(target))
+    parent = ensure_directory_without_symlinks(target.parent)
+    assert_no_symlink_components(target)
+    try:
+        metadata = target.lstat()
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(metadata.st_mode):
+        raise FlowStorageError(f"待删除路径必须是普通文件: {target}")
+    target.unlink()
+    fsync_directory(parent)
+    return True

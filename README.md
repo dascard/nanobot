@@ -154,7 +154,9 @@ WebUI 管理接口使用 `NANOBOT_ADMIN_TOKEN` 登录。
 docker compose up -d --build
 ```
 
-`docker-compose.yml` 会同时启动独立的 `session-summary-worker` 和 `semantic-index-worker`：
+`docker-compose.yml` 会同时启动独立的 `session-summary-worker` 和 `semantic-index-worker`。
+Compose 已为 Web 服务设置 `NANOBOT_SESSION_SUMMARY_WORKER_MODE=external`，因此不会再在
+FastAPI 进程内启动第二个 session-summary consumer：
 
 ```bash
 python -m workers.session_summary_worker --loop --interval 10
@@ -162,8 +164,16 @@ python -m workers.semantic_index_worker --loop --interval 10 --owner semantic-in
 ```
 
 前者消费 `session_summary_jobs`，异步生成高质量 LLM session summary；后者消费
-`semantic_index_jobs`，异步写入统一语义索引。不要把这些 worker 塞进 FastAPI Web
-进程；单机部署用 compose 服务，非 Docker 部署用 systemd/supervisor 以同一命令常驻运行。
+`semantic_index_jobs`，异步写入统一语义索引。
+
+非 Docker 部署必须为 session-summary 选择唯一运行模式：
+
+- `embedded`：默认值，由 FastAPI 进程内嵌消费；此时不要再启动独立 session-summary worker。
+- `external`：用 systemd/supervisor 启动上述独立 worker，并为 Web 服务设置
+  `NANOBOT_SESSION_SUMMARY_WORKER_MODE=external`。
+- `disabled`：Web 服务和独立进程都不消费 session summary；用于显式停用该能力。
+
+不要同时运行内嵌和独立 session-summary worker。`semantic-index-worker` 始终按独立进程部署。
 
 如果服务器部署需要先更新代码和子模块：
 

@@ -41,6 +41,12 @@ def test_schema_migrations_records_applied_versions():
     inspector = inspect(engine)
     assert "schema_migrations" in inspector.get_table_names()
     assert "chat_type" in [col["name"] for col in inspector.get_columns("agent_runs")]
+    assert "prompt_template_resolutions_json" in [
+        col["name"] for col in inspector.get_columns("agent_runs")
+    ]
+    assert "prompt_template_resolutions_json" in [
+        col["name"] for col in inspector.get_columns("prompt_render_logs")
+    ]
     assert "response_json" in [col["name"] for col in inspector.get_columns("llm_api_request_logs")]
     reply_contract_columns = [col["name"] for col in inspector.get_columns("reply_contract_check_logs")]
     assert "reply_tool_call_count" in reply_contract_columns
@@ -62,6 +68,97 @@ def test_schema_migrations_records_applied_versions():
         rows = conn.execute(text("SELECT version FROM schema_migrations ORDER BY version")).fetchall()
 
     assert [row[0] for row in rows] == sorted(version for version, _, _ in MIGRATIONS)
+
+
+def test_prompt_template_resolution_columns_apply_after_legacy_trace_migration():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations ("
+            "version TEXT PRIMARY KEY, name TEXT, "
+            "applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO schema_migrations(version, name) VALUES "
+            "('20260523_agent_prompt_trace_columns', 'legacy trace columns')"
+        ))
+        conn.execute(text(
+            "CREATE TABLE agent_runs ("
+            "run_id TEXT PRIMARY KEY, prompt_source TEXT DEFAULT '', "
+            "prompt_runtime_path TEXT DEFAULT '', prompt_default_path TEXT DEFAULT '', "
+            "prompt_sha256 TEXT DEFAULT '')"
+        ))
+        conn.execute(text(
+            "CREATE TABLE prompt_render_logs ("
+            "id INTEGER PRIMARY KEY, prompt_source TEXT DEFAULT '', "
+            "prompt_runtime_path TEXT DEFAULT '', prompt_default_path TEXT DEFAULT '', "
+            "prompt_sha256 TEXT DEFAULT '')"
+        ))
+        conn.execute(text(
+            "INSERT INTO agent_runs(run_id) VALUES ('legacy-run')"
+        ))
+        conn.execute(text(
+            "INSERT INTO prompt_render_logs(id) VALUES (1)"
+        ))
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    agent_columns = {
+        column["name"]: column for column in inspector.get_columns("agent_runs")
+    }
+    render_columns = {
+        column["name"]: column for column in inspector.get_columns("prompt_render_logs")
+    }
+    assert agent_columns["prompt_template_resolutions_json"]["nullable"] is False
+    assert render_columns["prompt_template_resolutions_json"]["nullable"] is False
+    with engine.connect() as conn:
+        assert conn.execute(text(
+            "SELECT prompt_template_resolutions_json FROM agent_runs "
+            "WHERE run_id = 'legacy-run'"
+        )).scalar_one() == "{}"
+        assert conn.execute(text(
+            "SELECT prompt_template_resolutions_json FROM prompt_render_logs WHERE id = 1"
+        )).scalar_one() == "{}"
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE version = '20260714_prompt_template_resolution_columns'"
+        )).scalar_one() == 1
+
+
+def test_fresh_prompt_trace_resolution_columns_support_legacy_writers():
+    from core.database import Base
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    inspector = inspect(engine)
+    agent_columns = {
+        column["name"]: column for column in inspector.get_columns("agent_runs")
+    }
+    render_columns = {
+        column["name"]: column for column in inspector.get_columns("prompt_render_logs")
+    }
+    assert agent_columns["prompt_template_resolutions_json"]["nullable"] is False
+    assert agent_columns["prompt_template_resolutions_json"]["default"] is not None
+    assert render_columns["prompt_template_resolutions_json"]["nullable"] is False
+    assert render_columns["prompt_template_resolutions_json"]["default"] is not None
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO agent_runs(run_id) VALUES ('fresh-legacy-run')"
+        ))
+        conn.execute(text("INSERT INTO prompt_render_logs DEFAULT VALUES"))
+        assert conn.execute(text(
+            "SELECT prompt_template_resolutions_json FROM agent_runs "
+            "WHERE run_id = 'fresh-legacy-run'"
+        )).scalar_one() == "{}"
+        assert conn.execute(text(
+            "SELECT prompt_template_resolutions_json FROM prompt_render_logs"
+        )).scalar_one() == "{}"
 
 
 def test_session_guidance_migrations_are_registered_in_dependency_order():

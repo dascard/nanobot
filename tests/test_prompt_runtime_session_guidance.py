@@ -174,6 +174,20 @@ async def test_prompt_runtime_forwards_guidance_and_redacts_prompt_trace(monkeyp
             warnings=[],
             debug={
                 "template_path": "/tmp/chat_private.md",
+                "template_resolutions": {
+                    "base_contract": {
+                        "template_key": "chat/main",
+                        "active_source": "runtime",
+                        "active_path": "/runtime/chat/main.md",
+                        "runtime_path": "/runtime/chat/main.md",
+                        "default_path": "/default/chat/main.md",
+                        "active_sha256": "a" * 64,
+                        "runtime_sha256": "a" * 64,
+                        "default_sha256": "b" * 64,
+                        "baseline_version": None,
+                        "drift_status": "untracked_legacy",
+                    }
+                },
                 "session_guidance_chat_stream_id": "qq:456:private",
                 "session_guidance_configured": True,
                 "session_guidance_chars": len(guidance_body),

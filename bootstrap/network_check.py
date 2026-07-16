@@ -2,97 +2,134 @@
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
+import asyncio
 import time
-import urllib.request
 from logging import Logger
-from pathlib import Path
+from typing import Any
+
+import aiohttp
+
+from core.build_info import resolve_build_info
 
 
-def run_startup_network_check(logger: Logger) -> None:
-    """启动时探测关键后端连通性，结果记入日志。"""
+async def _probe_public_endpoint(
+    session: aiohttp.ClientSession,
+    url: str,
+) -> tuple[str, int | None, int]:
+    started_at = time.monotonic()
     try:
-        project_root = Path(__file__).resolve().parents[1]
-        sha = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=project_root,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-        dt = subprocess.check_output(
-            ["git", "log", "-1", "--format=%ci", "--date=short"],
-            cwd=project_root,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()[:10]
-        logger.info("[startup] server version=%s date=%s", sha, dt)
+        async with session.get(
+            url,
+            headers={"User-Agent": "Nanobot/1.0"},
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as response:
+            status_code = int(response.status)
+            status = "ready" if 200 <= status_code < 400 else "http_error"
+            return status, status_code, round((time.monotonic() - started_at) * 1000)
     except Exception:
-        logger.info("[startup] server version=unknown")
+        return "network_error", None, round((time.monotonic() - started_at) * 1000)
+
+
+async def run_startup_network_check(
+    logger: Logger,
+    *,
+    session: aiohttp.ClientSession | Any | None = None,
+) -> None:
+    """异步探测实际模型路由和公开资讯端点，日志不包含凭据。"""
+
+    build = resolve_build_info(logger=logger)
+    logger.info(
+        "[startup] server version=%s date=%s",
+        build.commit,
+        build.commit_date,
+    )
 
     from config import NANOBOT_ADMIN_TOKEN, NANOBOT_API_TOKEN
 
-    logger.info("[startup] ========================================")
-    logger.info("[startup] Push API auth: %s", "enabled" if NANOBOT_API_TOKEN else "disabled")
-    logger.info("[startup] Admin WebUI Token: %s", NANOBOT_ADMIN_TOKEN)
-    logger.info("[startup] 访问 http://host:8000 并输入此 Token 登录")
-    logger.info("[startup] ========================================")
-
-    targets: dict[str, str] = {}
-    proxy_url = os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY") or ""
-    opener = (
-        urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-        )
-        if proxy_url
-        else urllib.request.build_opener()
+    logger.info(
+        "[startup] push_api_auth configured=%s",
+        str(bool(NANOBOT_API_TOKEN)).lower(),
+    )
+    logger.info(
+        "[startup] admin_web_token configured=%s",
+        str(bool(NANOBOT_ADMIN_TOKEN)).lower(),
     )
 
-    def _fetch(url: str, timeout: int):
-        req = urllib.request.Request(url, headers={"User-Agent": "Nanobot/1.0"})
-        return opener.open(req, timeout=timeout)
+    owns_session = session is None
+    if session is None:
+        session = aiohttp.ClientSession()
 
-    base = os.environ.get("NEW_API_BASE_URL", "http://10.60.42.158:9000/v1")
-    key = os.environ.get("NEW_API_KEY", "")
-    t0 = time.time()
     try:
-        req = urllib.request.Request(
-            f"{base}/models",
-            headers={"Authorization": f"Bearer {key}"} if key else {},
+        from clients import classifier_client
+        from core import model_route_health
+
+        targets = (
+            ("reply", "reply"),
+            ("timing_gate", "timing_gate"),
+            ("sticker_describe", "sticker_describe"),
         )
-        with urllib.request.build_opener().open(req, timeout=5) as response:
-            n = len(json.loads(response.read()).get("data", []))
-        targets["llm_api"] = f"OK ({n} models, {time.time() - t0:.1f}s)"
-    except Exception as exc:
-        targets["llm_api"] = f"FAIL: {type(exc).__name__}: {exc}"
+        route_snapshots: list[tuple[str, dict[str, Any] | None]] = []
+        for logical_name, route_key in targets:
+            try:
+                route = classifier_client.resolve_model_route(route_key)
+            except Exception:
+                route = None
+            route_snapshots.append((logical_name, route))
 
-    qwen = os.environ.get("CLASSIFIER_API_URL", "http://10.60.42.158:9999/v1")
-    t0 = time.time()
-    try:
-        with urllib.request.build_opener().open(f"{qwen}/models", timeout=3):
-            targets["qwen"] = f"OK ({time.time() - t0:.1f}s)"
-    except Exception as exc:
-        targets["qwen"] = f"FAIL: {type(exc).__name__}: {exc}"
+        async def probe_route(logical_name: str, route: dict[str, Any] | None):
+            if route is None:
+                return logical_name, model_route_health.ModelRouteHealth(
+                    "network_error", False, False, None, 0
+                )
+            try:
+                health = await model_route_health.probe_model_route(route, session)
+            except Exception:
+                health = model_route_health.ModelRouteHealth(
+                    "network_error", False, False, None, 0
+                )
+            return logical_name, health
 
-    t0 = time.time()
-    try:
-        with _fetch("https://duckduckgo.com", 5) as response:
-            targets["ddg"] = f"OK ({response.status}, {time.time() - t0:.1f}s)"
-    except Exception as exc:
-        targets["ddg"] = f"FAIL ({time.time() - t0:.1f}s): {type(exc).__name__}: {exc}"
+        route_results = await asyncio.gather(
+            *(probe_route(logical_name, route) for logical_name, route in route_snapshots)
+        )
+        public_results = await asyncio.gather(
+            _probe_public_endpoint(session, "https://duckduckgo.com"),
+            _probe_public_endpoint(session, "https://www.reddit.com/r/LocalLLaMA/.rss"),
+        )
 
-    t0 = time.time()
-    try:
-        with _fetch("https://www.reddit.com/r/LocalLLaMA/.rss", 5) as response:
-            targets["rss"] = f"OK ({response.status}, {time.time() - t0:.1f}s)"
-    except Exception as exc:
-        targets["rss"] = f"FAIL ({time.time() - t0:.1f}s): {type(exc).__name__}: {exc}"
-
-    ok = sum(1 for value in targets.values() if value.startswith("OK"))
-    fail = len(targets) - ok
-    logger.info("[NetworkCheck] %d/%d reachable:", ok, len(targets))
-    for name, status in targets.items():
-        logger.info("  %s: %s", name, status)
-    if fail:
-        logger.warning("[NetworkCheck] %d backends unreachable - ai_daily may be slow", fail)
+        failure_count = 0
+        for logical_name, health in route_results:
+            if not health.usable:
+                failure_count += 1
+            logger.info(
+                "[NetworkCheck] route=%s status=%s reachable=%s usable=%s "
+                "status_code=%s latency_ms=%s",
+                logical_name,
+                health.status,
+                str(health.reachable).lower(),
+                str(health.usable).lower(),
+                health.status_code,
+                health.latency_ms,
+            )
+        for logical_name, (status, status_code, latency_ms) in zip(
+            ("ddg", "rss"),
+            public_results,
+            strict=True,
+        ):
+            if status != "ready":
+                failure_count += 1
+            logger.info(
+                "[NetworkCheck] route=%s status=%s status_code=%s latency_ms=%s",
+                logical_name,
+                status,
+                status_code,
+                latency_ms,
+            )
+        if failure_count:
+            logger.warning(
+                "[NetworkCheck] unavailable_backends=%s",
+                failure_count,
+            )
+    finally:
+        if owns_session:
+            await session.close()

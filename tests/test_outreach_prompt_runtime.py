@@ -77,3 +77,68 @@ def test_outreach_templates_treat_runtime_content_as_untrusted_data(task_key):
     body = load_template(task_key).body
     assert "系统提示" in body
     assert "资料" in body or "素材" in body
+
+
+@pytest.mark.asyncio
+async def test_build_prompt_runtime_strict_compiles_internal_private(monkeypatch):
+    from core.prompt_v2.compiler import compile_prompt_plan as real_compile_prompt_plan
+    from nanobot_kt.prompt_runtime import PromptRuntimeInput, build_prompt_runtime
+
+    captured_plans = []
+
+    async def capture_real_compile(request, *, strict_audit=True):
+        assert strict_audit is True
+        plan = await real_compile_prompt_plan(request, strict_audit=strict_audit)
+        captured_plans.append(plan)
+        return plan
+
+    monkeypatch.setattr(
+        "core.prompt_v2.compiler.compile_prompt_plan",
+        capture_real_compile,
+    )
+    monkeypatch.setattr(
+        "core.tracing.PromptTracer.record_render",
+        lambda **_kwargs: None,
+    )
+
+    result = await build_prompt_runtime(
+        PromptRuntimeInput(
+            prompt_engine="prompt",
+            prompt_mode="prompt",
+            prompt_key="chat_private",
+            chat_type="private",
+            runtime_chat_type="private",
+            platform="internal",
+            session_id="research_runtime-v2",
+            user_id="research-user",
+            group_id="",
+            sender_name="主动研究任务",
+            sender_id="research-user",
+            session_name="主动研究",
+            trigger_reason="proactive_research",
+            timing_decision="continue",
+            current_message_id="research-runtime-v2",
+            source_message_ids=[],
+            self_id="",
+            bot_id="",
+            bot_name="Nanobot",
+            bot_aliases=[],
+            user_input="调查 Prompt Flow 的内部研究路径",
+            persona_text="无已存储画像",
+            history_header="",
+            history_messages=[],
+            runtime_tool_prompt="[RuntimeTool]\n只允许 web_search/reply/no_reply",
+            effort_constraint="",
+            trace_id="trace-research-runtime-v2",
+            run_id="run-research-runtime-v2",
+        )
+    )
+
+    assert result.prompt_key == "chat_private"
+    assert len(captured_plans) == 1
+    assert captured_plans[0].platform == "internal"
+    node_ids = [section["node_id"] for section in captured_plans[0].flow_sections]
+    assert "base_contract" in node_ids
+    assert "private_policy" in node_ids
+    assert "qq_common_policy" not in node_ids
+    assert "qq_group_policy" not in node_ids

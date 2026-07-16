@@ -608,7 +608,8 @@ async def test_run_proactive_research_start_timeout_still_stops_partially_starte
 @pytest.mark.asyncio
 async def test_run_proactive_research_partial_start_error_still_stops_bridge():
     api = _research_api()
-    bridge = FakeBridge("不会执行", start_error=RuntimeError("部分启动失败"))
+    secret = "UNKEYED-RESEARCH-RUNNER-SECRET"
+    bridge = FakeBridge("不会执行", start_error=RuntimeError(f"部分启动失败 {secret}"))
 
     result = await api.run_proactive_research(
         _request(api, request_id="research-start-error"),
@@ -618,7 +619,8 @@ async def test_run_proactive_research_partial_start_error_still_stops_bridge():
 
     assert result.status == "blocked"
     assert result.reason_code == "runtime_error"
-    assert "部分启动失败" in result.error
+    assert result.error == "主动外呼正文生成失败"
+    assert secret not in result.error
     assert bridge.events == ["start", "stop"]
 
 

@@ -2,6 +2,8 @@ import json
 import logging
 from datetime import datetime
 
+import pytest
+
 from app.memory_digest.builder import MemoryDigestBuilder
 from core.database import ChatLog
 
@@ -137,3 +139,51 @@ def test_memory_digest_builder_uses_high_signal_details_for_recall_cards():
     assert "PCL这是什么原理" in card_text
     assert "虚拟内存" in card_text
     assert "999听到鸟叫了" not in cards[0]["text"]
+
+
+def test_llm_digest_empty_critical_source_does_not_call_summarizer_and_stays_retryable(
+    monkeypatch,
+):
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm
+
+    calls = 0
+
+    def summarizer(_messages):
+        nonlocal calls
+        calls += 1
+        return "{}"
+
+    monkeypatch.setattr(
+        "app.memory_digest.llm_builder._collect_source_rows",
+        lambda _logs: [{"log_id": 1, "line": ""}],
+    )
+
+    result = build_memory_digest_with_llm(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-28",
+        logs=[_log(content="有效日志用于构造确定性摘要")],
+        summarizer=summarizer,
+    )
+
+    assert calls == 0
+    assert result.status == "failed"
+    assert result.meta["status"] == "failed"
+    assert result.meta["llm_status"] == "input_invalid"
+    assert result.level_contents[0]
+
+
+def test_llm_digest_does_not_swallow_summarizer_programming_error():
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm
+
+    def broken_summarizer(_messages):
+        raise TypeError("PROGRAMMING_BUG")
+
+    with pytest.raises(TypeError, match="PROGRAMMING_BUG"):
+        build_memory_digest_with_llm(
+            user_id="group_42",
+            session_id="group_42",
+            digest_date="2026-05-28",
+            logs=[_log(content="有效日志用于进入摘要器调用边界")],
+            summarizer=broken_summarizer,
+        )

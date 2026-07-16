@@ -7,6 +7,13 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from clients.classifier_client import strip_think_blocks
+from core.proactive_diagnostics import (
+    OutreachModelContractError,
+    generation_failure_from_exception,
+    judgement_failure_for_type,
+    normalize_research_reason_code,
+    research_failure_diagnostic,
+)
 from core.proactive_research import ResearchBudget, ResearchRequest
 
 
@@ -146,20 +153,15 @@ def evaluate_outreach_min_interval_gate(
     }
 
 
-async def evaluate_outreach_candidate(
+def evaluate_outreach_judgement(
     *,
-    user_id: str,
-    request_id: str,
     grounding: dict[str, Any],
     now: datetime,
     judge_fn: Callable[..., dict[str, Any]],
-    generator_fn: Callable[..., str],
-    research_fn: Callable[..., Any] | None = None,
-    context_summary: str | None = None,
     min_interval_min: int = 30,
     max_check_interval_min: int = 1440,
 ) -> dict[str, Any]:
-    """把 grounding 评估为 no-candidate、错误或可发布候选。"""
+    """只执行 Judge，不在返回前调用正文 Generator 或 Research。"""
 
     try:
         judge = judge_fn(
@@ -168,22 +170,49 @@ async def evaluate_outreach_candidate(
             min_interval_min=min_interval_min,
             max_check_interval_min=max_check_interval_min,
         )
-    except Exception as exc:
+    except Exception:
+        diagnostic = judgement_failure_for_type("model_error")
         return {
             "status": "judge_error",
             "would_publish": False,
-            "error_type": "model_error",
-            "reason": str(exc)[:500],
+            "error_type": diagnostic.error_type,
+            "reason": diagnostic.summary,
             "judge": {},
         }
     if judge.get("error_type") or judge.get("should_reach_out") is None:
+        diagnostic = judgement_failure_for_type(judge.get("error_type"))
         return {
             "status": "judge_error",
             "would_publish": False,
-            "error_type": str(judge.get("error_type") or "contract_error"),
-            "reason": str(judge.get("reason") or "")[:500],
+            "error_type": diagnostic.error_type,
+            "reason": diagnostic.summary,
             "judge": judge,
         }
+    if not judge.get("should_reach_out"):
+        return {
+            "status": "no_candidate",
+            "would_publish": False,
+            "judge": judge,
+        }
+    return {
+        "status": "generation_required",
+        "would_publish": True,
+        "judge": judge,
+    }
+
+
+async def materialize_outreach_candidate(
+    *,
+    user_id: str,
+    request_id: str,
+    grounding: dict[str, Any],
+    judge: dict[str, Any],
+    generator_fn: Callable[..., str],
+    research_fn: Callable[..., Any] | None = None,
+    context_summary: str | None = None,
+) -> dict[str, Any]:
+    """按已冻结 Judge 决策生成可发布正文，不再次执行 Judge。"""
+
     if not judge.get("should_reach_out"):
         return {
             "status": "no_candidate",
@@ -193,10 +222,16 @@ async def evaluate_outreach_candidate(
 
     if str(judge.get("outreach_kind") or "message") == "research":
         if research_fn is None:
+            diagnostic = research_failure_diagnostic(
+                reason_code="runner_unavailable",
+                error="",
+            )
             return {
                 "status": "research_blocked",
                 "would_publish": False,
                 "reason_code": "runner_unavailable",
+                "error_type": diagnostic.error_type,
+                "reason": diagnostic.summary,
                 "judge": judge,
             }
         request = ResearchRequest(
@@ -210,22 +245,35 @@ async def evaluate_outreach_candidate(
         try:
             result = await research_fn(request)
         except Exception as exc:
+            diagnostic = generation_failure_from_exception(exc)
             return {
                 "status": "research_blocked",
                 "would_publish": False,
                 "reason_code": "runtime_error",
-                "error": str(exc)[:1000],
+                "error_type": diagnostic.error_type,
+                "reason": diagnostic.summary,
                 "judge": judge,
             }
         research_payload = result.to_dict()
         if result.status != "draft_ready":
-            return {
+            reason_code = normalize_research_reason_code(
+                research_payload.get("reason_code")
+            ) or "contract_error"
+            research_payload["reason_code"] = reason_code
+            blocked = {
                 "status": "research_blocked",
                 "would_publish": False,
-                "reason_code": result.reason_code,
+                "reason_code": reason_code,
                 "judge": judge,
                 "research": research_payload,
             }
+            diagnostic = research_failure_diagnostic(
+                reason_code=reason_code,
+                error=result.error,
+            )
+            blocked["error_type"] = diagnostic.error_type
+            blocked["reason"] = diagnostic.summary
+            return blocked
         message = strip_think_blocks(result.draft or "").strip()
         if not message:
             return {
@@ -247,10 +295,16 @@ async def evaluate_outreach_candidate(
             result.sources,
         )
         if publication_error:
+            diagnostic = research_failure_diagnostic(
+                reason_code=publication_error,
+                error="",
+            )
             return {
                 "status": "research_blocked",
                 "would_publish": False,
                 "reason_code": publication_error,
+                "error_type": diagnostic.error_type,
+                "reason": diagnostic.summary,
                 "judge": judge,
                 "research": research_payload,
             }
@@ -258,18 +312,29 @@ async def evaluate_outreach_candidate(
             "status": "candidate",
             "would_publish": True,
             "message": message,
+            "model_trace_id": str(result.trace_id or "")[:128],
             "judge": judge,
             "research": research_payload,
         }
 
     try:
         message = generator_fn(grounding, str(judge.get("reason") or ""))
-    except Exception as exc:
+    except OutreachModelContractError as exc:
+        diagnostic = generation_failure_from_exception(exc)
         return {
             "status": "generation_error",
             "would_publish": False,
-            "error_type": str(getattr(exc, "error_type", "contract_error")),
-            "reason": str(exc)[:500],
+            "error_type": diagnostic.error_type,
+            "reason": diagnostic.summary,
+            "judge": judge,
+        }
+    except Exception as exc:
+        diagnostic = generation_failure_from_exception(exc)
+        return {
+            "status": "generation_error",
+            "would_publish": False,
+            "error_type": diagnostic.error_type,
+            "reason": diagnostic.summary,
             "judge": judge,
         }
     message = strip_think_blocks(str(message or "")).strip()
@@ -286,3 +351,38 @@ async def evaluate_outreach_candidate(
         "message": message,
         "judge": judge,
     }
+
+
+async def evaluate_outreach_candidate(
+    *,
+    user_id: str,
+    request_id: str,
+    grounding: dict[str, Any],
+    now: datetime,
+    judge_fn: Callable[..., dict[str, Any]],
+    generator_fn: Callable[..., str],
+    research_fn: Callable[..., Any] | None = None,
+    context_summary: str | None = None,
+    min_interval_min: int = 30,
+    max_check_interval_min: int = 1440,
+) -> dict[str, Any]:
+    """把 grounding 评估为 no-candidate、错误或可发布候选。"""
+
+    judgement = evaluate_outreach_judgement(
+        grounding=grounding,
+        now=now,
+        judge_fn=judge_fn,
+        min_interval_min=min_interval_min,
+        max_check_interval_min=max_check_interval_min,
+    )
+    if judgement.get("status") != "generation_required":
+        return judgement
+    return await materialize_outreach_candidate(
+        user_id=user_id,
+        request_id=request_id,
+        grounding=grounding,
+        judge=dict(judgement.get("judge") or {}),
+        generator_fn=generator_fn,
+        research_fn=research_fn,
+        context_summary=context_summary,
+    )

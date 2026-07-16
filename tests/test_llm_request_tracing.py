@@ -110,7 +110,60 @@ def test_finish_request_records_error_status(db_session):
     assert row.status == "error"
     assert row.response_status == 502
     assert row.error == "upstream failed"
-    assert json.loads(row.response_json)["detail"] == "bad gateway"
+    response_audit = json.loads(row.response_json)
+    assert response_audit["response_body_omitted"] is True
+    assert "bad gateway" in response_audit["safe_summary"]
+    assert len(response_audit["response_body_sha256"]) == 64
+
+
+def test_failure_trace_redacts_and_bounds_free_form_diagnostics(db_session):
+    from core.database import LLMApiRequestLog
+    from core.tracing import LLMRequestTracer
+
+    url_password = "trace-url-password-secret"
+    query_secret = "trace-query-secret"
+    body_secret = "trace-response-secret"
+    error_secret = "trace-error-secret"
+    log_id = LLMRequestTracer.record_request(
+        trace_id="trace-safe-failure",
+        run_id="run-safe-failure",
+        source="classifier.timing_gate",
+        url=(
+            f"https://trace-user:{url_password}@llm.test/v1/chat/completions"
+            f"?api_key={query_secret}#fragment-secret"
+        ),
+        request={"model": "m"},
+    )
+
+    LLMRequestTracer.finish_request(
+        log_id=log_id,
+        response={"detail": f"token={body_secret}" + "x" * 100_000},
+        response_status=502,
+        status="error",
+        error=f"Authorization: Bearer {error_secret}",
+        latency_ms=45,
+    )
+
+    row = db_session.query(LLMApiRequestLog).filter_by(id=log_id).one()
+    persisted = "\n".join([
+        row.url or "",
+        row.response_json or "",
+        row.response_preview or "",
+        row.error or "",
+    ])
+    for secret in (
+        url_password,
+        query_secret,
+        "fragment-secret",
+        body_secret,
+        error_secret,
+    ):
+        assert secret not in persisted
+    assert len(row.response_json) <= 8_000
+    response_audit = json.loads(row.response_json)
+    assert response_audit["response_body_omitted"] is True
+    assert response_audit["response_body_chars"] > 100_000
+    assert len(response_audit["response_body_sha256"]) == 64
 
 
 def test_openai_sdk_tracer_records_non_stream_request(monkeypatch):

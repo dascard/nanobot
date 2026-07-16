@@ -66,6 +66,13 @@ _SQL_KEYWORDS = {
 _SQLToken = tuple[str, str]
 
 
+def _ascii_lower(value: str) -> str:
+    return "".join(
+        chr(ord(char) + 32) if "A" <= char <= "Z" else char
+        for char in value
+    )
+
+
 def _tokenize_sql(value: str) -> tuple[_SQLToken, ...]:
     tokens: list[_SQLToken] = []
     index = 0
@@ -115,7 +122,7 @@ def _tokenize_sql(value: str) -> tuple[_SQLToken, ...]:
                     index += 2
                     continue
                 index += 1
-                tokens.append(("identifier", "".join(identifier).casefold()))
+                tokens.append(("identifier", _ascii_lower("".join(identifier))))
                 break
             else:
                 tokens.append(("invalid", "".join(identifier)))
@@ -125,7 +132,7 @@ def _tokenize_sql(value: str) -> tuple[_SQLToken, ...]:
             if end < 0:
                 tokens.append(("invalid", value[index:]))
                 break
-            tokens.append(("identifier", value[index + 1:end].casefold()))
+            tokens.append(("identifier", _ascii_lower(value[index + 1:end])))
             index = end + 1
             continue
         if char.isalpha() or char == "_" or ord(char) >= 128:
@@ -140,7 +147,7 @@ def _tokenize_sql(value: str) -> tuple[_SQLToken, ...]:
                 ):
                     break
                 index += 1
-            word = value[start:index].casefold()
+            word = _ascii_lower(value[start:index])
             tokens.append((
                 "keyword" if word in _SQL_KEYWORDS else "identifier",
                 word,
@@ -153,7 +160,7 @@ def _tokenize_sql(value: str) -> tuple[_SQLToken, ...]:
                 value[index].isalnum() or value[index] in "._"
             ):
                 index += 1
-            tokens.append(("number", value[start:index].casefold()))
+            tokens.append(("number", _ascii_lower(value[start:index])))
             continue
         tokens.append(("symbol", char))
         index += 1
@@ -369,11 +376,11 @@ def chat_delivery_outbox_table(
         "last_error TEXT NOT NULL DEFAULT '', "
         "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
         "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
-        "delivered_at DATETIME, "
+        "delivered_at DATETIME,\n"
         + _CHECKS[0]
-        + ", "
+        + ",\n"
         + _CHECKS[1]
-        + ")"
+        + "\n)"
     ))
     _validate_table(conn)
     statements = (

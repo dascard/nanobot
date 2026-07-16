@@ -242,6 +242,12 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "target_type": {"type": "string", "description": "推送类型: private 或 group；创建时留空则尝试使用当前会话类型", "enum": ["private", "group"]},
                 "target_id": {"type": "string", "description": "QQ号或群号；创建时留空则尝试使用当前 runtime_context 的 user_id/group_id"},
                 "prompt_template": {"type": "string", "description": "LLM 生成推送内容的提示模板，不是直接发送的固定文本"},
+                "idempotency_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "手动 run 必填；同一请求重试必须复用同一幂等键",
+                },
             },
             "required": ["action"],
         },

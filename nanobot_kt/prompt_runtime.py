@@ -109,6 +109,7 @@ class PromptRuntimeResult:
     prompt_sha256: str
     pre_event_messages: list[dict[str, Any]]
     event_content: Any
+    prompt_template_resolutions: dict[str, dict[str, Any]] = field(default_factory=dict)
     meta_update: dict[str, Any] = field(default_factory=dict)
     message_token_estimate: int = 0
     tool_schema_token_estimate: int = 0
@@ -130,6 +131,8 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
     from core.prompt_v2.compiler import compile_prompt_plan
     from core.prompt_v2.flow import PromptFlowError
     from core.prompt_v2.schema import PromptCompileRequest
+    from core.prompt_v2.template_baseline import TemplateBaselineError
+    from core.prompt_v2.template_resolution import build_template_trace_fields
     from core.tracing import PromptTracer
 
     request_debug = dict(input.debug or {})
@@ -173,7 +176,12 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
     )
     try:
         prompt_plan = await compile_prompt_plan(prompt_request, strict_audit=True)
-    except (PromptAuditError, PromptFlowError, json.JSONDecodeError) as exc:
+    except (
+        PromptAuditError,
+        PromptFlowError,
+        TemplateBaselineError,
+        json.JSONDecodeError,
+    ) as exc:
         audit_issues = list(getattr(exc, "issues", []) or [str(exc)])
         meta_update = {
             "prompt_engine": "prompt",
@@ -185,22 +193,47 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
             meta_update=meta_update,
         ) from exc
 
+    template_resolutions = prompt_plan.template_resolutions
+    if "base_contract" not in template_resolutions:
+        issue = "Prompt 模板来源解析缺少 base_contract"
+        raise PromptRuntimeAuditFailure(
+            issue,
+            meta_update={
+                "prompt_engine": "prompt",
+                "prompt_v2_audit_failed": True,
+                "audit_issues": [issue],
+            },
+        )
+    try:
+        template_trace_fields = build_template_trace_fields(template_resolutions)
+    except (TypeError, ValueError) as exc:
+        issue = f"Prompt 模板来源解析无效: {exc}"
+        raise PromptRuntimeAuditFailure(
+            issue,
+            meta_update={
+                "prompt_engine": "prompt",
+                "prompt_v2_audit_failed": True,
+                "audit_issues": [issue],
+            },
+        ) from exc
+    trace_variables = dict(prompt_plan.debug)
+    trace_variables.pop("template_resolutions", None)
+    trace_variables.pop("template_paths", None)
     PromptTracer.record_render(
         trace_id=input.trace_id,
         run_id=input.run_id,
         prompt_key=prompt_plan.prompt_key,
         mode="prompt",
-        variables=prompt_plan.debug,
+        variables=trace_variables,
         rendered_content=json.dumps(
             _build_prompt_trace_request(prompt_plan),
             ensure_ascii=False,
         ),
         token_estimate=prompt_plan.token_estimate,
         warnings=prompt_plan.warnings,
-        prompt_source="Prompt Runtime",
-        prompt_runtime_path=str(prompt_plan.debug.get("template_path", "")),
-        prompt_default_path=str(prompt_plan.debug.get("template_path", "")),
+        **template_trace_fields,
         prompt_sha256=prompt_plan.prompt_sha256,
+        prompt_template_resolutions=template_resolutions,
     )
     context_debug = dict(prompt_plan.debug.get("context_debug", {}) or {})
     meta_update = {
@@ -272,12 +305,11 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
     return PromptRuntimeResult(
         prompt_key=prompt_plan.prompt_key,
         prompt_mode="prompt",
-        prompt_source="Prompt Runtime",
-        prompt_runtime_path=str(prompt_plan.debug.get("template_path", "")),
-        prompt_default_path=str(prompt_plan.debug.get("template_path", "")),
+        **template_trace_fields,
         prompt_sha256=prompt_plan.prompt_sha256,
         pre_event_messages=prompt_plan.messages_without_current_user,
         event_content=prompt_plan.current_user_content,
+        prompt_template_resolutions=template_resolutions,
         meta_update=meta_update,
         message_token_estimate=prompt_plan.message_token_estimate,
         tool_schema_token_estimate=prompt_plan.tool_schema_token_estimate,

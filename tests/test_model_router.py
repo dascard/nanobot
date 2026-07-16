@@ -138,6 +138,50 @@ class TestClassifierRouteProviderResolution:
         assert route["provider_id"] == "newapi"
         assert route["model"] == "selected-reply-model"
 
+    def test_session_summary_prefers_dedicated_model_setting(self, monkeypatch):
+        import config
+        from clients.classifier_client import resolve_model_route
+
+        values = {
+            "model.session_summary": "dedicated-summary-model",
+            "model.providers.newapi.base_url": "http://newapi:9000/v1",
+            "model.providers.newapi.api_key": "newapi-key",
+            "model.providers.newapi.enabled": True,
+        }
+        monkeypatch.setattr(config, "LLM_MODEL_FAST", "legacy-fast-model")
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        route = resolve_model_route("session_summary")
+
+        assert route["provider_id"] == "newapi"
+        assert route["model"] == "dedicated-summary-model"
+
+    def test_session_summary_falls_back_to_fast_model_for_compatibility(
+        self,
+        monkeypatch,
+    ):
+        import config
+        from clients.classifier_client import resolve_model_route
+
+        values = {
+            "model.providers.newapi.base_url": "http://newapi:9000/v1",
+            "model.providers.newapi.api_key": "newapi-key",
+            "model.providers.newapi.enabled": True,
+        }
+        monkeypatch.setattr(config, "LLM_MODEL_FAST", "legacy-fast-model")
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        route = resolve_model_route("session_summary")
+
+        assert route["provider_id"] == "newapi"
+        assert route["model"] == "legacy-fast-model"
+
     def test_timing_proactive_inherits_reply_route_config(self, monkeypatch):
         from clients.classifier_client import resolve_model_route
 
@@ -236,7 +280,7 @@ class TestClassifierRouteProviderResolution:
             lambda key, default=None: values.get(key, default),
         )
 
-        with pytest.raises(RuntimeError, match="provider disabled: local_qwen"):
+        with pytest.raises(RuntimeError, match="provider disabled: local_llama"):
             call_model_route(route_key="timing_gate", user_message="ping")
 
     @pytest.mark.parametrize("route_key", ["timing_gate", "private_decision", "classifier_legacy"])

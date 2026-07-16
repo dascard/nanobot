@@ -55,7 +55,8 @@ async def _publisher_scope(
         yield publisher
         return
 
-    from core.daily_digest import push_envelope_to_qq_with_session
+    from core.daily_digest import push_envelope_to_qq_outcome_with_session
+    from core.outbound_transport import delivery_outcome_to_legacy
 
     async with aiohttp.ClientSession() as session:
         async def worker_publisher(
@@ -63,12 +64,15 @@ async def _publisher_scope(
             target_id: str,
             envelope: dict[str, Any],
         ) -> bool | None:
-            return await push_envelope_to_qq_with_session(
+            outcome = await push_envelope_to_qq_outcome_with_session(
                 session,
                 target_type,
                 target_id,
                 envelope,
             )
+            if outcome is None:
+                return False
+            return delivery_outcome_to_legacy(outcome)
 
         yield worker_publisher
 

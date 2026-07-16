@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -18,6 +20,7 @@ from core.prompt_v2.flow import (
     validate_flow,
     validate_runtime_contract,
 )
+from core.prompt_v2.flow_contract import FLOW_SCHEMA_VERSION
 from core.prompt_v2.flow_storage import (
     FlowStorageError,
     assert_no_symlink_components,
@@ -25,6 +28,8 @@ from core.prompt_v2.flow_storage import (
     ensure_directory_without_symlinks,
     flow_write_lock,
     fsync_directory,
+    template_governance_read_lock,
+    template_governance_write_lock,
 )
 
 
@@ -32,12 +37,29 @@ _BACKUP_NAME_RE = re.compile(
     r"^chat-flow\.(?P<timestamp>\d{8}T\d{12}Z)\."
     r"(?P<sha>[0-9a-f]{12})\.json\.bak$"
 )
+_FLOW_V2_PLAN_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+_FLOW_V2_PLAN_SCHEMA_VERSION = 1
+_FLOW_V2_MIGRATION_ID = "internal-private-flow-v2"
 _SESSION_GUIDANCE_NODE = {
     "id": "session_guidance",
     "type": "runtime",
     "label": "system: session_guidance",
     "runtime_key": "session_guidance",
 }
+
+
+@contextmanager
+def _runtime_flow_read_lock(runtime_flow_path: Path) -> Iterator[None]:
+    with flow_write_lock(runtime_flow_path):
+        with template_governance_read_lock(runtime_flow_path.parent.parent):
+            yield
+
+
+@contextmanager
+def _runtime_flow_write_lock(runtime_flow_path: Path) -> Iterator[None]:
+    with flow_write_lock(runtime_flow_path):
+        with template_governance_write_lock(runtime_flow_path.parent.parent):
+            yield
 
 
 class PromptFlowMigrationError(PromptFlowError):
@@ -170,6 +192,96 @@ def migrate_session_guidance_flow(
     return migrated, True
 
 
+def _normalized_condition_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip().lower() for item in value if str(item).strip()]
+
+
+def _internal_private_core_edge(flow: dict[str, Any]) -> dict[str, Any]:
+    matches = [
+        edge
+        for edge in list(flow.get("edges") or [])
+        if edge.get("from") == "base_contract"
+        and edge.get("to") == "private_policy"
+    ]
+    if len(matches) != 1:
+        raise PromptFlowMigrationError(
+            "flow 必须且只能包含一条 base_contract -> private_policy 核心边"
+        )
+    return matches[0]
+
+
+def _validate_core_edge_conditions(
+    edge: dict[str, Any],
+    *,
+    expected_platforms: frozenset[str],
+) -> None:
+    chat_types = _normalized_condition_values(edge.get("chat_types"))
+    platforms = _normalized_condition_values(edge.get("platforms"))
+    if len(chat_types) != 1 or frozenset(chat_types) != frozenset({"private"}):
+        raise PromptFlowMigrationError(
+            "base_contract -> private_policy 核心边的 chat_types 已冲突"
+        )
+    if len(platforms) != len(expected_platforms) or frozenset(platforms) != expected_platforms:
+        raise PromptFlowMigrationError(
+            "base_contract -> private_policy 核心边的 platforms 已冲突"
+        )
+
+
+def _require_session_guidance_baseline(flow: dict[str, Any]) -> None:
+    guidance_nodes = [
+        node
+        for node in list(flow.get("nodes") or [])
+        if node.get("id") == "session_guidance"
+        or node.get("runtime_key") == "session_guidance"
+    ]
+    if len(guidance_nodes) != 1:
+        raise PromptFlowMigrationError(
+            "Flow v2 迁移仅支持当前 v1 基线；请先完成 session_guidance Flow 迁移"
+        )
+    try:
+        _validate_existing_guidance_relationships(flow)
+    except PromptFlowMigrationError as exc:
+        raise _migration_error(
+            "Flow v2 迁移仅支持当前 v1 基线；请先完成 session_guidance Flow 迁移",
+            exc,
+        )
+
+
+def migrate_internal_private_flow_v2(
+    flow: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """把当前 v1 Flow 显式升级为支持 internal/private 的 v2。"""
+
+    migrated = copy.deepcopy(flow)
+    _validate_base_flow(migrated)
+    version = migrated.get("version", 1)
+    edge = _internal_private_core_edge(migrated)
+
+    if version == FLOW_SCHEMA_VERSION:
+        _validate_core_edge_conditions(
+            edge,
+            expected_platforms=frozenset({"web", "internal"}),
+        )
+        _validate_migrated_flow(migrated)
+        return migrated, False
+    if version != 1:
+        raise PromptFlowMigrationError(f"flow.version 无法迁移: {version}")
+
+    _validate_core_edge_conditions(
+        edge,
+        expected_platforms=frozenset({"web"}),
+    )
+    _require_session_guidance_baseline(migrated)
+    migrated["version"] = FLOW_SCHEMA_VERSION
+    edge["platforms"] = ["web", "internal"]
+    _validate_migrated_flow(migrated)
+    return migrated, True
+
+
 def _read_regular_file(path: Path, *, label: str) -> bytes:
     path = Path(path)
     try:
@@ -200,6 +312,262 @@ def _decode_flow(data: bytes, *, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise PromptFlowMigrationError(f"{label}顶层必须是 JSON object")
     return value
+
+
+def _serialize_flow(flow: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(flow, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def default_flow_v2_plan_dir(runtime_flow_path: Path) -> Path:
+    """从 runtime 根目录推导 Flow v2 迁移计划目录。"""
+
+    runtime_root = Path(runtime_flow_path).parent.parent
+    return runtime_root.parent / "prompt_template_migration_plans" / "flow_v2"
+
+
+def default_flow_v2_backup_dir(runtime_flow_path: Path) -> Path:
+    """从 runtime 根目录推导 Flow v2 精确备份目录。"""
+
+    runtime_root = Path(runtime_flow_path).parent.parent
+    return runtime_root.parent / "prompt_template_backups" / "flow_v2"
+
+
+def _flow_v2_plan_fields(
+    *,
+    runtime_flow_path: Path,
+    source: bytes,
+    target: bytes,
+    from_version: int,
+    changed: bool,
+) -> dict[str, Any]:
+    return {
+        "schema_version": _FLOW_V2_PLAN_SCHEMA_VERSION,
+        "migration_id": _FLOW_V2_MIGRATION_ID,
+        "runtime_flow_path": str(runtime_flow_path),
+        "source_sha256": _sha256_bytes(source),
+        "target_sha256": _sha256_bytes(target),
+        "from_version": from_version,
+        "to_version": FLOW_SCHEMA_VERSION,
+        "changed": changed,
+    }
+
+
+def _flow_v2_plan_id(fields: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        fields,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _sha256_bytes(encoded)
+
+
+def _flow_v2_plan_path(plan_dir: Path, plan_id: str) -> Path:
+    if _FLOW_V2_PLAN_ID_RE.fullmatch(str(plan_id or "")) is None:
+        raise PromptFlowMigrationError("plan_id 非法")
+    return Path(plan_dir) / f"flow-v2.{plan_id}.json"
+
+
+def _write_flow_v2_plan(plan_dir: Path, record: dict[str, Any]) -> Path:
+    try:
+        safe_plan_dir = ensure_directory_without_symlinks(Path(plan_dir))
+    except FlowStorageError as exc:
+        raise _migration_error(f"迁移计划目录包含符号链接或不安全组件: {exc}", exc)
+    plan_path = _flow_v2_plan_path(safe_plan_dir, str(record.get("plan_id") or ""))
+    payload = (
+        json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode("utf-8")
+    with flow_write_lock(plan_path):
+        atomic_replace_bytes(plan_path, payload)
+    return plan_path
+
+
+def _read_flow_v2_plan(
+    *,
+    plan_dir: Path,
+    plan_id: str,
+    runtime_flow_path: Path,
+) -> dict[str, Any]:
+    try:
+        safe_plan_dir = assert_no_symlink_components(Path(plan_dir))
+    except FlowStorageError as exc:
+        raise _migration_error(f"迁移计划目录包含符号链接或不安全组件: {exc}", exc)
+    plan_path = _flow_v2_plan_path(safe_plan_dir, plan_id)
+    record = _decode_flow(
+        _read_regular_file(plan_path, label="Flow v2 迁移计划"),
+        label="Flow v2 迁移计划",
+    )
+    stored_id = record.pop("plan_id", "")
+    if type(stored_id) is not str:
+        raise PromptFlowMigrationError("Flow v2 迁移计划摘要类型非法")
+    if stored_id != plan_id or _flow_v2_plan_id(record) != plan_id:
+        raise PromptFlowMigrationError("Flow v2 迁移计划摘要不匹配")
+    expected_fields = {
+        "schema_version",
+        "migration_id",
+        "runtime_flow_path",
+        "source_sha256",
+        "target_sha256",
+        "from_version",
+        "to_version",
+        "changed",
+    }
+    if set(record) != expected_fields:
+        raise PromptFlowMigrationError("Flow v2 迁移计划字段不匹配")
+    schema_version = record.get("schema_version")
+    if (
+        type(schema_version) is not int
+        or schema_version != _FLOW_V2_PLAN_SCHEMA_VERSION
+    ):
+        raise PromptFlowMigrationError("Flow v2 迁移计划版本不支持")
+    if record.get("migration_id") != _FLOW_V2_MIGRATION_ID:
+        raise PromptFlowMigrationError("Flow v2 迁移计划类型不匹配")
+    if record.get("runtime_flow_path") != str(runtime_flow_path):
+        raise PromptFlowMigrationError("Flow v2 迁移计划目标路径不匹配")
+    source_sha256 = record.get("source_sha256")
+    target_sha256 = record.get("target_sha256")
+    if (
+        type(source_sha256) is not str
+        or type(target_sha256) is not str
+        or _FLOW_V2_PLAN_ID_RE.fullmatch(source_sha256) is None
+        or _FLOW_V2_PLAN_ID_RE.fullmatch(target_sha256) is None
+    ):
+        raise PromptFlowMigrationError("Flow v2 迁移计划文件摘要非法")
+    changed = record.get("changed")
+    from_version = record.get("from_version")
+    to_version = record.get("to_version")
+    if (
+        type(changed) is not bool
+        or type(from_version) is not int
+        or type(to_version) is not int
+    ):
+        raise PromptFlowMigrationError("Flow v2 迁移计划状态非法")
+    if to_version != FLOW_SCHEMA_VERSION:
+        raise PromptFlowMigrationError("Flow v2 迁移计划目标版本不匹配")
+    if changed:
+        if from_version != 1 or source_sha256 == target_sha256:
+            raise PromptFlowMigrationError("Flow v2 迁移计划变更状态不一致")
+    elif from_version != FLOW_SCHEMA_VERSION or source_sha256 != target_sha256:
+        raise PromptFlowMigrationError("Flow v2 迁移计划无变更状态不一致")
+    record["plan_id"] = stored_id
+    record["plan_path"] = str(plan_path)
+    return record
+
+
+def plan_runtime_flow_v2(
+    runtime_flow_path: Path,
+    *,
+    plan_dir: Path,
+) -> dict[str, Any]:
+    """生成并持久化不含 Flow 正文的 v2 迁移计划。"""
+
+    try:
+        runtime_flow_path = assert_no_symlink_components(Path(runtime_flow_path))
+        with _runtime_flow_read_lock(runtime_flow_path):
+            source = _read_regular_file(runtime_flow_path, label="runtime flow")
+            source_flow = _decode_flow(source, label="runtime flow")
+            migrated, changed = migrate_internal_private_flow_v2(source_flow)
+            target = _serialize_flow(migrated) if changed else source
+            fields = _flow_v2_plan_fields(
+                runtime_flow_path=runtime_flow_path,
+                source=source,
+                target=target,
+                from_version=int(source_flow.get("version", 1)),
+                changed=changed,
+            )
+            plan_id = _flow_v2_plan_id(fields)
+            record = {**fields, "plan_id": plan_id}
+            plan_path = _write_flow_v2_plan(Path(plan_dir), record)
+    except FlowStorageError as exc:
+        raise _migration_error(f"runtime flow 存储路径不安全: {exc}", exc)
+    return {**record, "plan_path": str(plan_path)}
+
+
+def apply_runtime_flow_v2(
+    runtime_flow_path: Path,
+    *,
+    plan_dir: Path,
+    backup_dir: Path,
+    plan_id: str,
+) -> dict[str, Any]:
+    """在共享写锁内校验计划、精确备份并原子应用 Flow v2。"""
+
+    try:
+        runtime_flow_path = assert_no_symlink_components(Path(runtime_flow_path))
+        plan = _read_flow_v2_plan(
+            plan_dir=Path(plan_dir),
+            plan_id=plan_id,
+            runtime_flow_path=runtime_flow_path,
+        )
+        with _runtime_flow_write_lock(runtime_flow_path):
+            source = _read_regular_file(runtime_flow_path, label="runtime flow")
+            current_sha256 = _sha256_bytes(source)
+            source_sha256 = str(plan.get("source_sha256") or "")
+            target_sha256 = str(plan.get("target_sha256") or "")
+            if current_sha256 == target_sha256 and current_sha256 != source_sha256:
+                applied_flow = _decode_flow(source, label="runtime flow")
+                remigrated, changed = migrate_internal_private_flow_v2(applied_flow)
+                if changed or _serialize_flow(remigrated) != source:
+                    raise PromptFlowMigrationError(
+                        "Flow v2 迁移计划目标文件无法验证"
+                    )
+                return {
+                    "applied": False,
+                    "already_applied": True,
+                    "plan_id": plan_id,
+                    "runtime_flow_path": str(runtime_flow_path),
+                    "backup_path": "",
+                    "source_sha256": source_sha256,
+                    "target_sha256": target_sha256,
+                }
+            if current_sha256 != source_sha256:
+                raise PromptFlowMigrationError("Flow v2 迁移计划源文件已变化")
+
+            source_flow = _decode_flow(source, label="runtime flow")
+            migrated, changed = migrate_internal_private_flow_v2(source_flow)
+            target = _serialize_flow(migrated) if changed else source
+            fields = _flow_v2_plan_fields(
+                runtime_flow_path=runtime_flow_path,
+                source=source,
+                target=target,
+                from_version=int(source_flow.get("version", 1)),
+                changed=changed,
+            )
+            if (
+                _flow_v2_plan_id(fields) != plan_id
+                or _sha256_bytes(target) != plan.get("target_sha256")
+            ):
+                raise PromptFlowMigrationError("Flow v2 迁移计划与当前目标不匹配")
+            if not changed:
+                return {
+                    "applied": False,
+                    "already_applied": False,
+                    "plan_id": plan_id,
+                    "runtime_flow_path": str(runtime_flow_path),
+                    "backup_path": "",
+                    "source_sha256": fields["source_sha256"],
+                    "target_sha256": fields["target_sha256"],
+                }
+
+            backup_path = _create_exact_backup(source, backup_dir=Path(backup_dir))
+            atomic_replace_bytes(runtime_flow_path, target)
+            return {
+                "applied": True,
+                "already_applied": False,
+                "plan_id": plan_id,
+                "runtime_flow_path": str(runtime_flow_path),
+                "backup_path": str(backup_path),
+                "source_sha256": fields["source_sha256"],
+                "target_sha256": fields["target_sha256"],
+            }
+    except FlowStorageError as exc:
+        raise _migration_error(f"runtime flow 存储路径不安全: {exc}", exc)
 
 
 def _ensure_backup_directory(backup_dir: Path) -> Path:
@@ -263,7 +631,7 @@ def upgrade_runtime_flow_file(
     """验证并原子升级 runtime flow；已符合合同则保持字节不变。"""
     runtime_flow_path = Path(runtime_flow_path)
     try:
-        with flow_write_lock(runtime_flow_path):
+        with _runtime_flow_write_lock(runtime_flow_path):
             original = _read_regular_file(runtime_flow_path, label="runtime flow")
             flow = _decode_flow(original, label="runtime flow")
             migrated, changed = migrate_session_guidance_flow(flow)
@@ -370,7 +738,7 @@ def rollback_session_guidance_flow(
     runtime_flow_path = Path(runtime_flow_path)
     backup_dir = Path(backup_dir)
     try:
-        with flow_write_lock(runtime_flow_path):
+        with _runtime_flow_write_lock(runtime_flow_path):
             selected = _safe_backup_path(
                 backup_dir=backup_dir,
                 backup_name=backup_name,

@@ -17,7 +17,7 @@ from core.database import (
     ToolCall,
     get_db,
 )
-from core.tracing import row_to_dict
+from core.tracing import row_to_dict, sanitize_llm_log_payload
 
 router = APIRouter(tags=["admin-trace"])
 
@@ -238,7 +238,7 @@ def list_llm_api_logs(
         )
         items = []
         for row in rows:
-            item = dict(row._mapping)
+            item = sanitize_llm_log_payload(dict(row._mapping))
             for key in ("created_at", "finished_at"):
                 value = item.get(key)
                 if isinstance(value, datetime):

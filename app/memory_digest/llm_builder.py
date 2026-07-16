@@ -14,9 +14,8 @@ from collections.abc import Iterable
 
 from core.database import ChatLog
 from core.prompt_v2.section_renderer import sha256_text
-from core.prompt_v2.template_loader import load_template
-from core.prompt_v2.template_registry import runtime_template_dir
-from core.prompt_v2.variables import render_scoped_template
+from core.prompt_v2.task_contracts import TaskCallValueError
+from core.prompt_v2.task_templates import TaskInvocationError, render_task_pair
 
 from .builder import MemoryDigestBuildResult, MemoryDigestBuilder
 from .quality import build_quality
@@ -82,25 +81,36 @@ def _has_keyword_overlap(text: str, source_text: str, *, min_overlap: int = 2) -
 _SYSTEM_TEMPLATE_KEY = "tasks/memory_digest_system"
 _USER_TEMPLATE_KEY = "tasks/memory_digest_user"
 
-FALLBACK_MEMORY_DIGEST_SYSTEM_PROMPT = "生成长期记忆摘要，只输出严格 JSON。"
-FALLBACK_MEMORY_DIGEST_USER_PROMPT = (
-    "根据 digest_source 输出 preview、long_summary、recall_cards、quality。"
-)
+
+
+class SyncSummarizerContractError(TypeError):
+    """同步入口收到了 awaitable summarizer。"""
+
+
+class MemoryDigestModelError(RuntimeError):
+    """记忆摘要模型调用或响应合同失败。"""
+
+
+class MemoryDigestOutputError(ValueError):
+    """记忆摘要模型输出不满足 JSON 根合同。"""
 
 
 def _safe_json_loads(raw: str) -> dict[str, Any]:
     text = str(raw or "").strip()
     if not text:
-        raise ValueError("json_parse_failed:empty_response")
+        raise MemoryDigestOutputError("json_parse_failed:empty_response")
     try:
         value = json.loads(text)
-    except (TypeError, json.JSONDecodeError):
+    except (TypeError, json.JSONDecodeError) as exc:
         match = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)```", text)
         if not match:
-            raise ValueError("json_parse_failed")
-        value = json.loads(match.group(1).strip())
+            raise MemoryDigestOutputError("json_parse_failed") from exc
+        try:
+            value = json.loads(match.group(1).strip())
+        except (TypeError, json.JSONDecodeError) as fenced_exc:
+            raise MemoryDigestOutputError("json_parse_failed") from fenced_exc
     if not isinstance(value, dict):
-        raise ValueError("json_schema_invalid:root_not_object")
+        raise MemoryDigestOutputError("json_schema_invalid:root_not_object")
     return value
 
 
@@ -114,7 +124,9 @@ def _call_summarizer(summarizer: Callable[[list[dict[str, str]]], Any], messages
     result = summarizer(messages)
     if inspect.isawaitable(result):
         _close_awaitable(result)
-        raise TypeError("sync_summarizer_returned_awaitable: use build_memory_digest_with_llm_async")
+        raise SyncSummarizerContractError(
+            "sync_summarizer_returned_awaitable: use build_memory_digest_with_llm_async"
+        )
     return result
 
 
@@ -198,43 +210,6 @@ def _collect_source_rows(logs: list[ChatLog]) -> list[dict[str, Any]]:
     return rows
 
 
-def _template_source(path: Any) -> str:
-    try:
-        return "runtime" if str(path).startswith(str(runtime_template_dir())) else "default"
-    except Exception:
-        return "default"
-
-
-def _render_digest_template(template_key: str, values: dict[str, Any], fallback: str) -> tuple[str, dict[str, Any]]:
-    try:
-        template = load_template(template_key)
-        frontmatter = template.frontmatter or {}
-        if str(frontmatter.get("tool_name") or "") != "memory_digest":
-            raise ValueError("template_tool_name_mismatch")
-        if str(frontmatter.get("kind") or "") not in {"task", "tool"}:
-            raise ValueError("template_kind_invalid")
-        rendered = render_scoped_template(template.prompt_key, template.body, values).strip()
-        if not rendered:
-            raise ValueError("template_rendered_empty")
-        return rendered, {
-            "key": template.prompt_key,
-            "path": str(template.path),
-            "source": _template_source(template.path),
-            "sha256": sha256_text(rendered),
-            "version": frontmatter.get("version", ""),
-        }
-    except Exception as exc:
-        logger.warning("memory digest prompt template fallback: key=%s error=%s", template_key, exc)
-        text = fallback.strip()
-        return text, {
-            "key": template_key,
-            "path": "",
-            "source": "fallback",
-            "sha256": sha256_text(text),
-            "version": "",
-        }
-
-
 def build_llm_digest_messages(
     *,
     session_id: str,
@@ -259,42 +234,27 @@ def build_llm_digest_messages(
         "digest_source": source_text,
         "existing_digest_hint": json.dumps(fallback_hint, ensure_ascii=False),
     }
-    system_prompt, system_meta = _render_digest_template(
-        _SYSTEM_TEMPLATE_KEY,
-        values,
-        FALLBACK_MEMORY_DIGEST_SYSTEM_PROMPT,
-    )
-    user_prompt, user_meta = _render_digest_template(
-        _USER_TEMPLATE_KEY,
-        values,
-        (
-            FALLBACK_MEMORY_DIGEST_USER_PROMPT
-            + "\n\n<digest_source>\n"
-            + source_text
-            + "\n</digest_source>"
-        ),
-    )
+    rendered = render_task_pair("memory_digest", values)
+    system_meta = rendered.system
+    user_meta = rendered.user
     prompt_meta = {
         "template": f"{_SYSTEM_TEMPLATE_KEY} + {_USER_TEMPLATE_KEY}",
-        "system_key": system_meta["key"],
-        "system_path": system_meta["path"],
-        "system_source": system_meta["source"],
-        "system_sha256": system_meta["sha256"],
-        "system_version": system_meta["version"],
-        "user_key": user_meta["key"],
-        "user_path": user_meta["path"],
-        "user_source": user_meta["source"],
-        "user_sha256": user_meta["sha256"],
-        "user_version": user_meta["version"],
+        "system_key": system_meta.task_key,
+        "system_path": system_meta.path,
+        "system_source": system_meta.source,
+        "system_sha256": sha256_text(system_meta.content),
+        "system_version": system_meta.version,
+        "user_key": user_meta.task_key,
+        "user_path": user_meta.path,
+        "user_source": user_meta.source,
+        "user_sha256": sha256_text(user_meta.content),
+        "user_version": user_meta.version,
         "source_id": sid,
         "source_type": "date_session",
         "source_range": values["source_range"],
         "message_count": len(source_rows),
     }
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ], prompt_meta
+    return rendered.messages, prompt_meta
 
 
 async def default_llm_memory_digest_summarizer_async(messages: list[dict[str, str]]) -> str:
@@ -316,11 +276,13 @@ async def default_llm_memory_digest_summarizer_async(messages: list[dict[str, st
         enable_thinking=route.get("enable_thinking", "false"),
     )
     if isinstance(response, dict) and response.get("error"):
-        raise RuntimeError(str(response.get("detail") or response.get("error")))
+        raise MemoryDigestModelError(
+            str(response.get("detail") or response.get("error"))
+        )
     try:
         return str(response["choices"][0]["message"].get("content") or "")
-    except Exception as exc:
-        raise RuntimeError("llm_response_missing_content") from exc
+    except (AttributeError, IndexError, KeyError, TypeError) as exc:
+        raise MemoryDigestModelError("llm_response_missing_content") from exc
 
 
 def default_llm_memory_digest_summarizer(messages: list[dict[str, str]]) -> str:
@@ -510,10 +472,12 @@ def _fallback_result(
     status: str,
     error: str = "",
     prompt_meta: dict[str, Any] | None = None,
+    result_status: str | None = None,
 ) -> MemoryDigestBuildResult:
     prompt_meta = prompt_meta or {}
     meta = {
         **fallback.meta,
+        "status": result_status or fallback.meta.get("status") or fallback.status,
         "source_id": prompt_meta.get("source_id") or fallback.meta.get("source_id") or "",
         "source_type": prompt_meta.get("source_type") or fallback.meta.get("source_type") or "date_session",
         "source_range": fallback.meta.get("source_range") or prompt_meta.get("source_range", ""),
@@ -537,10 +501,15 @@ def _fallback_result(
     }
     if error:
         meta["llm_error"] = error[:500]
+    level_contents = (
+        dict(fallback.level_contents)
+        if result_status == "failed"
+        else render_digest_levels(meta)
+    )
     return MemoryDigestBuildResult(
-        status=fallback.status,
+        status=result_status or fallback.status,
         meta=meta,
-        level_contents=render_digest_levels(meta),
+        level_contents=level_contents,
     )
 
 
@@ -566,14 +535,46 @@ def _prepare_llm_digest_context(
 
     source_rows = _collect_source_rows(log_rows)
     if not source_rows:
-        return None, _fallback_result(fallback, status="skipped", error="source_rows_empty")
+        return None, _fallback_result(
+            fallback,
+            status="input_invalid",
+            error="source_rows_empty",
+            result_status="failed",
+        )
 
-    messages, prompt_meta = build_llm_digest_messages(
-        session_id=session_id,
-        digest_date=digest_date,
-        fallback=fallback,
-        source_rows=source_rows,
-    )
+    try:
+        messages, prompt_meta = build_llm_digest_messages(
+            session_id=session_id,
+            digest_date=digest_date,
+            fallback=fallback,
+            source_rows=source_rows,
+        )
+    except TaskCallValueError as exc:
+        logger.warning(
+            "memory digest task input rejected: session_id=%s date=%s error_type=%s",
+            session_id,
+            digest_date,
+            type(exc).__name__,
+        )
+        return None, _fallback_result(
+            fallback,
+            status="input_invalid",
+            error=type(exc).__name__,
+            result_status="failed",
+        )
+    except TaskInvocationError as exc:
+        logger.warning(
+            "memory digest task template rejected: session_id=%s date=%s error_type=%s",
+            session_id,
+            digest_date,
+            type(exc).__name__,
+        )
+        return None, _fallback_result(
+            fallback,
+            status="template_invalid",
+            error=type(exc).__name__,
+            result_status="failed",
+        )
     return _LlmDigestContext(
         fallback=fallback,
         source_rows=source_rows,
@@ -642,6 +643,15 @@ def build_memory_digest_with_llm(
         )
     try:
         raw = _call_summarizer(summarizer, context.messages)
+    except (
+        ConnectionError,
+        TimeoutError,
+        MemoryDigestModelError,
+        SyncSummarizerContractError,
+    ) as exc:
+        logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
+        return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)
+    try:
         return _build_memory_digest_result_from_raw(
             raw,
             context=context,
@@ -649,7 +659,7 @@ def build_memory_digest_with_llm(
             digest_date=digest_date,
             user_id=user_id,
         )
-    except Exception as exc:
+    except MemoryDigestOutputError as exc:
         logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
         return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)
 
@@ -676,6 +686,10 @@ async def build_memory_digest_with_llm_async(
     summarizer = summarizer or default_llm_memory_digest_summarizer_async
     try:
         raw = await _call_summarizer_async(summarizer, context.messages)
+    except (ConnectionError, TimeoutError, MemoryDigestModelError) as exc:
+        logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
+        return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)
+    try:
         return _build_memory_digest_result_from_raw(
             raw,
             context=context,
@@ -683,6 +697,6 @@ async def build_memory_digest_with_llm_async(
             digest_date=digest_date,
             user_id=user_id,
         )
-    except Exception as exc:
+    except MemoryDigestOutputError as exc:
         logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
         return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)

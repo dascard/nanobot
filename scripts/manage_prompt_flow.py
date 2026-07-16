@@ -17,9 +17,13 @@ if str(REPO_ROOT) not in sys.path:
 from core.prompt_v2.flow import runtime_flow_path  # noqa: E402
 from core.prompt_v2.flow_migrations import (  # noqa: E402
     PromptFlowMigrationError,
+    apply_runtime_flow_v2,
+    default_flow_v2_backup_dir,
+    default_flow_v2_plan_dir,
     default_session_guidance_flow_backup_dir,
     list_session_guidance_flow_backups,
     migrate_session_guidance_flow,
+    plan_runtime_flow_v2,
     rollback_session_guidance_flow,
 )
 from core.prompt_v2.flow_storage import (  # noqa: E402
@@ -44,6 +48,15 @@ def _parser() -> argparse.ArgumentParser:
         help="显式选择备份并原子回滚 session_guidance flow",
     )
     rollback.add_argument("--backup-name", required=True, help="严格合法的备份文件名")
+    subparsers.add_parser(
+        "plan",
+        help="生成并持久化 Flow v2 迁移计划，不改写 runtime flow",
+    )
+    apply = subparsers.add_parser(
+        "apply",
+        help="按已生成的 plan_id 原子应用 Flow v2 迁移",
+    )
+    apply.add_argument("--plan-id", required=True, help="plan 命令返回的迁移计划 ID")
     return parser
 
 
@@ -74,6 +87,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     runtime_path = runtime_flow_path()
     backup_dir = default_session_guidance_flow_backup_dir(runtime_path)
+    flow_v2_plan_dir = default_flow_v2_plan_dir(runtime_path)
+    flow_v2_backup_dir = default_flow_v2_backup_dir(runtime_path)
     try:
         if args.command == "check-session-guidance":
             result: object = _check(runtime_path)
@@ -83,13 +98,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                     backup_dir=backup_dir,
                 )
             }
-        else:
+        elif args.command == "rollback-session-guidance":
             restored = rollback_session_guidance_flow(
                 runtime_path,
                 backup_dir=backup_dir,
                 backup_name=args.backup_name,
             )
             result = {"restored": True, "runtime_flow_path": str(restored)}
+        elif args.command == "plan":
+            result = plan_runtime_flow_v2(
+                runtime_path,
+                plan_dir=flow_v2_plan_dir,
+            )
+        else:
+            result = apply_runtime_flow_v2(
+                runtime_path,
+                plan_dir=flow_v2_plan_dir,
+                backup_dir=flow_v2_backup_dir,
+                plan_id=args.plan_id,
+            )
     except (PromptFlowMigrationError, OSError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1

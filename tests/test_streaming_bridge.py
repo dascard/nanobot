@@ -464,10 +464,11 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
             prompt_key=prompt_input.prompt_key,
             prompt_mode=prompt_input.prompt_mode,
             prompt_source="unit",
-            prompt_runtime_path="",
-            prompt_default_path="",
-            prompt_sha256="a" * 64,
-        )
+                prompt_runtime_path="",
+                prompt_default_path="",
+                prompt_sha256="a" * 64,
+                prompt_template_resolutions={},
+            )
 
     monkeypatch.setattr("core.tracing.new_trace_id", lambda: "trace-stream")
     monkeypatch.setattr(

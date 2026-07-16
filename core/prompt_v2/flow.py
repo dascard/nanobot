@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from core.prompt_v2.flow_contract import (
+    FLOW_SCHEMA_VERSION,
+    LIVE_PROMPT_BRANCHES,
+    LIVE_PROMPT_BRANCH_SET,
     RUNTIME_NODE_KEYS,
+    RUNTIME_PLATFORMS,
     reserved_contract_by_node_id,
     reserved_contract_by_runtime_key,
     reserved_contract_by_template_key,
@@ -14,8 +18,8 @@ from core.prompt_v2.flow_contract import (
 from core.prompt_v2.flow_storage import (
     FlowStorageError,
     assert_no_symlink_components,
-    atomic_replace_bytes,
     flow_write_lock,
+    read_regular_bytes,
 )
 from core.prompt_v2.template_loader import default_template_dir, runtime_template_dir
 
@@ -25,12 +29,12 @@ class PromptFlowError(ValueError):
 
 
 CHAT_TYPES = {"group", "private"}
-RUNTIME_PLATFORMS = {"qq", "web"}
 _ANY_PLATFORM = "*"
+_SUPPORTED_FLOW_VERSIONS = frozenset({1, FLOW_SCHEMA_VERSION})
 
 
 DEFAULT_FLOW: dict[str, Any] = {
-    "version": 1,
+    "version": FLOW_SCHEMA_VERSION,
     "nodes": [
         {"id": "base_contract", "type": "template", "label": "system: base contract", "template_key": "chat/main"},
         {"id": "qq_common_policy", "type": "template", "label": "system: QQ platform policy", "template_key": "chat/platform/qq/common", "platforms": ["qq"]},
@@ -51,7 +55,7 @@ DEFAULT_FLOW: dict[str, Any] = {
     "edges": [
         {"from": "base_contract", "to": "qq_common_policy", "platforms": ["qq"]},
         {"from": "base_contract", "to": "group_policy", "chat_types": ["group"], "platforms": ["web"]},
-        {"from": "base_contract", "to": "private_policy", "chat_types": ["private"], "platforms": ["web"]},
+        {"from": "base_contract", "to": "private_policy", "chat_types": ["private"], "platforms": ["web", "internal"]},
         {"from": "qq_common_policy", "to": "group_policy", "chat_types": ["group"], "platforms": ["qq"]},
         {"from": "qq_common_policy", "to": "private_policy", "chat_types": ["private"], "platforms": ["qq"]},
         {"from": "group_policy", "to": "qq_group_policy", "chat_types": ["group"], "platforms": ["qq"]},
@@ -88,7 +92,11 @@ def runtime_flow_path() -> Path:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = read_regular_bytes(path)
+        return json.loads((raw or b"").decode("utf-8"))
+    except (FlowStorageError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PromptFlowError(f"flow 文件不可安全读取: {path}") from exc
 
 
 def _normalize_platform(platform: str) -> str:
@@ -96,6 +104,13 @@ def _normalize_platform(platform: str) -> str:
     if normalized not in RUNTIME_PLATFORMS:
         raise PromptFlowError(f"platform 不支持: {normalized}")
     return normalized
+
+
+def _normalize_flow_version(flow: dict[str, Any]) -> int:
+    raw_version = flow.get("version", 1)
+    if type(raw_version) is not int or raw_version not in _SUPPORTED_FLOW_VERSIONS:
+        raise PromptFlowError(f"flow.version 不支持: {raw_version}")
+    return raw_version
 
 
 def _applies(item: dict[str, Any], chat_type: str, platform: str) -> bool:
@@ -209,6 +224,9 @@ def _validate_reserved_node_identity(node: dict[str, Any]) -> None:
 
 
 def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(flow, dict):
+        raise PromptFlowError("flow 顶层必须是 JSON object")
+    version = _normalize_flow_version(flow)
     nodes = list(flow.get("nodes") or [])
     edges = list(flow.get("edges") or [])
     if not nodes:
@@ -281,7 +299,7 @@ def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
             outgoing_conditions.setdefault(start, []).append((active_chat_types, active_platforms, end))
         normalized_edges.append(edge)
 
-    return {"version": int(flow.get("version") or 1), "nodes": normalized_nodes, "edges": normalized_edges}
+    return {"version": version, "nodes": normalized_nodes, "edges": normalized_edges}
 
 
 def load_flow() -> PromptFlow:
@@ -298,49 +316,49 @@ def load_flow() -> PromptFlow:
     return PromptFlow(validate_flow(DEFAULT_FLOW), default, "built-in")
 
 
-def _runtime_contract_platforms(flow: dict[str, Any]) -> list[str]:
-    platforms = set(RUNTIME_PLATFORMS)
-    for item in [*(flow.get("nodes") or []), *(flow.get("edges") or [])]:
-        values = item.get("platforms")
-        if isinstance(values, str):
-            values = [values]
-        platforms.update(str(value).strip().lower() for value in (values or []) if str(value).strip())
-    return sorted(platforms)
-
-
 def validate_runtime_contract(flow: dict[str, Any]) -> None:
     from types import SimpleNamespace
 
     from core.prompt_v2.audit import audit_prompt_plan
 
-    for chat_type in sorted(CHAT_TYPES):
-        for platform in _runtime_contract_platforms(flow):
-            ordered_nodes = ordered_nodes_for_chat(flow, chat_type, platform=platform)
-            flow_sections = [
-                {
-                    "node_id": str(node.get("id") or ""),
-                    "node_type": str(node.get("type") or ""),
-                    "template_key": str(node.get("template_key") or ""),
-                    "runtime_key": str(node.get("runtime_key") or ""),
-                    "origin": "flow",
-                    "status": "emitted",
-                    "message_indexes": [],
-                }
-                for node in ordered_nodes
-            ]
-            audit = audit_prompt_plan(
-                SimpleNamespace(
-                    chat_type=chat_type,
-                    platform=platform,
-                    flow_sections=flow_sections,
-                ),
-                audit_messages=False,
+    normalized = validate_flow(flow)
+    if normalized["version"] != FLOW_SCHEMA_VERSION:
+        raise PromptFlowError(
+            f"active flow.version 必须为 {FLOW_SCHEMA_VERSION}, "
+            f"got {normalized['version']}"
+        )
+
+    for platform, chat_type in LIVE_PROMPT_BRANCHES:
+        ordered_nodes = ordered_nodes_for_chat(
+            normalized,
+            chat_type,
+            platform=platform,
+        )
+        flow_sections = [
+            {
+                "node_id": str(node.get("id") or ""),
+                "node_type": str(node.get("type") or ""),
+                "template_key": str(node.get("template_key") or ""),
+                "runtime_key": str(node.get("runtime_key") or ""),
+                "origin": "flow",
+                "status": "emitted",
+                "message_indexes": [],
+            }
+            for node in ordered_nodes
+        ]
+        audit = audit_prompt_plan(
+            SimpleNamespace(
+                chat_type=chat_type,
+                platform=platform,
+                flow_sections=flow_sections,
+            ),
+            audit_messages=False,
+        )
+        if not audit.ok:
+            issues = "; ".join(audit.issues)
+            raise PromptFlowError(
+                f"flow 在 chat_type={chat_type}, platform={platform} 下不满足运行契约: {issues}"
             )
-            if not audit.ok:
-                issues = "; ".join(audit.issues)
-                raise PromptFlowError(
-                    f"flow 在 chat_type={chat_type}, platform={platform} 下不满足运行契约: {issues}"
-                )
 
 
 def save_flow(flow: dict[str, Any]) -> dict[str, Any]:
@@ -350,17 +368,39 @@ def save_flow(flow: dict[str, Any]) -> dict[str, Any]:
     payload = (
         json.dumps(normalized, ensure_ascii=False, indent=2) + "\n"
     ).encode("utf-8")
+    from core.prompt_v2.template_baseline import default_template_state_dir
+    from core.prompt_v2.template_migration import TemplateMigrationService
+
+    runtime_root = path.parents[1]
+    configured_runtime_root = runtime_template_dir()
+    if path.absolute() == (configured_runtime_root / "chat" / "flow.json").absolute():
+        migration_service = TemplateMigrationService.from_environment()
+    else:
+        migration_service = TemplateMigrationService(
+            default_dir=default_flow_path().parents[1],
+            runtime_dir=runtime_root,
+            state_dir=default_template_state_dir(runtime_root),
+        )
     with flow_write_lock(path):
-        atomic_replace_bytes(path, payload)
+        migration_service.apply_runtime_change(
+            "chat/flow",
+            target_bytes=payload,
+            modified_by="admin",
+            operation_type="admin-flow-save",
+        )
     return {"saved": True, "runtime_path": str(path), "flow": normalized}
 
 
 def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str, platform: str = "qq") -> list[dict[str, Any]]:
     flow = validate_flow(flow)
     chat_type = str(chat_type or "").strip().lower()
-    platform = _normalize_platform(platform)
     if chat_type not in CHAT_TYPES:
         chat_type = "private"
+    platform = _normalize_platform(platform)
+    if (platform, chat_type) not in LIVE_PROMPT_BRANCH_SET:
+        raise PromptFlowError(
+            f"Prompt live branch 不支持: {platform}/{chat_type}"
+        )
     all_nodes = [
         dict(node)
         for node in flow.get("nodes") or []

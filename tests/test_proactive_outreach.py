@@ -3,7 +3,26 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from core.database import ChatLog, ConversationTurn, Persona, ProactiveOutreachLog
+from core.database import (
+    ChatLog,
+    ConversationTurn,
+    OutboundDeliveryControl,
+    Persona,
+    ProactiveOutreachLog,
+)
+
+
+@pytest.fixture(autouse=True)
+def _seed_proactive_outreach_delivery_control(db_session):
+    db_session.add(OutboundDeliveryControl(
+        source_type="proactive_outreach",
+        mode="legacy_direct",
+        cutover_epoch=0,
+        effective_from=datetime(1970, 1, 1),
+        protocol_version=2,
+        writer_version=0,
+    ))
+    db_session.commit()
 
 
 def test_build_outreach_grounding_includes_persona_recent_chat_and_intent(db_session):
@@ -838,6 +857,9 @@ async def test_run_outreach_due_once_reuses_semantic_key_for_same_due_point(monk
             "reason": "到点问午饭",
             "next_check_at": due_anchor.isoformat(),
             "next_intent": "继续问午饭",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
         }
 
     def fake_generate(grounding, reason):
@@ -924,7 +946,10 @@ async def test_run_outreach_once_updates_existing_pending_schedule_when_judge_sa
 
 
 @pytest.mark.asyncio
-async def test_deliver_outreach_once_marks_sending_before_push(monkeypatch, db_session):
+async def test_deliver_outreach_once_marks_request_boundary_before_push(
+    monkeypatch,
+    db_session,
+):
     from core import proactive_outreach
 
     observed_statuses = []
@@ -954,7 +979,7 @@ async def test_deliver_outreach_once_marks_sending_before_push(monkeypatch, db_s
     )
 
     assert result["status"] == "sent"
-    assert observed_statuses == ["sending"]
+    assert observed_statuses == ["delivering"]
 
 
 @pytest.mark.asyncio
@@ -1228,10 +1253,17 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
 
     stop_event = threading.Event()
     calls = []
+    legacy_drained = False
+
+    async def fake_legacy_drain():
+        nonlocal legacy_drained
+        legacy_drained = True
+        return []
 
     async def fake_due_once(user_id, **kwargs):
-        calls.append((user_id, kwargs))
         stop_event.set()
+        assert legacy_drained is True
+        calls.append((user_id, kwargs))
         return {"status": "pending"}
 
     int_values = {
@@ -1262,6 +1294,12 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
         lambda: {"scheduler-user"},
     )
     monkeypatch.setattr(proactive_outreach, "run_outreach_due_once", fake_due_once)
+    monkeypatch.setattr(
+        proactive_outreach,
+        "drain_due_legacy_proactive_outboxes",
+        fake_legacy_drain,
+        raising=False,
+    )
 
     proactive_outreach.proactive_outreach_scheduler(stop_event)
 
@@ -1276,3 +1314,56 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
             "surge_max_prob": proactive_outreach.DEFAULT_SURGE_MAX_PROB,
         },
     )]
+
+
+def test_disabled_scheduler_uses_delivery_poll_for_legacy_recovery(monkeypatch):
+    from core import proactive_outreach
+
+    class OneCycleEvent:
+        def __init__(self):
+            self.waits = []
+
+        def is_set(self):
+            return bool(self.waits)
+
+        def wait(self, timeout):
+            self.waits.append(timeout)
+            return True
+
+    stop_event = OneCycleEvent()
+    drain_calls = []
+
+    async def fake_legacy_drain():
+        drain_calls.append("drain")
+        return []
+
+    monkeypatch.setattr(
+        proactive_outreach.settings,
+        "get_bool",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        proactive_outreach.settings,
+        "get_int",
+        lambda key, default: (
+            120
+            if key == "proactive_outreach.fallback_interval_min"
+            else default
+        ),
+    )
+    monkeypatch.setattr(
+        proactive_outreach,
+        "drain_due_legacy_proactive_outboxes",
+        fake_legacy_drain,
+    )
+    monkeypatch.setattr(
+        proactive_outreach,
+        "_legacy_drain_poll_interval_seconds",
+        lambda: 1.0,
+        raising=False,
+    )
+
+    proactive_outreach.proactive_outreach_scheduler(stop_event)
+
+    assert drain_calls == ["drain"]
+    assert stop_event.waits == [1.0]

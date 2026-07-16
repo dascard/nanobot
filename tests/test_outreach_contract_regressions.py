@@ -1,9 +1,31 @@
+import hashlib
 import json
 from datetime import datetime, timedelta
 
 import pytest
 
-from core.database import ChatLog, ConversationTurn, ProactiveOutreachLog, User
+from core.database import (
+    ChatLog,
+    ConversationTurn,
+    OutboundDeliveryControl,
+    OutboundGenerationAttempt,
+    OutboundRun,
+    ProactiveOutreachLog,
+    User,
+)
+
+
+@pytest.fixture(autouse=True)
+def _seed_proactive_outreach_delivery_control(db_session):
+    db_session.add(OutboundDeliveryControl(
+        source_type="proactive_outreach",
+        mode="legacy_direct",
+        cutover_epoch=0,
+        effective_from=datetime(1970, 1, 1),
+        protocol_version=2,
+        writer_version=0,
+    ))
+    db_session.commit()
 
 
 def _install_route_response(monkeypatch, body, *, raw_body: bytes | None = None):
@@ -73,6 +95,30 @@ def _model_response(*, content, finish_reason="stop", reasoning_content="模型�
         usage={"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
         raw_response={},
     )
+
+
+_SENSITIVE_GENERATION_ERRORS = (
+    pytest.param(
+        "Authorization: Bearer AUTH-GENERATION-SECRET",
+        "AUTH-GENERATION-SECRET",
+        id="authorization",
+    ),
+    pytest.param(
+        "https://provider.test/fail?token=URL-GENERATION-SECRET",
+        "URL-GENERATION-SECRET",
+        id="credential-url",
+    ),
+    pytest.param(
+        "上游异常 RANDOM-GENERATION-SECRET",
+        "RANDOM-GENERATION-SECRET",
+        id="unkeyed-random",
+    ),
+    pytest.param(
+        "BODY-GENERATION-SECRET" + "x" * 5000,
+        "BODY-GENERATION-SECRET",
+        id="oversized-body",
+    ),
+)
 
 
 @pytest.mark.asyncio
@@ -258,14 +304,15 @@ def test_call_model_route_response_marks_malformed_success_body_as_error(monkeyp
     assert finished[0]["response_status"] == 200
 
 
-def test_call_model_route_response_audits_bounded_raw_body_for_invalid_json(monkeypatch):
+def test_call_model_route_response_omits_raw_body_for_invalid_json(monkeypatch):
     from clients.classifier_client import call_model_route_response
     from core.tracing import LLMRequestTracer
 
+    raw_body = b'{"choices": ['
     _install_route_response(
         monkeypatch,
         {},
-        raw_body=b'{"choices": [',
+        raw_body=raw_body,
     )
     finished = []
     monkeypatch.setattr(
@@ -279,9 +326,13 @@ def test_call_model_route_response_audits_bounded_raw_body_for_invalid_json(monk
 
     assert len(finished) == 1
     assert finished[0]["status"] == "error"
-    assert finished[0]["response"]["raw_body_preview"] == '{"choices": ['
-    assert finished[0]["response"]["raw_body_chars"] == 13
-    assert len(finished[0]["response"]["raw_body_sha256"]) == 64
+    response = finished[0]["response"]
+    assert response["response_body_omitted"] is True
+    assert response["response_body_chars"] == len(raw_body.decode("utf-8"))
+    assert response["response_body_sha256"] == hashlib.sha256(raw_body).hexdigest()
+    assert response["response_body_truncated"] is False
+    assert "raw_body_preview" not in response
+    assert raw_body.decode("utf-8") not in json.dumps(response, ensure_ascii=False)
 
 
 @pytest.mark.parametrize(
@@ -352,6 +403,50 @@ def test_recent_thread_extraction_exposes_truncation_diagnostics():
         "error_type": "model_truncated",
         "finish_reason": "length",
     }
+
+
+@pytest.mark.parametrize("error_text,secret", _SENSITIVE_GENERATION_ERRORS)
+def test_recent_thread_extraction_omits_untrusted_exception_text(
+    error_text,
+    secret,
+):
+    from core.proactive_outreach import extract_recent_threads
+
+    diagnostics = {}
+
+    def failed_model_call(**_kwargs):
+        raise RuntimeError(error_text)
+
+    result = extract_recent_threads(
+        [{"role": "user", "content": "昨天的项目还没做完", "created_at": "now"}],
+        llm_call=failed_model_call,
+        diagnostics=diagnostics,
+    )
+
+    assert result == []
+    assert diagnostics == {
+        "status": "error",
+        "error_type": "model_error",
+    }
+    assert secret not in json.dumps(diagnostics, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("error_text,secret", _SENSITIVE_GENERATION_ERRORS)
+def test_judge_outreach_omits_untrusted_exception_text(error_text, secret):
+    from core.proactive_outreach import judge_outreach
+
+    def failed_model_call(**_kwargs):
+        raise RuntimeError(error_text)
+
+    result = judge_outreach(
+        {"user_id": "judge-runtime-error", "recent_messages": []},
+        now=datetime(2026, 7, 10, 12, 0, 0),
+        model_call=failed_model_call,
+    )
+
+    assert result["error_type"] == "model_error"
+    assert result["reason"] == "主动外呼 Judge 调用失败"
+    assert secret not in json.dumps(result, ensure_ascii=False)
 
 
 @pytest.mark.parametrize(
@@ -521,8 +616,79 @@ async def test_generator_truncation_error_type_reaches_normal_candidate_result(d
         user_id="generator-truncated-normal"
     ).all()
     assert len(rows) == 1
-    assert rows[0].status == "evaluation_error"
-    assert "generator:model_truncated" in rows[0].judge_reason
+    assert rows[0].status == "failed"
+    run = db_session.query(OutboundRun).one()
+    attempt = db_session.query(OutboundGenerationAttempt).one()
+    assert rows[0].outbound_run_id == run.id
+    assert run.status == "failed"
+    assert run.failure_type == "model_truncated"
+    assert attempt.status == "failed"
+    assert attempt.error_type == "model_truncated"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_text,secret", _SENSITIVE_GENERATION_ERRORS)
+async def test_generator_runtime_error_uses_fixed_diagnostic_everywhere(
+    error_text,
+    secret,
+    db_session,
+):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 10, 12, 0, 0)
+
+    class UntrustedGeneratorError(RuntimeError):
+        error_type = "attacker_controlled_type"
+
+    def failed_generator(*_args, **_kwargs):
+        raise UntrustedGeneratorError(error_text)
+
+    result = await proactive_outreach.run_outreach_once(
+        "generator-runtime-error",
+        db=db_session,
+        now=now,
+        max_silence_min=999999,
+        thread_extractor=lambda _messages: [],
+        judge_fn=lambda *_args, **_kwargs: {
+            "should_reach_out": True,
+            "reason": "有具体话题",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        },
+        generator_fn=failed_generator,
+    )
+
+    row = db_session.query(ProactiveOutreachLog).one()
+    run = db_session.query(OutboundRun).one()
+    attempt = db_session.query(OutboundGenerationAttempt).one()
+    combined = json.dumps(
+        {
+            "result": result,
+            "run": {
+                "failure_type": run.failure_type,
+                "failure_summary": run.failure_summary,
+            },
+            "attempt": {
+                "error_type": attempt.error_type,
+                "error_summary": attempt.error_summary,
+            },
+            "grounding": json.loads(row.grounding_json),
+        },
+        ensure_ascii=False,
+    )
+
+    assert result["status"] == "generation_error"
+    assert result["error_type"] == "generation_error"
+    assert result["reason"] == "主动外呼正文生成失败"
+    assert run.failure_type == "generation_error"
+    assert run.failure_summary == "主动外呼正文生成失败"
+    assert attempt.error_type == "generation_error"
+    assert attempt.error_summary == "主动外呼正文生成失败"
+    assert secret not in combined
+    assert "attacker_controlled_type" not in combined
 
 
 @pytest.mark.asyncio
@@ -577,6 +743,74 @@ async def test_forced_generator_truncation_uses_safe_fallback_once(db_session):
     grounding = json.loads(row.grounding_json)
     assert grounding["forced_fallback"]["error_type"] == "model_truncated"
     assert "服务端安全兜底" in row.judge_reason
+    attempt = db_session.query(OutboundGenerationAttempt).one()
+    assert attempt.status == "failed"
+    assert attempt.error_type == "model_truncated"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_text,secret", _SENSITIVE_GENERATION_ERRORS)
+async def test_forced_generator_contract_error_uses_fixed_diagnostic_everywhere(
+    error_text,
+    secret,
+    db_session,
+):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    db_session.add(ProactiveOutreachLog(
+        user_id="forced-contract-error",
+        idempotency_key="outreach:forced-contract-error:pending",
+        status="pending",
+        created_at=now - timedelta(hours=49),
+        next_check_at=now,
+    ))
+    db_session.commit()
+
+    def failed_generator(*_args, **_kwargs):
+        raise proactive_outreach.OutreachModelContractError(
+            error_text,
+            error_type="model_truncated",
+        )
+
+    result = await proactive_outreach.run_outreach_once(
+        "forced-contract-error",
+        db=db_session,
+        now=now,
+        max_silence_min=48 * 60,
+        thread_extractor=lambda _messages: [],
+        generator_fn=failed_generator,
+        publisher=lambda *_args: True,
+    )
+
+    row = db_session.query(ProactiveOutreachLog).filter_by(status="sent").one()
+    run = db_session.get(OutboundRun, row.outbound_run_id)
+    attempt = db_session.query(OutboundGenerationAttempt).one()
+    combined = json.dumps(
+        {
+            "result": result,
+            "run": {
+                "failure_type": run.failure_type,
+                "failure_summary": run.failure_summary,
+            },
+            "attempt": {
+                "error_type": attempt.error_type,
+                "error_summary": attempt.error_summary,
+            },
+            "grounding": json.loads(row.grounding_json),
+        },
+        ensure_ascii=False,
+    )
+
+    assert result["status"] == "sent"
+    assert attempt.status == "failed"
+    assert attempt.error_type == "model_truncated"
+    assert attempt.error_summary == "主动外呼正文生成被截断"
+    assert json.loads(row.grounding_json)["forced_fallback"] == {
+        "error_type": "model_truncated",
+        "reason": "主动外呼正文生成被截断",
+    }
+    assert secret not in combined
 
 
 @pytest.mark.asyncio
@@ -826,7 +1060,12 @@ async def test_candidate_delivery_reuses_same_key_from_cancelled_row(
     db_session.expire_all()
     rows = db_session.query(ProactiveOutreachLog).filter_by(user_id=user_id).all()
     expected_message = "研究型候选正文" if outreach_kind == "research" else "普通候选正文"
-    assert result == {"status": "sent", "log_id": old_row.id, "forced": False}
+    assert result["status"] == "sent"
+    assert result["log_id"] == old_row.id
+    assert result["forced"] is False
+    assert result["deduplicated"] is False
+    assert isinstance(result["run_id"], int)
+    assert isinstance(result["outbox_id"], int)
     assert published == [("private", user_id, expected_message)]
     assert len(rows) == 1
     assert rows[0].status == "sent"
@@ -1387,9 +1626,7 @@ async def test_unknown_publisher_outcome_is_ambiguous_and_same_key_is_not_republ
         idempotency_key="outreach:unknown-publish"
     ).one()
     assert row.status == "ambiguous"
-    assert json.loads(row.grounding_json)["publish_outcome_unknown"][
-        "reason"
-    ] == "publisher 未返回确定结果"
+    assert "publish_outcome_unknown" not in json.loads(row.grounding_json)
 
 
 @pytest.mark.asyncio

@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.common_auth import verify_token
 from core.database import get_db
-from core.time_utils import db_now_naive
+from core.outbound_delivery import OutboundFencingError, OutboundSafetyError
+from core.scheduled_task_outbound import (
+    ScheduledTaskNotFoundError,
+    cancel_scheduled_task_deliveries,
+    enqueue_scheduled_task_occurrence,
+)
 
 
 logger = logging.getLogger("nanobot.routes")
@@ -61,9 +66,17 @@ def list_scheduled_tasks(
             "id": t.id,
             "name": t.name,
             "cron": t.cron_expr,
-            "target": f"{t.target_type}/{t.target_id}",
+            "target_type": t.target_type,
+            "target_configured": bool(str(t.target_id or "").strip()),
             "enabled": t.enabled,
             "last_run": t.last_run_at.isoformat() if t.last_run_at else None,
+            "last_attempt_at": (
+                t.last_attempt_at.isoformat() if t.last_attempt_at else None
+            ),
+            "last_success_at": (
+                t.last_success_at.isoformat() if t.last_success_at else None
+            ),
+            "delivery_status": t.delivery_status,
         }
         for t in tasks
     ]
@@ -82,6 +95,15 @@ def update_scheduled_task(
     t = db.query(ST).filter(ST.id == task_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Task not found")
+    cancellation = cancel_scheduled_task_deliveries(
+        db,
+        task=t,
+        reason_type="task_updated",
+        safe_summary="任务定义已修改",
+    )
+    if cancellation.unsafe:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="任务仍有投递中或结果不确定记录")
     t.name = req.name
     t.cron_expr = req.cron_expr
     t.target_type = req.target_type
@@ -103,53 +125,69 @@ def toggle_scheduled_task(
     t = db.query(ST).filter(ST.id == task_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Task not found")
+    cancellation = cancel_scheduled_task_deliveries(
+        db,
+        task=t,
+        reason_type="task_toggled",
+        safe_summary="任务启停状态已修改",
+    )
+    if cancellation.unsafe:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="任务仍有投递中或结果不确定记录")
     t.enabled = 0 if t.enabled else 1
     db.commit()
     return {"status": "ok", "enabled": bool(t.enabled)}
 
 
-@router.post("/tasks/{task_id}/run")
+@router.post("/tasks/{task_id}/run", status_code=status.HTTP_202_ACCEPTED)
 async def run_scheduled_task_now(
     task_id: int,
+    idempotency_key: str = Header(
+        ...,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=512,
+    ),
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),
 ):
-    """立即执行指定定时任务（生成内容并推送）。"""
-    from core.daily_digest import _generate_task_message, push_envelope_to_qq
-    from core.database import ScheduledTask as ST
-    from core.message_envelope import build_chat_response_envelope
+    """幂等登记一次手动运行；生成后先持久化再投递。"""
+    normalized_key = idempotency_key.strip()
+    if not normalized_key:
+        raise HTTPException(status_code=422, detail="Idempotency-Key 不能为空")
+    from core import database
 
-    t = db.query(ST).filter(ST.id == task_id).first()
-    if not t:
-        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        result = await enqueue_scheduled_task_occurrence(
+            db,
+            task_id=task_id,
+            trigger_type="manual",
+            manual_idempotency_key=normalized_key,
+            session_factory=database.SessionLocal,
+        )
+    except ScheduledTaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Task not found") from exc
+    except (OutboundFencingError, OutboundSafetyError) as exc:
+        raise HTTPException(status_code=409, detail="任务当前不可安全执行") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="幂等键或任务参数无效") from exc
 
-    logger.info("Manual run: %s", t.name)
-    content = await _generate_task_message(t)
-    if not content:
-        raise HTTPException(status_code=500, detail="LLM returned no content")
-
-    envelope = build_chat_response_envelope(
-        status="ok",
-        answer=content,
-        meta={
-            "platform": "qq",
-            "chat_type": "scheduled_task",
-            "task_id": t.id,
-            "task_name": t.name,
-            "target_type": t.target_type,
-            "target_id": t.target_id,
-        },
+    if result.status == "failed" and result.outbox_id is None:
+        raise HTTPException(status_code=502, detail="任务内容生成失败")
+    if result.status == "blocked":
+        raise HTTPException(status_code=503, detail="投递通道当前不可用")
+    logger.info(
+        "Manual scheduled task accepted task_id=%s run_id=%s status=%s",
+        task_id,
+        result.run_id,
+        result.status,
     )
-    ok = await push_envelope_to_qq(t.target_type, t.target_id, envelope)
-    if ok:
-        t.last_run_at = db_now_naive()
-        db.commit()
-        return {
-            "status": "ok",
-            "content": content[:200],
-            "target": f"{t.target_type}/{t.target_id}",
-        }
-    raise HTTPException(status_code=502, detail="Push to QQ failed")
+    return {
+        "status": result.status,
+        "run_id": result.run_id,
+        "outbox_id": result.outbox_id,
+        "deduplicated": result.deduplicated,
+    }
 
 
 @router.delete("/tasks/{task_id}")
@@ -164,6 +202,15 @@ def delete_scheduled_task(
     t = db.query(ST).filter(ST.id == task_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Task not found")
+    cancellation = cancel_scheduled_task_deliveries(
+        db,
+        task=t,
+        reason_type="task_deleted",
+        safe_summary="任务已删除",
+    )
+    if cancellation.unsafe:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="任务仍有投递中或结果不确定记录")
     db.delete(t)
     db.commit()
     return {"status": "ok"}

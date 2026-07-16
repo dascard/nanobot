@@ -6,6 +6,24 @@ from dataclasses import dataclass
 from typing import Literal
 
 
+FLOW_SCHEMA_VERSION = 2
+LIVE_PROMPT_BRANCHES: tuple[tuple[str, str], ...] = (
+    ("qq", "group"),
+    ("qq", "private"),
+    ("web", "group"),
+    ("web", "private"),
+    ("internal", "private"),
+)
+LIVE_PROMPT_BRANCH_SET = frozenset(LIVE_PROMPT_BRANCHES)
+RUNTIME_PLATFORMS = frozenset(platform for platform, _chat_type in LIVE_PROMPT_BRANCHES)
+
+
+def is_live_prompt_branch(platform: str, chat_type: str) -> bool:
+    """判断平台与会话类型是否属于受审计的在线分支。"""
+
+    return (str(platform), str(chat_type)) in LIVE_PROMPT_BRANCH_SET
+
+
 RUNTIME_NODE_KEYS = frozenset(
     {
         "runtime_context",

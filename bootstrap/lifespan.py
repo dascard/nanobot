@@ -67,7 +67,7 @@ async def lifespan(app: Any):
     app.state.new_api_session = new_api_session
 
     if not testing:
-        run_startup_network_check(logger)
+        await run_startup_network_check(logger, session=new_api_session)
         app.state.bridge = await init_bridge()
         logger.info("KT Agent initialized via bridge.")
     else:

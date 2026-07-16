@@ -301,6 +301,7 @@ from api.admin.tool_routes import (
 )
 from api.admin.web_search_routes import router as web_search_router
 from api.admin.proactive_outreach_routes import router as proactive_outreach_router
+from api.admin.outbound_delivery_routes import router as outbound_delivery_router
 
 logger = logging.getLogger("nanobot.admin")
 router = APIRouter(prefix="/api/v1/admin")
@@ -319,6 +320,7 @@ router.include_router(tool_router)
 router.include_router(model_router)
 router.include_router(web_search_router)
 router.include_router(proactive_outreach_router)
+router.include_router(outbound_delivery_router)
 router.include_router(reply_router)
 router.include_router(eval_router)
 router.include_router(trace_router)
@@ -588,18 +590,19 @@ def db_vacuum(request: Request, db: Session = Depends(get_db), _auth=Depends(ver
 @router.get("/settings")
 def list_settings(_auth=Depends(verify_admin)):
     from core.config_registry import SETTING_DEFS
-    from core.settings_service import settings
+    from core.settings_service import serialize_resolved_setting, settings
 
-    values = settings.all_values()
+    values = settings.all_resolved()
     result = []
     for key, defn in sorted(SETTING_DEFS.items(), key=lambda x: x[1].category + x[0]):
         if defn.category == "web_search":
             continue
-        val = values.get(key, defn.default)
+        resolved = values[key]
         result.append({
-            "key": key, "value": None if defn.sensitive else val,
-            "display_value": "****" if defn.sensitive else str(val),
-            "default": defn.default, "value_type": defn.value_type,
+            "key": key,
+            **serialize_resolved_setting(defn, resolved),
+            "default": None if defn.sensitive else defn.default,
+            "value_type": defn.value_type,
             "category": defn.category, "description": defn.description,
             "restart_required": defn.restart_required,
             "dangerous": defn.dangerous, "sensitive": defn.sensitive,
@@ -611,9 +614,10 @@ def list_settings(_auth=Depends(verify_admin)):
 @router.put("/settings/{key:path}")
 def update_setting(key: str, body: dict, request: Request, db: Session = Depends(get_db),
                    _auth=Depends(verify_admin)):
-    from core.config_registry import SETTING_DEFS
-    from core.settings_service import settings
+    from core.config_registry import SETTING_DEFS, canonical_setting_key
+    from core.settings_service import serialize_resolved_setting, settings
 
+    key = canonical_setting_key(key)
     defn = SETTING_DEFS.get(key)
     if not defn:
         raise HTTPException(400, f"Unknown setting: {key}")
@@ -652,27 +656,51 @@ def update_setting(key: str, body: dict, request: Request, db: Session = Depends
     audit_detail = _setting_audit_detail(val, sensitive=defn.sensitive)
     _audit(db, "update_setting", "setting", key, audit_detail, ip_address=_client_ip(request))
     settings.invalidate()
-    return {"key": key, "value": val, "restart_required": defn.restart_required,
-            "version": settings.version}
+    resolved = settings.get_resolved(key)
+    return {
+        "key": key,
+        **serialize_resolved_setting(defn, resolved),
+        "restart_required": defn.restart_required,
+        "version": settings.version,
+    }
 
 
 @router.post("/settings/{key:path}/reset")
 def reset_setting(key: str, request: Request, db: Session = Depends(get_db),
                   _auth=Depends(verify_admin)):
-    from core.config_registry import SETTING_DEFS
-    from core.settings_service import settings
+    from core.config_registry import (
+        LEGACY_SETTING_ALIASES,
+        SETTING_DEFS,
+        canonical_setting_key,
+    )
+    from core.settings_service import serialize_resolved_setting, settings
 
+    key = canonical_setting_key(key)
     defn = SETTING_DEFS.get(key)
     if not defn:
         raise HTTPException(400, f"Unknown setting: {key}")
-    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-    if row:
-        db.delete(row)
+    keys_to_reset = {key}
+    alias = LEGACY_SETTING_ALIASES.get(key)
+    if alias is not None:
+        keys_to_reset.add(alias.key)
+    rows = (
+        db.query(SystemSetting)
+        .filter(SystemSetting.key.in_(sorted(keys_to_reset)))
+        .all()
+    )
+    if rows:
+        for row in rows:
+            db.delete(row)
         db.commit()
         _audit(db, "reset_setting", "setting", key, ip_address=_client_ip(request))
     settings.invalidate()
-    return {"key": key, "value": defn.default, "reset_to": "default",
-            "version": settings.version}
+    resolved = settings.get_resolved(key)
+    return {
+        "key": key,
+        **serialize_resolved_setting(defn, resolved),
+        "reset_to": resolved.source,
+        "version": settings.version,
+    }
 
 
 @router.post("/settings/reload")

@@ -56,10 +56,12 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     )
     from core.database import Persona
     from core.identity import is_super_user_id
-    from core.prompt_v2.audit import PromptAuditError
     from core.prompt_v2 import compiler as prompt_compiler
+    from core.prompt_v2.audit import PromptAuditError
     from core.prompt_v2.flow import PromptFlowError
     from core.prompt_v2.schema import PromptCompileRequest
+    from core.prompt_v2.template_baseline import TemplateBaselineError
+    from core.prompt_v2.template_resolution import build_template_trace_fields
     from core.session_guidance import (
         SessionGuidanceValidationError,
         normalize_session_guidance,
@@ -207,7 +209,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
             ),
             strict_audit=True,
         )
-    except (PromptAuditError, PromptFlowError) as exc:
+    except (PromptAuditError, PromptFlowError, TemplateBaselineError) as exc:
         raise HTTPException(
             status_code=400,
             detail=_redact_guidance_from_error(str(exc), session_guidance.text),
@@ -227,6 +229,8 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         {"name": name, "enabled": bool(enabled.get(name, True))}
         for name in sorted(enabled.keys())
     ]
+    template_resolutions = plan.template_resolutions
+    template_trace_fields = build_template_trace_fields(template_resolutions)
     return {
         "engine": "prompt",
         "chat_type": chat_type,
@@ -240,10 +244,10 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         "session_guidance_updated_at": _iso(session_guidance.updated_at),
         "prompt_key": plan.prompt_key,
         "prompt_mode": "prompt",
-        "prompt_source": "Prompt Runtime",
-        "prompt_runtime_path": plan.debug.get("template_path", ""),
-        "prompt_default_path": plan.debug.get("template_path", ""),
+        **template_trace_fields,
+        "template_resolutions": template_resolutions,
         "prompt_sha256": plan.prompt_sha256,
+        "request_prompt_sha256": plan.prompt_sha256,
         "message_token_estimate": plan.message_token_estimate,
         "tool_schema_token_estimate": plan.tool_schema_token_estimate,
         "token_estimate": plan.token_estimate,

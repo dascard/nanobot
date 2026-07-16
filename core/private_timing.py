@@ -2,6 +2,7 @@
 
 import logging
 import re
+import urllib.error
 from dataclasses import asdict, dataclass, field
 
 from core.timing_score import TimingDecision, TimingModelHint, decide_timing
@@ -232,8 +233,12 @@ class PrivateTimingGate:
             return d
         except asyncio.TimeoutError:
             logger.warning("[PrivateDecision] timeout user=%s", user_id)
-        except Exception as e:
-            logger.warning("[PrivateDecision] failed user=%s: %s", user_id, e)
+        except (ConnectionError, urllib.error.URLError) as exc:
+            logger.warning(
+                "[PrivateDecision] model unavailable user=%s error_type=%s",
+                user_id,
+                type(exc).__name__,
+            )
 
         if _looks_transport_only(text, has_files):
             self.stats["no_reply"] += 1

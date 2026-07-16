@@ -1125,60 +1125,26 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
 
 @router.post("/models/health-check")
 async def model_health_check(_auth=Depends(verify_admin)):
-    """连通性探测：对每个配置的 API 端点做 GET /models，返回可达性、可用性、延迟。"""
-    import time
+    """探测三个实际模型路由，返回结构化可达性与可用性。"""
     import aiohttp
-    from core.settings_service import settings
-    from config import (
-        NEW_API_BASE_URL, NEW_API_KEY,
-        CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
+    from clients import classifier_client
+    from core import model_route_health
+
+    targets = (
+        ("new_api", "reply"),
+        ("classifier", "timing_gate"),
+        ("image_summary", "sticker_describe"),
     )
-
-    new_api_base = str(settings.get("new_api.base_url") or NEW_API_BASE_URL or "")
-    new_api_key = str(NEW_API_KEY or "")
-    classifier_url = str(settings.get("model.route.timing_gate") or CLASSIFIER_API_URL or "")
-    image_url = str(settings.get("model.route.sticker_describe") or IMAGE_SUMMARY_API_URL or "")
-
-    # (name, url, auth_header_or_none)
-    targets: list[tuple[str, str, dict | None]] = [
-        ("new_api", new_api_base, {"Authorization": f"Bearer {new_api_key}"} if new_api_key else None),
-        ("classifier", classifier_url, None),
-        ("image_summary", image_url, None),
-    ]
-
-    results = {}
+    results: dict[str, dict[str, object]] = {}
     async with aiohttp.ClientSession() as session:
-        for name, url, headers in targets:
-            if not url:
-                results[name] = {"reachable": False, "usable": False,
-                                 "latency_ms": 0, "error": "not configured"}
-                continue
-            start = time.monotonic()
+        for name, route_key in targets:
             try:
-                async with session.get(
-                    f"{url.rstrip('/')}/models",
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    latency = (time.monotonic() - start) * 1000
-                    ok = 200 <= resp.status < 300
-                    results[name] = {
-                        "reachable": True,
-                        "usable": ok,
-                        "latency_ms": round(latency, 1),
-                        "status": resp.status,
-                        "auth_error": resp.status in (401, 403),
-                        "url": url,
-                    }
-            except TimeoutError:
-                latency = (time.monotonic() - start) * 1000
-                results[name] = {"reachable": False, "usable": False,
-                                 "latency_ms": round(latency, 1),
-                                 "error": "timeout (10s)", "url": url}
-            except Exception as e:
-                latency = (time.monotonic() - start) * 1000
-                results[name] = {"reachable": False, "usable": False,
-                                 "latency_ms": round(latency, 1),
-                                 "error": str(e)[:200], "url": url}
+                route = classifier_client.resolve_model_route(route_key)
+                health = await model_route_health.probe_model_route(route, session)
+            except Exception:
+                health = model_route_health.ModelRouteHealth(
+                    "network_error", False, False, None, 0
+                )
+            results[name] = health.as_dict()
 
     return {"endpoints": results}
