@@ -7,6 +7,7 @@ import errno
 import json
 import logging
 import math
+import os
 import re
 import socket
 import time
@@ -19,6 +20,25 @@ from typing import Any, Literal
 import aiohttp
 
 logger = logging.getLogger("nanobot.outbound_transport")
+
+
+class QQPushConfigurationError(ValueError):
+    """QQ push 配置无效，异常不得包含配置原值。"""
+
+
+def resolve_qq_push_token(
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    source = os.environ if environ is None else environ
+    raw_token = str(source.get("NANOBOT_PUSH_TOKEN") or "")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in raw_token):
+        raise QQPushConfigurationError(
+            "NANOBOT_PUSH_TOKEN 包含非法控制字符"
+        )
+    token = raw_token.strip(" ")
+    if not token:
+        raise QQPushConfigurationError("NANOBOT_PUSH_TOKEN 未配置")
+    return token
 
 
 def _available_aiohttp_exception_types(
@@ -381,6 +401,7 @@ async def deliver_qq_push_with_session(
     session: aiohttp.ClientSession,
     *,
     push_url: str,
+    push_token: str,
     target_type: str,
     target_id: str,
     message: str,
@@ -390,6 +411,7 @@ async def deliver_qq_push_with_session(
 ) -> DeliveryOutcome:
     """发送一次 QQ push，并返回不含请求敏感数据的结构化结果。"""
 
+    token = resolve_qq_push_token({"NANOBOT_PUSH_TOKEN": push_token})
     if (
         not isinstance(response_body_limit_bytes, int)
         or isinstance(response_body_limit_bytes, bool)
@@ -408,6 +430,7 @@ async def deliver_qq_push_with_session(
     try:
         async with session.post(
             push_url,
+            headers={"Authorization": f"Bearer {token}"},
             json={
                 "target_type": target_type,
                 "target_id": target_id,

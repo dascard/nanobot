@@ -27,7 +27,7 @@ from core.outbound_delivery import (
     mark_delivery_request_started,
     settle_delivery_attempt,
 )
-from core.outbound_transport import DeliveryOutcome
+from core.outbound_transport import DeliveryOutcome, resolve_qq_push_token
 from core.qq_outbound_renderer import render_qq_outbound_envelope
 
 
@@ -62,6 +62,7 @@ class OutboundWorkerConfig:
     """独立 worker 的进程级只读配置。"""
 
     push_url: str = field(repr=False)
+    push_token: str = field(repr=False)
     push_timeout_seconds: float
     endpoint_config_revision: str
     batch_size: int = DEFAULT_BATCH_SIZE
@@ -74,6 +75,11 @@ class OutboundWorkerConfig:
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("QQBOT_PUSH_URL 必须是有效的 HTTP(S) URL")
         object.__setattr__(self, "push_url", push_url)
+
+        push_token = resolve_qq_push_token(
+            {"NANOBOT_PUSH_TOKEN": self.push_token}
+        )
+        object.__setattr__(self, "push_token", push_token)
 
         revision = str(self.endpoint_config_revision or "").strip()
         if not revision or len(revision) > 128:
@@ -114,6 +120,7 @@ class OutboundWorkerConfig:
         source = os.environ if environ is None else environ
         return cls(
             push_url=source.get("QQBOT_PUSH_URL", DEFAULT_PUSH_URL),
+            push_token=resolve_qq_push_token(source),
             push_timeout_seconds=_env_float(
                 source,
                 "QQBOT_PUSH_TIMEOUT",

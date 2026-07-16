@@ -565,6 +565,7 @@ async def _deliver_legacy_leaf(
             return await deliver_qq_push_with_session(
                 http_session,
                 push_url=request.push_url,
+                push_token=resolved_worker_config.push_token,
                 target_type=request.target_type,
                 target_id=request.target_id,
                 message=request.message,
@@ -724,6 +725,7 @@ async def drain_due_legacy_scheduled_task_outboxes(
             return await deliver_qq_push_with_session(
                 http_session,
                 push_url=request.push_url,
+                push_token=resolved_worker.push_token,
                 target_type=request.target_type,
                 target_id=request.target_id,
                 message=request.message,

@@ -27,6 +27,7 @@ from core.outbound_transport import (
     DeliveryOutcome,
     deliver_qq_push_with_session,
     delivery_outcome_to_legacy,
+    resolve_qq_push_token,
 )
 from core.safe_diagnostics import safe_response_summary
 from core.scheduled_task_outbound import (
@@ -774,6 +775,7 @@ async def push_to_qq_outcome_with_session(
     return await deliver_qq_push_with_session(
         session,
         push_url=QQBOT_PUSH_URL,
+        push_token=resolve_qq_push_token(),
         target_type=target_type,
         target_id=target_id,
         message=message,

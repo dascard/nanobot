@@ -109,6 +109,7 @@ async def _deliver(
     outcome = await deliver_qq_push_with_session(
         session,
         push_url=kwargs.pop("push_url", "http://qq-push.test/nanobot/push"),
+        push_token=kwargs.pop("push_token", "push-token-test-sentinel"),
         target_type=kwargs.pop("target_type", "private"),
         target_id=kwargs.pop("target_id", "target-1"),
         message=kwargs.pop("message", "测试消息"),
@@ -408,6 +409,82 @@ async def test_post_disables_redirect_following():
 
 
 @pytest.mark.asyncio
+async def test_qq_push_sends_dedicated_bearer_header():
+    token = "push-token-header-sentinel"
+
+    outcome, session = await _deliver(
+        _FakeResponse(200),
+        push_token=token,
+    )
+
+    assert outcome.category == "success"
+    assert session.calls[0][1]["headers"] == {
+        "Authorization": f"Bearer {token}",
+    }
+
+
+@pytest.mark.parametrize("codepoint", [*range(0x20), 0x7F])
+def test_push_token_resolver_rejects_ascii_control_characters(codepoint):
+    from core.outbound_transport import (
+        QQPushConfigurationError,
+        resolve_qq_push_token,
+    )
+
+    token = f"push-secret-{chr(codepoint)}-sentinel"
+
+    with pytest.raises(QQPushConfigurationError) as exc_info:
+        resolve_qq_push_token({"NANOBOT_PUSH_TOKEN": token})
+
+    assert str(exc_info.value) == "NANOBOT_PUSH_TOKEN 包含非法控制字符"
+    assert "push-secret" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "control",
+    ["\r", "\n", "\t", "\x7f"],
+    ids=["cr", "lf", "tab", "del"],
+)
+@pytest.mark.parametrize("position", ["leading", "trailing", "middle"])
+def test_push_token_resolver_rejects_control_characters_at_every_position(
+    control,
+    position,
+):
+    from core.outbound_transport import (
+        QQPushConfigurationError,
+        resolve_qq_push_token,
+    )
+
+    marker = "push-token-position-sentinel"
+    tokens = {
+        "leading": control + marker,
+        "trailing": marker + control,
+        "middle": "push-token" + control + "position-sentinel",
+    }
+
+    with pytest.raises(QQPushConfigurationError) as exc_info:
+        resolve_qq_push_token({"NANOBOT_PUSH_TOKEN": tokens[position]})
+
+    assert str(exc_info.value) == "NANOBOT_PUSH_TOKEN 包含非法控制字符"
+    assert "push-token" not in repr(exc_info.value)
+    assert "position-sentinel" not in repr(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_invalid_push_token_never_enters_exception_or_logs(caplog):
+    from core.outbound_transport import QQPushConfigurationError
+
+    token_marker = "invalid-push-token-log-sentinel"
+    token = f"{token_marker}\x00suffix"
+
+    with caplog.at_level(logging.WARNING, logger="nanobot.outbound_transport"):
+        with pytest.raises(QQPushConfigurationError) as exc_info:
+            await _deliver(_FakeResponse(200), push_token=token)
+
+    combined = repr(exc_info.value) + "\n" + caplog.text
+    assert token_marker not in combined
+
+
+@pytest.mark.asyncio
 async def test_response_body_stops_at_exact_byte_limit_without_text_call():
     response = _FakeResponse(
         400,
@@ -593,16 +670,23 @@ async def test_network_exception_classification(exc, category, phase, error_type
 @pytest.mark.asyncio
 async def test_transport_exception_text_never_enters_outcome_or_logs(caplog):
     message_secret = "exception-message-body-sentinel"
+    push_token_secret = "push-token-exception-sentinel"
     exc = RuntimeError("remote echoed " + message_secret)
 
     with caplog.at_level(logging.WARNING, logger="nanobot.outbound_transport"):
-        outcome, _ = await _deliver(exc, message=message_secret)
+        outcome, _ = await _deliver(
+            exc,
+            message=message_secret,
+            push_token=push_token_secret,
+        )
 
     assert outcome.category == "ambiguous"
     assert outcome.error_type == "transport_error"
     assert outcome.safe_summary == "出站传输失败"
     assert message_secret not in repr(outcome)
     assert message_secret not in caplog.text
+    assert push_token_secret not in repr(outcome)
+    assert push_token_secret not in caplog.text
 
 
 @pytest.mark.asyncio

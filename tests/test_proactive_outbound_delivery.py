@@ -75,6 +75,7 @@ def _file_session_factory(tmp_path, name: str, *, mode: str = "outbox_active"):
 def _worker_config() -> OutboundWorkerConfig:
     return OutboundWorkerConfig(
         push_url="http://qq-push.test/nanobot/push",
+        push_token="push-token-proactive-helper-sentinel",
         push_timeout_seconds=1.0,
         endpoint_config_revision=CONFIG_REVISION,
         batch_size=10,
@@ -192,6 +193,10 @@ async def test_local_naive_occurrence_is_converted_before_cutover_routing(
     ))
     db_session.commit()
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.setenv(
+        "NANOBOT_PUSH_TOKEN",
+        "push-token-proactive-cutover-sentinel",
+    )
     published = []
 
     async def publisher(*args):
@@ -533,6 +538,10 @@ async def test_expired_generation_owner_is_fenced_and_takeover_uses_next_attempt
     from core import proactive_outreach
 
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.setenv(
+        "NANOBOT_PUSH_TOKEN",
+        "push-token-proactive-takeover-sentinel",
+    )
     engine, factory = _file_session_factory(
         tmp_path,
         "proactive-generation-takeover.db",
@@ -1334,6 +1343,10 @@ async def test_legacy_mode_calls_publisher_only_after_durable_request_boundary(
 ):
     _seed_control(db_session, mode="legacy_direct")
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.setenv(
+        "NANOBOT_PUSH_TOKEN",
+        "push-token-proactive-publisher-sentinel",
+    )
     factory = sessionmaker(
         autocommit=False,
         autoflush=False,
@@ -1490,9 +1503,13 @@ async def test_legacy_default_transport_preserves_structured_failure(
     from core import outbound_transport, proactive_outreach
 
     _seed_control(db_session, mode="legacy_direct")
+    token = "push-token-proactive-default-sentinel"
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.setenv("NANOBOT_PUSH_TOKEN", token)
+    observed_tokens = []
 
-    async def structured_transport(*_args, **_kwargs):
+    async def structured_transport(*_args, **kwargs):
+        observed_tokens.append(kwargs["push_token"])
         return outcome
 
     monkeypatch.setattr(
@@ -1529,6 +1546,7 @@ async def test_legacy_default_transport_preserves_structured_failure(
     assert attempt.result_category == outcome.category
     assert attempt.error_type == outcome.error_type
     assert db_session.query(OutboundDeliveryCircuit).count() == circuit_count
+    assert observed_tokens == [token]
 
 
 @pytest.mark.asyncio
@@ -1539,10 +1557,14 @@ async def test_legacy_drain_retries_same_payload_without_regeneration(
     from core import outbound_transport, proactive_outreach
 
     _seed_control(db_session, mode="legacy_direct")
+    token = "push-token-proactive-env-sentinel"
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.setenv("NANOBOT_PUSH_TOKEN", token)
     first_outcome = _transient_503()
+    observed_tokens = []
 
-    async def transient_transport(*_args, **_kwargs):
+    async def transient_transport(*_args, **kwargs):
+        observed_tokens.append(kwargs["push_token"])
         return first_outcome
 
     monkeypatch.setattr(
@@ -1576,13 +1598,19 @@ async def test_legacy_drain_retries_same_payload_without_regeneration(
         bind=db_session.get_bind(),
     )
 
-    async def success_transport(_request):
+    async def success_transport(*_args, **kwargs):
+        observed_tokens.append(kwargs["push_token"])
         return _success()
+
+    monkeypatch.setattr(
+        outbound_transport,
+        "deliver_qq_push_with_session",
+        success_transport,
+    )
 
     results = await proactive_outreach.drain_due_legacy_proactive_outboxes(
         session_factory=factory,
         worker_config=_worker_config(),
-        transport=success_transport,
         now=retry_at + timedelta(microseconds=1),
         jitter=lambda _maximum: 0.0,
     )
@@ -1595,6 +1623,10 @@ async def test_legacy_drain_retries_same_payload_without_regeneration(
     assert db_session.query(OutboundRun).count() == 1
     assert db_session.query(OutboundDeliveryOutbox).count() == 1
     assert db_session.query(OutboundDeliveryAttempt).count() == 2
+    assert observed_tokens == [
+        token,
+        "push-token-proactive-helper-sentinel",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1606,6 +1638,10 @@ async def test_legacy_drain_terminalizes_leaf_past_retry_deadline(
 
     _seed_control(db_session, mode="legacy_direct")
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.setenv(
+        "NANOBOT_PUSH_TOKEN",
+        "push-token-proactive-deadline-sentinel",
+    )
 
     async def transient_transport(*_args, **_kwargs):
         return _transient_503()
@@ -1677,6 +1713,10 @@ async def test_fenced_expired_legacy_leaf_does_not_poison_terminalization_batch(
 
     _seed_control(db_session, mode="legacy_direct")
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.setenv(
+        "NANOBOT_PUSH_TOKEN",
+        "push-token-proactive-fencing-sentinel",
+    )
 
     async def transient_transport(*_args, **_kwargs):
         return _transient_503()
@@ -1765,6 +1805,10 @@ async def test_outreach_runtime_lease_does_not_reuse_old_source_time(
 
     _seed_control(db_session, mode="legacy_direct")
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.setenv(
+        "NANOBOT_PUSH_TOKEN",
+        "push-token-proactive-runtime-sentinel",
+    )
     factory = sessionmaker(
         autocommit=False,
         autoflush=False,

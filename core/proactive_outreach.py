@@ -1188,6 +1188,7 @@ async def _deliver_legacy_outreach_leaf(
     if worker_config.endpoint_config_revision != endpoint_config_revision:
         worker_config = OutboundWorkerConfig(
             push_url=worker_config.push_url,
+            push_token=worker_config.push_token,
             push_timeout_seconds=worker_config.push_timeout_seconds,
             endpoint_config_revision=endpoint_config_revision,
             batch_size=worker_config.batch_size,
@@ -1231,6 +1232,7 @@ async def _deliver_legacy_outreach_leaf(
             return await deliver_qq_push_with_session(
                 http_session,
                 push_url=request.push_url,
+                push_token=worker_config.push_token,
                 target_type=request.target_type,
                 target_id=request.target_id,
                 message=request.message,
@@ -1376,6 +1378,7 @@ async def drain_due_legacy_proactive_outboxes(
             return await deliver_qq_push_with_session(
                 http_session,
                 push_url=request.push_url,
+                push_token=resolved_worker.push_token,
                 target_type=request.target_type,
                 target_id=request.target_id,
                 message=request.message,

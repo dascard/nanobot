@@ -91,6 +91,7 @@ def _outcome(
 def _config(**overrides: Any) -> OutboundWorkerConfig:
     values = {
         "push_url": "http://qq.test/nanobot/push",
+        "push_token": "push-token-config-sentinel",
         "push_timeout_seconds": 1.0,
         "endpoint_config_revision": CONFIG_REVISION,
         "batch_size": 20,
@@ -99,6 +100,17 @@ def _config(**overrides: Any) -> OutboundWorkerConfig:
     }
     values.update(overrides)
     return OutboundWorkerConfig(**values)
+
+
+def _worker_environ(**overrides: str) -> dict[str, str]:
+    values = {
+        "QQBOT_PUSH_URL": "http://qq.test/nanobot/push",
+        "QQBOT_PUSH_TIMEOUT": "180",
+        "NANOBOT_QQ_PUSH_CONFIG_REVISION": CONFIG_REVISION,
+        "NANOBOT_OUTBOUND_LEASE_SECONDS": "240",
+    }
+    values.update(overrides)
+    return values
 
 
 @pytest.fixture
@@ -276,6 +288,97 @@ def _load_state(factory, outbox_id: int):
 def test_worker_config_rejects_invalid_values(overrides, message):
     with pytest.raises(ValueError, match=message):
         _config(**overrides)
+
+
+def test_worker_config_requires_dedicated_push_token():
+    with pytest.raises(ValueError) as exc_info:
+        OutboundWorkerConfig.from_env(_worker_environ())
+
+    assert str(exc_info.value) == "NANOBOT_PUSH_TOKEN 未配置"
+
+
+@pytest.mark.parametrize("codepoint", [*range(0x20), 0x7F])
+def test_worker_config_rejects_control_char_push_token(codepoint):
+    token = f"push-secret-{chr(codepoint)}-sentinel"
+
+    with pytest.raises(ValueError) as exc_info:
+        OutboundWorkerConfig.from_env(
+            _worker_environ(NANOBOT_PUSH_TOKEN=token)
+        )
+
+    assert str(exc_info.value) == "NANOBOT_PUSH_TOKEN 包含非法控制字符"
+    assert "push-secret" not in str(exc_info.value)
+
+
+def test_worker_config_constructor_rejects_control_char_push_token():
+    with pytest.raises(ValueError, match="NANOBOT_PUSH_TOKEN 包含非法控制字符"):
+        OutboundWorkerConfig(
+            push_url="http://qq.test/nanobot/push",
+            push_token="push-secret-\x00-sentinel",
+            push_timeout_seconds=180,
+            endpoint_config_revision=CONFIG_REVISION,
+            lease_seconds=240,
+        )
+
+
+def test_worker_config_stores_stripped_token_without_revealing_repr():
+    token = "push-token-repr-sentinel"
+    config = OutboundWorkerConfig.from_env(
+        _worker_environ(NANOBOT_PUSH_TOKEN=f"  {token}  ")
+    )
+
+    assert getattr(config, "push_token", None) == token
+    assert token not in repr(config)
+
+
+@pytest.mark.asyncio
+async def test_default_transport_receives_configured_push_token(monkeypatch):
+    import workers.outbound_delivery_worker as worker_module
+
+    token = "push-token-worker-sentinel"
+    observed = {}
+
+    class FakeClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    session = FakeClientSession()
+
+    async def fake_deliver(session_arg, **kwargs):
+        observed["session"] = session_arg
+        observed.update(kwargs)
+        return _outcome("success", 200)
+
+    monkeypatch.setattr(worker_module.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(
+        worker_module,
+        "deliver_qq_push_with_session",
+        fake_deliver,
+    )
+    request = OutboundTransportRequest(
+        push_url="http://qq.test/nanobot/push",
+        target_type="private",
+        target_id="target-sentinel",
+        message="测试消息",
+        timeout_seconds=1,
+        payload_sha256="a" * 64,
+        outbox_id=1,
+        attempt_no=1,
+        now=NOW,
+    )
+
+    async with worker_module._transport_scope(
+        None,
+        push_token=token,
+    ) as transport:
+        outcome = await transport(request)
+
+    assert outcome.category == "success"
+    assert observed["session"] is session
+    assert observed["push_token"] == token
 
 
 @pytest.mark.asyncio

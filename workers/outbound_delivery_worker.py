@@ -54,6 +54,8 @@ def _session_factory_or_default(
 @asynccontextmanager
 async def _transport_scope(
     transport: OutboundTransport | None,
+    *,
+    push_token: str,
 ) -> AsyncIterator[OutboundTransport]:
     if transport is not None:
         yield transport
@@ -66,6 +68,7 @@ async def _transport_scope(
             return await deliver_qq_push_with_session(
                 session,
                 push_url=request.push_url,
+                push_token=push_token,
                 target_type=request.target_type,
                 target_id=request.target_id,
                 message=request.message,
@@ -133,7 +136,10 @@ async def run_once_async(
     if batch_size <= 0:
         raise ValueError("limit 必须是正整数")
     factory = _session_factory_or_default(session_factory)
-    async with _transport_scope(transport) as resolved_transport:
+    async with _transport_scope(
+        transport,
+        push_token=resolved_config.push_token,
+    ) as resolved_transport:
         return await _run_batch(
             transport=resolved_transport,
             session_factory=factory,
@@ -169,7 +175,10 @@ async def run_forever_async(
         owner,
         resolved_config.batch_size,
     )
-    async with _transport_scope(transport) as resolved_transport:
+    async with _transport_scope(
+        transport,
+        push_token=resolved_config.push_token,
+    ) as resolved_transport:
         while not stop_event.is_set():
             try:
                 stats = await _run_batch(

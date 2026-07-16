@@ -48,6 +48,8 @@ def test_push_to_qq_with_session_uses_explicit_legacy_outcome_adapter(monkeypatc
         ),
     ]
     calls = []
+    token = "push-token-daily-adapter-sentinel"
+    monkeypatch.setenv("NANOBOT_PUSH_TOKEN", token)
 
     async def fake_deliver(session, **kwargs):
         calls.append((session, kwargs))
@@ -78,6 +80,7 @@ def test_push_to_qq_with_session_uses_explicit_legacy_outcome_adapter(monkeypatc
     assert calls[0][1]["target_type"] == "private"
     assert calls[0][1]["target_id"] == "u1"
     assert calls[0][1]["message"] == "测试消息"
+    assert all(call[1]["push_token"] == token for call in calls)
 
 
 def test_push_envelope_to_qq_renders_structured_messages(monkeypatch):

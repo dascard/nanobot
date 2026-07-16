@@ -133,6 +133,22 @@ def _environment_keys(service_block: str) -> set[str]:
     return keys
 
 
+def test_runtime_image_uses_python_311():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "FROM python:3.11-slim-bullseye" in dockerfile
+    assert "FROM python:3.10" not in dockerfile
+
+
+def test_timing_gate_uses_python_311():
+    workflow = Path(".github/workflows/timing-gate-eval.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'python-version: "3.11"' in workflow
+    assert 'python-version: "3.10"' not in workflow
+
+
 def test_worker_services_reuse_server_image_without_duplicate_builds():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
@@ -182,6 +198,7 @@ def test_compose_workers_use_explicit_minimal_environment_allowlists():
             "DATABASE_URL",
             "LOG_DIR",
             "LOG_LEVEL",
+            "NANOBOT_PUSH_TOKEN",
             "QQBOT_PUSH_URL",
             "QQBOT_PUSH_TIMEOUT",
             "NANOBOT_QQ_PUSH_CONFIG_REVISION",
@@ -208,6 +225,16 @@ def test_compose_workers_use_explicit_minimal_environment_allowlists():
         actual = _environment_keys(block)
         assert actual == expected[name]
         assert actual.isdisjoint(denylist)
+
+
+def test_outbound_worker_receives_only_dedicated_push_token():
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    worker = _service_block(compose, "outbound-delivery-worker")
+    keys = _environment_keys(worker)
+
+    assert "NANOBOT_PUSH_TOKEN" in keys
+    assert "NANOBOT_API_TOKEN" not in keys
+    assert "NANOBOT_ADMIN_TOKEN" not in keys
 
 
 def test_outbound_worker_has_minimal_runtime_surface():
@@ -315,6 +342,7 @@ def test_env_example_matches_current_runtime_configuration_contract():
         "RAG_EMBEDDING_PROVIDER",
         "NANOBOT_PROMPT_DEFAULT_DIR",
         "NANOBOT_PROMPT_RUNTIME_DIR",
+        "NANOBOT_PUSH_TOKEN",
         "QQBOT_PUSH_URL",
         "QQBOT_PUSH_TIMEOUT",
         "NANOBOT_QQ_PUSH_CONFIG_REVISION",
@@ -338,6 +366,7 @@ def test_env_example_matches_current_runtime_configuration_contract():
     sensitive_keys = {
         "NANOBOT_API_TOKEN",
         "NANOBOT_ADMIN_TOKEN",
+        "NANOBOT_PUSH_TOKEN",
         "NANOBOT_SUPER_USER_IDS",
         "NEW_API_KEY",
         "NANOBOT_STICKER_IMAGE_TOKEN",
@@ -353,6 +382,7 @@ def test_env_example_matches_current_runtime_configuration_contract():
         "NANOBOT_GIT_COMMIT_DATE",
         "NANOBOT_GIT_DIRTY",
     } & configured_keys
+    assert len(re.findall(r"^NANOBOT_PUSH_TOKEN=$", text, re.MULTILINE)) == 1
     for key in sensitive_keys:
         assert re.search(rf"^{key}=$", text, re.MULTILINE)
 

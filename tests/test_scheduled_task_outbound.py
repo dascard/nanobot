@@ -81,12 +81,92 @@ def _destination_fingerprint(target_id: str) -> str:
 def _worker_config() -> OutboundWorkerConfig:
     return OutboundWorkerConfig(
         push_url="http://qq.test/nanobot/push",
+        push_token="push-token-scheduled-helper-sentinel",
         push_timeout_seconds=1.0,
         endpoint_config_revision=CONFIG_REVISION,
         batch_size=1,
         lease_seconds=60.0,
         poll_interval_seconds=0.01,
     )
+
+
+def test_legacy_leaf_default_transport_passes_push_token(monkeypatch):
+    import aiohttp
+
+    from core import outbound_transport, scheduled_task_outbound
+
+    observed = {}
+
+    class FakeClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    async def fake_deliver_once(**kwargs):
+        request = OutboundTransportRequest(
+            push_url="http://qq.test/nanobot/push",
+            target_type="private",
+            target_id="target-sentinel",
+            message="测试消息",
+            timeout_seconds=1,
+            payload_sha256="a" * 64,
+            outbox_id=1,
+            attempt_no=1,
+            now=NOW,
+        )
+        return await kwargs["transport"](request)
+
+    async def fake_push(session, **kwargs):
+        observed["session"] = session
+        observed.update(kwargs)
+        return DeliveryOutcome(
+            category="success",
+            error_type="",
+            status_code=200,
+            retry_after_seconds=None,
+            duration_ms=1,
+            safe_summary="",
+            transport_phase="response_received",
+        )
+
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeClientSession)
+    monkeypatch.setattr(
+        scheduled_task_outbound,
+        "deliver_legacy_outbound_once",
+        fake_deliver_once,
+    )
+    monkeypatch.setattr(
+        outbound_transport,
+        "deliver_qq_push_with_session",
+        fake_push,
+    )
+
+    run_async(
+        scheduled_task_outbound._deliver_legacy_leaf(
+            result=scheduled_task_outbound.ScheduledTaskEnqueueResult(
+                run_id=1,
+                outbox_id=1,
+                status="queued",
+                delivery_mode="legacy_direct",
+                deduplicated=False,
+                generation_attempted=True,
+            ),
+            producer_config=(
+                scheduled_task_outbound.ScheduledTaskProducerConfig.for_tests(
+                    endpoint_config_revision=CONFIG_REVISION,
+                )
+            ),
+            session_factory=lambda: None,
+            transport=None,
+            worker_config=_worker_config(),
+            fixed_now=NOW,
+            clock=None,
+        )
+    )
+
+    assert observed["push_token"] == "push-token-scheduled-helper-sentinel"
 
 
 def _claim(db, task: ScheduledTask, *, mode: str = "cron"):
@@ -897,7 +977,9 @@ def test_legacy_drain_recovers_pending_leaf_without_occurrence_reentry(
 
 def test_legacy_drain_retries_transient_leaf_after_original_cron_slot(
     db_session,
+    monkeypatch,
 ):
+    from core import outbound_transport
     from core.scheduled_task_outbound import (
         ScheduledTaskProducerConfig,
         drain_due_legacy_scheduled_task_outboxes,
@@ -945,9 +1027,11 @@ def test_legacy_drain_retries_transient_leaf_after_original_cron_slot(
         )
     )
     success_calls = []
+    observed_tokens = []
 
-    async def success_transport(request):
-        success_calls.append(request.outbox_id)
+    async def success_transport(_session, **kwargs):
+        success_calls.append(True)
+        observed_tokens.append(kwargs["push_token"])
         return DeliveryOutcome(
             category="success",
             error_type="",
@@ -958,12 +1042,17 @@ def test_legacy_drain_retries_transient_leaf_after_original_cron_slot(
             transport_phase="response_received",
         )
 
+    monkeypatch.setattr(
+        outbound_transport,
+        "deliver_qq_push_with_session",
+        success_transport,
+    )
+
     results = run_async(
         drain_due_legacy_scheduled_task_outboxes(
             session_factory=database.SessionLocal,
             producer_config=producer_config,
             worker_config=_worker_config(),
-            transport=success_transport,
             now=NOW + timedelta(minutes=1),
         )
     )
@@ -971,7 +1060,8 @@ def test_legacy_drain_retries_transient_leaf_after_original_cron_slot(
     assert first.status == "retry_wait"
     assert len(results) == 1
     assert results[0].outbox_status == "delivered"
-    assert success_calls == [first.outbox_id]
+    assert success_calls == [True]
+    assert observed_tokens == ["push-token-scheduled-helper-sentinel"]
     assert generation_calls == [task.id]
     assert db_session.query(OutboundGenerationAttempt).count() == 1
     assert db_session.query(OutboundDeliveryAttempt).count() == 2

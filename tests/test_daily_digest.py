@@ -661,6 +661,9 @@ def test_push_to_qq_reuses_shared_session(monkeypatch):
     import core.daily_digest as dd
 
     constructed = {"count": 0}
+    requests = []
+    token = "push-token-daily-session-sentinel"
+    monkeypatch.setenv("NANOBOT_PUSH_TOKEN", token)
 
     class FakeResponse:
         status = 200
@@ -680,6 +683,7 @@ def test_push_to_qq_reuses_shared_session(monkeypatch):
             self.closed = False
 
         def post(self, url, **kwargs):
+            requests.append((url, kwargs))
             return FakeResponse()
 
         async def close(self):
@@ -708,6 +712,10 @@ def test_push_to_qq_reuses_shared_session(monkeypatch):
         assert ok2 is True
         # 复用单例：同一 loop 内两次 push 只构造一次 ClientSession
         assert constructed["count"] == 1
+        assert [request[1]["headers"] for request in requests] == [
+            {"Authorization": f"Bearer {token}"},
+            {"Authorization": f"Bearer {token}"},
+        ]
     finally:
         run_async(dd.close_push_session())
 
@@ -717,6 +725,10 @@ def test_push_to_qq_still_works_when_session_close_and_recreated(monkeypatch):
     import core.daily_digest as dd
 
     constructed = {"count": 0}
+    monkeypatch.setenv(
+        "NANOBOT_PUSH_TOKEN",
+        "push-token-daily-recreate-sentinel",
+    )
 
     class FakeResponse:
         status = 200
@@ -770,8 +782,10 @@ def test_push_to_qq_preserves_unknown_network_outcome(monkeypatch):
     assert run_async(daily_digest.push_to_qq("private", "u1", "测试消息")) is None
 
 
-def test_push_failure_log_is_redacted_and_bounded(caplog):
+def test_push_failure_log_is_redacted_and_bounded(caplog, monkeypatch):
     secret = "push-response-secret"
+    token = "push-token-daily-log-sentinel"
+    monkeypatch.setenv("NANOBOT_PUSH_TOKEN", token)
     body = ('{"token":"' + secret + '","detail":"' + "x" * 5000 + '"}').encode()
     text_calls = {"count": 0}
 
@@ -819,6 +833,7 @@ def test_push_failure_log_is_redacted_and_bounded(caplog):
     )
     assert result is False
     assert secret not in message
+    assert token not in message
     assert "响应正文已省略" in message
     assert len(message) <= 800
     assert text_calls["count"] == 0
