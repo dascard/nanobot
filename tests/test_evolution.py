@@ -3,6 +3,20 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from core.database import ChatLog
 from core.evolution import evolution_task, model_scout_task
 
+
+@pytest.fixture(autouse=True)
+def _enable_persona_auto_update_for_legacy_tests(monkeypatch):
+    from core.settings_service import settings
+
+    original = settings.get_bool
+    monkeypatch.setattr(
+        settings,
+        "get_bool",
+        lambda key, default=False: True
+        if key == "persona.auto_update_enabled"
+        else original(key, default),
+    )
+
 def test_evolution_task_not_triggered(db_session):
     """测试日志没有达到阈值时不触发进化"""
     # 塞入很少的几条记录
@@ -20,6 +34,18 @@ def test_evolution_task_not_triggered(db_session):
         mock_controller_cls.return_value = mock_controller
         evolution_task("evo_user")
     mock_controller.evolve.assert_not_called()
+
+
+def test_evolution_task_is_paused_when_auto_update_is_disabled(monkeypatch):
+    from core.settings_service import settings
+
+    monkeypatch.setattr(settings, "get_bool", lambda key, default=False: False)
+    monkeypatch.setattr(
+        "core.evolution.SQLiteMemory",
+        lambda: (_ for _ in ()).throw(AssertionError("停用时不应访问画像日志")),
+    )
+
+    evolution_task("paused-user")
 
 def test_evolution_task_triggered(db_session):
     """测试日志达到阈值后，走通 KT 回写逻辑"""

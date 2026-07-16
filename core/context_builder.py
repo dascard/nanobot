@@ -386,6 +386,14 @@ def _build_profile_section(
         "group_memory_skipped": [],
         "group_memory_context_chars": 0,
     }
+    from core.settings_service import settings
+
+    if not settings.get_bool("group_memory.injection_enabled", False):
+        debug["disabled_reason"] = "group_memory_injection_disabled"
+        debug["group_memory_skipped"].append({
+            "reason": "group_memory_injection_disabled",
+        })
+        return "", debug
     try:
         from app.group_memory.injection_service import GroupMemoryInjectionService
 

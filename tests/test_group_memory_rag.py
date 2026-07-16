@@ -327,3 +327,40 @@ def test_group_memory_rag_timeout_marks_fallback(db_session, monkeypatch):
     assert result.context == ""
     assert result.debug["timeout_fallback"] is True
     assert result.debug["latency_ms"] >= 1
+
+
+def test_group_memory_reranker_timeout_returns_before_blocking_provider_finishes(
+    db_session, monkeypatch
+):
+    import time
+
+    from app.group_memory.injection_service import GroupMemoryInjectionService
+    from core.database import ChatStreamConfig
+    import core.semantic.provider_factory as provider_factory
+
+    class BlockingReranker:
+        def rerank(self, query, candidates, *, top_k=None):
+            time.sleep(0.20)
+            return []
+
+    db_session.add(ChatStreamConfig(
+        chat_stream_id="qq:1097666427:group",
+        group_profile_mode="on",
+    ))
+    _memory(db_session, content_hash="gm-blocking-reranker")
+    db_session.commit()
+    monkeypatch.setattr(provider_factory, "get_reranker_provider", lambda: BlockingReranker())
+
+    started = time.perf_counter()
+    result = GroupMemoryInjectionService(db_session).build_context(
+        group_id="1097666427",
+        current_user_input="本地模型部署量化参数怎么调？",
+        recent_messages=[],
+        rag_timeout_ms=30,
+    )
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.15
+    assert result.context == ""
+    assert result.debug["timeout_fallback"] is True
+    assert result.debug["timeout_stage"] == "reranker"

@@ -5,6 +5,18 @@ from sqlalchemy import text
 from core.database import GroupMemory, MemoryDigest, RollingSessionSummary, SemanticIndexItem, StickerMemory
 
 
+def _recallable_digest_meta(**values):
+    meta = {
+        "schema_version": 2,
+        "status": "active",
+        "generator": "llm",
+        "llm_status": "success",
+        "quality": {"score": 0.9, "issues": []},
+    }
+    meta.update(values)
+    return meta
+
+
 def test_memory_digest_recall_cards_become_chunks():
     from core.semantic.adapters import chunks_from_memory_digest
 
@@ -14,12 +26,12 @@ def test_memory_digest_recall_cards_become_chunks():
         session_id="s1",
         level=2,
         content="总摘要",
-        meta_json=json.dumps({
-            "recall_cards": [
+        meta_json=json.dumps(_recallable_digest_meta(
+            recall_cards=[
                 {"title": "端口冲突", "text": "8000 端口被占用", "keywords": ["端口", "uvicorn"]},
                 {"title": "模型路由", "summary": "便宜模型优先", "keywords": ["route"]},
             ]
-        }, ensure_ascii=False),
+        ), ensure_ascii=False),
     )
 
     chunks = chunks_from_memory_digest(digest)
@@ -40,24 +52,24 @@ def test_memory_digest_recall_card_chunks_keep_digest_source_metadata():
         digest_date="2026-06-01",
         level=2,
         content="单张卡片内容",
-        meta_json=json.dumps({
-            "source_id": "src-20260601-s1",
-            "source_type": "date_session",
-            "source_range": "log_id 100-120",
-            "summary_type": "recall_card",
-            "generator": "llm",
-            "quality": {"score": 0.91},
-            "prompt_template": "tasks/memory_digest_system + tasks/memory_digest_user",
-            "fallback_reason": None,
-            "message_count": 18,
-            "recall_card_count": 3,
-            "recall_cards": [
+        meta_json=json.dumps(_recallable_digest_meta(
+            source_id="src-20260601-s1",
+            source_type="date_session",
+            source_range="log_id 100-120",
+            summary_type="recall_card",
+            generator="llm",
+            quality={"score": 0.91, "issues": []},
+            prompt_template="tasks/memory_digest_system + tasks/memory_digest_user",
+            fallback_reason=None,
+            message_count=18,
+            recall_card_count=3,
+            recall_cards=[
                 {
                     "text": "memory_digests 的 level 2 是 RAG 主召回层。",
                     "keywords": ["memory_digests", "RAG"],
                 }
             ],
-        }, ensure_ascii=False),
+        ), ensure_ascii=False),
     )
 
     chunks = chunks_from_memory_digest(digest)
@@ -77,7 +89,12 @@ def test_memory_digest_recall_card_chunks_keep_digest_source_metadata():
 def test_memory_digest_level0_is_expand_only():
     from core.semantic.adapters import chunks_from_memory_digest
 
-    digest = MemoryDigest(id=12, level=0, content="详细原文", meta_json="{}")
+    digest = MemoryDigest(
+        id=12,
+        level=0,
+        content="详细原文",
+        meta_json=json.dumps(_recallable_digest_meta(), ensure_ascii=False),
+    )
 
     chunks = chunks_from_memory_digest(digest)
 

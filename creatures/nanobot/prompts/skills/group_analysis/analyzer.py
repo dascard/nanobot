@@ -13,16 +13,16 @@ GROUP_ANALYSIS_SYSTEM_PROMPT = "你是群聊分析助手。只输出JSON，不�
 
 TOPIC_PROMPT = """分析以下群聊记录，提取核心讨论话题。
 
-## 消息格式: [HH:MM] [user_id]: 内容
+## 消息格式: [log_id=123][HH:MM] [user_id]: 内容
 
 ## 输出 JSON
 {{
   "topics": [
-    {{"topic": "话题名(≤15字)", "contributors": ["user_id"], "detail": "一句话总结讨论内容"}}
+    {{"topic": "话题名(≤15字)", "contributors": ["user_id"], "detail": "一句话总结讨论内容", "evidence_log_ids": [123, 456]}}
   ]
 }}
 
-要求: 2-5个话题，按讨论热度排序。只输出JSON。
+要求: 2-5个话题，按讨论热度排序；每个话题必须列出 1-8 个直接支持结论的真实 log_id，不得编造或复用无关消息。只输出JSON。
 
 ## 群聊消息
 {messages_text}"""
@@ -46,7 +46,7 @@ USER_TITLE_PROMPT = """根据群聊发言统计和消息内容，给活跃用户
 
 GOLDEN_QUOTE_PROMPT = """从群聊记录中提取最有趣的发言。
 
-## 消息格式: [HH:MM] [user_id]: 内容
+## 消息格式: [log_id=123][HH:MM] [user_id]: 内容
 
 ## 输出 JSON
 {{
@@ -62,7 +62,7 @@ GOLDEN_QUOTE_PROMPT = """从群聊记录中提取最有趣的发言。
 
 CHAT_QUALITY_PROMPT = """请根据以下群聊记录，给出结构化的聊天质量锐评。
 
-## 消息格式: [HH:MM] [user_id]: 内容
+## 消息格式: [log_id=123][HH:MM] [user_id]: 内容
 
 ## 输出 JSON
 {{
@@ -169,6 +169,11 @@ def _fallback_topics(payload: dict) -> dict:
             "topic": topic,
             "contributors": contributors[:5],
             "detail": f"相关消息 {len(rows)} 条；代表发言：{sample}" if sample else f"相关消息 {len(rows)} 条。",
+            "evidence_log_ids": [
+                int(row.get("log_id"))
+                for row in rows[:8]
+                if str(row.get("log_id") or "").isdigit() and int(row.get("log_id")) > 0
+            ],
         })
     return {"topics": topics}
 

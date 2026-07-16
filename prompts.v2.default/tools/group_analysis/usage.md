@@ -1,6 +1,6 @@
 ---
 name: 群聊日报工具
-version: 1
+version: 2
 kind: tool
 tool_name: group_analysis
 description: group_analysis 工具的使用边界。
@@ -22,19 +22,9 @@ description: group_analysis 工具的使用边界。
 - `instructions` 可选，只写用户额外分析要求，例如“只看最近讨论 AI 的部分”“偏技术总结”“找活跃用户”。
 - `window_hours` 可选，默认 24；传 `0` 表示不限制历史范围。用户说“最近 2 小时/最近 3 天”时换算后填写。
 
-### 工具职责
+### 报告内容
 
-`group_analysis` 会自行完成群解析、消息读取、清洗去重、统计聚合、LLM 分支分析和 HTML 日报渲染。
-
-内部 LLM 分支使用同目录下这些模板，而不是代码里的旧硬编码文本：
-
-- `tools/group_analysis/system`：共用 system prompt。
-- `tools/group_analysis/topics`：话题总结。
-- `tools/group_analysis/titles`：活跃用户称号。
-- `tools/group_analysis/quotes`：群聊金句。
-- `tools/group_analysis/quality`：聊天质量锐评。
-
-它的报告结构包括：
+工具会自行完成群解析、消息读取、清洗、统计、分析和 HTML 渲染。报告可能包括：
 
 - 群级统计：消息数、参与人数、总字数、表情统计、活跃时段。
 - 活跃度分布：按小时展示群聊活跃轨迹。
@@ -46,7 +36,8 @@ description: group_analysis 工具的使用边界。
 ### 输出约束
 
 - 工具返回的是可直接发送的 HTML 日报。拿到结果后不要再自行改写、总结或压缩。
-- 不要逐条暴露隐私消息；输出应聚合、去重、保留必要匿名化。
+- 报告可能包含成员显示名、少量原话、活跃称号和主观锐评，并不承诺匿名化；仅在用户确有权查看对应群聊时使用。
+- 活跃称号、金句、关系判断和质量锐评只属于本次报告，不应被当成已验证的长期群事实。
 - 如果工具返回“匹配到多个群”“未找到群”“消息不足”之类错误，直接把工具结果作为回复基础，不要编造报告。
 - 不要把工具内部 SQL、缓存命中、LLM 分支过程、源消息 ID 列表写给用户。
 - 不要把 `group_analysis` 当作普通历史查询工具；查上一句、查某条记录、查表结构仍使用 `sql_analysis`。

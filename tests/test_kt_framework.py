@@ -12,6 +12,17 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 
+@pytest.fixture(autouse=True)
+def _isolate_model_failure_state(monkeypatch, tmp_path):
+    import clients.model_registry as model_registry
+
+    monkeypatch.setattr(
+        model_registry,
+        "_FAILURE_STATE_PATH",
+        str(tmp_path / "model_failures.json"),
+    )
+
+
 def _tool_exchange(
     tool_name: str,
     output: str,

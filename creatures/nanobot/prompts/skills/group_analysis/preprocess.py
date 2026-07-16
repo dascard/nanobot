@@ -345,7 +345,11 @@ def _format_message_line(message: dict[str, Any]) -> str:
     content = re.sub(r"\s+", " ", str(message.get("content") or "")).strip()
     if len(content) > 500:
         content = content[:500] + "..."
-    return f"[{message.get('time', '??:??')}] [{message.get('user_id', '?')}]: {content}"
+    return (
+        f"[log_id={message.get('log_id', 0)}]"
+        f"[{message.get('time', '??:??')}] "
+        f"[{message.get('user_id', '?')}]: {content}"
+    )
 
 
 def _pack_lines_forward(lines: list[str], max_chars: int) -> str:

@@ -42,12 +42,29 @@ def _init_db():
 
 
 class TestUpsert:
-    def test_high_confidence_writes_active(self):
-        r = upsert("g_test", "topic", "群里常聊LLM部署", confidence_hint=0.80, evidence_log_ids=[1])
+    def test_high_confidence_requires_two_distinct_evidence_logs_to_activate(self):
+        r = upsert(
+            "g_test",
+            "topic",
+            "群里常聊LLM部署",
+            confidence_hint=0.80,
+            evidence_log_ids=[1, 1],
+        )
         assert r == "new"
+        assert query_active("g_test") == []
+
+        r = upsert(
+            "g_test",
+            "topic",
+            "群里常聊LLM部署",
+            confidence_hint=0.80,
+            evidence_log_ids=[2],
+        )
+        assert r == "updated"
         mems = query_active("g_test")
         assert len(mems) == 1
         assert mems[0]["status"] == "active"
+        assert mems[0]["evidence_count"] == 2
 
     def test_low_confidence_writes_review(self):
         from core.database import SessionLocal, GroupMemory

@@ -19,7 +19,10 @@ from core.group_runtime.ids import (
 from core.time_utils import db_now_naive
 
 from app.group_memory.renderer import render_group_memory_context
-from app.group_memory.retrieval_service import GroupMemoryRetrievalService
+from app.group_memory.retrieval_service import (
+    GroupMemoryRerankerTimeout,
+    GroupMemoryRetrievalService,
+)
 
 
 GROUP_MEMORY_RAG_CACHE: dict[str, tuple[float, GroupMemoryInjectionResult]] = {}
@@ -125,16 +128,24 @@ class GroupMemoryInjectionService:
             debug["degraded_blocked"] = True
             debug["blocked_reason"] = "reranker_unavailable"
             return GroupMemoryInjectionResult(debug=debug)
-        selection = GroupMemoryRetrievalService(
-            self.db,
-            reranker_provider=reranker_provider,
-        ).select(
-            group_id=session_id,
-            current_user_input=current_user_input,
-            recent_messages=recent_messages or [],
-            max_items=max_items,
-            max_chars=max_chars,
-        )
+        try:
+            selection = GroupMemoryRetrievalService(
+                self.db,
+                reranker_provider=reranker_provider,
+                reranker_timeout_ms=rag_timeout_ms,
+            ).select(
+                group_id=session_id,
+                current_user_input=current_user_input,
+                recent_messages=recent_messages or [],
+                max_items=max_items,
+                max_chars=max_chars,
+            )
+        except GroupMemoryRerankerTimeout:
+            debug["latency_ms"] = int((time.perf_counter() - started) * 1000)
+            debug["timeout_fallback"] = True
+            debug["timeout_stage"] = "reranker"
+            debug["group_memory_skipped"].append({"reason": "reranker_timeout"})
+            return GroupMemoryInjectionResult(debug=debug)
         latency_ms = int((time.perf_counter() - started) * 1000)
         debug["latency_ms"] = latency_ms
         if latency_ms > int(rag_timeout_ms):

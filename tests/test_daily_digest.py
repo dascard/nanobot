@@ -27,6 +27,30 @@ def _local_now() -> datetime:
     return datetime.now()  # noqa: DTZ005
 
 
+def _successful_digest_summarizer(text: str, *, evidence_log_id: int = 1):
+    def summarize(_messages):
+        return json.dumps(
+            {
+                "preview": {"brief": text, "keywords": [text[:20]]},
+                "long_summary": {"topic_flow": text},
+                "recall_cards": [
+                    {
+                        "card_id": "card_1",
+                        "type": "fact",
+                        "text": text,
+                        "keywords": [text[:20]],
+                        "importance": 0.8,
+                        "evidence_log_ids": [evidence_log_id],
+                    }
+                ],
+                "quality": {"score": 0.9, "issues": []},
+            },
+            ensure_ascii=False,
+        )
+
+    return summarize
+
+
 def test_generate_daily_digest_merges_legacy_group_session_ids(db_session, monkeypatch):
     ts = _local_time(2026, 4, 30, 12, 0, 0)
     db_session.add_all(
@@ -53,7 +77,10 @@ def test_generate_daily_digest_merges_legacy_group_session_ids(db_session, monke
 
     monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
 
-    created = daily_digest.generate_daily_digest_for_date("2026-04-30", use_llm=False)
+    created = daily_digest.generate_daily_digest_for_date(
+        "2026-04-30",
+        llm_summarizer=_successful_digest_summarizer("环境消息"),
+    )
 
     assert created == 1
     rows = db_session.query(MemoryDigest).filter_by(session_id="group_123456").all()
@@ -95,7 +122,9 @@ def test_generate_daily_digest_can_filter_specific_session(db_session, monkeypat
         "2026-05-31",
         user_id="shared_user",
         session_id="private_a",
-        use_llm=False,
+        llm_summarizer=_successful_digest_summarizer(
+            "A session should be regenerated"
+        ),
     )
 
     assert created == 1
@@ -207,7 +236,7 @@ def test_generate_daily_digest_filters_target_date_in_sql(db_session, monkeypatc
         created = daily_digest.generate_daily_digest_for_date(
             "2026-05-31",
             user_id="u_sql_date",
-            use_llm=False,
+            llm_summarizer=_successful_digest_summarizer("目标日内容"),
         )
     finally:
         event.remove(db_session.bind, "before_cursor_execute", capture_sql)

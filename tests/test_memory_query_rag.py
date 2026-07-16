@@ -69,8 +69,29 @@ def _digest_row(digest_id, *, cards):
         digest_date="2026-05-26",
         level=2,
         content="; ".join(card["text"] for card in cards),
-        meta_json=json.dumps({"schema_version": 2, "status": "active", "recall_cards": cards}, ensure_ascii=False),
+        meta_json=json.dumps({
+            "schema_version": 2,
+            "status": "active",
+            "generator": "llm",
+            "llm_status": "success",
+            "quality": {"score": 0.9, "issues": []},
+            "recall_cards": cards,
+        }, ensure_ascii=False),
     )
+
+
+def _safe_digest_index_metadata(**extra):
+    return {
+        "user_id": "u1",
+        "session_id": "s1",
+        "schema_version": 2,
+        "status": "active",
+        "generator": "llm",
+        "llm_status": "success",
+        "quality_score": 0.9,
+        "quality_issues": [],
+        **extra,
+    }
 
 
 def _index_chunks(db, chunks):
@@ -85,6 +106,78 @@ def _index_chunks(db, chunks):
         embedding_model="fake",
         embeddings=embeddings,
     )
+
+
+def test_memory_digest_adapter_rejects_non_llm_and_failed_quality_sources():
+    fallback = MemoryDigest(
+        id=90,
+        user_id="u1",
+        session_id="s1",
+        digest_date="2026-05-26",
+        level=2,
+        content="低质量确定性兜底",
+        meta_json=json.dumps({
+            "schema_version": 2,
+            "status": "active",
+            "generator": "deterministic_fallback",
+            "llm_status": "fallback",
+            "quality": {"score": 0.82, "issues": []},
+            "recall_cards": [{"text": "低质量确定性兜底"}],
+        }, ensure_ascii=False),
+    )
+    audit_rejected = MemoryDigest(
+        id=91,
+        user_id="u1",
+        session_id="s1",
+        digest_date="2026-05-26",
+        level=2,
+        content="审计失败摘要",
+        meta_json=json.dumps({
+            "schema_version": 2,
+            "status": "active",
+            "generator": "llm",
+            "llm_status": "success",
+            "quality": {"score": 0.9, "issues": ["recall_card_not_grounded"]},
+            "recall_cards": [{"text": "审计失败摘要"}],
+        }, ensure_ascii=False),
+    )
+
+    assert chunks_from_memory_digest(fallback) == []
+    assert chunks_from_memory_digest(audit_rejected) == []
+
+
+def test_memory_rag_rejects_preexisting_active_fallback_index(db_session):
+    from core.memory_rag import MemoryRagService
+    from core.semantic.adapters import SemanticChunk
+
+    _index_chunks(db_session, [SemanticChunk(
+        source_type="memory_digest",
+        source_id="fallback-old",
+        source_sub_id="card:0",
+        title="旧兜底",
+        text="端口冲突旧兜底",
+        lexical_text="端口冲突旧兜底",
+        embedding_text="端口冲突旧兜底",
+        metadata={
+            "user_id": "u1",
+            "session_id": "s1",
+            "schema_version": 2,
+            "status": "active",
+            "generator": "deterministic_fallback",
+            "llm_status": "fallback",
+            "quality_score": 0.82,
+            "quality_issues": [],
+        },
+    )])
+
+    result = MemoryRagService(db_session).query(
+        "端口冲突",
+        source="digest",
+        user_id="u1",
+        session_id="s1",
+    )
+
+    assert result["items"] == []
 
 
 def test_memory_query_uses_reranker_after_recall(db_session):
@@ -240,6 +333,9 @@ def test_memory_query_source_all_returns_digest_and_session_summary(db_session):
         meta_json=json.dumps({
             "schema_version": 2,
             "status": "active",
+            "generator": "llm",
+            "llm_status": "success",
+            "quality": {"score": 0.9, "issues": []},
             "recall_cards": [
                 {"title": "其他摘要", "text": "KohakuVQ 端口预算来自其他用户摘要。", "keywords": ["KohakuVQ", "端口", "预算"]},
             ],
@@ -400,7 +496,7 @@ def test_memory_rag_uses_fts_recall_before_recent_row_limit(db_session):
             text="KohakuVQ 端口冲突排查",
             lexical_text="KohakuVQ 端口冲突排查",
             embedding_text="KohakuVQ 端口冲突排查",
-            metadata={"user_id": "u1", "session_id": "s1"},
+            metadata=_safe_digest_index_metadata(),
         )
     ]
     chunks.extend(
@@ -412,7 +508,7 @@ def test_memory_rag_uses_fts_recall_before_recent_row_limit(db_session):
             text="午饭 咖啡 天气",
             lexical_text="午饭 咖啡 天气",
             embedding_text="午饭 咖啡 天气",
-            metadata={"user_id": "u1", "session_id": "s1"},
+            metadata=_safe_digest_index_metadata(),
         )
         for idx in range(405)
     )
@@ -443,7 +539,7 @@ def test_memory_rag_uses_vector_recall_before_recent_row_limit(db_session):
             text="uvicorn 8000 端口冲突排查。",
             lexical_text="uvicorn 8000 端口冲突排查。",
             embedding_text="uvicorn 8000 端口冲突排查。",
-            metadata={"user_id": "u1", "session_id": "s1"},
+            metadata=_safe_digest_index_metadata(),
         )
     ]
     chunks.extend(
@@ -455,7 +551,7 @@ def test_memory_rag_uses_vector_recall_before_recent_row_limit(db_session):
             text="午饭 咖啡 天气",
             lexical_text="午饭 咖啡 天气",
             embedding_text="午饭 咖啡 天气",
-            metadata={"user_id": "u1", "session_id": "s1"},
+            metadata=_safe_digest_index_metadata(),
         )
         for idx in range(405)
     )
@@ -513,7 +609,7 @@ def test_memory_rag_does_not_embed_when_index_has_no_vectors(db_session):
                 text="端口记录",
                 lexical_text="端口记录",
                 embedding_text="端口记录",
-                metadata={"user_id": "u1", "session_id": "s1"},
+                metadata=_safe_digest_index_metadata(),
             )
         ],
         index_version="fake:v1:v1",
@@ -546,7 +642,7 @@ def test_memory_rag_does_not_rerank_generic_lexical_fallback(db_session):
             text="uvicorn 8000 端口冲突排查。",
             lexical_text="uvicorn 8000 端口冲突排查。",
             embedding_text="uvicorn 8000 端口冲突排查。",
-            metadata={"user_id": "u1", "session_id": "s1"},
+            metadata=_safe_digest_index_metadata(),
         ),
         SemanticChunk(
             source_type="memory_digest",
@@ -556,7 +652,7 @@ def test_memory_rag_does_not_rerank_generic_lexical_fallback(db_session):
             text="这个问题怎么解决，需要再看看。",
             lexical_text="这个问题怎么解决，需要再看看。",
             embedding_text="这个问题怎么解决，需要再看看。",
-            metadata={"user_id": "u1", "session_id": "s1"},
+            metadata=_safe_digest_index_metadata(),
         ),
     ]
     upsert_semantic_chunks(db_session, chunks, index_version="fake:v1:v1")
@@ -627,7 +723,7 @@ def test_memory_rag_skips_low_overlap_fallback_before_rerank(db_session, monkeyp
             text="端口冲突导致部署失败。",
             lexical_text="端口冲突导致部署失败。",
             embedding_text="端口冲突导致部署失败。",
-            metadata={"user_id": "u1", "session_id": "s1"},
+            metadata=_safe_digest_index_metadata(),
         ),
         SemanticChunk(
             source_type="memory_digest",
@@ -637,7 +733,7 @@ def test_memory_rag_skips_low_overlap_fallback_before_rerank(db_session, monkeyp
             text="这里仅记录端口配置。",
             lexical_text="这里仅记录端口配置。",
             embedding_text="这里仅记录端口配置。",
-            metadata={"user_id": "u1", "session_id": "s1"},
+            metadata=_safe_digest_index_metadata(),
         ),
     ]
     upsert_semantic_chunks(db_session, chunks, index_version="fake:v1:v1")
@@ -749,6 +845,37 @@ def test_memory_query_tool_search_routes_all_sources_through_memory_rag(db_sessi
 
     assert [call["source"] for call in calls] == ["digest", "session_summary", "all"]
     assert all(call["has_reranker_kwarg"] for call in calls)
+    from core.database import RagDebugRun
+
+    telemetry = db_session.query(RagDebugRun).order_by(RagDebugRun.id.asc()).all()
+    assert len(telemetry) == 3
+    assert {row.source_type for row in telemetry} == {"memory_query"}
+    assert all(json.loads(row.response_json)["selected"] for row in telemetry)
+
+
+def test_memory_query_rag_index_probe_ignores_active_fallback_rows(db_session):
+    from core.semantic.adapters import SemanticChunk
+    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+
+    _index_chunks(db_session, [SemanticChunk(
+        source_type="memory_digest",
+        source_id="fallback-probe",
+        source_sub_id="card:0",
+        title="旧兜底",
+        text="旧兜底",
+        lexical_text="旧兜底",
+        embedding_text="旧兜底",
+        metadata={
+            "schema_version": 2,
+            "status": "active",
+            "generator": "deterministic_fallback",
+            "llm_status": "fallback",
+            "quality_score": 0.82,
+            "quality_issues": [],
+        },
+    )])
+
+    assert MemoryQueryTool._has_rag_index(db_session, "digest") is False
 
 
 def test_memory_query_tool_blocks_when_reranker_required_unavailable(db_session, monkeypatch):

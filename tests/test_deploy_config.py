@@ -355,3 +355,11 @@ def test_env_example_matches_current_runtime_configuration_contract():
     } & configured_keys
     for key in sensitive_keys:
         assert re.search(rf"^{key}=$", text, re.MULTILINE)
+
+
+def test_config_import_never_generates_or_appends_admin_token():
+    text = Path("config.py").read_text(encoding="utf-8")
+
+    assert "secrets.token_hex" not in text
+    assert 'open(_env_path, "a")' not in text
+    assert "Token 必须由部署环境的单一来源显式提供" in text

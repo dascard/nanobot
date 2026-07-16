@@ -45,10 +45,8 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "python_sandbox": {
         "description": (
-            "在安全沙箱中执行 Python 数据分析脚本。用于 SQL 难以表达的统计/清洗/聚合逻辑，"
-            "不是通用编程执行环境，也不是简单聊天记录查询的首选工具。"
-            "查询上一句、历史发言、表结构或简单 SELECT 时先使用 sql_analysis；"
-            "只有需要对 SQL 结果继续做复杂计算时才使用本工具。"
+            "当前部署已硬禁用任意 Python 执行，本工具不会进入真实请求。"
+            "历史查询和有界统计应使用只读 sql_analysis。"
         ),
         "parameters": {
             "type": "object",
@@ -212,8 +210,8 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "persona_update": {
         "description": (
-            "刷新当前用户已持久化聊天日志形成的画像。仅当用户明确请求刷新画像时使用；"
-            "普通聊天里的新信息由后台画像进化链路异步处理。"
+            "基于已持久化聊天日志刷新当前用户的整体画像。schema 无参数，"
+            "不支持定点纠正、删除或重建具体画像事实。"
         ),
         "parameters": {
             "type": "object",

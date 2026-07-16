@@ -300,6 +300,11 @@ async def _compile_prompt_plan_locked(
             )
         )
 
+    from core.prompt_v2.tool_templates import collect_tool_template_resolutions
+
+    template_resolutions.update(
+        collect_tool_template_resolutions(request.tool_schemas)
+    )
     metrics = calculate_request_metrics(
         messages=messages,
         tools=list(request.tool_schemas or []),

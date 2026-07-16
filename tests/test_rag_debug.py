@@ -33,6 +33,18 @@ def _auth_header():
     return {"Authorization": "Bearer test-token"}
 
 
+def _recallable_digest_meta(**values):
+    meta = {
+        "schema_version": 2,
+        "status": "active",
+        "generator": "llm",
+        "llm_status": "success",
+        "quality": {"score": 0.9, "issues": []},
+    }
+    meta.update(values)
+    return meta
+
+
 def test_semantic_schema_creates_index_tables_and_fts_rowid(db_session):
     from core.semantic.schema import ensure_semantic_schema
 
@@ -92,13 +104,11 @@ def test_rag_debug_memory_uses_real_pipeline_trace(client, db_session, monkeypat
         digest_date="2026-05-26",
         level=2,
         content="RAG Debug 端口冲突",
-        meta_json=json.dumps({
-            "schema_version": 2,
-            "status": "active",
-            "recall_cards": [
+        meta_json=json.dumps(_recallable_digest_meta(
+            recall_cards=[
                 {"title": "端口", "text": "RAG Debug 端口冲突排查", "keywords": ["RAG", "端口"]},
             ],
-        }, ensure_ascii=False),
+        ), ensure_ascii=False),
     )
     db_session.add(digest)
     db_session.commit()
@@ -145,17 +155,15 @@ def test_rag_debug_run_persists_sanitized_payload(client, db_session, monkeypatc
         digest_date="2026-05-26",
         level=2,
         content="RAG Debug 长文本",
-        meta_json=json.dumps({
-            "schema_version": 2,
-            "status": "active",
-            "recall_cards": [
+        meta_json=json.dumps(_recallable_digest_meta(
+            recall_cards=[
                 {
                     "title": "长文本",
                     "text": "RAG Debug " + ("上下文" * 400) + secret_tail,
                     "keywords": ["RAG", "Debug"],
                 },
             ],
-        }, ensure_ascii=False),
+        ), ensure_ascii=False),
     )
     db_session.add(digest)
     db_session.commit()
@@ -243,11 +251,11 @@ def test_rag_debug_status_reports_empty_index_and_reranker_route(client, db_sess
         digest_date="2026-05-26",
         level=2,
         content="RAG Debug 端口冲突",
-        meta_json=json.dumps({
-            "recall_cards": [
+        meta_json=json.dumps(_recallable_digest_meta(
+            recall_cards=[
                 {"title": "端口", "text": "RAG Debug 端口冲突排查"},
             ],
-        }, ensure_ascii=False),
+        ), ensure_ascii=False),
     )
     db_session.add(digest)
     db_session.commit()
@@ -282,11 +290,11 @@ def test_rag_debug_build_index_from_existing_data(client, db_session, monkeypatc
         digest_date="2026-05-26",
         level=2,
         content="RAG Debug 端口冲突",
-        meta_json=json.dumps({
-            "recall_cards": [
+        meta_json=json.dumps(_recallable_digest_meta(
+            recall_cards=[
                 {"title": "端口", "text": "RAG Debug 端口冲突排查"},
             ],
-        }, ensure_ascii=False),
+        ), ensure_ascii=False),
     )
     db_session.add(digest)
     db_session.commit()

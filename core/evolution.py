@@ -50,6 +50,11 @@ def evolution_task(user_id: str) -> None:
     """
     进化任务入口：委托给 KT 控制器执行。
     """
+    from core.settings_service import settings
+
+    if not settings.get_bool("persona.auto_update_enabled", False):
+        logger.info("画像自动更新已暂停 user=%s", user_id)
+        return
     lock = _get_lock(user_id)
     if not lock.acquire(blocking=False):
         logger.debug(f"Evolution already running for [{user_id}], skipping.")

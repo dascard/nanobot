@@ -425,9 +425,9 @@ class NanobotBridge:
 
         # 工具注册表一致性检查
         try:
-            from core.tool_registry import TOOL_METADATA
+            from core.tool_registry import FRAMEWORK_TOOL_METADATA, TOOL_METADATA
             kt_tools = set(tools_list)
-            meta_tools = set(TOOL_METADATA.keys())
+            meta_tools = set(TOOL_METADATA) | set(FRAMEWORK_TOOL_METADATA)
             # subagent 不在 KT registry._tools 中，跳过
             missing_meta = kt_tools - meta_tools
             missing_kt = {t for t in meta_tools - kt_tools

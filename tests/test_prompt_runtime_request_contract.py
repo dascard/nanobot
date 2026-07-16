@@ -471,7 +471,8 @@ async def test_private_superuser_final_sdk_request_matches_prompt_and_tool_plan(
         str(tool["function"].get("description") or "")
         for tool in final_tools
     ]
-    assert all(text.count("[V2ToolTemplate:") <= 1 for text in descriptions)
+    assert all("[V2ToolTemplate:" not in text for text in descriptions)
+    assert all("sha256:" not in text for text in descriptions)
     final_names = {tool["function"]["name"] for tool in final_tools}
     assert {"reply", "no_reply"} <= final_names
     assert not {"bash", "edit", "write", "python_sandbox"} & final_names

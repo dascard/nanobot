@@ -350,6 +350,8 @@ class MemoryDigestBuilder:
     def _format_valid_log(log: ChatLog) -> dict[str, Any]:
         role = str(getattr(log, "role", "") or "unknown").strip()
         sender = str(getattr(log, "sender_name", "") or "").strip()
+        meta = _safe_meta(getattr(log, "meta_json", "") or "")
+        is_bot = bool(meta.get("is_bot") or meta.get("sender_is_bot") or meta.get("external_bot"))
         content = _message_body(str(getattr(log, "content", "") or "").strip(), sender)
         if role == "assistant" and _is_html_blob(content):
             content = _html_label(content)
@@ -364,9 +366,15 @@ class MemoryDigestBuilder:
             "log_id": getattr(log, "id", None),
             "time": time_label,
             "role": role,
+            "is_bot": is_bot,
             "sender": sender or role,
             "content": content,
-            "line": f"[log_id={getattr(log, 'id', '')}][{time_label}] {sender or role}: {content}",
+            "line": (
+                f"[log_id={getattr(log, 'id', '')}]"
+                f"[role={role}]"
+                f"[source={'external_bot' if is_bot else 'conversation'}]"
+                f"[{time_label}] {sender or role}: {content}"
+            ),
         }
 
     @staticmethod

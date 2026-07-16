@@ -24,9 +24,26 @@ from .renderer import render_digest_levels
 logger = logging.getLogger("nanobot.memory_digest.llm")
 
 _URL_RE = re.compile(r"https?://[^\s，。！？；、)）\]>]+|www\.[^\s，。！？；、)）\]>]+", re.IGNORECASE)
+_CREDENTIAL_RE = re.compile(
+    r"\b(?:api[_-]?key|token|password|passwd|secret|authorization)\b\s*[:=]\s*[\"']?[A-Za-z0-9_.-]{6,}",
+    re.IGNORECASE,
+)
+_PROMPT_INJECTION_RE = re.compile(
+    r"(?:忽略|无视).{0,12}(?:系统|之前|上述).{0,12}(?:指令|提示)|"
+    r"ignore.{0,12}(?:previous|system).{0,12}instructions?",
+    re.IGNORECASE,
+)
 _MAX_SOURCE_LINES = 80
 _MIN_LLM_QUALITY = 0.75
 _CARD_MAX_CHARS = 120
+_CANONICAL_CARD_TYPES = {"decision", "fact", "todo", "preference", "module", "design_rule"}
+
+
+@dataclass(frozen=True)
+class _LlmDigestBatch:
+    source_rows: list[dict[str, Any]]
+    messages: list[dict[str, str]]
+    prompt_meta: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -35,6 +52,7 @@ class _LlmDigestContext:
     source_rows: list[dict[str, Any]]
     messages: list[dict[str, str]]
     prompt_meta: dict[str, Any]
+    batches: tuple[_LlmDigestBatch, ...] = ()
 
 _GENERIC_CARD_PATTERNS: list[re.Pattern] = [
     re.compile(r"^今天.*讨论"),
@@ -93,6 +111,12 @@ class MemoryDigestModelError(RuntimeError):
 
 class MemoryDigestOutputError(ValueError):
     """记忆摘要模型输出不满足 JSON 根合同。"""
+
+
+@dataclass(frozen=True)
+class MemoryDigestLlmOutput:
+    content: str
+    model: str
 
 
 def _safe_json_loads(raw: str) -> dict[str, Any]:
@@ -205,8 +229,6 @@ def _collect_source_rows(logs: list[ChatLog]) -> list[dict[str, Any]]:
         if builder._skip_reason(log, seen_short):
             continue
         rows.append(builder._format_valid_log(log))
-        if len(rows) >= _MAX_SOURCE_LINES:
-            break
     return rows
 
 
@@ -257,7 +279,9 @@ def build_llm_digest_messages(
     return rendered.messages, prompt_meta
 
 
-async def default_llm_memory_digest_summarizer_async(messages: list[dict[str, str]]) -> str:
+async def default_llm_memory_digest_summarizer_async(
+    messages: list[dict[str, str]],
+) -> MemoryDigestLlmOutput:
     from config import NEW_API_KEY
     from clients.new_api_client import NewAPIClient
     from clients.classifier_client import resolve_model_route
@@ -280,7 +304,10 @@ async def default_llm_memory_digest_summarizer_async(messages: list[dict[str, st
             str(response.get("detail") or response.get("error"))
         )
     try:
-        return str(response["choices"][0]["message"].get("content") or "")
+        return MemoryDigestLlmOutput(
+            content=str(response["choices"][0]["message"].get("content") or ""),
+            model=str(route.get("model") or "unknown"),
+        )
     except (AttributeError, IndexError, KeyError, TypeError) as exc:
         raise MemoryDigestModelError("llm_response_missing_content") from exc
 
@@ -293,6 +320,8 @@ def default_llm_memory_digest_summarizer(messages: list[dict[str, str]]) -> str:
 
 
 def parse_llm_digest_response(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, MemoryDigestLlmOutput):
+        raw = raw.content
     if isinstance(raw, dict):
         return dict(raw)
     return _safe_json_loads(str(raw or ""))
@@ -306,6 +335,7 @@ def _normalize_llm_meta(
     digest_date: str,
     user_id: str,
     prompt_meta: dict[str, Any],
+    llm_model: str,
 ) -> dict[str, Any]:
     raw_preview = payload.get("preview")
     raw_long_summary = payload.get("long_summary")
@@ -320,9 +350,12 @@ def _normalize_llm_meta(
         text = _as_str(raw_card.get("text"), max_chars=180)
         if not text:
             continue
+        card_type = _as_str(raw_card.get("type"), max_chars=40)
+        if card_type not in _CANONICAL_CARD_TYPES:
+            card_type = "fact"
         cards.append({
             "card_id": _as_str(raw_card.get("card_id"), max_chars=40) or f"card_{index}",
-            "type": _as_str(raw_card.get("type"), max_chars=40) or "recall_card",
+            "type": card_type,
             "text": text,
             "keywords": _as_str_list(raw_card.get("keywords"), limit=8, item_chars=40),
             "importance": max(0.0, min(1.0, _as_float(raw_card.get("importance"), default=0.7))),
@@ -346,7 +379,7 @@ def _normalize_llm_meta(
         "message_count": int(prompt_meta.get("message_count") or 0),
         "generator": "llm",
         "llm_status": "success",
-        "llm_model": "async_llm",
+        "llm_model": llm_model or "unknown",
         "prompt_template": prompt_meta.get("template", ""),
         "prompt_version": {
             "system_key": prompt_meta.get("system_key", ""),
@@ -414,12 +447,17 @@ def audit_llm_digest_meta(
     if quality_issues:
         issues.append("quality_issues_present")
 
-    if _URL_RE.search(json.dumps({
+    audited_text = json.dumps({
         "preview": preview,
         "long_summary": long_summary,
         "recall_cards": cards,
-    }, ensure_ascii=False)):
+    }, ensure_ascii=False)
+    if _URL_RE.search(audited_text):
         issues.append("contains_url")
+    if _CREDENTIAL_RE.search(audited_text):
+        issues.append("contains_credential_material")
+    if _PROMPT_INJECTION_RE.search(audited_text):
+        issues.append("contains_prompt_injection_text")
 
     # 构建 source 上下文（用于 grounded 检查）
     source_log_ids: set[int] = set()
@@ -432,6 +470,11 @@ def audit_llm_digest_meta(
         source_text = "\n".join(
             str(row.get("line") or "").strip() for row in source_rows
         )
+    source_by_id = {
+        int(row.get("log_id")): row
+        for row in (source_rows or [])
+        if str(row.get("log_id") or "").isdigit()
+    }
 
     for card in cards:
         text = str(card.get("text") if isinstance(card, dict) else card or "").strip()
@@ -441,14 +484,45 @@ def audit_llm_digest_meta(
         # evidence_log_ids 必须存在于 source
         evidence_ids = card.get("evidence_log_ids") if isinstance(card, dict) else []
         if isinstance(evidence_ids, list) and evidence_ids and source_log_ids:
+            evidence_lines: list[str] = []
             for eid in evidence_ids:
                 try:
                     if int(eid) not in source_log_ids:
                         issues.append("recall_card_evidence_not_in_source")
                         break
+                    evidence_lines.extend(
+                        str(row.get("line") or "")
+                        for row in (source_rows or [])
+                        if int(row.get("log_id") or 0) == int(eid)
+                    )
                 except (TypeError, ValueError):
                     issues.append("recall_card_evidence_not_in_source")
                     break
+            evidence_text = "\n".join(evidence_lines)
+            keywords = card.get("keywords") if isinstance(card, dict) else []
+            keyword_values = [str(item).strip() for item in keywords or [] if str(item).strip()]
+            keyword_supported = (
+                not keyword_values
+                or any(keyword.lower() in evidence_text.lower() for keyword in keyword_values)
+            )
+            if evidence_text and (
+                not keyword_supported
+                or not _has_keyword_overlap(text, evidence_text, min_overlap=1)
+            ):
+                issues.append("recall_card_evidence_not_grounded")
+            if str(card.get("type") or "") == "preference":
+                evidence_rows = [
+                    source_by_id.get(int(eid))
+                    for eid in evidence_ids
+                    if str(eid).isdigit()
+                ]
+                if any(
+                    row is None
+                    or str(row.get("role") or "") not in {"user", "ambient"}
+                    or bool(row.get("is_bot"))
+                    for row in evidence_rows
+                ):
+                    issues.append("preference_evidence_invalid_role")
 
         # 无 evidence → 检查词面重合
         if (not isinstance(evidence_ids, list) or not evidence_ids) and source_text:
@@ -543,12 +617,20 @@ def _prepare_llm_digest_context(
         )
 
     try:
-        messages, prompt_meta = build_llm_digest_messages(
-            session_id=session_id,
-            digest_date=digest_date,
-            fallback=fallback,
-            source_rows=source_rows,
-        )
+        batches: list[_LlmDigestBatch] = []
+        for start in range(0, len(source_rows), _MAX_SOURCE_LINES):
+            batch_rows = source_rows[start:start + _MAX_SOURCE_LINES]
+            messages, batch_prompt_meta = build_llm_digest_messages(
+                session_id=session_id,
+                digest_date=digest_date,
+                fallback=fallback,
+                source_rows=batch_rows,
+            )
+            batches.append(_LlmDigestBatch(
+                source_rows=batch_rows,
+                messages=messages,
+                prompt_meta=batch_prompt_meta,
+            ))
     except TaskCallValueError as exc:
         logger.warning(
             "memory digest task input rejected: session_id=%s date=%s error_type=%s",
@@ -575,12 +657,162 @@ def _prepare_llm_digest_context(
             error=type(exc).__name__,
             result_status="failed",
         )
+    first_batch = batches[0]
+    prompt_meta = {
+        **first_batch.prompt_meta,
+        "source_id": _source_id(
+            session_id=session_id,
+            digest_date=digest_date,
+            source_rows=source_rows,
+        ),
+        "source_range": _source_range(source_rows),
+        "message_count": len(source_rows),
+        "batch_count": len(batches),
+    }
     return _LlmDigestContext(
         fallback=fallback,
         source_rows=source_rows,
-        messages=messages,
+        messages=first_batch.messages,
         prompt_meta=prompt_meta,
+        batches=tuple(batches),
     ), None
+
+
+def _batch_context(
+    context: _LlmDigestContext,
+    batch: _LlmDigestBatch,
+) -> _LlmDigestContext:
+    return _LlmDigestContext(
+        fallback=context.fallback,
+        source_rows=batch.source_rows,
+        messages=batch.messages,
+        prompt_meta=batch.prompt_meta,
+        batches=(batch,),
+    )
+
+
+def _unique_strings(values: Iterable[Any], *, limit: int, item_chars: int) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = _as_str(value, max_chars=item_chars)
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _merge_batch_results(
+    context: _LlmDigestContext,
+    results: list[MemoryDigestBuildResult],
+) -> MemoryDigestBuildResult:
+    if len(results) == 1:
+        meta = {
+            **results[0].meta,
+            "source_id": context.prompt_meta["source_id"],
+            "source_range": context.prompt_meta["source_range"],
+            "cleaned_source_range": context.prompt_meta["source_range"],
+            "message_count": context.prompt_meta["message_count"],
+            "batch_count": 1,
+        }
+    else:
+        previews = [item.meta.get("preview", {}) for item in results]
+        long_summaries = [item.meta.get("long_summary", {}) for item in results]
+        card_groups = [
+            list(item.meta.get("recall_cards") or [])
+            for item in results
+        ]
+        merged_cards: list[dict[str, Any]] = []
+        seen_card_text: set[str] = set()
+        max_group_size = max((len(group) for group in card_groups), default=0)
+        for offset in range(max_group_size):
+            for group in card_groups:
+                if offset >= len(group):
+                    continue
+                card = group[offset]
+                if not isinstance(card, dict):
+                    continue
+                text_value = str(card.get("text") or "").strip()
+                if not text_value or text_value in seen_card_text:
+                    continue
+                seen_card_text.add(text_value)
+                merged_cards.append({**card, "card_id": f"card_{len(merged_cards) + 1}"})
+                if len(merged_cards) >= 12:
+                    break
+            if len(merged_cards) >= 12:
+                break
+
+        scores = [
+            _as_float((item.meta.get("quality") or {}).get("score"), default=0.0)
+            for item in results
+        ]
+        base = dict(results[0].meta)
+        meta = {
+            **base,
+            "source_id": context.prompt_meta["source_id"],
+            "source_range": context.prompt_meta["source_range"],
+            "cleaned_source_range": context.prompt_meta["source_range"],
+            "message_count": context.prompt_meta["message_count"],
+            "batch_count": len(results),
+            "preview": {
+                "brief": _as_str(
+                    "；".join(str(item.get("brief") or "").strip() for item in previews),
+                    max_chars=220,
+                ),
+                "keywords": _unique_strings(
+                    (value for item in previews for value in (item.get("keywords") or [])),
+                    limit=12,
+                    item_chars=40,
+                ),
+                "participants": _unique_strings(
+                    (value for item in previews for value in (item.get("participants") or [])),
+                    limit=12,
+                    item_chars=40,
+                ),
+            },
+            "long_summary": {
+                "topic_flow": _as_str(
+                    "\n".join(str(item.get("topic_flow") or "").strip() for item in long_summaries),
+                    max_chars=900,
+                ),
+                "important_details": _unique_strings(
+                    (value for item in long_summaries for value in (item.get("important_details") or [])),
+                    limit=20,
+                    item_chars=220,
+                ),
+                "conclusions": _unique_strings(
+                    (value for item in long_summaries for value in (item.get("conclusions") or [])),
+                    limit=12,
+                    item_chars=180,
+                ),
+                "open_loops": _unique_strings(
+                    (value for item in long_summaries for value in (item.get("open_loops") or [])),
+                    limit=12,
+                    item_chars=180,
+                ),
+            },
+            "recall_cards": merged_cards,
+            "quality": build_quality(
+                score=min(scores) if scores else 0.0,
+                issues=[],
+                should_inject_preview=True,
+            ),
+        }
+
+    audit_ok, issues = audit_llm_digest_meta(meta, source_rows=context.source_rows)
+    if not audit_ok:
+        return _fallback_result(
+            context.fallback,
+            status="fallback",
+            error=",".join(issues),
+            prompt_meta=context.prompt_meta,
+            result_status="failed",
+        )
+    return MemoryDigestBuildResult(
+        status="active",
+        meta=meta,
+        level_contents=render_digest_levels(meta),
+    )
 
 
 def _build_memory_digest_result_from_raw(
@@ -591,6 +823,7 @@ def _build_memory_digest_result_from_raw(
     digest_date: str,
     user_id: str,
 ) -> MemoryDigestBuildResult:
+    llm_model = raw.model if isinstance(raw, MemoryDigestLlmOutput) else "custom_summarizer"
     payload = parse_llm_digest_response(raw)
     meta = _normalize_llm_meta(
         payload,
@@ -599,6 +832,7 @@ def _build_memory_digest_result_from_raw(
         digest_date=digest_date,
         user_id=user_id,
         prompt_meta=context.prompt_meta,
+        llm_model=llm_model,
     )
     audit_ok, issues = audit_llm_digest_meta(meta, source_rows=context.source_rows)
     if not audit_ok:
@@ -607,6 +841,7 @@ def _build_memory_digest_result_from_raw(
             status="fallback",
             error=",".join(issues),
             prompt_meta=context.prompt_meta,
+            result_status="failed",
         )
     return MemoryDigestBuildResult(
         status="active",
@@ -640,28 +875,47 @@ def build_memory_digest_with_llm(
             status="fallback",
             error="sync_summarizer_required: use build_memory_digest_with_llm_async",
             prompt_meta=context.prompt_meta,
+            result_status="failed",
         )
-    try:
-        raw = _call_summarizer(summarizer, context.messages)
-    except (
-        ConnectionError,
-        TimeoutError,
-        MemoryDigestModelError,
-        SyncSummarizerContractError,
-    ) as exc:
-        logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
-        return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)
-    try:
-        return _build_memory_digest_result_from_raw(
-            raw,
-            context=context,
-            session_id=session_id,
-            digest_date=digest_date,
-            user_id=user_id,
-        )
-    except MemoryDigestOutputError as exc:
-        logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
-        return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)
+    results: list[MemoryDigestBuildResult] = []
+    for batch in context.batches:
+        try:
+            raw = _call_summarizer(summarizer, batch.messages)
+        except (
+            ConnectionError,
+            TimeoutError,
+            MemoryDigestModelError,
+            SyncSummarizerContractError,
+        ) as exc:
+            logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
+            return _fallback_result(
+                context.fallback,
+                status="fallback",
+                error=str(exc),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+            )
+        try:
+            result = _build_memory_digest_result_from_raw(
+                raw,
+                context=_batch_context(context, batch),
+                session_id=session_id,
+                digest_date=digest_date,
+                user_id=user_id,
+            )
+        except MemoryDigestOutputError as exc:
+            logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
+            return _fallback_result(
+                context.fallback,
+                status="fallback",
+                error=str(exc),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+            )
+        if result.status != "active":
+            return result
+        results.append(result)
+    return _merge_batch_results(context, results)
 
 
 async def build_memory_digest_with_llm_async(
@@ -684,19 +938,37 @@ async def build_memory_digest_with_llm_async(
         return early_result
     assert context is not None
     summarizer = summarizer or default_llm_memory_digest_summarizer_async
-    try:
-        raw = await _call_summarizer_async(summarizer, context.messages)
-    except (ConnectionError, TimeoutError, MemoryDigestModelError) as exc:
-        logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
-        return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)
-    try:
-        return _build_memory_digest_result_from_raw(
-            raw,
-            context=context,
-            session_id=session_id,
-            digest_date=digest_date,
-            user_id=user_id,
-        )
-    except MemoryDigestOutputError as exc:
-        logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
-        return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)
+    results: list[MemoryDigestBuildResult] = []
+    for batch in context.batches:
+        try:
+            raw = await _call_summarizer_async(summarizer, batch.messages)
+        except (ConnectionError, TimeoutError, MemoryDigestModelError) as exc:
+            logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
+            return _fallback_result(
+                context.fallback,
+                status="fallback",
+                error=str(exc),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+            )
+        try:
+            result = _build_memory_digest_result_from_raw(
+                raw,
+                context=_batch_context(context, batch),
+                session_id=session_id,
+                digest_date=digest_date,
+                user_id=user_id,
+            )
+        except MemoryDigestOutputError as exc:
+            logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
+            return _fallback_result(
+                context.fallback,
+                status="fallback",
+                error=str(exc),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+            )
+        if result.status != "active":
+            return result
+        results.append(result)
+    return _merge_batch_results(context, results)

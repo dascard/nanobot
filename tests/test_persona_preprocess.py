@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, ChatLog, PersonaFact
+from core.database import Base, ChatLog, PersonaBehavior, PersonaFact
 from core.persona_preprocess import (
     PersonaStateMachine,
     build_candidate_extraction_prompt,
@@ -209,6 +209,33 @@ class TestProcessCandidatesWithMockEmbedder:
         assert len(facts) == 2
         assert facts[0].cluster_id != facts[1].cluster_id
 
+    def test_legacy_behavior_candidate_uses_governed_fact_table(
+        self,
+        state_machine,
+        db_session,
+        monkeypatch,
+    ):
+        vector = np.pad(np.array([1.0], dtype=np.float32), (0, 767))
+        monkeypatch.setattr(
+            "core.persona_preprocess.embed_text",
+            lambda _text: vector,
+        )
+
+        stats = state_machine.process_candidates([{
+            "type": "behavior",
+            "text": "用户偏好先给结论",
+            "domain": "协作方式",
+            "evidence": "先说结论",
+        }])
+
+        assert stats["created"] == 1
+        fact = db_session.query(PersonaFact).one()
+        assert fact.memory_type == "interaction_style"
+        assert fact.fact_type == "behavior"
+        assert fact.status == "review"
+        assert fact.inject_policy == "manual_only"
+        assert db_session.query(PersonaBehavior).count() == 0
+
     def test_store_governed_fact_with_real_evidence_ids(self, state_machine, db_session, monkeypatch):
         import numpy as np
 
@@ -242,9 +269,11 @@ class TestProcessCandidatesWithMockEmbedder:
         assert stats["created"] == 1
         fact = db_session.query(PersonaFact).filter(PersonaFact.user_id == "test_user_01").one()
         assert fact.memory_type == "stable_preference"
-        assert fact.status == "active"
-        assert fact.inject_policy == "auto"
+        assert fact.status == "review"
+        assert fact.inject_policy == "manual_only"
+        assert fact.evidence_count == 1
         assert fact.content_hash
+        assert json.loads(fact.source_log_ids) == []
         assert json.loads(fact.evidence_log_ids_json) == [log.id]
         meta = json.loads(fact.candidate_meta_json)
         assert meta["confidence_hint"] == "high"
@@ -335,9 +364,13 @@ class TestProcessCandidatesWithMockEmbedder:
         assert stats["merged"] == 1
         facts = db_session.query(PersonaFact).filter(PersonaFact.user_id == "test_user_01").all()
         assert len(facts) == 1
-        assert facts[0].evidence_count == 2
+        assert facts[0].evidence_count == 1
+        assert facts[0].status == "review"
+        assert facts[0].inject_policy == "manual_only"
 
-    def test_merge_duplicate_mock(self, state_machine, db_session, monkeypatch):
+    def test_semantically_similar_but_different_text_is_not_auto_merged(
+        self, state_machine, db_session, monkeypatch
+    ):
         import numpy as np
 
         def mock_embed(text: str) -> np.ndarray:
@@ -355,13 +388,53 @@ class TestProcessCandidatesWithMockEmbedder:
 
         c2 = [{"text": "用户偏好简短回复", "evidence": "ev2", "domain": "编程"}]
         stats = state_machine.process_candidates(c2)
-        assert stats["merged"] == 1
+        assert stats["created"] == 1
+        assert stats["merged"] == 0
 
         facts = db_session.query(PersonaFact).filter(
             PersonaFact.user_id == "test_user_01"
         ).all()
-        assert len(facts) == 1
-        assert facts[0].evidence_count == 2
+        assert len(facts) == 2
+        assert all(fact.evidence_count == 0 for fact in facts)
+
+    def test_exact_fact_activates_only_after_two_distinct_evidence_logs(
+        self, state_machine, db_session, monkeypatch
+    ):
+        import numpy as np
+
+        monkeypatch.setattr(
+            "core.persona_preprocess.embed_text",
+            lambda _text: np.pad(np.array([1.0], dtype=np.float32), (0, 767)),
+        )
+        logs = [
+            ChatLog(
+                user_id="test_user_01",
+                session_id="private_test_user_01",
+                role="user",
+                content=content,
+            )
+            for content in ("以后回答先给结论", "还是请先给结论")
+        ]
+        db_session.add_all(logs)
+        db_session.commit()
+        base = {
+            "text": "用户偏好回答先给结论",
+            "memory_type": "stable_preference",
+            "should_store": True,
+            "should_inject": True,
+            "confidence_hint": "high",
+        }
+
+        state_machine.process_candidates([
+            {**base, "evidence_log_ids": [logs[0].id], "evidence_quote": logs[0].content},
+            {**base, "evidence_log_ids": [logs[1].id], "evidence_quote": logs[1].content},
+        ])
+
+        fact = db_session.query(PersonaFact).filter_by(user_id="test_user_01").one()
+        assert fact.evidence_count == 2
+        assert json.loads(fact.evidence_log_ids_json) == [logs[0].id, logs[1].id]
+        assert fact.status == "active"
+        assert fact.inject_policy == "auto"
 
     def test_different_domain_no_merge_mock(self, state_machine, db_session, monkeypatch):
         import numpy as np
@@ -395,19 +468,19 @@ class TestProcessCandidatesWithMockEmbedder:
 
 class TestProcessCandidatesMerge:
     @pytest.mark.slow
-    def test_merge_semantic_duplicate(self, state_machine, db_session):
+    def test_semantic_duplicate_stays_separate_without_entailment_proof(self, state_machine, db_session):
         c1 = [{"text": "用户喜欢简洁直接的代码回答", "evidence": "ev1", "domain": "编程"}]
         state_machine.process_candidates(c1)
 
         c2 = [{"text": "用户偏好简短代码回复，不喜欢冗长文字", "evidence": "ev2", "domain": "编程"}]
         stats = state_machine.process_candidates(c2)
-        assert stats["merged"] == 1
+        assert stats["created"] == 1
+        assert stats["merged"] == 0
 
         facts = db_session.query(PersonaFact).filter(
             PersonaFact.user_id == "test_user_01"
         ).all()
-        assert len(facts) == 1
-        assert facts[0].evidence_count == 2
+        assert len(facts) == 2
 
     @pytest.mark.slow
     def test_different_domain_no_merge(self, state_machine, db_session):

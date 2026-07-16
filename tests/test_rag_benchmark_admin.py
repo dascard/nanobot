@@ -39,6 +39,14 @@ def _file_db(path: Path):
 
 
 def _seed_memory_case(db):
+    digest_meta = {
+        "schema_version": 2,
+        "status": "active",
+        "generator": "llm",
+        "llm_status": "success",
+        "quality_score": 0.9,
+        "quality_issues": [],
+    }
     row = SemanticIndexItem(
         id=100,
         source_type="memory_digest",
@@ -49,6 +57,7 @@ def _seed_memory_case(db):
         title="RAG benchmark",
         text="RAG benchmark readonly case",
         lexical_text="RAG benchmark readonly case",
+        meta_json=json.dumps(digest_meta, ensure_ascii=False),
     )
     db.add(row)
     db.add(RagDebugRun(trace_id="before", source_type="memory", query="before"))
@@ -76,6 +85,7 @@ def _configure_paths(monkeypatch, tmp_path, db_path):
     monkeypatch.setattr(routes, "BENCHMARK_REPORT_DIR", reports)
     monkeypatch.setattr(routes, "BENCHMARK_CASE_BACKUP_DIR", backups)
     monkeypatch.setattr(routes, "BENCHMARK_CASE_TRASH_DIR", trash)
+    monkeypatch.setattr(routes, "BENCHMARK_RUN_LOCK", tmp_path / "run.lock")
     monkeypatch.setattr(routes, "get_benchmark_db_path", lambda: db_path)
     return routes, manual, generated, reports, backups, trash
 

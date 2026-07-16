@@ -173,7 +173,7 @@ def test_tool_plan_exposes_memory_query_by_default_and_can_disable(db_session):
     plan = build_tool_plan(chat_type="private", runtime_preset="full", db=db_session)
     assert "memory_query" in plan.sent_tool_names
     assert any(schema["function"]["name"] == "memory_query" for schema in plan.sent_tool_schemas)
-    assert "memory_query" in plan.runtime_tool_prompt
+    assert "memory_query" not in plan.runtime_tool_prompt
 
     db_session.add(ToolOverride(
         tool_name="memory_query",
@@ -402,6 +402,16 @@ def test_tool_plan_rejects_disabled_tool_execution():
 
     assert "python_sandbox" in str(exc.value)
     assert "测试禁用" in str(exc.value)
+
+
+def test_framework_skill_has_metadata_without_entering_user_tool_plan():
+    from core.tool_plan import build_tool_plan
+    from core.tool_registry import FRAMEWORK_TOOL_METADATA, get_tool_def
+
+    assert get_tool_def("skill") == FRAMEWORK_TOOL_METADATA["skill"]
+    plan = build_tool_plan(chat_type="private", runtime_preset="full")
+    assert "skill" not in plan.enabled
+    assert "skill" not in plan.sent_tool_names
 
 
 def test_record_runtime_tool_decision_can_use_injected_db(monkeypatch, db_session):

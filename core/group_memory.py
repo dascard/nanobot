@@ -17,7 +17,19 @@ logger = logging.getLogger("nanobot.group_memory")
 
 MEMORY_TYPES = {"topic", "slang", "relationship", "style", "event", "preference"}
 CONFIDENCE_FLOOR = 0.55
-MANUAL_REVIEW_TYPES = {"relationship", "event", "slang"}
+MANUAL_REVIEW_TYPES = {"relationship", "event", "slang", "style"}
+
+
+def _normalize_evidence_ids(value: list[int] | None) -> list[int]:
+    result: list[int] = []
+    for item in value or []:
+        try:
+            parsed = int(item)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0 and parsed not in result:
+            result.append(parsed)
+    return result[:10]
 
 
 def _normalize_content(content: str) -> str:
@@ -53,7 +65,7 @@ def _default_status_and_policy(
         return "active", "auto"
     if memory_type == "preference":
         return "review", "auto"
-    if confidence_hint >= 0.65 and evidence_log_ids:
+    if confidence_hint >= 0.65 and len(_normalize_evidence_ids(evidence_log_ids)) >= 2:
         return "active", "auto"
     return "review", "auto"
 
@@ -73,6 +85,7 @@ def upsert(
         return "skipped"
 
     group_id = _norm_group(group_id)
+    evidence_log_ids = _normalize_evidence_ids(evidence_log_ids)
 
     db = SessionLocal()
     try:
@@ -88,16 +101,23 @@ def upsert(
         )
         if existing:
             now = db_now_naive()
-            existing.evidence_count += 1
             existing.last_seen = now
-            existing.confidence = min(1.0, existing.confidence + confidence_hint * 0.1)
             existing.decay_score = min(1.0, existing.decay_score + 0.05)
-            if evidence_log_ids:
-                _merge_evidence(existing, evidence_log_ids)
-            if existing.status == "review" and existing.confidence >= 0.7 and existing.evidence_count >= 2:
+            previous_ids = _safe_evidence_ids(existing.evidence_log_ids_json)
+            merged_ids = _merge_evidence(existing, evidence_log_ids)
+            existing.evidence_count = len(merged_ids)
+            if len(merged_ids) > len(previous_ids):
+                existing.confidence = min(1.0, existing.confidence + confidence_hint * 0.1)
+            next_status, next_policy = _default_status_and_policy(
+                memory_type,
+                existing.confidence,
+                merged_ids,
+            )
+            existing.inject_policy = next_policy
+            if existing.status == "review" and next_status == "active":
                 existing.status = "active"
             elif existing.status == "archived" and existing.confidence >= CONFIDENCE_FLOOR:
-                existing.status = "active"
+                existing.status = next_status
             if meta:
                 existing.meta_json = json.dumps(
                     {**_safe_meta(existing.meta_json), **meta}, ensure_ascii=False)
@@ -113,8 +133,8 @@ def upsert(
             group_id=group_id, memory_type=memory_type,
             content=content.strip(), content_hash=ch,
             cluster_key=ck,
-            evidence_log_ids_json=json.dumps(evidence_log_ids or []),
-            confidence=confidence_hint, evidence_count=1,
+            evidence_log_ids_json=json.dumps(evidence_log_ids),
+            confidence=confidence_hint, evidence_count=len(evidence_log_ids),
             first_seen=now, last_seen=now,
             decay_score=1.0, source=source,
             status=status,
@@ -275,13 +295,16 @@ def _safe_evidence_ids(raw: str) -> list[int]:
         return []
 
 
-def _merge_evidence(memory, new_ids: list[int]):
+def _merge_evidence(memory, new_ids: list[int]) -> list[int]:
     try:
         existing = json.loads(memory.evidence_log_ids_json or "[]")
-        merged = list(dict.fromkeys(existing + new_ids))[-10:]
+        merged = _normalize_evidence_ids(existing + new_ids)
         memory.evidence_log_ids_json = json.dumps(merged)
+        return merged
     except (json.JSONDecodeError, TypeError):
-        memory.evidence_log_ids_json = json.dumps(new_ids[:10])
+        merged = _normalize_evidence_ids(new_ids)
+        memory.evidence_log_ids_json = json.dumps(merged)
+        return merged
 
 
 def _safe_meta(raw: str) -> dict:
@@ -296,8 +319,7 @@ def should_inject(memory: dict) -> bool:
     """判断一条记忆是否应注入 GroupProfile。
 
     基础 gate：active + 达到写入 floor + 有证据 + decay 未过期。
-    group_analysis 一次分析会把同一窗口的多条 source_log_ids 作为证据写入，
-    因此不能再要求同一候选重复出现两次才允许注入。
+    每条候选必须绑定具体证据日志；至少两条去重证据才允许注入。
     """
     if not (
         memory.get("status") == "active"
@@ -308,7 +330,7 @@ def should_inject(memory: dict) -> bool:
     ):
         return False
 
-    return memory.get("evidence_count", 0) >= 1
+    return memory.get("evidence_count", 0) >= 2
 
 
 def _row_to_dict(r: GroupMemory) -> dict:

@@ -1596,6 +1596,56 @@ def _super_user_config_cleanup(conn: Any, engine: Any, db_path: str | None) -> N
         )
 
 
+def _summary_model_safe_defaults(conn: Any, engine: Any, db_path: str | None) -> None:
+    """一次性收敛摘要路由的高风险历史参数。"""
+
+    if "system_settings" not in _table_names(conn):
+        return
+    columns = _columns(conn, "system_settings")
+    values = {
+        "model.route.session_summary.temperature": "0.1",
+        "model.route.session_summary.max_tokens": "1200",
+        "model.route.session_summary.enable_thinking": "false",
+        "model.route.memory_digest.temperature": "0.1",
+        "model.route.memory_digest.max_tokens": "1800",
+        "model.route.memory_digest.enable_thinking": "false",
+    }
+    now = db_now_naive()
+    for key, value in values.items():
+        assignments = ["value = :value"]
+        params: dict[str, Any] = {"key": key, "value": value}
+        if "description" in columns:
+            assignments.append("description = :description")
+            params["description"] = "摘要模型安全参数（2026-07-16 审计修复）"
+        if "updated_at" in columns:
+            assignments.append("updated_at = :updated_at")
+            params["updated_at"] = now
+        updated = conn.execute(
+            text(
+                f'UPDATE system_settings SET {", ".join(assignments)} '
+                'WHERE "key" = :key'
+            ),
+            params,
+        )
+        if updated.rowcount:
+            continue
+        insert_columns = ["key", "value"]
+        insert_params = [":key", ":value"]
+        if "description" in columns:
+            insert_columns.append("description")
+            insert_params.append(":description")
+        if "updated_at" in columns:
+            insert_columns.append("updated_at")
+            insert_params.append(":updated_at")
+        conn.execute(
+            text(
+                f'INSERT INTO system_settings ({", ".join(insert_columns)}) '
+                f'VALUES ({", ".join(insert_params)})'
+            ),
+            params,
+        )
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -1654,6 +1704,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         OUTBOUND_DELIVERY_SCHEMA_VERSION,
         "outbound delivery ledger and source projections",
         create_outbound_delivery_schema,
+    ),
+    (
+        "20260716_summary_model_safe_defaults",
+        "normalize session summary and memory digest model settings",
+        _summary_model_safe_defaults,
     ),
 ]
 

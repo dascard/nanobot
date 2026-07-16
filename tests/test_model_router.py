@@ -3,6 +3,17 @@ import asyncio
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_model_failure_state(monkeypatch, tmp_path):
+    import clients.model_registry as model_registry
+
+    monkeypatch.setattr(
+        model_registry,
+        "_FAILURE_STATE_PATH",
+        str(tmp_path / "model_failures.json"),
+    )
+
+
 class TestClassifierRouteProviderResolution:
     def test_provider_enabled_string_false_is_disabled(self, monkeypatch):
         from clients.classifier_client import _get_provider_config

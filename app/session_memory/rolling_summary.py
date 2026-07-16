@@ -203,7 +203,19 @@ def save_new_active_summary(
     archive_active_summaries_for_session(db, session_id)
 
     summary_text = render_summary_text(summary_json)
-    source_turn_ids = [int(turn.id) for turn in pending_turns]
+    pending_turn_ids = [int(turn.id) for turn in pending_turns]
+    try:
+        previous_turn_ids_raw = json.loads(getattr(old_summary, "source_turn_ids_json", "[]") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        previous_turn_ids_raw = []
+    previous_turn_ids = [
+        int(item) for item in previous_turn_ids_raw
+        if str(item).isdigit()
+    ] if isinstance(previous_turn_ids_raw, list) else []
+    source_turn_ids = list(dict.fromkeys([*previous_turn_ids, *pending_turn_ids]))
+    covered_from_turn_id = int(getattr(old_summary, "covered_from_turn_id", 0) or 0)
+    if covered_from_turn_id <= 0:
+        covered_from_turn_id = source_turn_ids[0]
     quality = summary_json.get("quality")
     quality = quality if isinstance(quality, dict) else {}
     issues = quality.get("issues")
@@ -227,12 +239,18 @@ def save_new_active_summary(
         summary_kind=summary_kind,
         summary_text=summary_text,
         summary_json=json.dumps(summary_json, ensure_ascii=False),
-        covered_from_turn_id=source_turn_ids[0],
+        covered_from_turn_id=covered_from_turn_id,
         covered_until_turn_id=source_turn_ids[-1],
         source_turn_ids_json=json.dumps(source_turn_ids, ensure_ascii=False),
         source_turn_count=len(source_turn_ids),
-        source_token_estimate=sum(estimate_tokens(turn.content or "") for turn in pending_turns),
-        source_char_count=sum(len(turn.content or "") for turn in pending_turns),
+        source_token_estimate=(
+            int(getattr(old_summary, "source_token_estimate", 0) or 0)
+            + sum(estimate_tokens(turn.content or "") for turn in pending_turns)
+        ),
+        source_char_count=(
+            int(getattr(old_summary, "source_char_count", 0) or 0)
+            + sum(len(turn.content or "") for turn in pending_turns)
+        ),
         raw_window_start_turn_id=int(raw_window_start_turn_id or 0),
         quality_score=float(quality.get("score") or 0.0),
         issues_json=json.dumps(issues, ensure_ascii=False),
@@ -338,6 +356,8 @@ def maybe_rollup_session_summary(
             pending_turns=pending_turns,
             previous_summary=active_summary,
             fallback_summary=result.summary,
+            recent_raw_turn_ids=result.recent_raw_turn_ids,
+            current_user_input=current_user_input,
         )
         result.summary_job_id = int(job.id or 0)
     return result

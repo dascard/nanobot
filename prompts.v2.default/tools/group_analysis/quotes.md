@@ -10,7 +10,7 @@ description: group_analysis 内部分支：提取群聊金句。
 从群聊记录中提取最有趣的发言。
 
 ## 消息格式
-[HH:MM] [user_id]: 内容
+[log_id=123][HH:MM] [user_id]: 内容
 
 ## 输出 JSON
 {

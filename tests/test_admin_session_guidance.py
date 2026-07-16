@@ -633,6 +633,7 @@ def test_admin_group_effective_preview_does_not_call_reranker_model(
     from app.group_memory.injection_service import GROUP_MEMORY_RAG_CACHE
     from core.database import ChatStreamConfig, GroupMemory
     from core.semantic.reranker import RerankResult
+    from core.settings_service import settings
     import core.semantic.provider_factory as provider_factory
 
     reranker_calls: list[str] = []
@@ -653,6 +654,16 @@ def test_admin_group_effective_preview_does_not_call_reranker_model(
             ]
 
     GROUP_MEMORY_RAG_CACHE.clear()
+    original_get_bool = settings.get_bool
+    monkeypatch.setattr(
+        settings,
+        "get_bool",
+        lambda key, default=False: (
+            True
+            if key == "group_memory.injection_enabled"
+            else original_get_bool(key, default)
+        ),
+    )
     db_session.add_all([
         ChatStreamConfig(
             chat_stream_id="qq:preview-no-model:group",

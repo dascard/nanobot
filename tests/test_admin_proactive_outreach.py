@@ -168,6 +168,10 @@ def test_proactive_outreach_status_reports_redacted_target_and_runtime(
     assert data["stats"]["total"] == 2
     assert data["stats"]["by_status"]["sent"] == 1
     assert data["latest_logs"][0]["status"] == "sent"
+    assert data["latest_logs"][0]["created_at_local"] == (
+        "2026-07-08T12:00:00+08:00"
+    )
+    assert data["latest_logs"][0]["created_at_utc"] == "2026-07-08T04:00:00Z"
     assert "target_fingerprint" in data["latest_logs"][0]
     assert "user_id" not in data["latest_logs"][0]
     assert "idempotency_key" not in data["latest_logs"][0]
@@ -273,6 +277,9 @@ def test_proactive_outreach_status_exposes_safe_outbox_linkage(
         assert item["outbox_status"] == "pending"
         assert item["payload_sha256_prefix"]
         assert item["delivery_error_type"] == ""
+        assert item["created_at_local"].endswith("+08:00")
+        assert item["created_at_utc"].endswith("Z")
+        assert item["delivery_updated_at_utc"].endswith("Z")
         for forbidden in (
             "payload_json",
             "destination_snapshot_json",

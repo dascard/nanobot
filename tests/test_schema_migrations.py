@@ -70,6 +70,55 @@ def test_schema_migrations_records_applied_versions():
     assert [row[0] for row in rows] == sorted(version for version, _, _ in MIGRATIONS)
 
 
+def test_summary_model_safe_defaults_migration_is_exact_and_one_time():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE system_settings ("
+            '"key" TEXT PRIMARY KEY, value TEXT, description TEXT, updated_at DATETIME)'
+        ))
+        conn.execute(text(
+            "INSERT INTO system_settings(\"key\", value) VALUES "
+            "('model.route.session_summary.temperature', '1.0'),"
+            "('model.route.session_summary.max_tokens', '65535'),"
+            "('model.route.session_summary.enable_thinking', 'true'),"
+            "('model.route.memory_digest.temperature', '1.0'),"
+            "('model.route.memory_digest.max_tokens', '65535'),"
+            "('model.route.memory_digest.enable_thinking', 'true'),"
+            "('model.route.reply.temperature', '0.7')"
+        ))
+
+    run_schema_migrations(engine)
+
+    with engine.begin() as conn:
+        rows = dict(conn.execute(text(
+            "SELECT \"key\", value FROM system_settings "
+            "WHERE \"key\" LIKE 'model.route.%'"
+        )).fetchall())
+        conn.execute(text(
+            "UPDATE system_settings SET value = '0.2' "
+            "WHERE \"key\" = 'model.route.session_summary.temperature'"
+        ))
+
+    assert rows["model.route.session_summary.temperature"] == "0.1"
+    assert rows["model.route.session_summary.max_tokens"] == "1200"
+    assert rows["model.route.session_summary.enable_thinking"] == "false"
+    assert rows["model.route.memory_digest.temperature"] == "0.1"
+    assert rows["model.route.memory_digest.max_tokens"] == "1800"
+    assert rows["model.route.memory_digest.enable_thinking"] == "false"
+    assert rows["model.route.reply.temperature"] == "0.7"
+
+    run_schema_migrations(engine)
+    with engine.connect() as conn:
+        value = conn.execute(text(
+            "SELECT value FROM system_settings "
+            "WHERE \"key\" = 'model.route.session_summary.temperature'"
+        )).scalar_one()
+    assert value == "0.2"
+
+
 def test_prompt_template_resolution_columns_apply_after_legacy_trace_migration():
     from core.schema_migrations import run_schema_migrations
 

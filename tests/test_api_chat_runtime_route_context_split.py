@@ -226,10 +226,39 @@ def test_build_chat_runtime_route_context_recovers_private_persona_injection_fai
 
     context = build_chat_runtime_route_context(runtime_input, services=services)
 
-    assert context.persona_text == "静态画像"
-    assert context.bridge_meta["persona_text"] == "静态画像"
+    assert context.persona_text == ""
+    assert context.bridge_meta["persona_text"] == ""
     assert context.bridge_meta["runtime_preset"] == "lightweight"
     assert "persona injection context failed user=u-runtime-route: persona down" in calls["warning"][0]
+
+
+def test_build_chat_runtime_route_context_does_not_keep_stale_persona_on_empty_selection():
+    from api.chat_runtime_route_context import ChatRuntimeRouteInput, build_chat_runtime_route_context
+
+    calls: dict[str, list[Any]] = {}
+    runtime_input = ChatRuntimeRouteInput(
+        req=_request(),
+        final_query="与旧画像无关的问题",
+        final_files=[],
+        persona_text="旧画像快照",
+        memory_header="历史摘要",
+        history_messages=[],
+        ctx_debug={},
+        is_group=False,
+        is_superuser=False,
+        private_decision=None,
+        guardrail_status="safe",
+        classifier_ran=False,
+    )
+
+    context = build_chat_runtime_route_context(
+        runtime_input,
+        services=_services(calls, persona_context="", persona_debug={"persona": "miss"}),
+    )
+
+    assert context.persona_text == ""
+    assert context.bridge_meta["persona_text"] == ""
+    assert context.ctx_debug["persona"] == "miss"
 
 
 def test_build_chat_runtime_route_context_delegates_runtime_input_and_logs_prompt_budget():
@@ -344,3 +373,21 @@ def test_parent_proxy_chat_delegates_runtime_route_context_and_preserves_patch_p
     assert calls
     assert routes._chat_runtime_route_services.__module__ == "api.routes"
     assert routes._build_chat_runtime_route_context.__module__ == "api.routes"
+
+
+def test_routes_persona_runtime_wrapper_fails_closed_when_injection_disabled(monkeypatch):
+    from api import routes
+    from core.settings_service import settings
+
+    monkeypatch.setattr(settings, "get_bool", lambda key, default=False: False)
+
+    result = routes._build_persona_injection_context(
+        object(),
+        user_id="u1",
+        current_user_input="问题",
+        recent_messages=[],
+    )
+
+    assert result.context == ""
+    assert result.selected_ids == []
+    assert result.debug["disabled_reason"] == "persona_injection_disabled"

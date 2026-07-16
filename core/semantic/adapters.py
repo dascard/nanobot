@@ -61,8 +61,36 @@ def _as_float(value: Any, *, default: float = 0.0) -> float:
         return default
 
 
+def is_recallable_memory_digest_meta(meta: dict[str, Any]) -> bool:
+    """只允许通过 LLM 审计门禁的 active digest 进入召回链路。"""
+
+    try:
+        schema_version = int(meta.get("schema_version") or 0)
+    except (TypeError, ValueError):
+        return False
+    if schema_version != 2:
+        return False
+    if str(meta.get("status") or "").strip() != "active":
+        return False
+    if str(meta.get("generator") or "").strip() != "llm":
+        return False
+    if str(meta.get("llm_status") or "").strip() != "success":
+        return False
+    quality = meta.get("quality") if isinstance(meta.get("quality"), dict) else {}
+    score = _as_float(
+        meta.get("quality_score"),
+        default=_as_float(quality.get("score")),
+    )
+    issues = meta.get("quality_issues", quality.get("issues", []))
+    if not isinstance(issues, list):
+        return False
+    return score >= 0.7 and not issues
+
+
 def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
     meta = _safe_json(getattr(row, "meta_json", ""), {})
+    if not isinstance(meta, dict) or not is_recallable_memory_digest_meta(meta):
+        return []
     level = int(getattr(row, "level", 0) or 0)
     source_id = str(meta.get("source_id") or getattr(row, "id", "") or "")
     quality = meta.get("quality") if isinstance(meta.get("quality"), dict) else {}
@@ -77,7 +105,12 @@ def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
         "source_type": str(meta.get("source_type") or ""),
         "source_range": str(meta.get("source_range") or ""),
         "summary_type": str(meta.get("summary_type") or ""),
+        "schema_version": int(meta.get("schema_version") or 0),
+        "status": str(meta.get("status") or ""),
         "generator": str(meta.get("generator") or ""),
+        "llm_status": str(meta.get("llm_status") or ""),
+        "quality_score": quality_score,
+        "quality_issues": list(quality.get("issues") or []),
         "prompt_template": str(meta.get("prompt_template") or ""),
         "prompt_version": meta.get("prompt_version") if isinstance(meta.get("prompt_version"), dict) else {},
         "fallback_reason": meta.get("fallback_reason"),
@@ -94,6 +127,8 @@ def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
                 text = _stringify(card.get("text") if isinstance(card, dict) else card)
                 if not text and isinstance(card, dict):
                     text = _stringify(card.get("summary") or card.get("content"))
+                if not text:
+                    continue
                 keywords = card.get("keywords") if isinstance(card, dict) else []
                 lexical = _join_parts(title, text, keywords)
                 chunks.append(SemanticChunk(
@@ -110,8 +145,7 @@ def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
                     source_prior=0.65,
                 ))
             return chunks
-        source_sub_id = "digest:level2"
-        visibility = "recall"
+        return []
     else:
         source_sub_id = f"digest:level{level}"
         visibility = "expand_only"

@@ -56,6 +56,21 @@ def test_proactive_outreach_settings_are_registered_as_plain_boolean_switch():
     assert ambiguous_hold.max_value == 10080
 
 
+def test_unreviewed_memory_automation_is_disabled_by_default():
+    from core.config_registry import SETTING_DEFS
+
+    assert SETTING_DEFS["persona.injection_enabled"].default is False
+    assert SETTING_DEFS["persona.auto_update_enabled"].default is False
+    assert SETTING_DEFS["group_memory.injection_enabled"].default is False
+
+
+def test_summary_routes_disable_thinking_by_default():
+    from core.config_registry import SETTING_DEFS
+
+    assert SETTING_DEFS["model.route.session_summary.enable_thinking"].default == "false"
+    assert SETTING_DEFS["model.route.memory_digest.enable_thinking"].default == "false"
+
+
 def test_settings_service_reports_database_environment_and_default_sources(monkeypatch):
     monkeypatch.setenv("NEW_API_TIMEOUT", "123")
     monkeypatch.delenv("RAG_RERANKER_SCORE_MODE", raising=False)

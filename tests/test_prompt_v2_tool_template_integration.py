@@ -12,7 +12,7 @@ def _write_tool_template(base: Path, key: str, tool_name: str, body: str) -> Non
     )
 
 
-def test_runtime_tool_prompt_lists_v2_tool_template_refs_without_body(tmp_path, monkeypatch):
+def test_runtime_tool_prompt_omits_tool_template_paths_hashes_and_bodies(tmp_path, monkeypatch):
     default_dir = tmp_path / "defaults"
     runtime_dir = tmp_path / "runtime"
     _write_tool_template(default_dir, "tools/sql_analysis/usage", "sql_analysis", "V2 SQL TEMPLATE MARKER")
@@ -28,8 +28,9 @@ def test_runtime_tool_prompt_lists_v2_tool_template_refs_without_body(tmp_path, 
         chat_type="private",
     )
 
-    assert "[V2ToolTemplateRef:sql_analysis]" in prompt
-    assert "工具模板正文已写入 tools schema description" in prompt
+    assert "V2ToolTemplateRef" not in prompt
+    assert "sha256" not in prompt
+    assert str(default_dir) not in prompt
     assert "V2 SQL TEMPLATE MARKER" not in prompt
     assert "DISABLED TEMPLATE MARKER" not in prompt
     assert "python_sandbox：测试禁用" in prompt
@@ -63,7 +64,9 @@ def test_outgoing_tool_schema_description_uses_v2_tool_template(tmp_path, monkey
     result = filter_payload_tools(payload, FinalToolSet(allowed={"sql_analysis"}, disabled={}))
     description = result["tools"][0]["function"]["description"]
 
-    assert "V2 SCHEMA TEMPLATE MARKER" in description
+    assert description == "V2 SCHEMA TEMPLATE MARKER"
+    assert "V2ToolTemplate" not in description
+    assert "sha256" not in description
     assert result["tools"] == payload["tools"]
     assert overlay_calls == []
 
@@ -101,7 +104,7 @@ def test_tool_schema_overlay_is_idempotent_and_replaces_stale_generated_tail(
     second = overlay_tool_schema_description(first)
 
     assert second == first
-    assert second["function"]["description"].count("[V2ToolTemplate:") == 1
+    assert second["function"]["description"] == "FIRST GENERATED BODY"
 
     _write_tool_template(
         runtime_dir,
@@ -113,10 +116,18 @@ def test_tool_schema_overlay_is_idempotent_and_replaces_stale_generated_tail(
     refreshed = overlay_tool_schema_description(second)
     description = refreshed["function"]["description"]
 
-    assert description.startswith("人工说明前缀\n\n普通 Markdown 保留")
+    assert "人工说明前缀" not in description
     assert "FIRST GENERATED BODY" not in description
-    assert "SECOND GENERATED BODY" in description
-    assert description.count("[V2ToolTemplate:") == 1
+    assert description == "SECOND GENERATED BODY"
+
+    from core.prompt_v2.tool_templates import collect_tool_template_resolutions
+
+    resolutions = collect_tool_template_resolutions([refreshed])
+    assert set(resolutions) == {"tool_schema:sql_analysis"}
+    assert resolutions["tool_schema:sql_analysis"]["active_path"].endswith(
+        "tools/sql_analysis/usage.md"
+    )
+    assert len(resolutions["tool_schema:sql_analysis"]["active_sha256"]) == 64
 
 
 def test_tool_template_policy_caches_directory_scan(tmp_path, monkeypatch):

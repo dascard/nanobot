@@ -86,6 +86,30 @@ SETTING_DEFS: dict[str, SettingDef] = {
         category="bot",
         description="角色别名，支持逗号或换行分隔，对应 {{ alias_names }} / {{ bot_aliases }}",
     ),
+    "persona.injection_enabled": SettingDef(
+        key="persona.injection_enabled",
+        env_name="PERSONA_INJECTION_ENABLED",
+        default=False,
+        value_type="bool",
+        category="memory",
+        description="是否允许在真实私聊回复中自动注入已审核画像",
+    ),
+    "persona.auto_update_enabled": SettingDef(
+        key="persona.auto_update_enabled",
+        env_name="PERSONA_AUTO_UPDATE_ENABLED",
+        default=False,
+        value_type="bool",
+        category="memory",
+        description="是否允许后台进化任务自动提取并累加画像事实",
+    ),
+    "group_memory.injection_enabled": SettingDef(
+        key="group_memory.injection_enabled",
+        env_name="GROUP_MEMORY_INJECTION_ENABLED",
+        default=False,
+        value_type="bool",
+        category="memory",
+        description="是否允许在真实群聊回复中自动检索并注入群记忆",
+    ),
     "proactive_outreach.enabled": SettingDef(
         key="proactive_outreach.enabled",
         env_name="PROACTIVE_OUTREACH_ENABLED",
@@ -845,12 +869,17 @@ for _route_key in (
     "private_decision",
     "classifier_legacy",
 ):
+    _thinking_default = (
+        "false"
+        if _route_key in {"session_summary", "memory_digest"}
+        else "auto"
+    )
     SETTING_DEFS.setdefault(
         f"model.route.{_route_key}.enable_thinking",
         SettingDef(
             key=f"model.route.{_route_key}.enable_thinking",
             env_name="",
-            default="auto",
+            default=_thinking_default,
             value_type="str",
             category="model",
             description=f"{_route_key} thinking 模式: auto/true/false",

@@ -23,12 +23,17 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 warnings.filterwarnings("ignore", message=".*CUDA initialization.*")
 from sqlalchemy.orm import Session  # noqa: E402
 
-from core.database import ChatLog, PersonaFact, PersonaBehavior  # noqa: E402
+from core.database import ChatLog, PersonaFact  # noqa: E402
 from core.persona_candidate_prompt import (  # noqa: E402
     CANDIDATE_EXTRACTION_SYSTEM_PROMPT as CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
     build_candidate_extraction_prompt as build_candidate_extraction_prompt,
     filter_user_messages as filter_user_messages,
     format_candidate_logs as format_candidate_logs,
+)
+from core.persona_fact_evidence import (  # noqa: E402
+    content_hash as content_hash,
+    safe_json_dict as _safe_json_dict,
+    safe_json_list as _safe_json_list,
 )
 from core.time_utils import db_now_naive  # noqa: E402
 
@@ -121,33 +126,6 @@ def _from_blob(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32)
 
 
-def _normalize_content(value: str) -> str:
-    return " ".join(str(value or "").strip().lower().split()).rstrip("。.!！?？")
-
-
-def content_hash(value: str) -> str:
-    norm = _normalize_content(value)
-    if not norm:
-        return ""
-    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:32]
-
-
-def _safe_json_list(value: str | None) -> list[Any]:
-    try:
-        parsed = json.loads(value or "[]")
-    except Exception:
-        return []
-    return parsed if isinstance(parsed, list) else []
-
-
-def _safe_json_dict(value: str | None) -> dict[str, Any]:
-    try:
-        parsed = json.loads(value or "{}")
-    except Exception:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
 # ── 状态机核心 ──
 
 class PersonaStateMachine:
@@ -162,8 +140,8 @@ class PersonaStateMachine:
     def process_candidates(self, candidates: list[dict[str, Any]]) -> dict[str, Any]:
         """处理 LLM 提取的候选列表。
 
-        新画像候选 → persona_facts 表（治理字段 + cluster 去重）
-        旧 behavior 候选 → persona_behaviors 表（兼容旧链路）
+        所有新旧候选统一写入 persona_facts（治理字段 + cluster 去重）。
+        旧 type=behavior 映射为 interaction_style，不再累加无消费链的旧表。
 
         返回: {"created": int, "merged": int, "conflicts": int, "rejected": int, "reject_reasons": dict}
         """
@@ -187,14 +165,6 @@ class PersonaStateMachine:
             .limit(MAX_FACTS_PER_USER)
             .all()
         )
-        existing_behaviors = (
-            self.db.query(PersonaBehavior)
-            .filter(PersonaBehavior.user_id == self.user_id)
-            .order_by(PersonaBehavior.last_observed.desc())
-            .limit(MAX_FACTS_PER_USER)
-            .all()
-        )
-
         for c in candidates:
             text = (c.get("text") or "").strip()
             if not text:
@@ -244,58 +214,41 @@ class PersonaStateMachine:
                 "reason": c.get("reason", ""),
                 "reject_reason": c.get("reject_reason", ""),
             }
-            ctype = c.get("type", "preference")
+            hash_match = self._find_content_hash_match(existing_facts, memory_type, text)
+            if hash_match is not None:
+                self._merge_fact(
+                    hash_match, text, evidence, vec, now,
+                    memory_type=memory_type,
+                    confidence_hint=confidence_hint,
+                    evidence_log_ids=evidence_ids,
+                    should_inject=bool(should_inject),
+                    candidate_meta=candidate_meta,
+                )
+                stats["merged"] += 1
+                continue
 
-            if not c.get("memory_type") and ctype == "behavior":
-                self._upsert_behavior(text, evidence, domain, vec, existing_behaviors, now)
-                stats["created"] += 1
-            else:
-                hash_match = self._find_content_hash_match(existing_facts, memory_type, text)
-                if hash_match is not None:
-                    self._merge_fact(
-                        hash_match, text, evidence, vec, now,
-                        memory_type=memory_type,
-                        confidence_hint=confidence_hint,
-                        evidence_log_ids=evidence_ids,
-                        should_inject=bool(should_inject),
-                        candidate_meta=candidate_meta,
-                    )
-                    stats["merged"] += 1
-                    continue
-
-                matches = self._find_matches(vec, existing_facts)
-                if not matches:
-                    new_fact = self._create_fact(
-                        text, evidence, domain, vec, now,
-                        memory_type=memory_type,
-                        confidence_hint=confidence_hint,
-                        evidence_log_ids=evidence_ids,
-                        status=status,
-                        inject_policy=inject_policy,
-                        candidate_meta=candidate_meta,
-                    )
-                    existing_facts.insert(0, new_fact)
-                    stats["created"] += 1
-                elif len(matches) == 1:
-                    self._merge_fact(
-                        matches[0][0], text, evidence, vec, now,
-                        memory_type=memory_type,
-                        confidence_hint=confidence_hint,
-                        evidence_log_ids=evidence_ids,
-                        should_inject=bool(should_inject),
-                        candidate_meta=candidate_meta,
-                    )
-                    stats["merged"] += 1
-                else:
-                    self._resolve_conflicts(
-                        matches, text, evidence, domain, vec, now,
-                        memory_type=memory_type,
-                        confidence_hint=confidence_hint,
-                        evidence_log_ids=evidence_ids,
-                        should_inject=bool(should_inject),
-                        candidate_meta=candidate_meta,
-                    )
-                    stats["conflicts"] += 1
+            matches = self._find_matches(vec, existing_facts)
+            # embedding 相似只能用于发现可能相关项，不能证明两个陈述等价。
+            # 没有双向语义蕴含证据时保守新建，避免把不同正文和证据揉成一条。
+            new_fact = self._create_fact(
+                text, evidence, domain, vec, now,
+                memory_type=memory_type,
+                confidence_hint=confidence_hint,
+                evidence_log_ids=evidence_ids,
+                status=status,
+                inject_policy=inject_policy,
+                candidate_meta=candidate_meta,
+            )
+            existing_facts.insert(0, new_fact)
+            stats["created"] += 1
+            # 只有多个相似候选同时命中时才进入昂贵的 NLI 冲突复核；
+            # 单纯相似不再产生任何 contradicted_by 标记。
+            if len(matches) > 1:
+                stats["conflicts"] += self._mark_confirmed_contradictions(
+                    new_fact,
+                    matches,
+                    text,
+                )
 
         self._apply_decay(now)
         self._prune_excess()
@@ -350,8 +303,8 @@ class PersonaStateMachine:
             .all()
         )
         valid = {int(row[0]) for row in rows}
-        ordered = [item for item in ids if item in valid]
-        return ordered, len(ordered) == len(ids)
+        ordered = list(dict.fromkeys(item for item in ids if item in valid))
+        return ordered, len(valid.intersection(ids)) == len(set(ids))
 
     def _find_content_hash_match(
         self,
@@ -391,7 +344,7 @@ class PersonaStateMachine:
     ) -> tuple[str, str]:
         if memory_type not in AUTO_INJECT_MEMORY_TYPES or not should_inject:
             return "review", "manual_only"
-        if confidence_hint == "high" and evidence_ids:
+        if confidence_hint == "high" and len(evidence_ids) >= 2:
             return "active", "auto"
         if confidence_hint == "medium" and len(evidence_ids) >= 3:
             return "active", "auto"
@@ -506,6 +459,7 @@ class PersonaStateMachine:
         evidence_ids = list(evidence_log_ids or [])
         meta = dict(candidate_meta or {})
         meta.setdefault("confidence_hint", confidence_hint)
+        meta["evidence_items"] = [self._evidence_item(text, evidence, evidence_ids)] if evidence_ids else []
         fact = PersonaFact(
             user_id=self.user_id,
             domain_primary=domain,
@@ -513,8 +467,8 @@ class PersonaStateMachine:
             embedding=blob,
             cluster_centroid=blob,
             cluster_id=None,
-            evidence_count=1,
-            source_log_ids=json.dumps([evidence] if evidence else [], ensure_ascii=False),
+            evidence_count=len(evidence_ids),
+            source_log_ids="[]",
             evidence_log_ids_json=json.dumps(evidence_ids, ensure_ascii=False),
             first_seen=now,
             last_seen=now,
@@ -530,40 +484,6 @@ class PersonaStateMachine:
         self.db.flush()
         fact.cluster_id = fact.id
         return fact
-
-    # ── Behavior 写入（简化去重，不做 centroid 聚类）──
-
-    def _upsert_behavior(self, text: str, evidence: str, domain: str,
-                         vec: np.ndarray, existing: list[PersonaBehavior], now: datetime):
-        """Behavior 去重：embedding 相似 > MATCH_THRESHOLD 则合并，否则新建。"""
-        blob = _to_blob(vec)
-        for b in existing:
-            if b.embedding is None:
-                continue
-            bv = _from_blob(b.embedding)
-            if cosine_similarity(vec, bv) > MATCH_THRESHOLD:
-                b.frequency += 1
-                b.last_observed = now
-                if evidence:
-                    sources = json.loads(b.source_log_ids or "[]")
-                    if evidence not in sources:
-                        sources.append(evidence)
-                        if len(sources) > 20:
-                            sources = sources[-20:]
-                        b.source_log_ids = json.dumps(sources, ensure_ascii=False)
-                logger.debug(f"Behavior merged: '{text[:40]}' -> freq={b.frequency}")
-                return
-        # 新 behavior
-        bh = PersonaBehavior(
-            user_id=self.user_id,
-            domain_primary=domain,
-            pattern=text,
-            embedding=blob,
-            frequency=1,
-            source_log_ids=json.dumps([evidence] if evidence else [], ensure_ascii=False),
-            last_observed=now,
-        )
-        self.db.add(bh)
 
     # ── 合并 ──
 
@@ -582,38 +502,78 @@ class PersonaStateMachine:
         candidate_meta: dict[str, Any] | None = None,
     ):
         """单匹配 → 合并到已有 cluster。"""
+        # 这里只由 content_hash 完全一致的路径调用，正文与证据保持同一语义单元。
         fact.content = self._canonicalize(fact.content, text)
-        fact.evidence_count += 1
         fact.last_seen = now
         fact.content_hash = content_hash(fact.content)
         if not getattr(fact, "memory_type", None):
             fact.memory_type = memory_type
 
-        sources = json.loads(fact.source_log_ids or "[]")
-        if evidence and evidence not in sources:
-            sources.append(evidence)
-            if len(sources) > 20:
-                sources = sources[-20:]
-            fact.source_log_ids = json.dumps(sources, ensure_ascii=False)
-
         evidence_ids = list(evidence_log_ids or [])
-        if evidence_ids:
-            existing_ids = _safe_json_list(getattr(fact, "evidence_log_ids_json", "[]"))
-            merged_ids = list(dict.fromkeys([*existing_ids, *evidence_ids]))
-            fact.evidence_log_ids_json = json.dumps(merged_ids[-50:], ensure_ascii=False)
+        existing_ids = _safe_json_list(getattr(fact, "evidence_log_ids_json", "[]"))
+        merged_ids = list(dict.fromkeys([*existing_ids, *evidence_ids]))[-50:]
+        fact.evidence_log_ids_json = json.dumps(merged_ids, ensure_ascii=False)
+        fact.evidence_count = len(merged_ids)
 
         fact.embedding = _to_blob(vec)
         score = compute_confidence(fact.evidence_count, 0)
         fact.confidence = confidence_label(score)
         if should_inject and memory_type in AUTO_INJECT_MEMORY_TYPES:
-            if confidence_hint == "high" or fact.evidence_count >= 3:
+            if (
+                (confidence_hint == "high" and fact.evidence_count >= 2)
+                or fact.evidence_count >= 3
+            ):
                 fact.status = "active"
                 fact.inject_policy = "auto"
         meta = _safe_json_dict(getattr(fact, "candidate_meta_json", "{}"))
         if candidate_meta:
+            items = meta.get("evidence_items")
+            if not isinstance(items, list):
+                items = []
+            if evidence_ids:
+                item = self._evidence_item(text, evidence, evidence_ids)
+                if item not in items:
+                    items.append(item)
+            meta["evidence_items"] = items[-50:]
+            # 精确同文合并时这些字段仍描述同一事实，可安全更新。
             meta.update({k: v for k, v in candidate_meta.items() if v not in (None, "")})
             fact.candidate_meta_json = json.dumps(meta, ensure_ascii=False)
         self._update_centroid(fact.cluster_id)
+
+    @staticmethod
+    def _evidence_item(text: str, quote: str, evidence_ids: list[int]) -> dict[str, Any]:
+        return {
+            "content_hash": content_hash(text),
+            "log_ids": list(dict.fromkeys(int(item) for item in evidence_ids)),
+            "quote": str(quote or "")[:500],
+        }
+
+    def _mark_confirmed_contradictions(
+        self,
+        new_fact: PersonaFact,
+        matches: list[tuple[PersonaFact, float]],
+        new_text: str,
+    ) -> int:
+        """只为 NLI 明确判定矛盾的事实建立双向关联。"""
+
+        conflicts = 0
+        for other, _ in matches:
+            if not self.detect_contradiction(new_text, other.content):
+                continue
+            other_links = [int(item) for item in _safe_json_list(other.contradicted_by) if str(item).isdigit()]
+            new_links = [int(item) for item in _safe_json_list(new_fact.contradicted_by) if str(item).isdigit()]
+            if new_fact.id not in other_links:
+                other_links.append(new_fact.id)
+                other.contradicted_by = json.dumps(other_links[-50:], ensure_ascii=False)
+            if other.id not in new_links:
+                new_links.append(other.id)
+                new_fact.contradicted_by = json.dumps(new_links[-50:], ensure_ascii=False)
+            other.confidence = "待确认"
+            new_fact.confidence = "待确认"
+            new_fact.status = "review"
+            new_fact.inject_policy = "manual_only"
+            conflicts += 1
+        return conflicts
 
     # ── 冲突解决 ──
 
@@ -625,7 +585,7 @@ class PersonaStateMachine:
                            evidence_log_ids: list[int] | None = None,
                            should_inject: bool = False,
                            candidate_meta: dict[str, Any] | None = None):
-        """多匹配 → 取 evidence_count 最高的 cluster 合并，其余标记为 contradicted。"""
+        """兼容旧调用：合并最佳项，仅标记 NLI 明确确认的矛盾。"""
         matches.sort(key=lambda m: m[0].evidence_count, reverse=True)
         primary = matches[0][0]
         self._merge_fact(
@@ -638,13 +598,14 @@ class PersonaStateMachine:
         )
 
         for other, _ in matches[1:]:
-            contradicted = json.loads(other.contradicted_by or "[]")
-            if primary.cluster_id not in contradicted:
-                contradicted.append(primary.cluster_id)
-                other.contradicted_by = json.dumps(contradicted, ensure_ascii=False)
-                if other.confidence == "确认":
-                    other.confidence = "待确认"
-            logger.debug(f"Contradiction: fact {other.id} contradicted by cluster {primary.cluster_id}")
+            if not self.detect_contradiction(text, other.content):
+                continue
+            contradicted = [int(item) for item in _safe_json_list(other.contradicted_by) if str(item).isdigit()]
+            if primary.id not in contradicted:
+                contradicted.append(primary.id)
+                other.contradicted_by = json.dumps(contradicted[-50:], ensure_ascii=False)
+                other.confidence = "待确认"
+            logger.debug(f"Contradiction: fact {other.id} contradicted by fact {primary.id}")
 
     # ── Centroid 更新 ──
 

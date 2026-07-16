@@ -50,6 +50,8 @@ def enqueue_session_summary_job(
     fallback_summary: RollingSessionSummary,
     max_retry: int | None = None,
     force: bool = False,
+    recent_raw_turn_ids: Sequence[int] | None = None,
+    current_user_input: str = "",
 ) -> tuple[SessionSummaryJob, bool]:
     """为 fallback summary 覆盖范围创建 LLM 摘要任务。
 
@@ -101,6 +103,10 @@ def enqueue_session_summary_job(
             "schema_version": 1,
             "created_by": "rolling_summary_fallback",
             "fallback_summary_kind": getattr(fallback_summary, "summary_kind", "") or "deterministic_fallback",
+            "recent_raw_turn_ids": list(dict.fromkeys(
+                int(item) for item in (recent_raw_turn_ids or [])
+            )),
+            "current_user_input": str(current_user_input or "").replace("\x00", "")[:2000],
         }, ensure_ascii=False),
         created_at=now,
         updated_at=now,

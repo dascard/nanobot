@@ -29,6 +29,8 @@ def _add_digest(db, *, digest_id: int | None = None, status="active", schema_ver
     meta = {
         "schema_version": schema_version,
         "status": status,
+        "generator": "llm",
+        "llm_status": "success",
         "preview": {
             "brief": "群里讨论了 KohakuVQ 和 Discrete AR 图像生成。",
             "keywords": ["KohakuVQ", "Discrete AR", "图像生成"],
@@ -263,8 +265,131 @@ def test_llm_memory_digest_builder_promotes_clean_llm_summary():
     assert result.status == "active"
     assert result.meta["generator"] == "llm"
     assert result.meta["llm_status"] == "success"
+    assert result.meta["llm_model"] == "custom_summarizer"
     assert result.meta["quality"]["should_inject_preview"] is True
     assert "PCL 与 pagefile" in result.level_contents[2]
+
+
+def test_llm_digest_collects_all_valid_source_rows_instead_of_first_eighty():
+    from app.memory_digest.llm_builder import _collect_source_rows, _source_id
+
+    logs = [
+        _log(id=index, content=f"第 {index} 条长期有效消息，讨论 memory digest 批处理")
+        for index in range(1, 102)
+    ]
+
+    rows = _collect_source_rows(logs)
+
+    assert len(rows) == 101
+    assert rows[-1]["log_id"] == 101
+    full_id = _source_id(session_id="group_42", digest_date="2026-05-22", source_rows=rows)
+    truncated_id = _source_id(session_id="group_42", digest_date="2026-05-22", source_rows=rows[:80])
+    assert full_id != truncated_id
+
+
+def test_llm_digest_summarizes_all_source_rows_in_audited_batches():
+    import re
+
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm
+
+    calls: list[list[int]] = []
+
+    def summarizer(messages):
+        prompt = messages[-1]["content"]
+        ids = [int(item) for item in re.findall(r"\[log_id=(\d+)\]", prompt)]
+        calls.append(ids)
+        first_id = ids[0]
+        return json.dumps({
+            "preview": {"brief": f"批次 {len(calls)} 摘要", "keywords": [f"批次{first_id}"]},
+            "long_summary": {"topic_flow": f"本批覆盖从批次{first_id}开始的长期摘要消息。"},
+            "recall_cards": [{
+                "card_id": "card_1",
+                "type": "fact",
+                "text": f"批次{first_id}包含长期摘要分批处理事实。",
+                "keywords": [f"批次{first_id}", "长期摘要"],
+                "importance": 0.8,
+                "evidence_log_ids": [first_id],
+            }],
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False)
+
+    result = build_memory_digest_with_llm(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[
+            _log(id=index, content=f"批次{index}包含长期摘要分批处理事实")
+            for index in range(1, 162)
+        ],
+        summarizer=summarizer,
+    )
+
+    assert result.status == "active"
+    assert len(calls) == 3
+    assert [len(batch) for batch in calls] == [80, 80, 1]
+    assert result.meta["message_count"] == 161
+    assert result.meta["batch_count"] == 3
+    assert result.meta["source_range"] == "log_id 1-161"
+    assert {card["evidence_log_ids"][0] for card in result.meta["recall_cards"]} == {1, 81, 161}
+
+
+def test_llm_digest_rejects_card_whose_named_evidence_does_not_support_it():
+    from app.memory_digest.llm_builder import audit_llm_digest_meta
+
+    meta = {
+        "status": "active",
+        "preview": {"brief": "技术偏好摘要"},
+        "long_summary": {"topic_flow": "讨论了 Python 与部署。"},
+        "recall_cards": [{
+            "card_id": "card_1",
+            "type": "preference",
+            "text": "用户长期偏好 Rust，不使用 Python。",
+            "keywords": ["Rust"],
+            "importance": 0.9,
+            "evidence_log_ids": [1],
+        }],
+        "quality": {"score": 0.9, "issues": []},
+    }
+    source_rows = [
+        {"log_id": 1, "line": "[log_id=1][role=user] 用户明确说长期使用 Python"},
+        {"log_id": 2, "line": "[log_id=2][role=assistant] 助手建议尝试 Rust"},
+    ]
+
+    ok, issues = audit_llm_digest_meta(meta, source_rows=source_rows)
+
+    assert ok is False
+    assert "recall_card_evidence_not_grounded" in issues
+
+
+def test_llm_digest_rejects_credentials_and_assistant_as_user_preference_evidence():
+    from app.memory_digest.llm_builder import audit_llm_digest_meta
+
+    meta = {
+        "status": "active",
+        "preview": {"brief": "不安全摘要"},
+        "long_summary": {"topic_flow": "助手输出了测试凭证。"},
+        "recall_cards": [{
+            "card_id": "card_1",
+            "type": "preference",
+            "text": "用户偏好使用 api_key=sk-secret-value 调用服务。",
+            "keywords": ["api_key", "服务"],
+            "importance": 0.9,
+            "evidence_log_ids": [7],
+        }],
+        "quality": {"score": 0.9, "issues": []},
+    }
+    source_rows = [{
+        "log_id": 7,
+        "role": "assistant",
+        "is_bot": True,
+        "line": "[log_id=7][role=assistant][source=bot] api_key=sk-secret-value",
+    }]
+
+    ok, issues = audit_llm_digest_meta(meta, source_rows=source_rows)
+
+    assert ok is False
+    assert "contains_credential_material" in issues
+    assert "preference_evidence_invalid_role" in issues
 
 
 def test_llm_memory_digest_sync_builder_rejects_awaitable_summarizer():
@@ -346,6 +471,41 @@ def test_llm_memory_digest_async_builder_awaits_async_summarizer():
     assert result.meta["generator"] == "llm"
     assert result.meta["llm_status"] == "success"
     assert "async builder" in result.level_contents[2]
+
+
+def test_default_memory_digest_summarizer_returns_resolved_model_name(monkeypatch):
+    from app.memory_digest.llm_builder import (
+        MemoryDigestLlmOutput,
+        default_llm_memory_digest_summarizer_async,
+    )
+
+    monkeypatch.setattr(
+        "clients.classifier_client.resolve_model_route",
+        lambda _key: {
+            "api_key": "test",
+            "base_url": "http://example.invalid/v1",
+            "temperature": 0.1,
+            "model": "summary-model-v2",
+            "max_tokens": 1800,
+            "enable_thinking": "false",
+        },
+    )
+
+    async def fake_chat_completion(self, **_kwargs):
+        return {"choices": [{"message": {"content": "{}"}}]}
+
+    monkeypatch.setattr(
+        "clients.new_api_client.NewAPIClient.chat_completion",
+        fake_chat_completion,
+    )
+
+    result = run_async(default_llm_memory_digest_summarizer_async([
+        {"role": "user", "content": "测试"},
+    ]))
+
+    assert isinstance(result, MemoryDigestLlmOutput)
+    assert result.model == "summary-model-v2"
+    assert result.content == "{}"
 
 
 @pytest.mark.parametrize(
@@ -434,7 +594,7 @@ def test_llm_memory_digest_builder_accepts_goal_string_json_shape_and_records_pr
     assert len(result.meta["recall_cards"]) == 2
 
 
-def test_llm_memory_digest_builder_falls_back_when_audit_rejects_url_card():
+def test_llm_memory_digest_builder_fails_closed_when_audit_rejects_url_card():
     from app.memory_digest.llm_builder import build_memory_digest_with_llm
 
     def fake_summarizer(_messages):
@@ -477,7 +637,7 @@ def test_llm_memory_digest_builder_falls_back_when_audit_rejects_url_card():
         summarizer=fake_summarizer,
     )
 
-    assert result.status == "active"
+    assert result.status == "failed"
     assert result.meta["generator"] == "deterministic_fallback"
     assert result.meta["llm_status"] == "fallback"
     assert "contains_url" in result.meta["llm_error"]
@@ -561,7 +721,7 @@ def test_llm_memory_digest_builder_falls_back_when_card_contains_log_path():
     assert "recall_card_contains_log_path" in result.meta["fallback_reason"]
 
 
-def test_generate_daily_digest_writes_v2_recall_card_rows(db_session, monkeypatch):
+def test_generate_daily_digest_does_not_persist_deterministic_preview(db_session, monkeypatch):
     from core import daily_digest
 
     db_session.add_all([
@@ -573,17 +733,15 @@ def test_generate_daily_digest_writes_v2_recall_card_rows(db_session, monkeypatc
 
     created = daily_digest.generate_daily_digest_for_date("2026-05-22", use_llm=False)
 
-    assert created == 1
+    assert created == 0
     rows = db_session.query(MemoryDigest).filter_by(session_id="group_42", level=2).all()
-    assert len(rows) >= 1
-    meta = json.loads(rows[0].meta_json)
-    assert meta["schema_version"] == 2
-    assert meta["status"] == "active"
-    assert rows[0].content.startswith("[card]")
-    assert meta["recall_cards"][0]["evidence_log_ids"]
+    assert rows == []
 
 
-def test_generate_daily_digest_force_can_replace_skipped_digest(db_session, monkeypatch):
+def test_generate_daily_digest_skipped_source_remains_retryable_without_empty_rows(
+    db_session,
+    monkeypatch,
+):
     from core import daily_digest
 
     db_session.add_all([
@@ -594,22 +752,14 @@ def test_generate_daily_digest_force_can_replace_skipped_digest(db_session, monk
     monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
 
     assert daily_digest.generate_daily_digest_for_date("2026-05-22", use_llm=False) == 0
-    skipped = db_session.query(MemoryDigest).filter_by(session_id="group_42", level=2).one()
-    assert json.loads(skipped.meta_json)["status"] == "skipped"
+    assert db_session.query(MemoryDigest).filter_by(session_id="group_42").all() == []
+    assert daily_digest._already_digested(db_session, "group_42", "2026-05-22") is False
 
     db_session.add(_log(id=3, content="KohakuVQ 后续补充了有效讨论"))
     db_session.commit()
 
     assert daily_digest.generate_daily_digest_for_date("2026-05-22", use_llm=False) == 0
-    assert daily_digest.generate_daily_digest_for_date("2026-05-22", force=True, use_llm=False) == 1
-
-    rows = db_session.query(MemoryDigest).filter_by(session_id="group_42", level=2).all()
-    metas = [json.loads(row.meta_json) for row in rows]
-    statuses = [meta["status"] for meta in metas]
-    assert statuses.count("active") >= 1
-    active_source_ids = {meta["source_id"] for meta in metas if meta["status"] == "active"}
-    assert len(active_source_ids) == 1
-    assert "archived" in statuses
+    assert db_session.query(MemoryDigest).filter_by(session_id="group_42").all() == []
 
 
 def test_generate_daily_digest_uses_llm_memory_digest_by_default(db_session, monkeypatch):
@@ -693,8 +843,7 @@ def test_generate_daily_digest_contract_failure_remains_retryable(
     rows = db_session.query(MemoryDigest).filter_by(session_id="group_42").all()
     assert calls == 0
     assert created == 0
-    assert rows
-    assert {json.loads(row.meta_json)["status"] for row in rows} == {"failed"}
+    assert rows == []
     assert daily_digest._already_digested(db_session, "group_42", "2026-05-22") is False
 
 
@@ -737,7 +886,7 @@ def test_generate_daily_digest_force_failure_preserves_existing_active_digest(
     assert calls == 0
     assert created == 0
     assert existing_meta["status"] == "active"
-    assert new_statuses == {"failed"}
+    assert new_statuses == set()
 
 
 def test_generate_daily_digest_sync_without_summarizer_does_not_call_default_async(
@@ -766,13 +915,10 @@ def test_generate_daily_digest_sync_without_summarizer_does_not_call_default_asy
 
     created = daily_digest.generate_daily_digest_for_date("2026-05-22")
 
-    assert created == 1
+    assert created == 0
     assert called is False
     row = db_session.query(MemoryDigest).filter_by(session_id="group_42", level=2).first()
-    meta = json.loads(row.meta_json)
-    assert meta["generator"] == "deterministic_fallback"
-    assert meta["llm_status"] == "fallback"
-    assert "sync_summarizer_required" in meta["fallback_reason"]
+    assert row is None
 
 
 def test_generate_daily_digest_async_uses_async_llm_summarizer(db_session, monkeypatch):
@@ -811,6 +957,24 @@ def test_generate_daily_digest_async_uses_async_llm_summarizer(db_session, monke
     assert meta["generator"] == "llm"
     assert meta["llm_status"] == "success"
     assert "async daily digest" in row.content
+
+
+def test_scheduled_memory_digest_entry_uses_async_llm_generation(monkeypatch):
+    from core import daily_digest
+
+    calls: list[str] = []
+
+    async def fake_generate(target_date, **_kwargs):
+        calls.append(target_date)
+        return 3
+
+    monkeypatch.setattr(daily_digest, "generate_daily_digest_for_date_async", fake_generate)
+    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: datetime(2026, 5, 23, 4, 0, 0))
+
+    created = daily_digest.run_daily_digest_once()
+
+    assert created == 3
+    assert calls == ["2026-05-22"]
 
 
 def test_generate_daily_digest_writes_one_level0_one_level1_and_multiple_level2_cards(db_session, monkeypatch):
@@ -886,13 +1050,48 @@ def test_generate_daily_digest_falls_back_when_llm_summarizer_raises(db_session,
         llm_summarizer=broken_summarizer,
     )
 
+    assert created == 0
+    assert db_session.query(MemoryDigest).filter_by(session_id="group_42").count() == 0
+
+
+def test_successful_daily_digest_enqueues_each_written_row_for_semantic_index(
+    db_session, monkeypatch
+):
+    from core import daily_digest
+    from core.database import SemanticIndexJob
+
+    def fake_summarizer(_messages):
+        return json.dumps({
+            "preview": {"brief": "索引闭环", "keywords": ["semantic index"]},
+            "long_summary": {"topic_flow": "确认摘要写入后必须自动创建语义索引任务。"},
+            "recall_cards": [{
+                "card_id": "card_1",
+                "type": "design_rule",
+                "text": "MemoryDigest 成功写入后自动 enqueue 语义索引任务。",
+                "keywords": ["MemoryDigest", "semantic index"],
+                "importance": 0.9,
+                "evidence_log_ids": [1, 2],
+            }],
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False)
+
+    db_session.add_all([
+        _log(id=1, content="MemoryDigest 写入之后需要自动 enqueue"),
+        _log(id=2, content="semantic index worker 才能收到新任务"),
+    ])
+    db_session.commit()
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+
+    created = daily_digest.generate_daily_digest_for_date(
+        "2026-05-22",
+        llm_summarizer=fake_summarizer,
+    )
+
+    digest_ids = [row.id for row in db_session.query(MemoryDigest).order_by(MemoryDigest.id).all()]
+    jobs = db_session.query(SemanticIndexJob).order_by(SemanticIndexJob.id).all()
     assert created == 1
-    row = db_session.query(MemoryDigest).filter_by(session_id="group_42", level=2).first()
-    meta = json.loads(row.meta_json)
-    assert meta["generator"] == "deterministic_fallback"
-    assert meta["llm_status"] == "fallback"
-    assert "llm gateway unavailable" in meta["llm_error"]
-    assert "KohakuVQ" in row.content
+    assert [int(job.source_id) for job in jobs] == digest_ids
+    assert all(job.source_type == "memory_digest" for job in jobs)
 
 
 def test_memory_recall_excludes_legacy_by_default(client, db_session):
@@ -1117,11 +1316,13 @@ def test_expand_by_source_matches_default_json_dumps_spacing(db_session):
     meta = {
         "schema_version": 2,
         "status": "active",
+        "generator": "llm",
+        "llm_status": "success",
         "source_id": source_id,
         "preview": {"brief": "测试预览", "keywords": ["测试"], "participants": []},
         "long_summary": {"topic_flow": "测试详情", "important_details": [], "conclusions": [], "open_loops": []},
         "recall_cards": [],
-        "quality": {"score": 0.9, "reason": "test"},
+        "quality": {"score": 0.9, "issues": [], "reason": "test"},
     }
 
     row = MemoryDigest(

@@ -942,8 +942,8 @@ class PersonaFact(Base):
     """用户画像事实——LLM 提取候选后，Python 状态机去重/聚类/计数/衰减。
     一个 cluster = 一个语义等价簇，cluster 内共享 cluster_id。
 
-    注意: source_log_ids 字段名沿袭旧命名，实际存储 evidence 文本（非 log ID 整数），
-    用前需 json.loads() 解析。
+    注意: source_log_ids 是旧字段，历史数据可能存储 evidence 文本，不能作为日志外键。
+    新链路只写 evidence_log_ids_json，并由其去重数量计算 evidence_count。
     """
 
     __tablename__ = "persona_facts"
@@ -955,7 +955,7 @@ class PersonaFact(Base):
     cluster_centroid = Column(LargeBinary, nullable=True)  # 簇内均值向量（稳定锚点）
     cluster_id = Column(Integer, index=True, nullable=True)
     evidence_count = Column(Integer, default=1)
-    source_log_ids = Column(Text, default="[]")  # JSON array of log IDs
+    source_log_ids = Column(Text, default="[]")  # 旧字段；历史内容不可信，新链路不再写入
     evidence_log_ids_json = Column(Text, default="[]")  # 真实 ChatLog.id 列表；旧 source_log_ids 不可信
     first_seen = Column(DateTime, nullable=True)
     last_seen = Column(DateTime, nullable=True)

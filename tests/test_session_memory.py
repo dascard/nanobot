@@ -749,6 +749,182 @@ def test_session_summary_worker_promotes_llm_summary_and_archives_fallback(db_se
     assert llm_summary.llm_status == "success"
     assert llm_summary.quality_score == 0.86
     assert "异步 LLM 摘要" in llm_summary.summary_text
+    from core.database import SemanticIndexJob
+
+    index_job = db_session.query(SemanticIndexJob).one()
+    assert index_job.source_type == "session_summary"
+    assert index_job.source_id == str(llm_summary.id)
+
+
+def test_llm_summary_prompt_requires_carrying_previous_summary_forward(db_session):
+    from app.session_memory.llm_summarizer import build_llm_summary_messages
+
+    previous = RollingSessionSummary(summary_text="旧摘要中的待办不能丢失")
+    turn = _turn(db_session, content="新增进展")
+
+    messages = build_llm_summary_messages(
+        previous_summary=previous,
+        source_turns=[turn],
+    )
+    prompt = "\n".join(message["content"] for message in messages)
+
+    assert "完整合并" in prompt
+    assert "previous_summary" in prompt
+    assert "不可信数据" in prompt
+    assert "只总结输入中列出的 pending" not in prompt
+
+
+def test_llm_summary_inherits_previous_coverage_and_source_ids(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    previous_turns = [_turn(db_session, content=f"旧轮次 {idx}") for idx in range(2)]
+    pending_turns = [_turn(db_session, content=f"新轮次 {idx}") for idx in range(2)]
+    previous = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="旧摘要",
+        covered_from_turn_id=previous_turns[0].id,
+        covered_until_turn_id=previous_turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in previous_turns]),
+        source_turn_count=2,
+    )
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=pending_turns[0].id,
+        covered_until_turn_id=pending_turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in pending_turns]),
+    )
+    db_session.add_all([previous, fallback])
+    db_session.commit()
+    job, _ = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=pending_turns,
+        previous_summary=previous,
+        fallback_summary=fallback,
+    )
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=lambda _messages: json.dumps({
+            "summary": "旧摘要与新进展已经完整合并",
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False),
+    )
+
+    assert result["done"] == 1
+    summary = db_session.get(RollingSessionSummary, job.result_summary_id)
+    expected_ids = [turn.id for turn in previous_turns + pending_turns]
+    assert json.loads(summary.source_turn_ids_json) == expected_ids
+    assert summary.covered_from_turn_id == expected_ids[0]
+    assert summary.covered_until_turn_id == expected_ids[-1]
+    assert summary.source_turn_count == 4
+
+
+def test_llm_summary_audit_uses_rollup_recent_ids_and_current_input(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import audit_llm_session_summary
+
+    turns = [_turn(db_session, content=f"待摘要 {idx}") for idx in range(2)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        summary_text="fallback",
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    current_input = "用户刚刚要求不要把这句当前输入提前写进历史摘要"
+    job, _ = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+        recent_raw_turn_ids=[99, 100],
+        current_user_input=current_input,
+    )
+
+    ok, issues = audit_llm_session_summary(
+        payload={
+            "summary": current_input,
+            "open_threads": [],
+            "decisions": [],
+            "important_user_requests": [],
+            "resolved_items": [],
+            "artifacts": [],
+            "participants": [],
+            "keywords": [],
+            "quality": {"score": 0.9, "issues": []},
+        },
+        source_turns=turns,
+        job=job,
+    )
+
+    assert ok is False
+    assert "summary_contains_current_user_input" in issues
+
+
+def test_llm_summary_worker_batches_oversized_source_without_silent_truncation(
+    db_session, monkeypatch
+):
+    from app.session_memory import config
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    monkeypatch.setattr(config, "SESSION_SUMMARY_LLM_MAX_INPUT_CHARS", 500)
+    turns = [_turn(db_session, content=f"轮次 {idx} " + "甲" * 240) for idx in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _ = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    prompts: list[str] = []
+
+    def summarizer(messages):
+        prompts.append(messages[-1]["content"])
+        return json.dumps({
+            "summary": f"阶段 {len(prompts)} 已完整合并",
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False)
+
+    result = run_session_summary_worker_once(db_session, summarizer=summarizer)
+
+    assert result["done"] == 1
+    assert len(prompts) >= 3
+    assert "阶段 1 已完整合并" in prompts[1]
+    summary = db_session.get(RollingSessionSummary, job.result_summary_id)
+    assert json.loads(summary.source_turn_ids_json) == [turn.id for turn in turns]
 
 
 def test_session_summary_legacy_sync_worker_rejects_awaitable_summarizer(db_session):

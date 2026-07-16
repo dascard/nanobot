@@ -583,8 +583,12 @@ def test_model_routing_eval_filters_required_capabilities_for_image_case():
     assert result.output["raw"]["ordered_candidates"] == ["vision-model"]
 
 
-def test_capability_dataset_uses_case_suite_as_runner():
-    from evals.run import load_cases, run_suite
+def test_capability_dataset_uses_case_suite_as_runner(tmp_path, monkeypatch):
+    import evals.run as eval_run
+
+    monkeypatch.setattr(eval_run, "REPORTS_DIR", tmp_path / "reports")
+    load_cases = eval_run.load_cases
+    run_suite = eval_run.run_suite
 
     cases = load_cases("capability_model_routing")
 
@@ -595,8 +599,12 @@ def test_capability_dataset_uses_case_suite_as_runner():
     assert report.failed == 0
 
 
-def test_capability_reply_contract_dataset_uses_reply_runner():
-    from evals.run import load_cases, run_suite
+def test_capability_reply_contract_dataset_uses_reply_runner(tmp_path, monkeypatch):
+    import evals.run as eval_run
+
+    monkeypatch.setattr(eval_run, "REPORTS_DIR", tmp_path / "reports")
+    load_cases = eval_run.load_cases
+    run_suite = eval_run.run_suite
 
     cases = load_cases("capability_reply_contract")
 
@@ -611,8 +619,12 @@ def test_capability_reply_contract_dataset_uses_reply_runner():
     assert report.failed == 0
 
 
-def test_capability_rendering_contract_dataset_runs_offline():
-    from evals.run import load_cases, run_suite
+def test_capability_rendering_contract_dataset_runs_offline(tmp_path, monkeypatch):
+    import evals.run as eval_run
+
+    monkeypatch.setattr(eval_run, "REPORTS_DIR", tmp_path / "reports")
+    load_cases = eval_run.load_cases
+    run_suite = eval_run.run_suite
 
     cases = load_cases("capability_rendering_contract")
 

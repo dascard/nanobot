@@ -17,17 +17,9 @@ EVOLUTION_THRESHOLD = int(os.environ.get("EVOLUTION_THRESHOLD", "10"))
 # NANOBOT_API_TOKEN：bot 推送 / chat / group/message 接口认证（为空则接口返回 503）
 NANOBOT_API_TOKEN = os.environ.get("NANOBOT_API_TOKEN", "")
 
-# NANOBOT_ADMIN_TOKEN：WebUI /api/v1/admin/* 管理接口认证（自动生成，必填）
+# NANOBOT_ADMIN_TOKEN：WebUI /api/v1/admin/* 管理接口认证（缺失时管理接口返回 503）
+# 配置模块不得生成或回写密钥；Token 必须由部署环境的单一来源显式提供。
 NANOBOT_ADMIN_TOKEN = os.environ.get("NANOBOT_ADMIN_TOKEN", "")
-if not NANOBOT_ADMIN_TOKEN:
-    import secrets
-    NANOBOT_ADMIN_TOKEN = secrets.token_hex(16)
-    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    try:
-        with open(_env_path, "a") as _fh:
-            _fh.write(f"\nNANOBOT_ADMIN_TOKEN={NANOBOT_ADMIN_TOKEN}\n")
-    except Exception:
-        pass
 # ── 超级用户列表 ──
 def _parse_id_set(raw: str) -> set[str]:
     return {

@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.database import SemanticIndexItem
+from core.semantic.adapters import is_recallable_memory_digest_meta
 from core.semantic.reranker import SemanticCandidate
 from core.semantic.retriever import (
     fts_recall_hits,
@@ -314,6 +315,11 @@ class MemoryRagService:
         fts_candidate_count = 0
         semantic_hits = 0
         for row in recall.rows:
+            if (
+                row.source_type == "memory_digest"
+                and not is_recallable_memory_digest_meta(_safe_json(row.meta_json))
+            ):
+                continue
             lexical = recall.lexical_by_id.get(int(row.id))
             if lexical is None:
                 lexical = lexical_overlap_score(query, row.lexical_text or row.text or "")

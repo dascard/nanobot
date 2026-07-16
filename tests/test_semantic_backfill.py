@@ -12,9 +12,14 @@ def test_preview_reports_empty_memory_index_and_buildable_chunks(db_session):
         session_id="s1",
         digest_date="2026-05-26",
         level=2,
-        content="端口冲突排查",
-        meta_json=json.dumps({
-            "recall_cards": [
+            content="端口冲突排查",
+            meta_json=json.dumps({
+                "schema_version": 2,
+                "status": "active",
+                "generator": "llm",
+                "llm_status": "success",
+                "quality": {"score": 0.9, "issues": []},
+                "recall_cards": [
                 {"title": "端口", "text": "8000 端口被占用", "keywords": ["uvicorn"]},
             ],
         }, ensure_ascii=False),
@@ -40,9 +45,14 @@ def test_build_index_from_existing_memory_digest_writes_items_and_fts(db_session
         session_id="s1",
         digest_date="2026-05-26",
         level=2,
-        content="端口冲突排查",
-        meta_json=json.dumps({
-            "recall_cards": [
+            content="端口冲突排查",
+            meta_json=json.dumps({
+                "schema_version": 2,
+                "status": "active",
+                "generator": "llm",
+                "llm_status": "success",
+                "quality": {"score": 0.9, "issues": []},
+                "recall_cards": [
                 {"title": "端口", "text": "8000 端口被占用", "keywords": ["uvicorn"]},
             ],
         }, ensure_ascii=False),

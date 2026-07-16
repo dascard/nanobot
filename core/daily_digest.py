@@ -412,6 +412,8 @@ def _write_memory_digest_rows(
     result,
     force: bool,
 ) -> bool:
+    if result.status != "active" or str(result.meta.get("generator") or "") != "llm":
+        return False
     start_id = logs[0].id
     end_id = logs[-1].id
     uid = logs[0].user_id or ""
@@ -438,6 +440,7 @@ def _write_memory_digest_rows(
     )
     db.add(d0)
     db.flush()
+    written_rows = [d0]
 
     d1 = MemoryDigest(
         user_id=uid,
@@ -452,6 +455,7 @@ def _write_memory_digest_rows(
     )
     db.add(d1)
     db.flush()
+    written_rows.append(d1)
 
     cards = meta.get("recall_cards") if isinstance(meta.get("recall_cards"), list) else []
     if not cards:
@@ -476,6 +480,18 @@ def _write_memory_digest_rows(
             source_end_log_id=end_id,
         )
         db.add(d2)
+        db.flush()
+        written_rows.append(d2)
+    from core.semantic.jobs import enqueue_index_job
+
+    for row in written_rows:
+        enqueue_index_job(
+            db,
+            source_type="memory_digest",
+            source_id=str(row.id),
+            index_version="",
+            commit=False,
+        )
     return result.status == "active"
 
 
@@ -608,8 +624,10 @@ async def generate_daily_digest_for_date_async(
 
 def run_daily_digest_once() -> int:
     # Summarize yesterday by default so the day is complete.
+    from core.async_bridge import run_awaitable_sync
+
     yesterday = _to_day(db_now_naive() - timedelta(days=1))
-    return generate_daily_digest_for_date(yesterday)
+    return run_awaitable_sync(generate_daily_digest_for_date_async(yesterday))
 
 
 def daily_digest_scheduler(stop_event: threading.Event) -> None:

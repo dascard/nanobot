@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
@@ -160,6 +162,7 @@ class MemoryQueryTool(BaseTool):
         )
 
         runtime = get_rag_runtime_config("memory")
+        started = time.perf_counter()
         result = MemoryRagService(
             db,
             embedding_provider=get_embedding_provider(),
@@ -171,6 +174,16 @@ class MemoryQueryTool(BaseTool):
             user_id=str(args.get("user_id") or "").strip(),
             session_id=str(args.get("session_id") or "").strip(),
             limit=limit,
+        )
+        latency_ms = max(0, int((time.perf_counter() - started) * 1000))
+        self._record_rag_query(
+            db,
+            query=query,
+            source=source,
+            args=args,
+            limit=limit,
+            result=result,
+            latency_ms=latency_ms,
         )
         if result.get("degraded") and not runtime.allow_degraded:
             return ToolResult(error=degraded_error("memory", str(result.get("fallback_reason") or "")))
@@ -201,17 +214,92 @@ class MemoryQueryTool(BaseTool):
     @staticmethod
     def _has_rag_index(db, source: str) -> bool:
         from core.database import SemanticIndexItem
+        from core.semantic.adapters import is_recallable_memory_digest_meta
 
-        source_types = {"memory_digest"} if source == "digest" else {"session_summary"}
-        return (
-            db.query(SemanticIndexItem.id)
+        if source == "digest":
+            source_types = {"memory_digest"}
+        elif source == "session_summary":
+            source_types = {"session_summary"}
+        else:
+            source_types = {"memory_digest", "session_summary"}
+        rows = (
+            db.query(SemanticIndexItem.source_type, SemanticIndexItem.meta_json)
             .filter(SemanticIndexItem.source_type.in_(sorted(source_types)))
             .filter(SemanticIndexItem.status == "active")
             .filter(SemanticIndexItem.visibility == "recall")
-            .limit(1)
-            .first()
-            is not None
+            .yield_per(200)
         )
+        for source_type, meta_json in rows:
+            if source_type == "session_summary":
+                return True
+            try:
+                meta = json.loads(meta_json or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(meta, dict) and is_recallable_memory_digest_meta(meta):
+                return True
+        return False
+
+    @staticmethod
+    def _record_rag_query(
+        db,
+        *,
+        query: str,
+        source: str,
+        args: dict[str, Any],
+        limit: int,
+        result: dict[str, Any],
+        latency_ms: int,
+    ) -> None:
+        """记录真实 memory_query 消费，不持久化召回正文。"""
+
+        try:
+            from core.database import RagDebugRun
+            from core.tracing_context import get_trace_context
+
+            trace_id, run_id = get_trace_context()
+            selected: list[dict[str, Any]] = []
+            for item in list(result.get("items") or []):
+                if not isinstance(item, dict):
+                    continue
+                card_ids = [
+                    str(card.get("candidate_id") or "")
+                    for card in list(item.get("matched_cards") or [])
+                    if isinstance(card, dict) and str(card.get("candidate_id") or "")
+                ]
+                selected.append({
+                    "source_type": str(item.get("source_type") or item.get("source") or ""),
+                    "source_id": str(item.get("source_id") or ""),
+                    "digest_id": item.get("digest_id"),
+                    "summary_id": item.get("summary_id"),
+                    "candidate_ids": card_ids,
+                    "parent_score": float(item.get("parent_score") or 0.0),
+                })
+            request_json = json.dumps({
+                "mode": "runtime_memory_query",
+                "source": source,
+                "user_id": str(args.get("user_id") or ""),
+                "session_id": str(args.get("session_id") or ""),
+                "limit": int(limit),
+                "run_id": run_id,
+            }, ensure_ascii=False)
+            response_json = json.dumps({
+                "stats": dict(result.get("stats") or {}),
+                "selected": selected,
+            }, ensure_ascii=False)
+            db.add(RagDebugRun(
+                trace_id=trace_id,
+                source_type="memory_query",
+                query=str(query or "")[:2000],
+                request_json=request_json,
+                response_json=response_json,
+                degraded=1 if result.get("degraded") else 0,
+                fallback_reason=str(result.get("fallback_reason") or "")[:1000],
+                latency_ms=max(0, int(latency_ms)),
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
 
     @staticmethod
     def _validate_date_args(args: dict[str, Any]) -> None:

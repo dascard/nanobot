@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import logging
+import math
 import os
 import time
 from threading import RLock
@@ -27,6 +28,35 @@ class ResolvedSetting:
     key: str
     value: object
     source: SettingSource
+
+
+def coerce_setting_value(value: object, defn: SettingDef) -> object:
+    """按注册表定义转换并校验设置值。
+
+    调用方可自行决定校验失败时是拒绝写入，还是回退默认值。
+    """
+
+    if value is None:
+        return defn.default
+    if defn.value_type == "bool":
+        if isinstance(value, bool):
+            return value
+        return str(value).lower() in {"1", "true", "yes", "on"}
+    if defn.value_type == "int":
+        converted: object = int(value)
+    elif defn.value_type == "float":
+        converted = float(value)
+        if not math.isfinite(converted):
+            raise ValueError(f"{defn.key} 必须是有限数值")
+    else:
+        return str(value)
+
+    numeric = float(converted)
+    if defn.min_value is not None and numeric < defn.min_value:
+        raise ValueError(f"{defn.key} 不能小于 {defn.min_value}")
+    if defn.max_value is not None and numeric > defn.max_value:
+        raise ValueError(f"{defn.key} 不能大于 {defn.max_value}")
+    return converted
 
 
 def serialize_resolved_setting(
@@ -173,18 +203,8 @@ class SettingsService:
             return values
 
     def _cast(self, value: object, defn: SettingDef) -> object:
-        if value is None:
-            return defn.default
         try:
-            if defn.value_type == "bool":
-                if isinstance(value, bool):
-                    return value
-                return str(value).lower() in {"1", "true", "yes", "on"}
-            if defn.value_type == "int":
-                return int(value)
-            if defn.value_type == "float":
-                return float(value)
-            return str(value)
+            return coerce_setting_value(value, defn)
         except (ValueError, TypeError):
             return defn.default
 

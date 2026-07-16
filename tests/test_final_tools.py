@@ -95,8 +95,10 @@ def test_final_tools_filter_is_pure_clipping_without_schema_growth(monkeypatch):
         description = tool["function"]["description"]
         assert description == original_descriptions[tool["function"]["name"]]
         policy = get_tool_template_policy(tool["function"]["name"])
-        expected_markers = 1 if policy and policy.body else 0
-        assert description.count("[V2ToolTemplate:") == expected_markers
+        if policy and policy.body:
+            assert description.startswith(policy.body[:1600].rstrip())
+        assert "[V2ToolTemplate:" not in description
+        assert "sha256:" not in description
 
     result["tools"][0]["function"]["description"] = "调用方修改"
     assert payload["tools"][0]["function"]["description"] != "调用方修改"
@@ -270,7 +272,7 @@ def test_runtime_preset_prompt_does_not_expand_enabled_tool_schema():
     assert "reply：" not in prompt
     assert "ai_daily：" not in prompt
     assert "bash：群聊强制禁用" in prompt
-    assert "no_reply(reason)" in prompt
+    assert "no_reply(reason)" not in prompt
 
 
 def test_runtime_tool_prompt_disambiguates_sql_and_memory():
@@ -310,8 +312,9 @@ def test_effective_tool_schema_preview_uses_real_descriptions():
     })
     by_name = {item["function"]["name"]: item["function"] for item in schemas}
 
-    assert "刷新当前用户已持久化聊天日志形成的画像" in by_name["persona_update"]["description"]
-    assert "简单聊天记录查询" in by_name["python_sandbox"]["description"]
-    assert "Asia/Shanghai" in by_name["schedule_task"]["description"]
+    assert "当前用户画像" in by_name["persona_update"]["description"]
+    assert "schema 无参数" in by_name["persona_update"]["description"]
+    assert "硬禁用" in by_name["python_sandbox"]["description"]
+    assert "Asia/Shanghai" in by_name["schedule_task"]["parameters"]["properties"]["cron_expr"]["description"]
     assert by_name["schedule_task"]["parameters"]["properties"]["target_type"]["enum"] == ["private", "group"]
     assert by_name["memory_read"]["parameters"]["properties"]["run_in_background"]

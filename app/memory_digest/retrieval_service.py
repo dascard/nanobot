@@ -10,6 +10,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from core.database import MemoryDigest
+from core.semantic.adapters import is_recallable_memory_digest_meta
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _FILTER_FETCH_FACTOR = 10
@@ -42,6 +43,12 @@ def validate_digest_date(value: str, field_name: str) -> str:
 
 def _is_legacy(meta: dict[str, Any]) -> bool:
     return digest_status(meta) == "legacy"
+
+
+def _is_retrievable(meta: dict[str, Any], *, include_legacy: bool) -> bool:
+    if _is_legacy(meta):
+        return bool(include_legacy)
+    return is_recallable_memory_digest_meta(meta)
 
 
 def calc_recall_confidence(keyword: str, content: str, meta: dict[str, Any]) -> float:
@@ -103,7 +110,10 @@ class MemoryDigestRetrievalService:
             if not rows:
                 break
             for row in rows:
-                if not _is_legacy(safe_digest_meta(row.meta_json)):
+                if _is_retrievable(
+                    safe_digest_meta(row.meta_json),
+                    include_legacy=False,
+                ):
                     results.append(self.serialize(row, include_content=include_content))
                     if len(results) >= target_limit:
                         break
@@ -157,9 +167,7 @@ class MemoryDigestRetrievalService:
                 break
             for row in rows:
                 meta = safe_digest_meta(row.meta_json)
-                if not include_legacy and _is_legacy(meta):
-                    continue
-                if digest_status(meta) not in {"active", "legacy"}:
+                if not _is_retrievable(meta, include_legacy=include_legacy):
                     continue
                 chain = self.expand_chain(row, reveal_to_level=reveal_to_level)
                 expanded = [
@@ -195,7 +203,7 @@ class MemoryDigestRetrievalService:
         if not row:
             return None
         meta = safe_digest_meta(row.meta_json)
-        if not include_legacy and _is_legacy(meta):
+        if not _is_retrievable(meta, include_legacy=include_legacy):
             return None
         chain = self.expand_chain(row, reveal_to_level=0)
         return {
@@ -245,9 +253,7 @@ class MemoryDigestRetrievalService:
         filtered: list[Any] = []
         for row in rows:
             meta = safe_digest_meta(row.meta_json)
-            if not include_legacy and _is_legacy(meta):
-                continue
-            if digest_status(meta) not in {"active", "legacy"}:
+            if not _is_retrievable(meta, include_legacy=include_legacy):
                 continue
             filtered.append(row)
         if not filtered:

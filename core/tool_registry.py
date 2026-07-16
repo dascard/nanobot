@@ -100,7 +100,7 @@ TOOL_METADATA: dict[str, ToolDef] = {
     "persona_update": ToolDef(
         name="persona_update", label="画像更新", category="system", risk_level="medium",
         private_default=True, group_default=True,
-        description="用户明确要求时，刷新当前用户已持久化聊天日志形成的画像。",
+        description="仅触发当前用户的整体画像提取与刷新；无参数，不操作单条事实。",
     ),
     "schedule_task": ToolDef(
         name="schedule_task", label="定时任务", category="system", risk_level="medium",
@@ -155,5 +155,19 @@ TOOL_METADATA: dict[str, ToolDef] = {
 }
 
 
+# KT 自动注册但不会进入 Nanobot 用户可见 ToolPlan 的框架工具。
+FRAMEWORK_TOOL_METADATA: dict[str, ToolDef] = {
+    "skill": ToolDef(
+        name="skill",
+        label="技能加载（框架）",
+        category="system",
+        risk_level="low",
+        private_default=False,
+        group_default=False,
+        description="KT 框架按需读取过程技能；不作为 Nanobot 对话工具暴露。",
+    ),
+}
+
+
 def get_tool_def(name: str) -> ToolDef | None:
-    return TOOL_METADATA.get(name)
+    return TOOL_METADATA.get(name) or FRAMEWORK_TOOL_METADATA.get(name)

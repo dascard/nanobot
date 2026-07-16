@@ -118,10 +118,11 @@ def test_timing_gate_eval_suite_contains_directed_to_other_paired_conflict_cases
     assert linger_conflict.expected["scoring"]["model_used"] is True
 
 
-def test_timing_gate_eval_suite_runs_offline():
-    from evals.run import run_suite
+def test_timing_gate_eval_suite_runs_offline(tmp_path, monkeypatch):
+    import evals.run as eval_run
 
-    report = run_suite("timing_gate")
+    monkeypatch.setattr(eval_run, "REPORTS_DIR", tmp_path / "reports")
+    report = eval_run.run_suite("timing_gate")
 
     assert report.total >= 12
     assert report.failed == 0

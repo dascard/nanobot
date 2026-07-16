@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import copy
 import logging
-import re
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Iterable
 
 from core.prompt_v2.section_renderer import sha256_text
 from core.prompt_v2.template_loader import load_template
@@ -18,12 +17,6 @@ from core.prompt_v2.template_registry import (
 from core.prompt_v2.variables import render_scoped_template
 
 logger = logging.getLogger("nanobot.prompt_v2.tool_templates")
-
-_GENERATED_TOOL_TEMPLATE_TAIL_RE = re.compile(
-    r"(?:\n{2,})?\[V2ToolTemplate:[^\]\n ]+ sha256:[0-9a-f]{12}\]\n.*\Z",
-    re.DOTALL,
-)
-
 
 @dataclass(frozen=True)
 class ToolTemplatePolicy:
@@ -167,37 +160,28 @@ def render_tool_execution_template(
         return fallback
 
 
-def format_enabled_tool_templates(
-    enabled: dict[str, bool],
-    values: dict[str, Any] | None = None,
-    *,
-    max_chars_per_tool: int = 2600,
-) -> str:
-    sections: list[str] = []
-    for name in sorted(n for n, ok in (enabled or {}).items() if ok):
-        policy = get_tool_template_policy(name, values)
-        if not policy or not policy.body:
+def collect_tool_template_resolutions(
+    tool_schemas: Iterable[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """收集工具 usage 模板来源，只写入 trace，不进入模型可见描述。"""
+
+    resolutions: dict[str, dict[str, Any]] = {}
+    names: set[str] = set()
+    for schema in tool_schemas or []:
+        function = schema.get("function") if isinstance(schema, dict) else None
+        if isinstance(function, dict):
+            name = str(function.get("name") or "").strip()
+            if name:
+                names.add(name)
+    for name in sorted(names):
+        try:
+            template = load_template(f"tools/{name}/usage")
+        except (FileNotFoundError, ValueError):
             continue
-        body = policy.body
-        if len(body) > max_chars_per_tool:
-            body = f"{body[:max_chars_per_tool].rstrip()}\n...[truncated:{len(policy.body)} chars sha256:{policy.sha256}]"
-        sections.append(
-            "\n".join([
-                f"[ToolTemplate:{name}]",
-                f"source: {policy.source} path: {policy.path} sha256: {policy.sha256[:12]}",
-                body,
-                f"[/ToolTemplate:{name}]",
-            ])
-        )
-    return "\n\n".join(sections)
-
-
-def _strip_generated_tool_template_tail(description: str) -> str:
-    text = str(description or "").strip()
-    match = _GENERATED_TOOL_TEMPLATE_TAIL_RE.search(text)
-    if match is None:
-        return text
-    return text[: match.start()].rstrip()
+        if template.resolution is None:
+            continue
+        resolutions[f"tool_schema:{name}"] = template.resolution.to_dict()
+    return resolutions
 
 
 def overlay_tool_schema_description(tool_schema: dict[str, Any], *, max_chars: int = 1600) -> dict[str, Any]:
@@ -212,12 +196,9 @@ def overlay_tool_schema_description(tool_schema: dict[str, Any], *, max_chars: i
     if not policy or not policy.body:
         return schema
 
-    original = _strip_generated_tool_template_tail(
-        str(function.get("description") or "")
-    )
     body = policy.body
     if len(body) > max_chars:
-        body = f"{body[:max_chars].rstrip()}\n...[truncated:{len(policy.body)} chars sha256:{policy.sha256}]"
-    marker = f"[V2ToolTemplate:{policy.template_key} sha256:{policy.sha256[:12]}]\n{body}"
-    function["description"] = f"{original}\n\n{marker}" if original else marker
+        body = f"{body[:max_chars].rstrip()}\n...[truncated:{len(policy.body)} chars]"
+    # usage 模板是模型可见工具说明的唯一正文；静态 description 只作为模板缺失兜底。
+    function["description"] = body
     return schema

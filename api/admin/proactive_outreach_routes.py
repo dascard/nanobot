@@ -6,8 +6,9 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -62,6 +63,7 @@ _LIVE_DRY_RUN_QUALITY_BLOCK_REASONS = frozenset({
     "unverified_url",
     "draft_budget_too_small",
 })
+_OUTREACH_LOCAL_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 class ProactiveSettingUpdate(BaseModel):
@@ -91,6 +93,40 @@ def _iso(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value or "")
+
+
+def _iso_with_timezone(value: object, *, assume_timezone) -> str:
+    if not isinstance(value, datetime):
+        return ""
+    current = value
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=assume_timezone)
+    return current.isoformat()
+
+
+def _local_time_iso(value: object) -> str:
+    if not isinstance(value, datetime):
+        return ""
+    current = value
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_OUTREACH_LOCAL_TIMEZONE)
+    return current.astimezone(_OUTREACH_LOCAL_TIMEZONE).isoformat()
+
+
+def _local_time_utc_iso(value: object) -> str:
+    if not isinstance(value, datetime):
+        return ""
+    current = value
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_OUTREACH_LOCAL_TIMEZONE)
+    return current.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _utc_time_iso(value: object) -> str:
+    return _iso_with_timezone(value, assume_timezone=timezone.utc).replace(
+        "+00:00",
+        "Z",
+    )
 
 
 def _target_fingerprint(value: object) -> str:
@@ -215,7 +251,9 @@ def _empty_delivery_linkage(row: ProactiveOutreachLog) -> dict[str, Any]:
         "payload_sha256_prefix": "",
         "delivery_error_type": "",
         "delivery_updated_at": "",
+        "delivery_updated_at_utc": "",
         "delivered_at": "",
+        "delivered_at_utc": "",
     }
 
 
@@ -293,7 +331,9 @@ def _delivery_linkages(
                 "payload_sha256_prefix": str(outbox.payload_sha256 or "")[:12],
                 "delivery_error_type": str(outbox.last_error_type or ""),
                 "delivery_updated_at": _iso(outbox.updated_at),
+                "delivery_updated_at_utc": _utc_time_iso(outbox.updated_at),
                 "delivered_at": _iso(outbox.delivered_at),
+                "delivered_at_utc": _utc_time_iso(outbox.delivered_at),
             })
         result[int(row.id)] = linkage
     return result
@@ -315,6 +355,8 @@ def _outreach_log_dict(
         "status": row.status or "",
         "forced": bool(row.forced),
         "created_at": _iso(row.created_at),
+        "created_at_local": _local_time_iso(row.created_at),
+        "created_at_utc": _local_time_utc_iso(row.created_at),
     }
     payload.update(delivery_linkage or _empty_delivery_linkage(row))
     return payload

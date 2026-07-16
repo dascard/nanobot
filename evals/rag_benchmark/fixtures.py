@@ -69,6 +69,22 @@ GROUP_MEMORY_DECOY_GROUP_ID = "group_rag_fixture_other"
 GROUP_MEMORY_QUERY = "群体记忆 RAG fixture 正例"
 
 
+def _recallable_digest_metadata(*, user_id: str, session_id: str) -> dict:
+    """构造通过生产召回门禁的 LLM digest fixture 元数据。"""
+
+    return {
+        "schema_version": 2,
+        "status": "active",
+        "generator": "llm",
+        "llm_status": "success",
+        "quality_score": 0.9,
+        "quality_issues": [],
+        "user_id": user_id,
+        "session_id": session_id,
+        "fixture": FIXTURE_PRESET,
+    }
+
+
 def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
     # RAG benchmark fixture 写入 SQLite ORM DateTime，保持 naive 本地墙钟时间语义。
     return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
@@ -432,11 +448,10 @@ def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
             text=text,
             lexical_text=lexical,
             embedding_text=lexical,
-            metadata={
-                "user_id": MEMORY_USER_ID,
-                "session_id": MEMORY_SESSION_ID,
-                "fixture": FIXTURE_PRESET,
-            },
+            metadata=_recallable_digest_metadata(
+                user_id=MEMORY_USER_ID,
+                session_id=MEMORY_SESSION_ID,
+            ),
             visibility="recall",
             quality_score=0.9,
             trust_level="medium",
@@ -450,11 +465,10 @@ def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
             text=f"{text} 这是其他用户 decoy，不允许被目标用户召回。",
             lexical_text=lexical,
             embedding_text=lexical,
-            metadata={
-                "user_id": MEMORY_OTHER_USER_ID,
-                "session_id": MEMORY_SESSION_ID,
-                "fixture": FIXTURE_PRESET,
-            },
+            metadata=_recallable_digest_metadata(
+                user_id=MEMORY_OTHER_USER_ID,
+                session_id=MEMORY_SESSION_ID,
+            ),
             visibility="recall",
             quality_score=0.95,
             trust_level="medium",
@@ -468,11 +482,10 @@ def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
             text=f"{text} 这是其他 session decoy，不允许被目标 session 召回。",
             lexical_text=lexical,
             embedding_text=lexical,
-            metadata={
-                "user_id": MEMORY_USER_ID,
-                "session_id": MEMORY_OTHER_SESSION_ID,
-                "fixture": FIXTURE_PRESET,
-            },
+            metadata=_recallable_digest_metadata(
+                user_id=MEMORY_USER_ID,
+                session_id=MEMORY_OTHER_SESSION_ID,
+            ),
             visibility="recall",
             quality_score=0.95,
             trust_level="medium",

@@ -604,7 +604,7 @@ def edit_model_route(
 ):
     """编辑模型路由配置——写入 SystemSetting 子字段。"""
     from core.config_registry import SETTING_DEFS
-    from core.settings_service import settings
+    from core.settings_service import coerce_setting_value, settings
 
     prefix, db_key, is_classifier = _resolve_route_key(route_key)
     if is_classifier:
@@ -628,6 +628,7 @@ def edit_model_route(
     else:
         allowed = {"provider", "model", "api_key", "timeout", "temperature", "max_tokens", "enable_thinking"}
 
+    prepared: list[tuple[str, str, str]] = []
     for field, value in fields.items():
         if value is None or field not in allowed:
             continue
@@ -642,7 +643,6 @@ def edit_model_route(
                 continue
         else:
             key = f"{prefix}.{field}"
-        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
         defn = SETTING_DEFS.get(key)
         desc = defn.description if defn else f"model route {route_key}.{field}"
         if field == "enable_thinking":
@@ -652,11 +652,21 @@ def edit_model_route(
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e)) from e
         elif defn and defn.value_type == "int":
-            stored_value = str(int(value))
+            try:
+                stored_value = str(coerce_setting_value(value, defn))
+            except (TypeError, ValueError) as e:
+                raise HTTPException(status_code=422, detail=str(e)) from e
         elif defn and defn.value_type == "float":
-            stored_value = str(float(value))
+            try:
+                stored_value = str(coerce_setting_value(value, defn))
+            except (TypeError, ValueError) as e:
+                raise HTTPException(status_code=422, detail=str(e)) from e
         else:
             stored_value = str(value)
+        prepared.append((key, stored_value, desc))
+
+    for key, stored_value, desc in prepared:
+        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
         if not row:
             row = SystemSetting(key=key, value=stored_value, description=desc)
             db.add(row)

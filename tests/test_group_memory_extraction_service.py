@@ -38,9 +38,14 @@ async def test_extract_group_memories_reuses_group_analysis_pipeline(db_session,
         assert instructions == "提取稳定群体记忆"
         assert len(payload["messages"]) == 3
         assert payload["source_log_ids"]
+        source_ids = payload["source_log_ids"]
         return {
             "topics": {"topics": [
-                {"topic": "本地模型部署", "detail": "群里在讨论压测、上下文窗口和部署文档"},
+                {
+                    "topic": "本地模型部署",
+                    "detail": "群里在讨论压测、上下文窗口和部署文档",
+                    "evidence_log_ids": source_ids[:3],
+                },
             ]},
             "quality": {"dimensions": [], "summary": ""},
             "quotes": {"quotes": []},

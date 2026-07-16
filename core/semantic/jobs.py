@@ -21,6 +21,7 @@ def enqueue_index_job(
     job_type: str = "upsert",
     index_version: str = "",
     max_retry: int = 3,
+    commit: bool = True,
 ) -> SemanticIndexJob:
     ensure_semantic_schema(db.bind)
     now = db_now_naive()
@@ -36,8 +37,11 @@ def enqueue_index_job(
         updated_at=now,
     )
     db.add(job)
-    db.commit()
-    db.refresh(job)
+    if commit:
+        db.commit()
+        db.refresh(job)
+    else:
+        db.flush()
     return job
 
 

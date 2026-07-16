@@ -1958,6 +1958,32 @@ class TestModelHealthCheck:
 
 
 class TestModelRouteV2:
+    def test_summary_route_rejects_out_of_range_parameters_atomically(
+        self, client, auth_header, db_session
+    ):
+        from core.database import SystemSetting
+
+        response = client.put(
+            "/api/v1/admin/models/routes/session_summary",
+            json={
+                "temperature": 3.0,
+                "max_tokens": 65535,
+                "enable_thinking": "false",
+            },
+            headers=auth_header,
+        )
+
+        assert response.status_code == 422, response.text
+        keys = {
+            row.key
+            for row in db_session.query(SystemSetting)
+            .filter(SystemSetting.key.like("model.route.session_summary.%"))
+            .all()
+        }
+        assert "model.route.session_summary.temperature" not in keys
+        assert "model.route.session_summary.max_tokens" not in keys
+        assert "model.route.session_summary.enable_thinking" not in keys
+
     def test_models_status_includes_local_rag_reranker_component(self, client, auth_header, monkeypatch):
         from core.settings_service import settings
 

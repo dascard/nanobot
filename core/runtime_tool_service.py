@@ -269,26 +269,7 @@ def build_runtime_tool_prompt(
             "sql_analysis；memory_read 只用于长期记忆，不用于检索 chat_logs/conversation_turns。"
         )
 
-    try:
-        from core.prompt_v2.tool_templates import get_tool_template_policy
-
-        template_refs: list[str] = []
-        for name in sorted(n for n, ok in (enabled or {}).items() if ok):
-            policy = get_tool_template_policy(name)
-            if not policy:
-                continue
-            template_refs.append(
-                f"  - [V2ToolTemplateRef:{name}] {policy.template_key} "
-                f"source:{policy.source} sha256:{policy.sha256[:12]}"
-            )
-        if template_refs:
-            lines.append("工具模板正文已写入 tools schema description，本段只列来源避免重复：")
-            lines.extend(template_refs)
-    except Exception as exc:
-        logger.warning("Failed to render Prompt V2 tool template refs: %s", exc)
-
     lines.append("规则：不要声称调用未出现在 tools schema 中的工具，也不要声称调用已禁用工具。")
-    lines.append("如需回复，必须真实调用 reply(content)；不回复则调用 no_reply(reason)。")
     return "\n".join(lines)
 
 

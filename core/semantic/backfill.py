@@ -45,7 +45,8 @@ def source_types_for_backfill(source_type: str) -> list[str]:
 
 
 def _load_memory_digest_chunks(db: Session, limit: int) -> tuple[int, list[SemanticChunk]]:
-    rows = db.query(MemoryDigest).order_by(MemoryDigest.id.asc()).limit(limit).all()
+    # 新数据已经过 LLM 审计；先扫描最新行，避免旧 fallback 占满回填预算。
+    rows = db.query(MemoryDigest).order_by(MemoryDigest.id.desc()).limit(limit).all()
     chunks: list[SemanticChunk] = []
     for row in rows:
         chunks.extend(chunk for chunk in chunks_from_memory_digest(row) if chunk.text or chunk.lexical_text)

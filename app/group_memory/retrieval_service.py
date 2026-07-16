@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -38,6 +39,15 @@ TYPE_PRIOR = {
 STRICT_RELEVANCE_TYPES = {"relationship", "event", "slang"}
 DEFAULT_MIN_RELEVANCE = 0.05
 STRICT_MIN_RELEVANCE = 0.18
+AUTO_INJECT_MEMORY_TYPES = {"topic", "preference"}
+_RERANKER_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="group-memory-reranker",
+)
+
+
+class GroupMemoryRerankerTimeout(TimeoutError):
+    """群记忆 reranker 超过当前请求的硬时限。"""
 
 
 @dataclass
@@ -115,11 +125,17 @@ class GroupMemoryRetrievalService:
         reranker_provider: Any = None,
         min_reranker: float = 0.55,
         max_sql_candidates: int = 2000,
+        reranker_timeout_ms: int | None = None,
     ):
         self.db = db
         self.reranker_provider = reranker_provider
         self.min_reranker = float(min_reranker)
         self.max_sql_candidates = int(max_sql_candidates)
+        self.reranker_timeout_ms = (
+            max(1, int(reranker_timeout_ms))
+            if reranker_timeout_ms is not None
+            else None
+        )
 
     def select(
         self,
@@ -212,7 +228,24 @@ class GroupMemoryRetrievalService:
             for row in rows
         ]
         try:
-            results = self.reranker_provider.rerank(query_text, candidates, top_k=50)
+            if self.reranker_timeout_ms is None:
+                results = self.reranker_provider.rerank(query_text, candidates, top_k=50)
+            else:
+                future = _RERANKER_EXECUTOR.submit(
+                    self.reranker_provider.rerank,
+                    query_text,
+                    candidates,
+                    top_k=50,
+                )
+                try:
+                    results = future.result(timeout=self.reranker_timeout_ms / 1000.0)
+                except FutureTimeoutError as exc:
+                    future.cancel()
+                    raise GroupMemoryRerankerTimeout(
+                        f"group memory reranker exceeded {self.reranker_timeout_ms}ms"
+                    ) from exc
+        except GroupMemoryRerankerTimeout:
+            raise
         except Exception:
             return {}
         scores: dict[int, float] = {}
@@ -259,6 +292,8 @@ class GroupMemoryRetrievalService:
             return "never"
         if policy != "auto":
             return "invalid_policy"
+        if str(getattr(row, "memory_type", "") or "") not in AUTO_INJECT_MEMORY_TYPES:
+            return "subjective_type_requires_review"
         if float(getattr(row, "confidence", 0) or 0) < 0.55:
             return "low_confidence"
         if float(getattr(row, "decay_score", 0) or 0) < 0.3:

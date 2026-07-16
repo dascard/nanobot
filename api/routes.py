@@ -606,7 +606,19 @@ def _build_persona_injection_context(
     current_user_input: str,
     recent_messages: list[dict[str, str]],
 ) -> Any:
-    from app.persona.injection_service import PersonaInjectionService
+    from app.persona.injection_service import PersonaInjectionResult, PersonaInjectionService
+    from core.settings_service import settings
+
+    if not settings.get_bool("persona.injection_enabled", False):
+        return PersonaInjectionResult(debug={
+            "persona_injected": False,
+            "persona_fact_ids": [],
+            "persona_skipped": [{"reason": "persona_injection_disabled"}],
+            "persona_context_chars": 0,
+            "persona_context": "",
+            "score_components": {},
+            "disabled_reason": "persona_injection_disabled",
+        })
 
     return PersonaInjectionService(db).build_context(
         user_id=user_id,

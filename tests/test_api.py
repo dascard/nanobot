@@ -2229,13 +2229,19 @@ def test_sticker_register_search_and_disable_api(client):
     assert search_after_disable.json()["results"] == []
 
 
-def test_public_sticker_image_returns_cached_file(client, db_session):
+def test_public_sticker_image_returns_cached_file(
+    client,
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
     import os
     from core.database import StickerMemory
     from core.sticker_memory import register_sticker
-    from core.sticker_preview import _cache_dir
+    import core.sticker_preview as sticker_preview
 
-    local_path = os.path.join(_cache_dir(), "unit-public-api-sticker.png")
+    monkeypatch.setattr(sticker_preview, "_cache_dir", lambda: str(tmp_path))
+    local_path = os.path.join(str(tmp_path), "unit-public-api-sticker.png")
     body = b"fake-public-image"
     with open(local_path, "wb") as f:
         f.write(body)

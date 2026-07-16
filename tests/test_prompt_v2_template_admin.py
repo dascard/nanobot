@@ -884,3 +884,18 @@ def test_group_analysis_template_describes_real_pipeline():
     assert "群聊金句" in raw
     assert "聊天质量锐评" in raw
     assert "工具返回的是可直接发送的 HTML 日报" in raw
+    assert "并不承诺匿名化" in raw
+    assert "显示名" in raw
+
+
+def test_tool_usage_templates_match_deployed_capabilities():
+    persona = (PROMPT_V2_DEFAULT_DIR / "tools" / "persona_update" / "usage.md").read_text(encoding="utf-8")
+    sandbox = (PROMPT_V2_DEFAULT_DIR / "tools" / "python_sandbox" / "usage.md").read_text(encoding="utf-8")
+    daily = (PROMPT_V2_DEFAULT_DIR / "tools" / "ai_daily" / "usage.md").read_text(encoding="utf-8")
+
+    assert "schema 无参数" in persona
+    assert "不支持定点纠正、删除或从零重建" in persona
+    assert "硬禁用" in sandbox
+    assert "不要选择、调用" in sandbox
+    assert "最终 HTML" in daily
+    assert "不要总结、压缩、重排" in daily

@@ -59,7 +59,8 @@ def _inject_persona_context(
     services: ChatRuntimeRouteServices,
     safe_user_input: str,
 ) -> tuple[str, dict[str, Any]]:
-    persona_text = runtime_input.persona_text
+    # 私聊画像以本次动态门禁结果为准；旧快照不得在 miss/异常时回流。
+    persona_text = runtime_input.persona_text if runtime_input.is_group else ""
     ctx_debug = dict(runtime_input.ctx_debug)
     if runtime_input.is_group:
         return persona_text, ctx_debug
@@ -72,8 +73,7 @@ def _inject_persona_context(
         )
         ctx_debug.update(getattr(persona_result, "debug", {}) or {})
         context = getattr(persona_result, "context", "")
-        if context:
-            persona_text = context
+        persona_text = context or ""
     except Exception as exc:
         services.logger.warning(
             "[/chat] persona injection context failed user=%s: %s",

@@ -10,7 +10,7 @@ description: group_analysis 内部分支：生成聊天质量锐评。
 请根据以下群聊记录，给出结构化的聊天质量锐评。
 
 ## 消息格式
-[HH:MM] [user_id]: 内容
+[log_id=123][HH:MM] [user_id]: 内容
 
 ## 输出 JSON
 {

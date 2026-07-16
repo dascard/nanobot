@@ -157,7 +157,7 @@ def test_group_memory_injection_preview_mode_reports_without_context(db_session)
     ))
     db_session.add(GroupMemory(
         group_id="group_1097666427",
-        memory_type="style",
+        memory_type="topic",
         content="群风格: 讨论问题时喜欢直接指出不合理处",
         content_hash="gm-preview-style",
         confidence=0.90,
@@ -180,6 +180,35 @@ def test_group_memory_injection_preview_mode_reports_without_context(db_session)
     assert result.debug["group_memory_injected"] is False
     assert result.selected_ids
     assert result.debug["group_memory_ids"] == result.selected_ids
+
+
+def test_group_memory_retrieval_blocks_legacy_subjective_auto_memory(db_session):
+    from app.group_memory.retrieval_service import GroupMemoryRetrievalService
+    from core.database import GroupMemory
+
+    db_session.add(GroupMemory(
+        group_id="group_1097666427",
+        memory_type="style",
+        content="旧数据声称这个群喜欢尖锐嘲讽",
+        content_hash="gm-legacy-subjective-style",
+        confidence=0.95,
+        evidence_count=20,
+        evidence_log_ids_json="[1, 2, 3]",
+        decay_score=1.0,
+        status="active",
+        inject_policy="auto",
+        last_seen=_local_now(),
+    ))
+    db_session.commit()
+
+    result = GroupMemoryRetrievalService(db_session).select(
+        group_id="1097666427",
+        current_user_input="这个群喜欢什么风格？",
+        recent_messages=[],
+    )
+
+    assert result.selected_ids == []
+    assert result.skipped == [{"id": 1, "reason": "subjective_type_requires_review"}]
 
 
 def test_group_memory_retrieval_skips_manual_policy_and_low_relevance(db_session):
@@ -238,10 +267,10 @@ def test_group_memory_retrieval_skips_manual_policy_and_low_relevance(db_session
     assert [m.id for m in result.selected] == [1]
     skipped = {item["id"]: item["reason"] for item in result.skipped}
     assert skipped[2] == "manual_only"
-    assert skipped[3] == "low_relevance"
+    assert skipped[3] == "subjective_type_requires_review"
     assert result.score_components["1"]["final"] > 0
     assert result.score_components["2"]["skip_reason"] == "manual_only"
-    assert result.score_components["3"]["skip_reason"] == "low_relevance"
+    assert result.score_components["3"]["skip_reason"] == "subjective_type_requires_review"
     assert result.score_components["3"]["relevance"] == 0.0
 
 
@@ -320,3 +349,22 @@ def test_group_memory_overview_recent_injected_ids_sort_by_injected_at(db_sessio
     item = next(row for row in overview if row["group_id"] == "group_1097666427")
 
     assert item["recent_injected_ids"] == [2, 1]
+
+
+def test_runtime_group_profile_builder_fails_closed_when_global_injection_disabled(
+    db_session, monkeypatch
+):
+    from core import context_builder
+    from core.settings_service import settings
+
+    monkeypatch.setattr(settings, "get_bool", lambda key, default=False: False)
+
+    context, debug = context_builder._build_profile_section(
+        db_session,
+        "group_1097666427",
+        current_user_input="测试",
+    )
+
+    assert context == ""
+    assert debug["group_memory_injected"] is False
+    assert debug["disabled_reason"] == "group_memory_injection_disabled"

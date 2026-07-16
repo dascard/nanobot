@@ -210,10 +210,17 @@ def test_expand_sticker_refs_in_content_replaces_short_token(db_session):
     assert expanded.startswith("[CQ:image,file=")
 
 
-def test_expand_sticker_refs_prefers_public_cached_url(db_session, monkeypatch):
-    from core.sticker_preview import _cache_dir
+def test_expand_sticker_refs_prefers_public_cached_url(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    import core.sticker_preview as sticker_preview
 
-    local_path = os.path.join(_cache_dir(), "unit-public-sticker.png")
+    cache_dir = str(tmp_path)
+    monkeypatch.setattr(sticker_preview, "_cache_dir", lambda: cache_dir)
+
+    local_path = os.path.join(cache_dir, "unit-public-sticker.png")
     with open(local_path, "wb") as f:
         f.write(b"fake-image")
     try:
