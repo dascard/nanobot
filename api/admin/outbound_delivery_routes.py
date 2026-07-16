@@ -24,7 +24,7 @@ from core.database import (
     ProactiveOutreachLog,
     get_db,
 )
-from core.outbound_delivery_service import OutboundWorkerConfig
+from core.outbound_delivery_service import resolve_qq_push_config_revision
 
 
 router = APIRouter(
@@ -483,7 +483,7 @@ def replay_outbound_delivery(
     if db.get(OutboundDeliveryOutbox, outbox_id) is None:
         raise HTTPException(status_code=404, detail="出站队列记录不存在")
     try:
-        revision = OutboundWorkerConfig.from_env().endpoint_config_revision
+        revision = resolve_qq_push_config_revision()
     except (TypeError, ValueError):
         raise HTTPException(status_code=503, detail="出站配置不可用") from None
     try:

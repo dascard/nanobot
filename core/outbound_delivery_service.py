@@ -46,6 +46,18 @@ NETWORK_RETRY_CAP_SECONDS = 300.0
 MIN_RETRY_DELAY_SECONDS = 0.001
 
 
+def resolve_qq_push_config_revision(
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    source = os.environ if environ is None else environ
+    revision = str(
+        source.get("NANOBOT_QQ_PUSH_CONFIG_REVISION", "1") or ""
+    ).strip()
+    if not revision or len(revision) > 128:
+        raise ValueError("NANOBOT_QQ_PUSH_CONFIG_REVISION 必须是非空短文本")
+    return revision
+
+
 class OutboundTransport(Protocol):
     async def __call__(
         self,
@@ -81,9 +93,9 @@ class OutboundWorkerConfig:
         )
         object.__setattr__(self, "push_token", push_token)
 
-        revision = str(self.endpoint_config_revision or "").strip()
-        if not revision or len(revision) > 128:
-            raise ValueError("NANOBOT_QQ_PUSH_CONFIG_REVISION 必须是非空短文本")
+        revision = resolve_qq_push_config_revision({
+            "NANOBOT_QQ_PUSH_CONFIG_REVISION": self.endpoint_config_revision,
+        })
         object.__setattr__(self, "endpoint_config_revision", revision)
 
         _require_positive_number(

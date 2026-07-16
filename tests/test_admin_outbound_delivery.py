@@ -486,6 +486,39 @@ def test_replay_uses_route_clock_instead_of_core_default(
     assert response.status_code == 200, response.text
 
 
+def test_replay_reads_revision_without_worker_push_token(
+    admin_outbound,
+    monkeypatch,
+):
+    monkeypatch.delenv("NANOBOT_PUSH_TOKEN", raising=False)
+    monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    with admin_outbound.session_factory() as db:
+        _run, parent = _seed_ledger(db, with_attempt=False)
+        db.commit()
+        parent_id = int(parent.id)
+
+    response = admin_outbound.client.post(
+        f"/api/v1/admin/outbound-delivery/outboxes/{parent_id}/replay",
+        json={
+            "manual_request_key": "operator-request-server-config",
+            "confirm_duplicate_risk": True,
+            "reason": "验证管理端只依赖出站配置版本",
+            "max_attempts": 2,
+            "retry_deadline_at": (NOW + timedelta(days=1)).isoformat(),
+        },
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200, response.text
+    with admin_outbound.session_factory() as db:
+        child = db.get(
+            OutboundDeliveryOutbox,
+            int(response.json()["outbox_id"]),
+        )
+        assert child is not None
+        assert child.endpoint_config_revision == CONFIG_REVISION
+
+
 def test_replay_creates_child_without_changing_ambiguous_parent(admin_outbound):
     with admin_outbound.session_factory() as db:
         run, parent = _seed_ledger(db, with_attempt=False)
