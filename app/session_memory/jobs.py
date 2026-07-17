@@ -487,6 +487,7 @@ def mark_summary_job_failed(
     *,
     error: str,
     retry_delay_sec: int | None = None,
+    retryable: bool = True,
 ) -> SessionSummaryJob:
     job.retry_count = int(job.retry_count or 0) + 1
     job.error = str(error or "summary_job_failed")[:4000]
@@ -495,7 +496,7 @@ def mark_summary_job_failed(
     now = db_now_naive()
     job.updated_at = now
     max_retry = max(0, int(job.max_retry or config.SESSION_SUMMARY_MAX_RETRY))
-    if job.retry_count < max_retry:
+    if retryable and job.retry_count < max_retry:
         job.status = "pending"
         delay = int(retry_delay_sec if retry_delay_sec is not None else config.SESSION_SUMMARY_RETRY_DELAY_SEC)
         job.next_retry_at = now + timedelta(seconds=max(1, delay))

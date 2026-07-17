@@ -2191,6 +2191,184 @@ def test_summary_prompt_explains_disposition_semantics():
     assert "改写、压缩、合并或改述都必须使用 updated" in (
         SESSION_SUMMARY_OUTPUT_INSTRUCTION
     )
+    assert "四个可继承数组合计最多 7 项" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
+    assert "summary 不超过 400 字" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
+    assert "约 1000 tokens 以内" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
+
+
+def test_summary_state_obligation_budget_caps_next_batch_audit():
+    from app.session_memory.llm_summarizer import (
+        _build_bounded_summary_obligations,
+    )
+
+    bounded_state = {
+        "summary": "紧凑累计摘要",
+        "open_threads": [f"待办 {index}" for index in range(7)],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [f"已完成 {index}" for index in range(8)],
+        "artifacts": [],
+        "participants": [f"参与者 {index}" for index in range(8)],
+        "keywords": [f"关键词 {index}" for index in range(8)],
+    }
+
+    assert len(_build_bounded_summary_obligations(bounded_state)) == 7
+
+    oversized_state = dict(bounded_state)
+    oversized_state["decisions"] = ["额外决策"]
+    with pytest.raises(
+        ValueError,
+        match="^summary_state_obligation_budget_exceeded$",
+    ):
+        _build_bounded_summary_obligations(oversized_state)
+
+
+def test_summary_state_output_budget_checks_summary_and_obligation_item_boundaries():
+    from app.session_memory.llm_summarizer import (
+        _build_bounded_summary_obligations,
+    )
+
+    bounded_state = {
+        "summary": "摘" * 400,
+        "open_threads": ["项" * 60],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": [],
+        "keywords": [],
+    }
+
+    assert len(_build_bounded_summary_obligations(bounded_state)) == 1
+
+    oversized_summary = dict(bounded_state, summary="摘" * 401)
+    with pytest.raises(
+        ValueError,
+        match="^summary_state_output_budget_exceeded$",
+    ):
+        _build_bounded_summary_obligations(oversized_summary)
+
+    oversized_item = dict(bounded_state, open_threads=["项" * 61])
+    with pytest.raises(
+        ValueError,
+        match="^summary_state_output_budget_exceeded$",
+    ):
+        _build_bounded_summary_obligations(oversized_item)
+
+
+def test_summary_full_response_budget_includes_quality_and_inheritance():
+    from app.session_memory.llm_summarizer import (
+        _validate_summary_response_budget,
+    )
+
+    payload = {
+        "summary": "紧凑摘要",
+        "open_threads": [],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": [],
+        "keywords": [],
+        "quality": {"score": 0.9, "issues": ["警" * 1800]},
+        "inheritance": [],
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="^summary_state_output_budget_exceeded$",
+    ):
+        _validate_summary_response_budget(payload)
+
+
+def test_summary_full_response_budget_rejects_token_heavy_cjk_below_char_limit():
+    from app.session_memory import config as summary_config
+    from app.session_memory.llm_summarizer import (
+        _validate_summary_response_budget,
+    )
+
+    payload = {
+        "summary": "合法摘要",
+        "open_threads": [],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": ["参与者" + "甲" * 37 for _ in range(26)],
+        "keywords": [],
+        "quality": {"score": 0.9, "issues": []},
+        "inheritance": [],
+    }
+    compact = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert len(compact) < summary_config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS
+
+    with pytest.raises(
+        ValueError,
+        match="^summary_state_output_token_budget_exceeded$",
+    ):
+        _validate_summary_response_budget(payload)
+
+
+def test_summary_full_response_budget_counts_raw_escaped_json():
+    from app.session_memory.llm_summarizer import (
+        _validate_summary_response_budget,
+        parse_llm_summary_response,
+    )
+
+    raw = json.dumps({
+        "summary": "摘" * 350,
+        "quality": {"score": 0.9, "issues": []},
+        "inheritance": [],
+    }, ensure_ascii=True, indent=2)
+    payload = parse_llm_summary_response(raw)
+
+    with pytest.raises(
+        ValueError,
+        match="^summary_state_output_budget_exceeded$",
+    ):
+        _validate_summary_response_budget(payload, raw_content=raw)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "summary": "摘要",
+            "quality": {"score": 0.9, "issues": []},
+            "unexpected": "不得持久化",
+        },
+        {
+            "summary": "摘要",
+            "quality": {"score": True, "issues": []},
+        },
+        {
+            "summary": "摘要",
+            "quality": {"score": 2, "issues": []},
+        },
+        {
+            "summary": "摘要",
+            "quality": {"score": float("nan"), "issues": []},
+        },
+        {
+            "summary": "摘要",
+            "quality": {"score": 10 ** 400, "issues": []},
+        },
+        {
+            "summary": "摘要",
+            "quality": {"score": 0.9, "issues": [], "extra": True},
+        },
+    ],
+)
+def test_summary_response_schema_rejects_extra_fields_and_invalid_quality(payload):
+    from app.session_memory.llm_summarizer import parse_llm_summary_response
+
+    with pytest.raises(ValueError, match="^json_schema_invalid"):
+        parse_llm_summary_response(payload)
 
 
 def test_summary_inheritance_audit_is_recorded_in_prepared_batch_trace(db_session):
@@ -2246,7 +2424,7 @@ def test_summary_inheritance_audit_is_recorded_in_prepared_batch_trace(db_sessio
     assert len(trace.inheritance_audit.state_sha256) == 64
 
 
-def test_summary_previous_state_second_batch_uses_full_canonical_json(db_session):
+def test_summary_long_previous_state_is_compacted_before_second_batch(db_session):
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_contract import build_summary_obligations
     from app.session_memory.llm_summarizer import run_session_summary_worker_once
@@ -2299,17 +2477,28 @@ def test_summary_previous_state_second_batch_uses_full_canonical_json(db_session
         previous_summary=previous,
         fallback_summary=fallback,
     )
-    obligation = build_summary_obligations(previous_state)[0]
+    old_obligation = build_summary_obligations(previous_state)[0]
+    compacted_thread = f"压缩旧状态并保留事实锚点：{tail_marker}"
+    compacted_state = {
+        **previous_state,
+        "open_threads": [compacted_thread],
+    }
+    compacted_obligation = build_summary_obligations(compacted_state)[0]
     prompts: list[str] = []
 
     def summarizer(messages):
         prompts.append(messages[-1]["content"])
+        first_batch = len(prompts) == 1
         return json.dumps({
-            **previous_state,
+            **compacted_state,
             "summary": "新消息已累计进入完整结构化摘要",
             "inheritance": [{
-                "source_id": obligation.source_id,
-                "disposition": "carried",
+                "source_id": (
+                    old_obligation.source_id
+                    if first_batch
+                    else compacted_obligation.source_id
+                ),
+                "disposition": "updated" if first_batch else "carried",
                 "target_field": "open_threads",
                 "target_index": 0,
             }],
@@ -2320,10 +2509,366 @@ def test_summary_previous_state_second_batch_uses_full_canonical_json(db_session
 
     assert result["done"] == 1
     assert len(prompts) >= 2
+    assert tail_marker in prompts[0]
+    assert compacted_thread in prompts[1]
     assert tail_marker in prompts[1]
+    assert "线" * 200 not in prompts[1]
     assert "旧的 1800 字渲染文本" not in prompts[1]
     saved = db_session.get(RollingSessionSummary, job.result_summary_id)
     assert "inheritance" not in json.loads(saved.summary_json)
+
+
+def test_summary_previous_obligation_over_budget_fails_before_llm_without_backoff(
+    db_session,
+):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    previous_turn = _turn(db_session, content="旧摘要来源")
+    previous_state = {
+        "summary": "旧摘要",
+        "open_threads": [f"待办 {index}" for index in range(8)],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": [],
+        "keywords": [],
+    }
+    previous = RollingSessionSummary(
+        session_id="previous-obligation-over-budget",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="旧摘要",
+        summary_json=json.dumps(previous_state, ensure_ascii=False),
+        covered_from_turn_id=previous_turn.id,
+        covered_until_turn_id=previous_turn.id,
+        source_turn_ids_json=json.dumps([previous_turn.id]),
+    )
+    turn = _turn(db_session, content="新一轮待摘要内容")
+    fallback = RollingSessionSummary(
+        session_id="previous-obligation-over-budget",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add_all([previous, fallback])
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="previous-obligation-over-budget",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=previous,
+        fallback_summary=fallback,
+    )
+    calls = []
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=lambda _messages: calls.append(True),
+        owner="budget-worker",
+    )
+
+    db_session.refresh(job)
+    db_session.refresh(fallback)
+    assert result["failed"] == 1
+    assert calls == []
+    assert job.status == "failed"
+    assert job.retry_count == 1
+    assert job.next_retry_at is None
+    assert job.error == "summary_previous_obligation_budget_exceeded"
+    assert fallback.status == "active"
+
+
+def test_summary_previous_state_over_budget_is_non_retryable_prepare_error(db_session):
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import (
+        NonRetryableSessionSummaryError,
+        prepare_claimed_session_summary_job,
+    )
+
+    previous_turn = _turn(db_session, content="超限旧摘要来源")
+    previous = RollingSessionSummary(
+        session_id="previous-state-over-budget",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="旧摘要",
+        summary_json=json.dumps({"summary": "摘" * 4001}, ensure_ascii=False),
+        covered_from_turn_id=previous_turn.id,
+        covered_until_turn_id=previous_turn.id,
+        source_turn_ids_json=json.dumps([previous_turn.id]),
+    )
+    turn = _turn(db_session, content="超限旧摘要后的新内容")
+    fallback = RollingSessionSummary(
+        session_id="previous-state-over-budget",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add_all([previous, fallback])
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="previous-state-over-budget",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=previous,
+        fallback_summary=fallback,
+    )
+    claim_summary_job(db_session, job.id, owner="state-budget-worker")
+
+    with pytest.raises(
+        NonRetryableSessionSummaryError,
+        match="^summary_state_budget_exceeded$",
+    ):
+        prepare_claimed_session_summary_job(
+            db_session,
+            job.id,
+            owner="state-budget-worker",
+        )
+
+
+def test_summary_previous_obligation_over_budget_persists_in_sync_short_transaction(
+    db_session,
+):
+    from app.session_memory.jobs import (
+        claim_summary_job,
+        enqueue_session_summary_job,
+        retry_session_summary_job,
+    )
+    from app.session_memory.llm_summarizer import (
+        process_claimed_session_summary_job_short_transactions,
+    )
+    from core import database
+
+    previous_turn = _turn(db_session, content="同步短事务旧摘要来源")
+    previous = RollingSessionSummary(
+        session_id="sync-previous-budget",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="旧摘要",
+        summary_json=json.dumps({
+            "summary": "旧摘要",
+            "open_threads": [f"同步待办 {index}" for index in range(8)],
+        }, ensure_ascii=False),
+        covered_from_turn_id=previous_turn.id,
+        covered_until_turn_id=previous_turn.id,
+        source_turn_ids_json=json.dumps([previous_turn.id]),
+    )
+    turn = _turn(db_session, content="同步短事务新内容")
+    fallback = RollingSessionSummary(
+        session_id="sync-previous-budget",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add_all([previous, fallback])
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="sync-previous-budget",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=previous,
+        fallback_summary=fallback,
+    )
+    claim_summary_job(db_session, job.id, owner="sync-budget-worker")
+    db_session.commit()
+    calls = []
+
+    ok = process_claimed_session_summary_job_short_transactions(
+        database.SessionLocal,
+        job_id=job.id,
+        summarizer=lambda _messages: calls.append(True),
+        owner="sync-budget-worker",
+    )
+
+    assert ok is False
+    assert calls == []
+    with database.SessionLocal() as verify_db:
+        persisted = verify_db.get(SessionSummaryJob, job.id)
+        assert persisted.status == "failed"
+        assert persisted.next_retry_at is None
+        assert persisted.error == "summary_previous_obligation_budget_exceeded"
+        retry_session_summary_job(verify_db, job.id)
+        verify_db.commit()
+    with database.SessionLocal() as verify_db:
+        retried = verify_db.get(SessionSummaryJob, job.id)
+        assert retried.status == "pending"
+        assert retried.error == ""
+
+
+@pytest.mark.asyncio
+async def test_summary_previous_obligation_over_budget_persists_in_async_short_transaction(
+    db_session,
+):
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import (
+        process_claimed_session_summary_job_short_transactions_async,
+    )
+    from core import database
+
+    previous_turn = _turn(db_session, content="异步短事务旧摘要来源")
+    previous = RollingSessionSummary(
+        session_id="async-previous-budget",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="旧摘要",
+        summary_json=json.dumps({
+            "summary": "旧摘要",
+            "open_threads": [f"异步待办 {index}" for index in range(8)],
+        }, ensure_ascii=False),
+        covered_from_turn_id=previous_turn.id,
+        covered_until_turn_id=previous_turn.id,
+        source_turn_ids_json=json.dumps([previous_turn.id]),
+    )
+    turn = _turn(db_session, content="异步短事务新内容")
+    fallback = RollingSessionSummary(
+        session_id="async-previous-budget",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add_all([previous, fallback])
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="async-previous-budget",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=previous,
+        fallback_summary=fallback,
+    )
+    claim_summary_job(db_session, job.id, owner="async-budget-worker")
+    db_session.commit()
+    calls = []
+
+    async def summarizer(_messages):
+        calls.append(True)
+
+    ok = await process_claimed_session_summary_job_short_transactions_async(
+        database.SessionLocal,
+        job_id=job.id,
+        summarizer=summarizer,
+        owner="async-budget-worker",
+    )
+
+    assert ok is False
+    assert calls == []
+    with database.SessionLocal() as verify_db:
+        persisted = verify_db.get(SessionSummaryJob, job.id)
+        assert persisted.status == "failed"
+        assert persisted.next_retry_at is None
+        assert persisted.error == "summary_previous_obligation_budget_exceeded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("worker_mode", ["sync", "async"])
+async def test_summary_short_transaction_redacts_unknown_prefixed_error(
+    db_session,
+    caplog,
+    worker_mode,
+):
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import (
+        process_claimed_session_summary_job_short_transactions,
+        process_claimed_session_summary_job_short_transactions_async,
+    )
+    from core import database
+
+    turn = _turn(
+        db_session,
+        session_id=f"prefixed-error-{worker_mode}",
+        content="未知异常脱敏用例",
+    )
+    fallback = RollingSessionSummary(
+        session_id=f"prefixed-error-{worker_mode}",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id=fallback.session_id,
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    owner = f"prefixed-error-{worker_mode}-worker"
+    claim_summary_job(db_session, job.id, owner=owner)
+    db_session.commit()
+    sentinel = "summary_api_key_sensitive_sentinel"
+
+    if worker_mode == "sync":
+        processed = process_claimed_session_summary_job_short_transactions(
+            database.SessionLocal,
+            job_id=job.id,
+            summarizer=lambda _messages: (_ for _ in ()).throw(
+                RuntimeError(sentinel)
+            ),
+            owner=owner,
+        )
+    else:
+        async def failing_summarizer(_messages):
+            raise RuntimeError(sentinel)
+
+        processed = await process_claimed_session_summary_job_short_transactions_async(
+            database.SessionLocal,
+            job_id=job.id,
+            summarizer=failing_summarizer,
+            owner=owner,
+        )
+
+    assert processed is False
+    with database.SessionLocal() as verify_db:
+        persisted = verify_db.get(SessionSummaryJob, job.id)
+        assert persisted.status == "pending"
+        assert persisted.next_retry_at is not None
+        assert persisted.error == "session_summary_processing_failed:RuntimeError"
+        assert sentinel not in persisted.error
+    assert sentinel not in caplog.text
 
 
 @pytest.mark.parametrize("drift_kind", ["content", "role"])
@@ -3828,6 +4373,7 @@ def test_lost_summary_owner_cannot_finalize_or_write(db_session):
 def test_short_transaction_finalize_rolls_back_when_semantic_enqueue_fails(
     db_session,
     monkeypatch,
+    caplog,
 ):
     from sqlalchemy.orm import sessionmaker
 
@@ -3887,7 +4433,9 @@ def test_short_transaction_finalize_rolls_back_when_semantic_enqueue_fails(
     assert current_job.status == "pending"
     assert current_job.retry_count == 1
     assert current_job.result_summary_id is None
-    assert "semantic enqueue failed" in current_job.error
+    assert current_job.error == "session_summary_processing_failed:RuntimeError"
+    assert "semantic enqueue failed" not in current_job.error
+    assert "semantic enqueue failed" not in caplog.text
     assert current_fallback.status == "active"
     summaries = db_session.query(RollingSessionSummary).filter_by(
         session_id=fallback.session_id,

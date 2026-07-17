@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -68,14 +69,109 @@ inheritance 只用于审计，不能写进 summary 或其他业务字段。
 输出严格 JSON，不要 Markdown，不要代码块。
 """
 
+SESSION_SUMMARY_MAX_STATE_OBLIGATIONS = 7
+SESSION_SUMMARY_MAX_SUMMARY_CHARS = 400
+SESSION_SUMMARY_MAX_OBLIGATION_CHARS = 60
+SESSION_SUMMARY_MAX_ESTIMATED_OUTPUT_TOKENS = 1000
+
+_SESSION_SUMMARY_LIST_FIELDS = (
+    "open_threads",
+    "decisions",
+    "important_user_requests",
+    "resolved_items",
+    "artifacts",
+    "participants",
+    "keywords",
+)
+_SESSION_SUMMARY_ROOT_FIELDS = frozenset({
+    "summary",
+    *_SESSION_SUMMARY_LIST_FIELDS,
+    "quality",
+    "inheritance",
+})
+_SESSION_SUMMARY_QUALITY_FIELDS = frozenset({"score", "issues"})
+_SESSION_SUMMARY_INHERITANCE_FIELDS = frozenset({
+    "source_id",
+    "disposition",
+    "target_field",
+    "target_index",
+})
+
 SESSION_SUMMARY_OUTPUT_INSTRUCTION = """请输出严格 JSON，业务字段严格为 summary、open_threads、decisions、important_user_requests、resolved_items、artifacts、participants、keywords、quality，并额外输出仅用于审计的 inheritance 数组。
 inheritance 每项字段为 source_id、disposition、target_field、target_index；disposition 只允许 carried、updated、resolved。
 carried 仅表示目标文本与 obligation.normalized_text 完全一致；改写、压缩、合并或改述都必须使用 updated；确认事项已完成才使用 resolved。
 每个 available obligation 必须恰好处置一次，resolved 只能指向 resolved_items，legacy_summary 只能指向 summary；target 必须存在且非空。
-summary 不超过 1200 字，quality.score 必须是 0 到 1 的数字。不要把 pending_fragments 当日志转写，不要保留 turn_id、时间戳、role 或 fragment 标签。
+summary 不超过 400 字；open_threads、decisions、important_user_requests、artifacts 四个可继承数组合计最多 7 项，每项不超过 60 字，优先合并同类事项并把必要背景压缩进 summary。
+resolved_items、participants、keywords 也必须保持简洁。
+整份 JSON 必须简洁并同时控制在 1800 字符、约 1000 tokens 以内，quality.score 必须是 0 到 1 的有限数字。不要把 pending_fragments 当日志转写，不要保留 turn_id、时间戳、role 或 fragment 标签。
 如果只能摘录，请改写为简洁要点。必须完整合并 previous_summary，不能只输出 pending_fragments 的摘要。"""
 
 SESSION_SUMMARY_FRAGMENT_MAX_CHARS = 1000
+
+
+class NonRetryableSessionSummaryError(ValueError):
+    """输入合同确定性失败，禁止 worker 自动重复调用。"""
+
+
+_SAFE_SESSION_SUMMARY_ERROR_CODES = frozenset({
+    "contains_prompt_control_tag",
+    "contains_user_input_tag",
+    "json_parse_failed",
+    "json_schema_invalid",
+    "llm_response_missing_content",
+    "possible_tool_contract_leak",
+    "quality_issues_present",
+    "quality_score_below_threshold",
+    "source_turn_ids_mismatch",
+    "source_turn_not_eligible",
+    "source_turns_empty",
+    "summary_contains_current_user_input",
+    "summary_empty",
+    "summary_fragment_count_invalid",
+    "summary_fragment_index_invalid",
+    "summary_fragment_manifest_invalid",
+    "summary_fragment_size_invalid",
+    "summary_inheritance_invalid",
+    "summary_input_manifest_mismatch",
+    "summary_job_failed",
+    "summary_job_lease_lost",
+    "summary_mentions_recent_raw_turn",
+    "summary_obligation_invalid",
+    "summary_prepare_invalid",
+    "summary_previous_obligation_budget_exceeded",
+    "summary_request_budget_exceeded",
+    "summary_request_message_invalid",
+    "summary_state_budget_exceeded",
+    "summary_state_obligation_budget_exceeded",
+    "summary_state_output_budget_exceeded",
+    "summary_state_output_token_budget_exceeded",
+    "summary_too_long",
+    "summary_turn_hash_invalid",
+    "summary_turn_id_duplicate",
+    "summary_turn_id_invalid",
+    "sync_summarizer_returned_awaitable",
+})
+
+
+def _safe_session_summary_error(exc: BaseException) -> str:
+    """将任意异常收敛为不含请求正文、地址或凭证的稳定错误码。"""
+
+    raw = str(exc or "")
+    safe_codes: list[str] = []
+    for part in raw.split(","):
+        code = part.strip().split(":", 1)[0]
+        if (
+            re.fullmatch(r"[a-z][a-z0-9_]{2,127}", code)
+            and code in _SAFE_SESSION_SUMMARY_ERROR_CODES
+            and code not in safe_codes
+        ):
+            safe_codes.append(code)
+    if safe_codes:
+        return ",".join(safe_codes)
+    error_type = type(exc).__name__
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", error_type):
+        error_type = "Exception"
+    return f"session_summary_processing_failed:{error_type}"
 
 
 @dataclass(frozen=True)
@@ -113,19 +209,26 @@ class PreparedSessionSummaryJob:
         return [dict(message) for message in self.batch_contracts[0].messages]
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid_json_constant:{value}")
+
+
 def _safe_json_loads(raw: str) -> dict[str, Any]:
     text = str(raw or "").strip()
     if not text:
         raise ValueError("json_parse_failed: empty_response")
     try:
-        value = json.loads(text)
-    except (TypeError, json.JSONDecodeError):
+        value = json.loads(text, parse_constant=_reject_json_constant)
+    except (TypeError, ValueError, json.JSONDecodeError):
         match = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)```", text)
         if not match:
             raise ValueError("json_parse_failed")
         try:
-            value = json.loads(match.group(1).strip())
-        except (TypeError, json.JSONDecodeError) as exc:
+            value = json.loads(
+                match.group(1).strip(),
+                parse_constant=_reject_json_constant,
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("json_parse_failed") from exc
     if not isinstance(value, dict):
         raise ValueError("json_schema_invalid: root_not_object")
@@ -137,19 +240,50 @@ def parse_llm_summary_response(raw: Any) -> dict[str, Any]:
         payload = dict(raw)
     else:
         payload = _safe_json_loads(str(raw or ""))
-    payload.setdefault("open_threads", [])
-    payload.setdefault("decisions", [])
-    payload.setdefault("important_user_requests", [])
-    payload.setdefault("resolved_items", [])
-    payload.setdefault("artifacts", [])
-    payload.setdefault("participants", [])
-    payload.setdefault("keywords", [])
+    if set(payload) - _SESSION_SUMMARY_ROOT_FIELDS:
+        raise ValueError("json_schema_invalid: unexpected_root_fields")
+    summary = payload.setdefault("summary", "")
+    if type(summary) is not str:
+        raise ValueError("json_schema_invalid: summary_not_string")
+    for field_name in _SESSION_SUMMARY_LIST_FIELDS:
+        items = payload.setdefault(field_name, [])
+        if type(items) is not list or any(type(item) is not str for item in items):
+            raise ValueError(f"json_schema_invalid: {field_name}_not_string_list")
+
     quality = payload.get("quality")
-    if not isinstance(quality, dict):
+    if quality is None:
         quality = {}
-    quality.setdefault("score", 0.0)
-    quality.setdefault("issues", [])
-    payload["quality"] = quality
+    if type(quality) is not dict:
+        raise ValueError("json_schema_invalid: quality_not_object")
+    if set(quality) - _SESSION_SUMMARY_QUALITY_FIELDS:
+        raise ValueError("json_schema_invalid: unexpected_quality_fields")
+    score = quality.get("score", 0.0)
+    if type(score) not in (int, float):
+        raise ValueError("json_schema_invalid: quality_score_invalid")
+    try:
+        numeric_score = float(score)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("json_schema_invalid: quality_score_invalid") from exc
+    if not math.isfinite(numeric_score) or not 0.0 <= numeric_score <= 1.0:
+        raise ValueError("json_schema_invalid: quality_score_invalid")
+    quality_issues = quality.get("issues", [])
+    if (
+        type(quality_issues) is not list
+        or any(type(item) is not str for item in quality_issues)
+    ):
+        raise ValueError("json_schema_invalid: quality_issues_not_string_list")
+    payload["quality"] = {
+        "score": numeric_score,
+        "issues": quality_issues,
+    }
+
+    inheritance = payload.setdefault("inheritance", [])
+    if type(inheritance) is not list or any(
+        type(item) is not dict
+        or set(item) != _SESSION_SUMMARY_INHERITANCE_FIELDS
+        for item in inheritance
+    ):
+        raise ValueError("json_schema_invalid: inheritance_invalid")
     return payload
 
 
@@ -224,6 +358,7 @@ def build_llm_summary_messages(
         previous_summary,
         max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
     )
+    _validate_previous_obligation_budget(obligations)
     batches = build_summary_request_batches(
         system_prompt=SESSION_SUMMARY_SYSTEM_PROMPT,
         previous_state=previous_state,
@@ -498,6 +633,64 @@ def _source_turns_for_batch(
     return tuple(turn for turn in prepared.source_turns if turn.id in turn_ids)
 
 
+def _build_bounded_summary_obligations(
+    state: dict[str, Any],
+) -> tuple[SummaryObligation, ...]:
+    """限制下一批 inheritance 合同规模，避免 1200 tokens 被审计结构耗尽。"""
+
+    summary = str(state.get("summary") or "")
+    obligations = build_summary_obligations(state)
+    if len(obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
+        raise ValueError("summary_state_obligation_budget_exceeded")
+    if (
+        len(summary) > SESSION_SUMMARY_MAX_SUMMARY_CHARS
+        or any(
+            len(obligation.normalized_text) > SESSION_SUMMARY_MAX_OBLIGATION_CHARS
+            for obligation in obligations
+        )
+    ):
+        raise ValueError("summary_state_output_budget_exceeded")
+    return obligations
+
+
+def _validate_summary_response_budget(
+    payload: dict[str, Any],
+    *,
+    raw_content: Any = None,
+) -> None:
+    """按紧凑 JSON 校验完整模型响应，覆盖 quality 与 inheritance 开销。"""
+
+    try:
+        serialized = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("json_schema_invalid: non_serializable") from exc
+    raw_text = raw_content if type(raw_content) is str else serialized
+    if max(len(serialized), len(raw_text)) > config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS:
+        raise ValueError("summary_state_output_budget_exceeded")
+    if max(
+        estimate_tokens(serialized),
+        estimate_tokens(raw_text),
+    ) > SESSION_SUMMARY_MAX_ESTIMATED_OUTPUT_TOKENS:
+        raise ValueError("summary_state_output_token_budget_exceeded")
+
+
+def _validate_previous_obligation_budget(
+    obligations: tuple[SummaryObligation, ...],
+) -> None:
+    """首批调用前拒绝 1200 tokens 下不可满足的历史审计合同。"""
+
+    if len(obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
+        raise NonRetryableSessionSummaryError(
+            "summary_previous_obligation_budget_exceeded"
+        )
+
+
 def _build_next_request_batch(
     *,
     state: dict[str, Any],
@@ -535,6 +728,10 @@ def _accept_summary_batch_payload(
 ]:
     llm_result = _normalize_llm_result(raw)
     payload = parse_llm_summary_response(llm_result.content)
+    _validate_summary_response_budget(
+        payload,
+        raw_content=llm_result.content,
+    )
     inheritance_audit = validate_inheritance(
         payload,
         obligations,
@@ -552,7 +749,7 @@ def _accept_summary_batch_payload(
     return (
         business_payload,
         state,
-        build_summary_obligations(state),
+        _build_bounded_summary_obligations(state),
         inheritance_audit,
         llm_result,
     )
@@ -824,6 +1021,64 @@ def save_llm_session_summary(
     return row
 
 
+def _safe_prepare_error_code(exc: BaseException) -> str:
+    """只保留稳定内部错误码，避免把输入或异常正文写入 job。"""
+
+    code = str(exc or "").split(":", 1)[0].strip()
+    if re.fullmatch(r"[a-z][a-z0-9_]{2,127}", code):
+        return code
+    return "summary_prepare_invalid"
+
+
+def _build_prepared_summary_contract(
+    *,
+    previous: RollingSessionSummary | None,
+    source_turn_snapshots: tuple[SessionSummaryTurnSnapshot, ...],
+) -> tuple[
+    tuple[TurnFragment, ...],
+    TurnCoverageManifest,
+    dict[str, Any],
+    tuple[SummaryObligation, ...],
+    tuple[SummaryRequestBatch, ...],
+]:
+    """构建首批纯输入合同，并把确定性失败标为不可自动重试。"""
+
+    try:
+        fragments = _fragment_source_turns(source_turn_snapshots)
+        manifest = build_coverage_manifest(fragments)
+        previous_state = canonical_previous_state(
+            previous,
+            max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
+        )
+        previous_obligations = build_previous_summary_obligations(
+            previous,
+            max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
+        )
+        _validate_previous_obligation_budget(previous_obligations)
+        batch_contracts = build_summary_request_batches(
+            system_prompt=SESSION_SUMMARY_SYSTEM_PROMPT,
+            previous_state=previous_state,
+            available_obligations=previous_obligations,
+            fragments=fragments,
+            output_instruction=SESSION_SUMMARY_OUTPUT_INSTRUCTION,
+            max_request_chars=config.SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS,
+            safety_chars=config.SESSION_SUMMARY_LLM_REQUEST_SAFETY_CHARS,
+        )
+    except NonRetryableSessionSummaryError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise NonRetryableSessionSummaryError(
+            _safe_prepare_error_code(exc)
+        ) from exc
+    return (
+        fragments,
+        manifest,
+        previous_state,
+        previous_obligations,
+        batch_contracts,
+    )
+
+
 def prepare_claimed_session_summary_job(
     db: Session,
     job_id: int,
@@ -839,27 +1094,18 @@ def prepare_claimed_session_summary_job(
         return None
     source_turns = _load_source_turns(db, job)
     if not source_turns:
-        raise ValueError("source_turns_empty")
+        raise NonRetryableSessionSummaryError("source_turns_empty")
     previous = db.get(RollingSessionSummary, int(job.previous_summary_id or 0)) if job.previous_summary_id else None
     source_turn_snapshots = tuple(_snapshot_turn(turn) for turn in source_turns)
-    fragments = _fragment_source_turns(source_turn_snapshots)
-    manifest = build_coverage_manifest(fragments)
-    previous_state = canonical_previous_state(
-        previous,
-        max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
-    )
-    previous_obligations = build_previous_summary_obligations(
-        previous,
-        max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
-    )
-    batch_contracts = build_summary_request_batches(
-        system_prompt=SESSION_SUMMARY_SYSTEM_PROMPT,
-        previous_state=previous_state,
-        available_obligations=previous_obligations,
-        fragments=fragments,
-        output_instruction=SESSION_SUMMARY_OUTPUT_INSTRUCTION,
-        max_request_chars=config.SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS,
-        safety_chars=config.SESSION_SUMMARY_LLM_REQUEST_SAFETY_CHARS,
+    (
+        fragments,
+        manifest,
+        previous_state,
+        previous_obligations,
+        batch_contracts,
+    ) = _build_prepared_summary_contract(
+        previous=previous,
+        source_turn_snapshots=source_turn_snapshots,
     )
     return PreparedSessionSummaryJob(
         job_id=int(job.id or 0),
@@ -980,6 +1226,7 @@ def fail_claimed_session_summary_job(
     *,
     owner: str = "session-summary-worker",
     error: str,
+    retryable: bool = True,
 ) -> bool:
     job = db.get(SessionSummaryJob, int(job_id))
     if job is None:
@@ -988,7 +1235,12 @@ def fail_claimed_session_summary_job(
         return False
     if job.locked_by and job.locked_by != owner:
         return False
-    mark_summary_job_failed(db, job, error=error)
+    mark_summary_job_failed(
+        db,
+        job,
+        error=error,
+        retryable=retryable,
+    )
     db.flush()
     return True
 
@@ -999,10 +1251,17 @@ def _fail_claimed_job_with_factory(
     job_id: int,
     owner: str,
     error: str,
+    retryable: bool = True,
 ) -> bool:
     db = session_factory()
     try:
-        failed = fail_claimed_session_summary_job(db, job_id, owner=owner, error=error)
+        failed = fail_claimed_session_summary_job(
+            db,
+            job_id,
+            owner=owner,
+            error=error,
+            retryable=retryable,
+        )
         db.commit()
         return failed
     except Exception:
@@ -1076,11 +1335,13 @@ def process_claimed_session_summary_job_short_transactions(
         db.commit()
     except Exception as exc:
         db.rollback()
+        safe_error = _safe_session_summary_error(exc)
         _fail_claimed_job_with_factory(
             session_factory,
             job_id=int(job_id),
             owner=owner,
-            error=str(exc),
+            error=safe_error,
+            retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
         return False
     finally:
@@ -1096,16 +1357,18 @@ def process_claimed_session_summary_job_short_transactions(
             owner=owner,
         )
     except Exception as exc:
+        safe_error = _safe_session_summary_error(exc)
         logger.warning(
             "session summary job preflight failed: job_id=%s error=%s",
             job_id,
-            exc,
+            safe_error,
         )
         _fail_claimed_job_with_factory(
             session_factory,
             job_id=int(job_id),
             owner=owner,
-            error=str(exc),
+            error=safe_error,
+            retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
         return False
     if preflight_decision == "obsolete":
@@ -1124,12 +1387,17 @@ def process_claimed_session_summary_job_short_transactions(
             ),
         )
     except Exception as exc:
-        logger.warning("session summary job failed before finalize: job_id=%s error=%s", job_id, exc)
+        safe_error = _safe_session_summary_error(exc)
+        logger.warning(
+            "session summary job failed before finalize: job_id=%s error=%s",
+            job_id,
+            safe_error,
+        )
         _fail_claimed_job_with_factory(
             session_factory,
             job_id=int(job_id),
             owner=owner,
-            error=str(exc),
+            error=safe_error,
         )
         return False
 
@@ -1145,12 +1413,17 @@ def process_claimed_session_summary_job_short_transactions(
         return ok
     except Exception as exc:
         db.rollback()
-        logger.warning("session summary job failed: job_id=%s error=%s", job_id, exc)
+        safe_error = _safe_session_summary_error(exc)
+        logger.warning(
+            "session summary job failed: job_id=%s error=%s",
+            job_id,
+            safe_error,
+        )
         _fail_claimed_job_with_factory(
             session_factory,
             job_id=int(job_id),
             owner=owner,
-            error=str(exc),
+            error=safe_error,
         )
         return False
     finally:
@@ -1172,11 +1445,13 @@ async def process_claimed_session_summary_job_short_transactions_async(
         db.commit()
     except Exception as exc:
         db.rollback()
+        safe_error = _safe_session_summary_error(exc)
         _fail_claimed_job_with_factory(
             session_factory,
             job_id=int(job_id),
             owner=owner,
-            error=str(exc),
+            error=safe_error,
+            retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
         return False
     finally:
@@ -1192,16 +1467,17 @@ async def process_claimed_session_summary_job_short_transactions_async(
             owner=owner,
         )
     except Exception as exc:
+        safe_error = _safe_session_summary_error(exc)
         logger.warning(
             "session summary job preflight failed: job_id=%s error=%s",
             job_id,
-            exc,
+            safe_error,
         )
         _fail_claimed_job_with_factory(
             session_factory,
             job_id=int(job_id),
             owner=owner,
-            error=str(exc),
+            error=safe_error,
         )
         return False
     if preflight_decision == "obsolete":
@@ -1220,12 +1496,17 @@ async def process_claimed_session_summary_job_short_transactions_async(
             ),
         )
     except Exception as exc:
-        logger.warning("session summary job failed before finalize: job_id=%s error=%s", job_id, exc)
+        safe_error = _safe_session_summary_error(exc)
+        logger.warning(
+            "session summary job failed before finalize: job_id=%s error=%s",
+            job_id,
+            safe_error,
+        )
         _fail_claimed_job_with_factory(
             session_factory,
             job_id=int(job_id),
             owner=owner,
-            error=str(exc),
+            error=safe_error,
         )
         return False
 
@@ -1241,12 +1522,17 @@ async def process_claimed_session_summary_job_short_transactions_async(
         return ok
     except Exception as exc:
         db.rollback()
-        logger.warning("session summary job failed: job_id=%s error=%s", job_id, exc)
+        safe_error = _safe_session_summary_error(exc)
+        logger.warning(
+            "session summary job failed: job_id=%s error=%s",
+            job_id,
+            safe_error,
+        )
         _fail_claimed_job_with_factory(
             session_factory,
             job_id=int(job_id),
             owner=owner,
-            error=str(exc),
+            error=safe_error,
         )
         return False
     finally:
@@ -1289,8 +1575,19 @@ def process_session_summary_job(
         )
         return ok
     except Exception as exc:
-        logger.warning("session summary job failed: job_id=%s error=%s", getattr(job, "id", 0), exc)
-        fail_claimed_session_summary_job(db, int(job.id or 0), owner=owner, error=str(exc))
+        safe_error = _safe_session_summary_error(exc)
+        logger.warning(
+            "session summary job failed: job_id=%s error=%s",
+            getattr(job, "id", 0),
+            safe_error,
+        )
+        fail_claimed_session_summary_job(
+            db,
+            int(job.id or 0),
+            owner=owner,
+            error=safe_error,
+            retryable=not isinstance(exc, NonRetryableSessionSummaryError),
+        )
         db.flush()
         return False
 
