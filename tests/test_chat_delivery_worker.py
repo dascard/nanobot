@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -282,7 +282,7 @@ async def test_worker_stop_signal_prevents_next_batch_claim(worker_session_facto
     from core.database import ChatDeliveryOutbox
     from workers.chat_delivery_worker import run_forever_async
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     with worker_session_factory() as db:
         for message_id in ("stop-first", "stop-second"):
             enqueue_chat_delivery(

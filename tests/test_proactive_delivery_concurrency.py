@@ -1,7 +1,7 @@
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, event
@@ -669,7 +669,10 @@ def test_research_candidate_from_replaced_lease_owner_cannot_be_published(
                 assert lease is not None
                 lease.owner_token = "new-owner"
                 lease.lease_expires_at = datetime.now() + timedelta(minutes=15)
-                run.claim_expires_at = datetime.now() - timedelta(seconds=1)
+                run.claim_expires_at = (
+                    datetime.now(timezone.utc).replace(tzinfo=None)
+                    - timedelta(seconds=1)
+                )
                 takeover.commit()
             finally:
                 takeover.close()
