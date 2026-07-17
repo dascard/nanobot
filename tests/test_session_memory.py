@@ -2179,6 +2179,20 @@ def test_summary_inheritance_without_previous_allows_only_empty_audit():
     with pytest.raises(ValueError, match="^summary_inheritance_invalid$"):
         validate_inheritance(unknown, ())
 
+
+def test_summary_prompt_explains_disposition_semantics():
+    from app.session_memory.llm_summarizer import (
+        SESSION_SUMMARY_OUTPUT_INSTRUCTION,
+    )
+
+    assert "carried 仅表示目标文本与 obligation.normalized_text 完全一致" in (
+        SESSION_SUMMARY_OUTPUT_INSTRUCTION
+    )
+    assert "改写、压缩、合并或改述都必须使用 updated" in (
+        SESSION_SUMMARY_OUTPUT_INSTRUCTION
+    )
+
+
 def test_summary_inheritance_audit_is_recorded_in_prepared_batch_trace(db_session):
     from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
@@ -3589,6 +3603,94 @@ def test_older_summary_finalize_becomes_obsolete_after_newer_coverage(
         "proposed_coverage": turns[1].id,
         "reason": "higher_active_coverage",
     }
+
+
+@pytest.mark.asyncio
+async def test_obsolete_summary_job_skips_async_summarizer_before_llm(
+    db_session,
+):
+    from sqlalchemy.orm import sessionmaker
+
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import (
+        process_claimed_session_summary_job_short_transactions_async,
+    )
+
+    turns = [
+        _turn(
+            db_session,
+            session_id="preflight-obsolete-session",
+            content=f"preflight coverage {index}",
+        )
+        for index in range(2)
+    ]
+    fallback = RollingSessionSummary(
+        session_id="preflight-obsolete-session",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="任务自己的旧 fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[0].id,
+        source_turn_ids_json=json.dumps([turns[0].id]),
+    )
+    blocking = RollingSessionSummary(
+        session_id="preflight-obsolete-session",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="更高 coverage 摘要",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add_all([fallback, blocking])
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id=fallback.session_id,
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turns[0]],
+        previous_summary=None,
+        fallback_summary=fallback,
+        force=True,
+    )
+    assert claim_summary_job(
+        db_session,
+        job.id,
+        owner="preflight-worker",
+    ) is not None
+    db_session.commit()
+    session_factory = sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    summarizer_calls: list[int] = []
+
+    async def summarizer(_messages):
+        summarizer_calls.append(1)
+        return {
+            "summary": "不应调用模型",
+            "inheritance": [],
+            "quality": {"score": 0.9, "issues": []},
+        }
+
+    processed = await process_claimed_session_summary_job_short_transactions_async(
+        session_factory,
+        job_id=job.id,
+        summarizer=summarizer,
+        owner="preflight-worker",
+    )
+
+    db_session.expire_all()
+    current_job = db_session.get(SessionSummaryJob, job.id)
+    obsolete = json.loads(current_job.meta_json)["obsolete"]
+    assert processed is True
+    assert summarizer_calls == []
+    assert current_job.status == "obsolete"
+    assert current_job.result_summary_id is None
+    assert obsolete["blocking_summary_id"] == blocking.id
+    assert obsolete["reason"] == "higher_active_coverage"
 
 
 def test_equal_coverage_other_active_summary_makes_job_obsolete(db_session):

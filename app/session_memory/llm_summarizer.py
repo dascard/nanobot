@@ -70,6 +70,7 @@ inheritance 只用于审计，不能写进 summary 或其他业务字段。
 
 SESSION_SUMMARY_OUTPUT_INSTRUCTION = """请输出严格 JSON，业务字段严格为 summary、open_threads、decisions、important_user_requests、resolved_items、artifacts、participants、keywords、quality，并额外输出仅用于审计的 inheritance 数组。
 inheritance 每项字段为 source_id、disposition、target_field、target_index；disposition 只允许 carried、updated、resolved。
+carried 仅表示目标文本与 obligation.normalized_text 完全一致；改写、压缩、合并或改述都必须使用 updated；确认事项已完成才使用 resolved。
 每个 available obligation 必须恰好处置一次，resolved 只能指向 resolved_items，legacy_summary 只能指向 summary；target 必须存在且非空。
 summary 不超过 1200 字，quality.score 必须是 0 到 1 的数字。不要把 pending_fragments 当日志转写，不要保留 turn_id、时间戳、role 或 fragment 标签。
 如果只能摘录，请改写为简洁要点。必须完整合并 previous_summary，不能只输出 pending_fragments 的摘要。"""
@@ -1033,6 +1034,33 @@ def _renew_claimed_job_with_factory(
         db.close()
 
 
+def _preflight_claimed_job_with_factory(
+    session_factory: Callable[[], Session],
+    *,
+    job_id: int,
+    owner: str,
+) -> str:
+    """在调用 LLM 前淘汰已被更高或同级 active coverage 阻塞的 job。"""
+
+    db = session_factory()
+    try:
+        job = db.get(SessionSummaryJob, int(job_id))
+        permit = acquire_summary_finalize_permit(
+            db,
+            int(job_id),
+            owner=owner,
+        )
+        if permit.decision == "obsolete" and job is not None:
+            mark_summary_job_obsolete(db, job, permit=permit)
+        db.commit()
+        return permit.decision
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def process_claimed_session_summary_job_short_transactions(
     session_factory: Callable[[], Session],
     *,
@@ -1059,6 +1087,30 @@ def process_claimed_session_summary_job_short_transactions(
         db.close()
 
     if prepared is None:
+        return False
+
+    try:
+        preflight_decision = _preflight_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+        )
+    except Exception as exc:
+        logger.warning(
+            "session summary job preflight failed: job_id=%s error=%s",
+            job_id,
+            exc,
+        )
+        _fail_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+            error=str(exc),
+        )
+        return False
+    if preflight_decision == "obsolete":
+        return True
+    if preflight_decision != "promote":
         return False
 
     try:
@@ -1131,6 +1183,30 @@ async def process_claimed_session_summary_job_short_transactions_async(
         db.close()
 
     if prepared is None:
+        return False
+
+    try:
+        preflight_decision = _preflight_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+        )
+    except Exception as exc:
+        logger.warning(
+            "session summary job preflight failed: job_id=%s error=%s",
+            job_id,
+            exc,
+        )
+        _fail_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+            error=str(exc),
+        )
+        return False
+    if preflight_decision == "obsolete":
+        return True
+    if preflight_decision != "promote":
         return False
 
     try:
