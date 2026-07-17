@@ -4,30 +4,17 @@
 
 所有输出、注释、commit message 使用**中文**。代码标识符使用英文。
 
-## 技能工作流（强制）
+## Agent 工作方式（GPT-5.6）
 
-**任何非平凡任务（≥3 个文件或新功能）必须按以下顺序使用 skills。不确定是否适用时，先调用 Skill 工具检查。**
-
-1% 可能 = 必须调用。这不是可选的。"只是一个简单的问题"、"让我先探索一下"、"我记得这个技能"——这些都是合理化。调用技能。
-
-特别提醒：
-- **探索/分析需求时** → 优先用 brainstorming 提出澄清问题，而不是直接给方案
-- **实现完成后声称成功前** → 必须经过 verification-before-completion
-- **提交时** → 必须遵循 chinese-commit-conventions
-- **审查他人代码或自审时** → 调用 chinese-code-review
-- **参考外部项目实现时** → 用 GitHub MCP tools，不要用 WebSearch
-
-任何非平凡任务（≥3 个文件或新功能）必须按以下顺序使用 skills：
-
-```
-brainstorming → 设计文档     → docs/superpowers/specs/YYYY-MM-DD-<topic>.md
-writing-plans → 实现计划     → .claude/plans/<topic>.md
-test-driven-development     → 先写测试，红-绿-重构
-verification-before-completion → 验证通过后才能声称完成
-chinese-commit-conventions  → 规范化提交
-```
-
-平凡任务（单文件 fix、typo）可以跳过 brainstorm/plan，但**必须**经过 verification-before-completion。
+- **结果优先**：需求明确时直接执行最小充分方案，不先生成设计文档、长计划或流程说明。
+- **严格守界**：只修改用户放入范围的文件；不得顺手重构、增加门禁或扩大任务。发现相邻问题时先报告，不自动处理。
+- **按需加载技能**：仅当用户点名技能，或任务与某个窄领域技能直接匹配时才加载。不要因为“可能有帮助”而加载元工作流技能，也不要串联多个规划/审查技能。
+- **少问关键问题**：只有缺失信息会实质改变结果或产生风险时才澄清；其余情况采用最保守的合理假设继续。
+- **轻量规划**：简单任务不进入 plan/goal 模式。复杂任务可在回复中维护简短步骤，但除非用户要求，不创建计划文件。
+- **谨慎使用子 agent**：仅在多个独立子问题可明显并行时使用；简单改动、单点调查和同文件编辑由主 agent 完成。
+- **验证后再结论**：修改后运行与改动直接相关的最小验证；声称完成、修复或测试通过时必须给出实际证据。
+- **提交需授权**：用户明确说“提交”之前不得 commit；提交时遵循 `chinese-commit-conventions`。
+- **外部信息要查证**：API/模型行为优先使用官方文档；社区经验只能作为待验证信号。参考外部代码时优先使用 GitHub 代码搜索。
 
 ## 提交规范
 
@@ -77,7 +64,7 @@ chinese-commit-conventions  → 规范化提交
 - **熔断器**：`ModelFailureTracker` 连续 3 次失败后自动禁用 5min
 - **Token 估算**：CJK 字符按 1.0，ASCII 按 0.35（不求精确，量级判断）
 - **中文优先**：bot 使用者是中文用户，所有 prompt 和回复用中文
-- **提示词同步**：修改 `enriched_query` 组装逻辑、历史注入方式、conversation 结构时，**必须检查 `creatures/nanobot/prompt.md` 是否仍然准确**。如果 prompt 引用的标记（如 `<user_input>`、`<history_context>`）或行为描述（如"历史通过 conversation 注入"）已过时，必须在同一 PR 中更新
+- **提示词同步**：修改 `enriched_query` 组装逻辑、历史注入方式、conversation 结构、工具输出契约或 prompt runtime 输入时，**必须检查 canonical Prompt Runtime 模板是否仍然准确**，重点包括 `prompts.v2.default/chat/*`、`prompts.v2.default/tasks/*`、`prompts.v2.default/tools/*/usage.md`、`core/prompt_v2/variables.py` 和 `core/prompt_v2/template_registry.py`。如果模板引用的变量、标记或行为描述已过时，必须在同一 PR 中更新默认模板与必要的 `data/prompts_v2/` 运行时模板。
 
 ## 禁止行为（反复犯错的教训）
 
@@ -101,7 +88,7 @@ chinese-commit-conventions  → 规范化提交
 - ✗ "用关键词匹配做领域分类"——不可靠
 - ✗ "asyncio.Lock 嵌套 + Event.wait"——必然死锁
 - ✗ "_preprocess 重排消息"——hacky
-- ✓ **复杂问题先用 brainstorming 探索方案，别急着写代码**
+- ✓ **复杂且需求不明确时先确认关键约束；需求明确时直接实施最小方案**
 
 ### 5. 代码改了但没读现有实现
 - ✗ PRAGMA regex `\b` 不知道实际 SQL 格式
