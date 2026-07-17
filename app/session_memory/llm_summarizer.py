@@ -654,6 +654,35 @@ def _build_bounded_summary_obligations(
     return obligations
 
 
+def _compact_raw_json_for_budget(raw: str) -> str:
+    """移除 JSON 字符串外的排版空白，同时保留转义与字符串正文。"""
+
+    text = str(raw or "").strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    compacted: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            compacted.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char in " \t\r\n":
+            continue
+        compacted.append(char)
+        if char == '"':
+            in_string = True
+    return "".join(compacted)
+
+
 def _validate_summary_response_budget(
     payload: dict[str, Any],
     *,
@@ -672,7 +701,15 @@ def _validate_summary_response_budget(
     except (TypeError, ValueError) as exc:
         raise ValueError("json_schema_invalid: non_serializable") from exc
     raw_text = raw_content if type(raw_content) is str else serialized
-    if max(len(serialized), len(raw_text)) > config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS:
+    raw_budget_text = (
+        _compact_raw_json_for_budget(raw_text)
+        if type(raw_content) is str
+        else serialized
+    )
+    if max(
+        len(serialized),
+        len(raw_budget_text),
+    ) > config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS:
         raise ValueError("summary_state_output_budget_exceeded")
     if max(
         estimate_tokens(serialized),

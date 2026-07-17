@@ -2281,6 +2281,45 @@ def test_summary_full_response_budget_includes_quality_and_inheritance():
         _validate_summary_response_budget(payload)
 
 
+def test_summary_full_response_budget_ignores_json_formatting_whitespace():
+    from app.session_memory import config as summary_config
+    from app.session_memory.llm_summarizer import (
+        _validate_summary_response_budget,
+    )
+
+    payload = {
+        "summary": "摘" * 100,
+        "open_threads": [],
+        "decisions": ["决" * 61, "策" * 40],
+        "important_user_requests": ["求" * 12 for _ in range(5)],
+        "resolved_items": ["完" * 12 for _ in range(4)],
+        "artifacts": [],
+        "participants": ["用户", "助手"],
+        "keywords": ["关键词" for _ in range(8)],
+        "quality": {"score": 0.9, "issues": []},
+        "inheritance": [
+            {
+                "source_id": f"id{index:014d}",
+                "disposition": "updated",
+                "target_field": "important_user_requests",
+                "target_index": min(index, 4),
+            }
+            for index in range(7)
+        ],
+    }
+    compact = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    pretty = json.dumps(payload, ensure_ascii=False, indent=2)
+    assert len(compact) < summary_config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS
+    assert len(pretty) > summary_config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS
+
+    _validate_summary_response_budget(payload, raw_content=pretty)
+
+
 def test_summary_full_response_budget_rejects_token_heavy_cjk_below_char_limit():
     from app.session_memory import config as summary_config
     from app.session_memory.llm_summarizer import (
