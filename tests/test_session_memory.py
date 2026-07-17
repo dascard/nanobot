@@ -2230,7 +2230,7 @@ def test_summary_state_output_budget_checks_summary_and_obligation_item_boundari
 
     bounded_state = {
         "summary": "摘" * 400,
-        "open_threads": ["项" * 60],
+        "open_threads": ["项" * 64],
         "decisions": [],
         "important_user_requests": [],
         "resolved_items": [],
@@ -2248,7 +2248,7 @@ def test_summary_state_output_budget_checks_summary_and_obligation_item_boundari
     ):
         _build_bounded_summary_obligations(oversized_summary)
 
-    oversized_item = dict(bounded_state, open_threads=["项" * 61])
+    oversized_item = dict(bounded_state, open_threads=["项" * 65])
     with pytest.raises(
         ValueError,
         match="^summary_state_output_budget_exceeded$",
