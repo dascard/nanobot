@@ -81,6 +81,15 @@ class InheritanceAudit:
     updated_count: int
     resolved_count: int
     state_sha256: str
+    normalized_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class InheritanceNormalization:
+    """继承元数据规范化结果，只暴露脱敏修正数量。"""
+
+    payload: dict[str, Any]
+    normalized_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +340,133 @@ def build_previous_summary_obligations(
     return build_summary_obligations(state, legacy_summary=legacy)
 
 
+def normalize_inheritance_metadata(
+    payload: Mapping[str, Any],
+    obligations: Sequence[SummaryObligation],
+    *,
+    max_state_chars: int = 4000,
+) -> InheritanceNormalization:
+    """保守纠正模型声明的同字段合并元数据，不推断新的继承关系。"""
+
+    result = dict(payload)
+    inheritance = payload.get("inheritance", [])
+    if not isinstance(inheritance, list):
+        return InheritanceNormalization(payload=result, normalized_count=0)
+    normalized_items = [
+        dict(item) if isinstance(item, Mapping) else item
+        for item in inheritance
+    ]
+    result["inheritance"] = normalized_items
+
+    expected = {obligation.source_id: obligation for obligation in obligations}
+    if len(expected) != len(obligations):
+        return InheritanceNormalization(payload=result, normalized_count=0)
+    source_counts: dict[str, int] = {}
+    field_counts: dict[str, int] = {}
+    for obligation in obligations:
+        source_counts.setdefault(obligation.source_id, 0)
+        field_counts[obligation.field] = field_counts.get(obligation.field, 0) + 1
+    normalized_indexes: set[int] = set()
+    for item in normalized_items:
+        if not isinstance(item, Mapping):
+            continue
+        source_id = item.get("source_id")
+        if isinstance(source_id, str):
+            source_counts[source_id] = source_counts.get(source_id, 0) + 1
+
+    state = canonical_summary_state(payload, max_state_chars=max_state_chars)
+    for item_index, item in enumerate(normalized_items):
+        if not isinstance(item, dict):
+            continue
+        source_id = item.get("source_id")
+        disposition = item.get("disposition")
+        target_field = item.get("target_field")
+        target_index = item.get("target_index")
+        if (
+            not isinstance(source_id, str)
+            or source_counts.get(source_id) != 1
+            or source_id not in expected
+            or not isinstance(disposition, str)
+            or disposition not in {"carried", "updated"}
+            or not isinstance(target_field, str)
+            or isinstance(target_index, bool)
+            or not isinstance(target_index, int)
+        ):
+            continue
+        obligation = expected[source_id]
+        if obligation.field == "legacy_summary" or target_field != obligation.field:
+            continue
+        targets = state.get(target_field)
+        if not isinstance(targets, list):
+            continue
+
+        if 0 <= target_index < len(targets):
+            normalized_target = _normalize_obligation_text(targets[target_index])
+            if (
+                normalized_target
+                and disposition == "carried"
+                and normalized_target != obligation.normalized_text
+            ):
+                item["disposition"] = "updated"
+                normalized_indexes.add(item_index)
+            continue
+
+        source_field_count = field_counts.get(obligation.field, 0)
+        if (
+            len(targets) == 1
+            and _normalize_obligation_text(targets[0])
+            and 0 < target_index < source_field_count
+        ):
+            item["disposition"] = "updated"
+            item["target_index"] = 0
+            normalized_indexes.add(item_index)
+
+    shared_targets: dict[tuple[str, int], list[tuple[int, dict[str, Any]]]] = {}
+    for item_index, item in enumerate(normalized_items):
+        if not isinstance(item, dict):
+            continue
+        source_id = item.get("source_id")
+        disposition = item.get("disposition")
+        target_field = item.get("target_field")
+        target_index = item.get("target_index")
+        if (
+            not isinstance(source_id, str)
+            or source_counts.get(source_id) != 1
+            or source_id not in expected
+            or not isinstance(disposition, str)
+            or disposition not in {"carried", "updated"}
+            or not isinstance(target_field, str)
+            or isinstance(target_index, bool)
+            or not isinstance(target_index, int)
+        ):
+            continue
+        obligation = expected[source_id]
+        if obligation.field == "legacy_summary" or target_field != obligation.field:
+            continue
+        targets = state.get(target_field)
+        if (
+            not isinstance(targets, list)
+            or target_index < 0
+            or target_index >= len(targets)
+            or not _normalize_obligation_text(targets[target_index])
+        ):
+            continue
+        shared_targets.setdefault((target_field, target_index), []).append(
+            (item_index, item)
+        )
+    for group in shared_targets.values():
+        if len(group) < 2:
+            continue
+        for item_index, item in group:
+            if item.get("disposition") == "carried":
+                item["disposition"] = "updated"
+                normalized_indexes.add(item_index)
+    return InheritanceNormalization(
+        payload=result,
+        normalized_count=len(normalized_indexes),
+    )
+
+
 def _target_value(
     state: Mapping[str, Any],
     *,
@@ -354,12 +490,20 @@ def validate_inheritance(
     obligations: Sequence[SummaryObligation],
     *,
     max_state_chars: int = 4000,
+    normalized_count: int = 0,
 ) -> InheritanceAudit:
     """验证每个 previous obligation 恰好映射到一个非空目标。"""
 
     state = canonical_summary_state(payload, max_state_chars=max_state_chars)
     inheritance = payload.get("inheritance", [])
     if not isinstance(inheritance, list):
+        raise ValueError("summary_inheritance_invalid")
+    if (
+        isinstance(normalized_count, bool)
+        or not isinstance(normalized_count, int)
+        or normalized_count < 0
+        or normalized_count > len(inheritance)
+    ):
         raise ValueError("summary_inheritance_invalid")
     expected = {obligation.source_id: obligation for obligation in obligations}
     if len(expected) != len(obligations):
@@ -415,6 +559,7 @@ def validate_inheritance(
         updated_count=counts["updated"],
         resolved_count=counts["resolved"],
         state_sha256=_text_sha256(_compact_json(state)),
+        normalized_count=normalized_count,
     )
 
 

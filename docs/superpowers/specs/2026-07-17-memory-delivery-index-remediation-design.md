@@ -648,3 +648,32 @@ git diff --check
 - 不通过手工修改 job、outbox 或 scheduled task 成功状态伪造闭环。
 - 不物理删除历史业务数据；清洗阶段只允许经批准的归档、禁用或状态标记。
 - 真实 QQ 日报和生产清洗仍属于独立副作用操作，必须以对应 dry-run 证据为前提。
+
+## 生产反馈补充：继承审计元数据的保守规范化
+
+2026-07-18 对历史 Session Summary job 9 进行正式 Admin 重试时，四个批次的
+LLM 请求均获得 HTTP 200。前三批通过继承门禁，末批业务 JSON、字符预算和 Token
+预算均通过，但模型把两个合并到同一输出项的 `decisions` obligation 仍标记为
+`carried`，并沿用合并前序号写出一个越界 `target_index`，最终以
+`summary_inheritance_invalid` 失败。原始请求、响应和 ChatLog 保留为审计档案，
+不得通过数据库改状态绕过门禁。
+
+采用纯契约层的保守规范化，且严格限制为下列可证明情形：
+
+1. `source_id` 必须已知且在审计数组中唯一；未知或重复来源不修复。
+2. `target_field` 必须与 obligation 的原字段一致；`resolved`、跨字段和 legacy
+   summary 不参与索引修复。
+3. `carried` 指向有效同字段目标但文本并非逐字一致时，只把 disposition 纠正为
+   `updated`，不修改业务文本。
+4. 同字段多个 obligation 被模型明确映射到一个唯一、非空输出项时，只有正整数
+   `target_index` 仍处于该字段输入 obligation 的序号范围内，才归一到索引 0，并把
+   disposition 纠正为 `updated`。
+5. 多目标歧义、负索引、任意大索引、空目标、未知 disposition、缺失 source 或
+   任何无法唯一证明的情况仍由原 `validate_inheritance()` 失败闭合。
+
+规范化返回副本，不修改原始模型响应；完整原始响应继续保存在 LLM 请求日志中，
+批次 trace 额外记录脱敏的 `normalized_count`，用于区分模型原生 `updated` 与运行时纠正。
+字符和 Token 预算在规范化前检查，规范化后仍执行原严格门禁。Prompt 同步明确
+`target_index` 从 0 开始，以及多个来源合并到同一目标时允许共享同一个索引、但必须
+全部标记为 `updated`。该调整不允许从业务正文推断新的 obligation，也不放宽未知、
+重复、跨字段或缺失继承关系。

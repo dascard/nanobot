@@ -32,6 +32,7 @@ from app.session_memory.llm_contract import (
     canonical_previous_state,
     canonical_summary_state,
     fragment_summary_turn,
+    normalize_inheritance_metadata,
     strip_summary_inheritance,
     validate_inheritance,
 )
@@ -102,6 +103,7 @@ _SESSION_SUMMARY_INHERITANCE_FIELDS = frozenset({
 SESSION_SUMMARY_OUTPUT_INSTRUCTION = """请输出严格 JSON，业务字段严格为 summary、open_threads、decisions、important_user_requests、resolved_items、artifacts、participants、keywords、quality，并额外输出仅用于审计的 inheritance 数组。
 inheritance 每项字段为 source_id、disposition、target_field、target_index；disposition 只允许 carried、updated、resolved。
 carried 仅表示目标文本与 obligation.normalized_text 完全一致；改写、压缩、合并或改述都必须使用 updated；确认事项已完成才使用 resolved。
+target_index 从 0 开始；合并多个 obligation 到同一目标时，每个 source_id 都必须单独写一项 updated，并允许共享同一个 target_field 和 target_index。
 每个 available obligation 必须恰好处置一次，resolved 只能指向 resolved_items，legacy_summary 只能指向 summary；target 必须存在且非空。
 summary 不超过 400 字；open_threads、decisions、important_user_requests、artifacts 四个可继承数组合计最多 7 项，每项不超过 60 字，优先合并同类事项并把必要背景压缩进 summary。
 resolved_items、participants、keywords 也必须保持简洁。
@@ -771,10 +773,17 @@ def _accept_summary_batch_payload(
         payload,
         raw_content=llm_result.content,
     )
+    normalization = normalize_inheritance_metadata(
+        payload,
+        obligations,
+        max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
+    )
+    payload = normalization.payload
     inheritance_audit = validate_inheritance(
         payload,
         obligations,
         max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
+        normalized_count=normalization.normalized_count,
     )
     business_payload = strip_summary_inheritance(payload)
     _audit_intermediate_summary_payload(
@@ -1043,6 +1052,9 @@ def save_llm_session_summary(
                         ),
                         "resolved_count": (
                             trace.inheritance_audit.resolved_count
+                        ),
+                        "normalized_count": (
+                            trace.inheritance_audit.normalized_count
                         ),
                         "state_sha256": (
                             trace.inheritance_audit.state_sha256

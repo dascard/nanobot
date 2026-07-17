@@ -1172,3 +1172,53 @@ python -B -m pytest tests/test_database.py tests/test_semantic_index_worker.py \
 - 两轮最终中文审查均为 Critical 0、Important 0；指出的反向 clear/rollup 时序与
   TextClause allowlist 边界两个 Minor 均已补充测试；
 - Ruff：测试镜像与宿主均未安装，明确标记为尚未执行。
+
+## 任务 11：生产响应继承审计兼容
+
+**文件：**
+
+- 修改：`app/session_memory/llm_contract.py`
+- 修改：`app/session_memory/llm_summarizer.py`
+- 修改：`tests/test_session_memory.py`
+- 修改：`docs/superpowers/specs/2026-07-17-memory-delivery-index-remediation-design.md`
+- 修改：`.Codex/plans/memory-delivery-index-remediation.md`
+
+- [x] **步骤 1：补充生产形态红测**
+
+构造两个 `decisions` obligation 被模型合并到唯一输出项的脱敏 fixture：模型仍把两项
+标为 `carried`，目标索引分别为 0、1。断言规范化后两项均为 `updated` 且共享索引 0，
+严格 inheritance gate 通过，同时原 payload 不被修改。补充 Prompt 对 0-based 索引和
+多来源合并映射的断言。
+
+- [x] **步骤 2：证明旧代码红灯**
+
+运行新增测试，预期因规范化入口尚不存在或原严格门禁拒绝合并后索引而失败。
+
+- [x] **步骤 3：实现纯函数保守规范化**
+
+只修复已知唯一 source、同字段、唯一非空目标且索引仍位于原 obligation 序号范围的
+合并元数据；有效目标上的错误 `carried` 改为 `updated`。未知、重复、跨字段、多目标
+歧义、负索引、超出原序号范围和空目标保持失败闭合。编排层在完整响应预算检查之后、
+严格 `validate_inheritance()` 之前调用该纯函数，并在批次 trace 中记录脱敏的
+`normalized_count`。
+
+- [x] **步骤 4：运行负向边界与真实响应只读重放**
+
+验证多目标、任意大索引和跨字段仍失败；在禁网、只读挂载中重放 LLM 日志 24882，
+只输出结构计数，不输出请求、响应或召回正文。
+
+- [x] **步骤 5：运行完整验证并版本化提交**
+
+执行 `tests/test_session_memory.py`、全量隔离 pytest、`compileall`、`git diff --check`
+和中文代码/安全审查。仅在 0 failures 后按文件精确暂存并提交，不包含生产配置或数据。
+
+实际验证（2026-07-18，Python 3.11 隔离容器、`--network none`、空生产凭据）：
+
+- 新增红测：`5 failed`，失败原因分别为规范化入口和 Prompt 说明缺失；
+- 规范化、负向边界、Prompt 与编排 trace：`11 passed`；
+- `tests/test_session_memory.py`：`122 passed`；
+- LLM 日志 24882 禁网只读重放：5 个 obligation 通过，运行时规范化 2 项，业务字段不变；
+- 完整测试：`4922 passed, 6 skipped, 0 failed`；
+- 安全审查与事务审查均为 Critical 0、Important 0、Minor 0；
+- 另修正两个只在 Asia/Shanghai 暴露的测试 fixture UTC 语义，生产调用链审计未发现本地
+  naive 时间进入 chat delivery 或 outbound run 账本。

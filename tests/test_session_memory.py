@@ -2056,6 +2056,136 @@ def test_summary_inheritance_accepts_carried_updated_and_resolved():
     assert audit.state_sha256 == expected_hash
 
 
+@pytest.mark.parametrize("target_text", ["合并后的决策", "决策甲"])
+def test_summary_inheritance_normalizes_declared_single_target_merge(target_text):
+    from app.session_memory.llm_contract import (
+        build_summary_obligations,
+        normalize_inheritance_metadata,
+        validate_inheritance,
+    )
+
+    previous_state = {
+        "summary": "脱敏摘要",
+        "open_threads": [],
+        "decisions": ["决策甲", "决策乙"],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": [],
+        "keywords": [],
+    }
+    obligations = build_summary_obligations(previous_state)
+    payload = {
+        **previous_state,
+        "decisions": [target_text],
+        "inheritance": [
+            {
+                "source_id": obligations[0].source_id,
+                "disposition": "carried",
+                "target_field": "decisions",
+                "target_index": 0,
+            },
+            {
+                "source_id": obligations[1].source_id,
+                "disposition": "carried",
+                "target_field": "decisions",
+                "target_index": 1,
+            },
+        ],
+    }
+    original = json.loads(json.dumps(payload, ensure_ascii=False))
+
+    normalization = normalize_inheritance_metadata(payload, obligations)
+    normalized = normalization.payload
+    audit = validate_inheritance(
+        normalized,
+        obligations,
+        normalized_count=normalization.normalized_count,
+    )
+
+    assert payload == original
+    assert [item["disposition"] for item in normalized["inheritance"]] == [
+        "updated",
+        "updated",
+    ]
+    assert [item["target_index"] for item in normalized["inheritance"]] == [0, 0]
+    assert audit.obligation_count == 2
+    assert audit.carried_count == 0
+    assert audit.updated_count == 2
+    assert audit.normalized_count == 2
+
+
+@pytest.mark.parametrize(
+    "failure_kind",
+    [
+        "ambiguous",
+        "arbitrary_index",
+        "cross_field",
+        "duplicate",
+        "empty_target",
+        "negative_index",
+        "unknown",
+    ],
+)
+def test_summary_inheritance_normalization_keeps_ambiguous_audit_invalid(failure_kind):
+    from app.session_memory.llm_contract import (
+        build_summary_obligations,
+        normalize_inheritance_metadata,
+        validate_inheritance,
+    )
+
+    decisions = ["决策甲", "决策乙", "决策丙"] if failure_kind == "ambiguous" else [
+        "决策甲",
+        "决策乙",
+    ]
+    previous_state = {
+        "summary": "脱敏摘要",
+        "open_threads": [],
+        "decisions": decisions,
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": [],
+        "keywords": [],
+    }
+    obligations = build_summary_obligations(previous_state)
+    payload = {
+        **previous_state,
+        "decisions": ["输出甲", "输出乙"] if failure_kind == "ambiguous" else ["唯一输出"],
+        "inheritance": [
+            {
+                "source_id": obligation.source_id,
+                "disposition": "updated",
+                "target_field": "decisions",
+                "target_index": index,
+            }
+            for index, obligation in enumerate(obligations)
+        ],
+    }
+    if failure_kind == "arbitrary_index":
+        payload["inheritance"][1]["target_index"] = 99
+    elif failure_kind == "cross_field":
+        payload["important_user_requests"] = ["错误目标"]
+        payload["inheritance"][1]["target_field"] = "important_user_requests"
+    elif failure_kind == "duplicate":
+        payload["inheritance"].append(dict(payload["inheritance"][0]))
+    elif failure_kind == "empty_target":
+        payload["decisions"] = [""]
+    elif failure_kind == "negative_index":
+        payload["inheritance"][1]["target_index"] = -1
+    elif failure_kind == "unknown":
+        payload["inheritance"][1]["source_id"] = "unknown"
+
+    normalization = normalize_inheritance_metadata(payload, obligations)
+
+    with pytest.raises(ValueError, match="^summary_inheritance_invalid$"):
+        validate_inheritance(
+            normalization.payload,
+            obligations,
+            normalized_count=normalization.normalized_count,
+        )
+
+
 def test_summary_obligation_ids_are_stable_for_normalized_duplicates():
     from app.session_memory.llm_contract import build_summary_obligations
 
@@ -2191,6 +2321,8 @@ def test_summary_prompt_explains_disposition_semantics():
     assert "改写、压缩、合并或改述都必须使用 updated" in (
         SESSION_SUMMARY_OUTPUT_INSTRUCTION
     )
+    assert "target_index 从 0 开始" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
+    assert "合并多个 obligation 到同一目标" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
     assert "四个可继承数组合计最多 7 项" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
     assert "summary 不超过 400 字" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
     assert "约 1000 tokens 以内" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
@@ -2461,6 +2593,95 @@ def test_summary_inheritance_audit_is_recorded_in_prepared_batch_trace(db_sessio
     assert trace.fragment_hashes == prepared.manifest.fragment_hashes
     assert trace.inheritance_audit.obligation_count == 0
     assert len(trace.inheritance_audit.state_sha256) == 64
+
+
+def test_summary_worker_records_normalized_single_target_merge_trace(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_contract import build_summary_obligations
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    previous_turn = _turn(db_session, content="旧摘要来源")
+    previous_state = {
+        "summary": "脱敏累计摘要",
+        "open_threads": [],
+        "decisions": ["决策甲", "决策乙"],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": [],
+        "keywords": [],
+    }
+    previous = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="脱敏累计摘要",
+        summary_json=json.dumps(previous_state, ensure_ascii=False),
+        covered_from_turn_id=previous_turn.id,
+        covered_until_turn_id=previous_turn.id,
+        source_turn_ids_json=json.dumps([previous_turn.id]),
+    )
+    pending_turn = _turn(db_session, content="新增脱敏事实")
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=pending_turn.id,
+        covered_until_turn_id=pending_turn.id,
+        source_turn_ids_json=json.dumps([pending_turn.id]),
+    )
+    db_session.add_all([previous, fallback])
+    db_session.commit()
+    job, _ = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[pending_turn],
+        previous_summary=previous,
+        fallback_summary=fallback,
+    )
+    obligations = build_summary_obligations(previous_state)
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=lambda _messages: {
+            "summary": "新的脱敏累计摘要",
+            "decisions": ["决策甲"],
+            "inheritance": [
+                {
+                    "source_id": obligations[0].source_id,
+                    "disposition": "carried",
+                    "target_field": "decisions",
+                    "target_index": 0,
+                },
+                {
+                    "source_id": obligations[1].source_id,
+                    "disposition": "carried",
+                    "target_field": "decisions",
+                    "target_index": 1,
+                },
+            ],
+            "quality": {"score": 0.9, "issues": []},
+        },
+    )
+
+    assert result["done"] == 1
+    db_session.refresh(job)
+    saved = db_session.get(RollingSessionSummary, job.result_summary_id)
+    saved_payload = json.loads(saved.summary_json)
+    trace = json.loads(saved.meta_json)["batch_traces"][0]["inheritance"]
+    assert "inheritance" not in saved_payload
+    assert saved_payload["decisions"] == ["决策甲"]
+    assert trace["obligation_count"] == 2
+    assert trace["carried_count"] == 0
+    assert trace["updated_count"] == 2
+    assert trace["normalized_count"] == 2
 
 
 def test_summary_long_previous_state_is_compacted_before_second_batch(db_session):
