@@ -69,7 +69,8 @@ inheritance 只用于审计，不能写进 summary 或其他业务字段。
 输出严格 JSON，不要 Markdown，不要代码块。
 """
 
-SESSION_SUMMARY_MAX_STATE_OBLIGATIONS = 7
+# Prompt 目标仍为 7 项；硬门禁容忍 1 项偏差，历史 12 项膨胀仍会失败。
+SESSION_SUMMARY_MAX_STATE_OBLIGATIONS = 8
 SESSION_SUMMARY_MAX_SUMMARY_CHARS = 400
 # Prompt 目标仍为 60 字；硬门禁保留 4 字格式容差，避免轻微越界导致整单重试。
 SESSION_SUMMARY_MAX_OBLIGATION_CHARS = 64

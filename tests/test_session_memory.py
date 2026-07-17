@@ -2203,7 +2203,7 @@ def test_summary_state_obligation_budget_caps_next_batch_audit():
 
     bounded_state = {
         "summary": "紧凑累计摘要",
-        "open_threads": [f"待办 {index}" for index in range(7)],
+        "open_threads": [f"待办 {index}" for index in range(8)],
         "decisions": [],
         "important_user_requests": [],
         "resolved_items": [f"已完成 {index}" for index in range(8)],
@@ -2212,7 +2212,7 @@ def test_summary_state_obligation_budget_caps_next_batch_audit():
         "keywords": [f"关键词 {index}" for index in range(8)],
     }
 
-    assert len(_build_bounded_summary_obligations(bounded_state)) == 7
+    assert len(_build_bounded_summary_obligations(bounded_state)) == 8
 
     oversized_state = dict(bounded_state)
     oversized_state["decisions"] = ["额外决策"]
@@ -2566,7 +2566,7 @@ def test_summary_previous_obligation_over_budget_fails_before_llm_without_backof
     previous_turn = _turn(db_session, content="旧摘要来源")
     previous_state = {
         "summary": "旧摘要",
-        "open_threads": [f"待办 {index}" for index in range(8)],
+        "open_threads": [f"待办 {index}" for index in range(9)],
         "decisions": [],
         "important_user_requests": [],
         "resolved_items": [],
@@ -2707,7 +2707,7 @@ def test_summary_previous_obligation_over_budget_persists_in_sync_short_transact
         summary_text="旧摘要",
         summary_json=json.dumps({
             "summary": "旧摘要",
-            "open_threads": [f"同步待办 {index}" for index in range(8)],
+            "open_threads": [f"同步待办 {index}" for index in range(9)],
         }, ensure_ascii=False),
         covered_from_turn_id=previous_turn.id,
         covered_until_turn_id=previous_turn.id,
@@ -2782,7 +2782,7 @@ async def test_summary_previous_obligation_over_budget_persists_in_async_short_t
         summary_text="旧摘要",
         summary_json=json.dumps({
             "summary": "旧摘要",
-            "open_threads": [f"异步待办 {index}" for index in range(8)],
+            "open_threads": [f"异步待办 {index}" for index in range(9)],
         }, ensure_ascii=False),
         covered_from_turn_id=previous_turn.id,
         covered_until_turn_id=previous_turn.id,
