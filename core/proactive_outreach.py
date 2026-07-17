@@ -58,10 +58,14 @@ from core.database import (
 )
 from core.identity import get_super_user_ids
 from core.outbound_delivery_service import (
+    CustomTransportConfig,
+    LegacyWriterLeaseSnapshot,
+    LegacyWriterTakeover,
     OutboundDeliveryWorkResult,
     OutboundTransport,
     OutboundWorkerConfig,
     deliver_legacy_outbound_once,
+    snapshot_live_legacy_writer,
 )
 from core.settings_service import settings
 from core.sqlite_retry import run_sqlite_locked_retry
@@ -98,6 +102,7 @@ OUTREACH_CLAIM_LEASE_SECONDS = 900.0
 OUTREACH_WRITER_LEASE_SECONDS = 900.0
 OUTREACH_DEFAULT_MAX_ATTEMPTS = 3
 OUTREACH_DEFAULT_RETRY_DEADLINE_SECONDS = 86400.0
+OUTREACH_SCHEDULER_POLL_SECONDS = 60.0
 _OUTREACH_PROCESS_OWNER = (
     f"proactive-outreach:{os.getpid()}:{secrets.token_hex(16)}"
 )[:128]
@@ -1180,26 +1185,19 @@ async def _deliver_legacy_outreach_leaf(
     *,
     session: Session,
     outbox_id: int,
-    publisher: Callable[[str, str, str], Any] | None,
+    publisher: Callable[[str, str, str], Any],
     endpoint_config_revision: str,
     now: datetime | None,
 ) -> None:
-    worker_config = OutboundWorkerConfig.from_env()
-    if worker_config.endpoint_config_revision != endpoint_config_revision:
-        worker_config = OutboundWorkerConfig(
-            push_url=worker_config.push_url,
-            push_token=worker_config.push_token,
-            push_timeout_seconds=worker_config.push_timeout_seconds,
-            endpoint_config_revision=endpoint_config_revision,
-            batch_size=worker_config.batch_size,
-            lease_seconds=worker_config.lease_seconds,
-            poll_interval_seconds=worker_config.poll_interval_seconds,
-        )
+    execution_config = CustomTransportConfig(
+        endpoint_config_revision=endpoint_config_revision,
+    )
+
     async def deliver(transport) -> None:
         await deliver_legacy_outbound_once(
             session_factory=_outreach_session_factory(session),
             transport=transport,
-            config=worker_config,
+            config=execution_config,
             outbox_id=outbox_id,
             worker_owner=_OUTREACH_PROCESS_OWNER,
             writer_owner=_OUTREACH_PROCESS_OWNER,
@@ -1209,37 +1207,17 @@ async def _deliver_legacy_outreach_leaf(
             now=now,
         )
 
-    if publisher is not None:
-        async def legacy_transport(request):
-            result = publisher(
-                request.target_type,
-                request.target_id,
-                request.message,
-            )
-            if inspect.isawaitable(result):
-                result = await result
-            return _legacy_delivery_outcome(result)
+    async def legacy_transport(request):
+        result = publisher(
+            request.target_type,
+            request.target_id,
+            request.message,
+        )
+        if inspect.isawaitable(result):
+            result = await result
+        return _legacy_delivery_outcome(result)
 
-        await deliver(legacy_transport)
-        return
-
-    import aiohttp
-
-    from core.outbound_transport import deliver_qq_push_with_session
-
-    async with aiohttp.ClientSession() as http_session:
-        async def qq_transport(request):
-            return await deliver_qq_push_with_session(
-                http_session,
-                push_url=request.push_url,
-                push_token=worker_config.push_token,
-                target_type=request.target_type,
-                target_id=request.target_id,
-                message=request.message,
-                timeout_seconds=request.timeout_seconds,
-            )
-
-        await deliver(qq_transport)
+    await deliver(legacy_transport)
 
 
 async def drain_due_legacy_proactive_outboxes(
@@ -1250,6 +1228,9 @@ async def drain_due_legacy_proactive_outboxes(
     now: datetime | None = None,
     clock: Callable[[], datetime] | None = None,
     jitter: Callable[[float], float] | None = None,
+    worker_owner: str | None = None,
+    stop_event: Any | None = None,
+    takeover_writer: LegacyWriterTakeover | None = None,
     limit: int | None = None,
 ) -> list[OutboundDeliveryWorkResult]:
     """恢复主动外呼中安全到期的 legacy leaf。"""
@@ -1264,6 +1245,7 @@ async def drain_due_legacy_proactive_outboxes(
     clock_source = clock or (lambda: datetime.now(timezone.utc))
     current = _utc_naive(now if now is not None else clock_source())
     discovery = factory()
+    writer_snapshot: LegacyWriterLeaseSnapshot | None = None
     try:
         outbound_delivery.terminalize_expired_outboxes(
             discovery,
@@ -1273,6 +1255,11 @@ async def drain_due_legacy_proactive_outboxes(
             now=current,
         )
         discovery.commit()
+        writer_snapshot = snapshot_live_legacy_writer(
+            discovery,
+            source_type=OUTREACH_SOURCE_TYPE,
+            now=current,
+        )
         outbox_ids = [
             int(row[0])
             for row in (
@@ -1331,24 +1318,39 @@ async def drain_due_legacy_proactive_outboxes(
     finally:
         discovery.close()
 
+    if writer_snapshot is not None:
+        writer_owner = writer_snapshot.writer_owner
+        writer_token = writer_snapshot.writer_token
+        writer_protocol_version = writer_snapshot.protocol_version
+        expected_writer_version = writer_snapshot.writer_version
+    elif takeover_writer is not None:
+        writer_owner = takeover_writer.writer_owner
+        writer_token = takeover_writer.writer_token
+        writer_protocol_version = outbound_delivery.OUTBOUND_PROTOCOL_VERSION
+        expected_writer_version = None
+    else:
+        return []
+    delivery_owner = str(worker_owner or writer_owner).strip()
+
     async def deliver_batch(
         resolved_transport: OutboundTransport,
     ) -> list[OutboundDeliveryWorkResult]:
         results: list[OutboundDeliveryWorkResult] = []
         for outbox_id in outbox_ids:
+            if stop_event is not None and stop_event.is_set():
+                break
             try:
                 result = await deliver_legacy_outbound_once(
                     session_factory=factory,
                     transport=resolved_transport,
                     config=resolved_worker,
                     outbox_id=outbox_id,
-                    worker_owner=_OUTREACH_PROCESS_OWNER,
-                    writer_owner=_OUTREACH_PROCESS_OWNER,
-                    writer_token=_OUTREACH_WRITER_TOKEN,
-                    writer_protocol_version=(
-                        outbound_delivery.OUTBOUND_PROTOCOL_VERSION
-                    ),
+                    worker_owner=delivery_owner,
+                    writer_owner=writer_owner,
+                    writer_token=writer_token,
+                    writer_protocol_version=writer_protocol_version,
                     writer_lease_seconds=OUTREACH_WRITER_LEASE_SECONDS,
+                    expected_writer_version=expected_writer_version,
                     now=now,
                     clock=clock,
                     jitter=jitter,
@@ -2107,11 +2109,15 @@ async def _commit_generated_outreach(
         session.rollback()
         raise
 
-    if work.delivery_mode == "legacy_direct" and queued.outbox_id is not None:
+    if (
+        work.delivery_mode == "legacy_direct"
+        and queued.outbox_id is not None
+        and publisher is not None
+    ):
         await _deliver_legacy_outreach_leaf(
             session=session,
             outbox_id=int(queued.outbox_id),
-            publisher=publisher if publisher is not None else push_to_qq,
+            publisher=publisher,
             endpoint_config_revision=work.endpoint_revision,
             now=None,
         )
@@ -2704,11 +2710,15 @@ async def _enqueue_outreach_outbox(
             session.rollback()
             raise
 
-        if claim.delivery_mode == "legacy_direct" and queued.outbox_id is not None:
+        if (
+            claim.delivery_mode == "legacy_direct"
+            and queued.outbox_id is not None
+            and publisher is not None
+        ):
             await _deliver_legacy_outreach_leaf(
                 session=session,
                 outbox_id=int(queued.outbox_id),
-                publisher=publisher if publisher is not None else push_to_qq,
+                publisher=publisher,
                 endpoint_config_revision=endpoint_revision,
                 now=None,
             )
@@ -3820,6 +3830,7 @@ async def run_outreach_due_once(
     surge_min_prob: float | None = None,
     surge_max_prob: float | None = None,
     random_fn: Callable[[], float] | None = None,
+    publisher: Callable[[str, str, str], Any] | None = None,
 ) -> dict[str, Any]:
     """执行一次到期外呼检查；安静时段直接跳过。"""
 
@@ -3888,23 +3899,8 @@ async def run_outreach_due_once(
             if ambiguous_hold_min is not None
             else DEFAULT_AMBIGUOUS_HOLD_MIN
         ),
+        publisher=publisher,
     )
-
-
-def _legacy_drain_poll_interval_seconds() -> float:
-    """遗留投递恢复独立使用短轮询，不受模型评估心跳影响。"""
-
-    try:
-        configured = float(
-            OutboundWorkerConfig.from_env().poll_interval_seconds
-        )
-    except (TypeError, ValueError) as exc:
-        logger.error(
-            "Proactive outreach recovery poll config invalid: error_type=%s",
-            type(exc).__name__,
-        )
-        return 1.0
-    return min(60.0, max(0.1, configured))
 
 
 def proactive_outreach_scheduler(stop_event: threading.Event) -> None:
@@ -3915,20 +3911,6 @@ def proactive_outreach_scheduler(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         enabled = False
         try:
-            try:
-                drained = run_awaitable_sync(
-                    drain_due_legacy_proactive_outboxes()
-                )
-                if drained:
-                    logger.info(
-                        "Proactive outreach legacy drain completed: count=%s",
-                        len(drained),
-                    )
-            except Exception as exc:
-                logger.error(
-                    "Proactive outreach legacy drain failed: error_type=%s",
-                    type(exc).__name__,
-                )
             enabled = settings.get_bool("proactive_outreach.enabled", False)
             monotonic_now = time.monotonic()
             if not enabled:
@@ -3999,7 +3981,7 @@ def proactive_outreach_scheduler(stop_event: threading.Event) -> None:
         except Exception as exc:
             logger.exception("Proactive outreach scheduler error: %s", exc)
 
-        wait_seconds = _legacy_drain_poll_interval_seconds()
+        wait_seconds = OUTREACH_SCHEDULER_POLL_SECONDS
         if enabled and next_evaluation_at > 0:
             wait_seconds = min(
                 wait_seconds,

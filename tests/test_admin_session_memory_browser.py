@@ -1,7 +1,12 @@
 import json
 from datetime import datetime, timedelta
 
-from core.database import ConversationTurn, MemoryDigest, RollingSessionSummary
+from core.database import (
+    ConversationTurn,
+    MemoryDigest,
+    RollingSessionSummary,
+    SessionSummaryJob,
+)
 
 
 def _auth_header():
@@ -11,6 +16,189 @@ def _auth_header():
 # SQLite ORM DateTime 列当前使用 naive 本地墙钟时间；这些测试 fixture 保持同一语义。
 def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
     return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
+
+
+def test_admin_session_summary_retry_rejects_non_failed_job(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    job = SessionSummaryJob(
+        session_id="retry-conflict-session",
+        status="obsolete",
+        meta_json=json.dumps({
+            "obsolete": {
+                "blocking_summary_id": 88,
+                "blocking_coverage": 120,
+                "proposed_coverage": 80,
+                "reason": "higher_active_coverage",
+            },
+            "private_text": "不得进入管理响应",
+        }, ensure_ascii=False),
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.post(
+        f"/api/v1/admin/session-memory/jobs/{job.id}/retry",
+        headers=_auth_header(),
+    )
+
+    assert response.status_code == 409
+    assert "不得进入管理响应" not in response.text
+    db_session.refresh(job)
+    assert job.status == "obsolete"
+
+
+def test_admin_session_summary_get_redacts_obsolete_meta(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    job = SessionSummaryJob(
+        session_id="obsolete-redaction-session",
+        status="obsolete",
+        meta_json=json.dumps({
+            "obsolete": {
+                "blocking_summary_id": 88,
+                "blocking_coverage": 120,
+                "proposed_coverage": 80,
+                "reason": "higher_active_coverage",
+                "private_nested_text": "不得进入管理响应",
+            },
+            "private_text": "也不得进入管理响应",
+        }, ensure_ascii=False),
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/admin/session-memory/obsolete-redaction-session/rolling-summary",
+        headers=_auth_header(),
+    )
+
+    assert response.status_code == 200, response.text
+    returned = response.json()["jobs"][0]
+    assert returned["obsolete"] == {
+        "blocking_summary_id": 88,
+        "blocking_coverage": 120,
+        "proposed_coverage": 80,
+        "reason": "higher_active_coverage",
+    }
+    assert "meta_json" not in returned
+    assert "不得进入管理响应" not in response.text
+
+
+def test_admin_archive_enqueues_session_summary_semantic_delete(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import SemanticIndexJob
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    summary = RollingSessionSummary(
+        session_id="admin-archive-index-session",
+        user_id="u1",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="待归档摘要",
+        stable_hash="admin-archive-index-revision",
+    )
+    db_session.add(summary)
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/admin/session-memory/"
+        "admin-archive-index-session/rolling-summary/archive",
+        headers=_auth_header(),
+    )
+
+    assert response.status_code == 200, response.text
+    db_session.refresh(summary)
+    job = db_session.query(SemanticIndexJob).one()
+    assert summary.status == "archived"
+    assert job.source_type == "session_summary"
+    assert job.source_id == summary.session_id
+    assert job.job_type == "delete"
+    job_meta = json.loads(job.meta_json)
+    assert job_meta["job_origin"] == "business"
+    assert str(summary.id) in job_meta["delete_source_ids"]
+
+
+def test_admin_archive_rolls_back_when_semantic_enqueue_fails(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import SemanticIndexJob
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(client._transport, "raise_server_exceptions", False)
+    summary = RollingSessionSummary(
+        session_id="admin-archive-rollback",
+        user_id="u1",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="归档失败后必须保持 active",
+    )
+    db_session.add(summary)
+    db_session.commit()
+    rollback_calls = []
+    original_rollback = db_session.rollback
+
+    def recording_rollback():
+        rollback_calls.append(True)
+        return original_rollback()
+
+    monkeypatch.setattr(db_session, "rollback", recording_rollback)
+    monkeypatch.setattr(
+        "core.semantic.jobs.enqueue_index_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("semantic enqueue failed")
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/admin/session-memory/"
+        "admin-archive-rollback/rolling-summary/archive",
+        headers=_auth_header(),
+    )
+
+    assert response.status_code == 500
+    assert rollback_calls == [True]
+    db_session.expire_all()
+    assert db_session.get(RollingSessionSummary, summary.id).status == "active"
+    assert db_session.query(SemanticIndexJob).count() == 0
+
+
+def test_admin_session_summary_retry_accepts_failed_job(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    job = SessionSummaryJob(
+        session_id="retry-failed-session",
+        status="failed",
+        error="json_parse_failed",
+        retry_count=3,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.post(
+        f"/api/v1/admin/session-memory/jobs/{job.id}/retry",
+        headers=_auth_header(),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["job"]["status"] == "pending"
+    db_session.refresh(job)
+    assert job.status == "pending"
+    assert job.retry_count == 3
 
 
 def test_admin_session_memory_sessions_list_returns_session_summaries(client, db_session, monkeypatch):

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from collections.abc import Callable
+from dataclasses import replace
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from core.database import SemanticIndexItem, SemanticIndexJob, SessionLocal
+from core.database import SemanticIndexJob, SessionLocal
 from core.semantic.adapters import (
     SemanticChunk,
     chunk_from_group_memory,
@@ -18,31 +19,49 @@ from core.semantic.adapters import (
     chunk_from_sticker,
     chunks_from_memory_digest,
     chunks_from_session_summary,
+    is_recallable_knowledge_chunk,
+    is_recallable_knowledge_document,
 )
-from core.semantic.indexer import upsert_semantic_chunks
-from core.semantic.jobs import claim_next_job, finish_job, recover_timed_out_jobs
+from core.semantic.indexer import reconcile_semantic_source
+from core.semantic.jobs import (
+    DEFAULT_LEASE_SECONDS,
+    SemanticJobLeaseLost,
+    claim_next_job,
+    fail_job,
+    heartbeat_job,
+    recover_timed_out_jobs,
+    semantic_job_lease,
+)
 from core.semantic.provider_factory import get_embedding_provider, get_rag_runtime_config
 from core.semantic.schema import ensure_semantic_schema
-from core.time_utils import db_now_naive
 
 
 ChunkLoader = Callable[[SemanticIndexJob], list[SemanticChunk]]
 
 
-def _mark_source_deleted(db: Session, job: SemanticIndexJob) -> None:
-    rows = (
-        db.query(SemanticIndexItem)
-        .filter(SemanticIndexItem.source_type == job.source_type)
-        .filter(SemanticIndexItem.source_id == str(job.source_id))
-        .filter(SemanticIndexItem.index_version == job.index_version)
-        .all()
-    )
-    now = db_now_naive()
-    for row in rows:
-        row.status = "deleted"
-        row.deleted_at = now
-        db.execute(text("DELETE FROM semantic_index_fts WHERE rowid = :rowid"), {"rowid": row.id})
-    db.commit()
+def _job_meta(job: SemanticIndexJob) -> dict:
+    try:
+        value = json.loads(job.meta_json or "{}")
+        return value if isinstance(value, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _legacy_physical_source_chunks(
+    chunks: list[SemanticChunk],
+    *,
+    job: SemanticIndexJob,
+) -> list[SemanticChunk]:
+    """只为部署前遗留物理 ID job 保持可消费；新 job 必须使用 v2 meta。"""
+
+    return [
+        replace(
+            chunk,
+            source_id=str(job.source_id or ""),
+            metadata={**chunk.metadata, "legacy_physical_source_id": True},
+        )
+        for chunk in chunks
+    ]
 
 
 def _embedding_bytes_by_sub_id(
@@ -52,37 +71,93 @@ def _embedding_bytes_by_sub_id(
     if embedding_provider is None or not chunks:
         return {}, ""
     try:
-        vectors = embedding_provider.embed([chunk.embedding_text for chunk in chunks])
+        raw_vectors = embedding_provider.embed(
+            [chunk.embedding_text for chunk in chunks]
+        )
+        vectors = list(raw_vectors)
     except Exception as exc:
-        return {}, str(exc)
+        return {}, f"embedding_provider_error:{type(exc).__name__}"
+    if len(vectors) != len(chunks):
+        return {}, "embedding_vector_count_mismatch"
+
+    encoded_vectors: list[bytes] = []
+    numeric_dimensions: set[int] = set()
+    for vector in vectors:
+        if isinstance(vector, bytes):
+            if not vector:
+                return {}, "embedding_vector_empty"
+            try:
+                raw_values = json.loads(vector)
+            except Exception:
+                return {}, "embedding_vector_invalid"
+            if not isinstance(raw_values, list):
+                return {}, "embedding_vector_invalid"
+        else:
+            raw_values = vector
+        try:
+            values = [float(item) for item in raw_values]
+        except Exception as exc:
+            return {}, f"embedding_provider_error:{type(exc).__name__}"
+        if not values:
+            return {}, "embedding_vector_empty"
+        if not all(math.isfinite(value) for value in values):
+            return {}, "embedding_vector_non_finite"
+        if not any(value != 0.0 for value in values):
+            return {}, "embedding_vector_zero_norm"
+        numeric_dimensions.add(len(values))
+        encoded_vectors.append(json.dumps(
+            values,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8"))
+    if len(numeric_dimensions) > 1:
+        return {}, "embedding_vector_dimension_mismatch"
 
     embeddings: dict[str, bytes] = {}
-    for chunk, vector in zip(chunks, vectors):
-        if isinstance(vector, bytes):
-            embeddings[chunk.source_sub_id] = vector
-        else:
-            embeddings[chunk.source_sub_id] = json.dumps(
-                [float(item) for item in vector],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
+    for chunk, encoded_vector in zip(chunks, encoded_vectors, strict=True):
+        embeddings[chunk.source_sub_id] = encoded_vector
     return embeddings, ""
+
+
+def _safe_worker_error(exc: Exception, *, prefix: str) -> str:
+    return f"{prefix}:{type(exc).__name__}"
 
 
 def _default_chunk_loader(db: Session) -> ChunkLoader:
     def load(job: SemanticIndexJob) -> list[SemanticChunk]:
         source_type = str(job.source_type or "")
         source_id = str(job.source_id or "")
+        meta = _job_meta(job)
         if source_type == "memory_digest":
             from core.database import MemoryDigest
 
+            document_ids = meta.get("document_ids")
+            if isinstance(document_ids, list) and document_ids:
+                normalized_ids = [int(item) for item in document_ids if int(item or 0) > 0]
+                rows = (
+                    db.query(MemoryDigest)
+                    .filter(MemoryDigest.id.in_(normalized_ids))
+                    .order_by(MemoryDigest.level.asc(), MemoryDigest.id.asc())
+                    .all()
+                )
+                return chunks_from_memory_digest(rows)
+            if not source_id.isdigit():
+                return []
             row = db.query(MemoryDigest).filter(MemoryDigest.id == int(source_id)).first()
-            return chunks_from_memory_digest(row) if row is not None else []
+            chunks = chunks_from_memory_digest(row) if row is not None else []
+            return _legacy_physical_source_chunks(chunks, job=job)
         if source_type == "session_summary":
             from core.database import RollingSessionSummary
 
-            row = db.query(RollingSessionSummary).filter(RollingSessionSummary.id == int(source_id)).first()
-            return chunks_from_session_summary(row) if row is not None else []
+            document_id = int(meta.get("document_id") or 0)
+            if document_id > 0:
+                row = db.get(RollingSessionSummary, document_id)
+                return chunks_from_session_summary(row) if row is not None else []
+            if not source_id.isdigit():
+                return []
+            row = db.get(RollingSessionSummary, int(source_id))
+            chunks = chunks_from_session_summary(row) if row is not None else []
+            return _legacy_physical_source_chunks(chunks, job=job)
         if source_type == "group_memory":
             from core.database import GroupMemory
 
@@ -97,12 +172,27 @@ def _default_chunk_loader(db: Session) -> ChunkLoader:
         if source_type == "knowledge":
             from core.database import KnowledgeChunk, KnowledgeDocument
 
-            document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == int(source_id)).first()
-            query = db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == int(source_id))
+            document = db.query(KnowledgeDocument).filter(
+                KnowledgeDocument.id == int(source_id),
+                KnowledgeDocument.status == "active",
+            ).first()
+            if document is None or not is_recallable_knowledge_document(document):
+                return []
+            query = db.query(KnowledgeChunk).filter(
+                KnowledgeChunk.document_id == int(source_id),
+                KnowledgeChunk.status == "active",
+            )
             if job.source_sub_id:
                 query = query.filter(KnowledgeChunk.chunk_id == job.source_sub_id)
-            rows = query.order_by(KnowledgeChunk.order_index.asc()).all()
-            return [chunk_from_knowledge_chunk(row, document=document) for row in rows]
+            rows = query.order_by(
+                KnowledgeChunk.order_index.asc(),
+                KnowledgeChunk.id.asc(),
+            ).all()
+            return [
+                chunk_from_knowledge_chunk(row, document=document)
+                for row in rows
+                if is_recallable_knowledge_chunk(row)
+            ]
         return []
 
     return load
@@ -114,37 +204,75 @@ def process_semantic_index_job(
     *,
     chunk_loader: ChunkLoader,
     embedding_provider=None,
-) -> SemanticIndexJob:
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+) -> SemanticIndexJob | None:
     ensure_semantic_schema(db.bind)
+    lease = semantic_job_lease(job)
     try:
-        if job.job_type == "delete":
-            _mark_source_deleted(db, job)
-            return finish_job(db, job, status="done")
-
         chunks = chunk_loader(job)
         embeddings, embedding_error = _embedding_bytes_by_sub_id(chunks, embedding_provider)
-        try:
-            rows = upsert_semantic_chunks(
-                db,
-                chunks,
-                index_version=job.index_version,
-                embeddings=embeddings,
-                embedding_enabled=embedding_provider is not None,
-            )
-        except Exception as exc:
-            db.rollback()
-            return finish_job(db, job, status="failed", error=str(exc))
+        renewed = heartbeat_job(
+            db,
+            job_id=lease.job_id,
+            lease_token=lease.lease_token,
+            lease_seconds=lease_seconds,
+        )
+        if renewed is None:
+            return None
+        job_meta = _job_meta(job)
+        delete_source_ids = job_meta.get("delete_source_ids")
+        if not isinstance(delete_source_ids, list):
+            delete_source_ids = []
+        terminal_status = "done_with_warning" if embedding_error else "done"
+        rows = reconcile_semantic_source(
+            db,
+            source_type=str(job.source_type or ""),
+            source_id=str(job.source_id or ""),
+            source_revision=renewed.source_revision,
+            index_version=job.index_version,
+            expected_chunks=[] if job.job_type == "delete" else chunks,
+            delete_source_ids=delete_source_ids,
+            lease=renewed,
+            embeddings=embeddings,
+            embedding_enabled=embedding_provider is not None,
+            status=terminal_status,
+            error=embedding_error,
+            ensure_schema=False,
+        )
 
         if embedding_error:
             for row in rows:
                 row.embedding_status = "failed"
-            db.commit()
-            return finish_job(db, job, status="done_with_warning", error=embedding_error)
-
-        return finish_job(db, job, status="done")
+        db.commit()
+        db.expire_all()
+        return db.get(SemanticIndexJob, renewed.job_id)
+    except SemanticJobLeaseLost:
+        db.rollback()
+        return None
+    except ValueError as exc:
+        db.rollback()
+        return fail_job(
+            db,
+            job_id=lease.job_id,
+            lease_token=lease.lease_token,
+            error=_safe_worker_error(
+                exc,
+                prefix="semantic_index_permanent_error",
+            ),
+            retryable=False,
+        )
     except Exception as exc:
         db.rollback()
-        return finish_job(db, job, status="failed", error=str(exc))
+        return fail_job(
+            db,
+            job_id=lease.job_id,
+            lease_token=lease.lease_token,
+            error=_safe_worker_error(
+                exc,
+                prefix="semantic_index_worker_error",
+            ),
+            retryable=True,
+        )
 
 
 def run_once(
@@ -154,6 +282,7 @@ def run_once(
     chunk_loader: ChunkLoader | None = None,
     embedding_provider=None,
     recover_timeout_seconds: int = 900,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
 ) -> bool:
     if not get_rag_runtime_config().semantic_index_enabled:
         return False
@@ -162,7 +291,11 @@ def run_once(
         db = SessionLocal()
     try:
         recover_timed_out_jobs(db, timeout_seconds=recover_timeout_seconds)
-        job = claim_next_job(db, worker_id=worker_id)
+        job = claim_next_job(
+            db,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
         if job is None:
             return False
         process_semantic_index_job(
@@ -170,6 +303,7 @@ def run_once(
             job,
             chunk_loader=chunk_loader or _default_chunk_loader(db),
             embedding_provider=embedding_provider if embedding_provider is not None else get_embedding_provider(),
+            lease_seconds=lease_seconds,
         )
         return True
     finally:

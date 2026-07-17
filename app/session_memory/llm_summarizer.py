@@ -20,6 +20,7 @@ from app.session_memory.llm_contract import (
     InheritanceAudit,
     SummaryObligation,
     SummaryBatchTrace,
+    SessionSummaryLLMResult,
     SummaryRequestBatch,
     TurnCoverageManifest,
     TurnFragment,
@@ -34,10 +35,13 @@ from app.session_memory.llm_contract import (
     validate_inheritance,
 )
 from app.session_memory.jobs import (
+    acquire_summary_finalize_permit,
     claim_summary_job,
     fetch_pending_summary_jobs,
     mark_summary_job_done,
     mark_summary_job_failed,
+    mark_summary_job_obsolete,
+    renew_summary_job_lease,
 )
 from app.session_memory.rolling_summary import archive_active_summaries_for_session, audit_rolling_summary
 from app.session_memory.summarizer import render_summary_text
@@ -233,7 +237,9 @@ def build_llm_summary_messages(
     return [dict(message) for message in batches[0].messages]
 
 
-async def default_llm_summary_summarizer_async(messages: list[dict[str, str]]) -> str:
+async def default_llm_summary_summarizer_async(
+    messages: list[dict[str, str]],
+) -> SessionSummaryLLMResult:
     from config import NEW_API_KEY
     from clients.new_api_client import NewAPIClient
     from clients.classifier_client import resolve_model_route
@@ -254,9 +260,33 @@ async def default_llm_summary_summarizer_async(messages: list[dict[str, str]]) -
     if isinstance(response, dict) and response.get("error"):
         raise RuntimeError(str(response.get("detail") or response.get("error")))
     try:
-        return str(response["choices"][0]["message"].get("content") or "")
+        content = str(response["choices"][0]["message"].get("content") or "")
     except Exception as exc:
         raise RuntimeError("llm_response_missing_content") from exc
+    actual_model = str(
+        response.get("model")
+        or response.get("_nanobot_model_id")
+        or "unknown"
+    ).strip() or "unknown"
+    requested_model = str(
+        response.get("_nanobot_requested_model")
+        or response.get("_nanobot_model_id")
+        or route.get("model")
+        or "unknown"
+    ).strip() or "unknown"
+    raw_log_id = response.get("_nanobot_request_log_id")
+    request_log_id = (
+        int(raw_log_id)
+        if isinstance(raw_log_id, int) and not isinstance(raw_log_id, bool)
+        and raw_log_id > 0
+        else None
+    )
+    return SessionSummaryLLMResult(
+        content=content,
+        model=actual_model,
+        requested_model=requested_model,
+        request_log_id=request_log_id,
+    )
 
 
 def default_llm_summary_summarizer(messages: list[dict[str, str]]) -> str:
@@ -284,6 +314,33 @@ def _call_summarizer(
             "use process_claimed_session_summary_job_short_transactions_async"
         )
     return result
+
+
+def _normalize_llm_result(raw: Any) -> SessionSummaryLLMResult:
+    if isinstance(raw, SessionSummaryLLMResult):
+        model = str(raw.model or "unknown").strip() or "unknown"
+        requested_model = (
+            str(raw.requested_model or model).strip() or model
+        )
+        request_log_id = (
+            int(raw.request_log_id)
+            if isinstance(raw.request_log_id, int)
+            and not isinstance(raw.request_log_id, bool)
+            and raw.request_log_id > 0
+            else None
+        )
+        return SessionSummaryLLMResult(
+            content=raw.content,
+            model=model,
+            requested_model=requested_model,
+            request_log_id=request_log_id,
+        )
+    return SessionSummaryLLMResult(
+        content=raw,
+        model="custom_summarizer",
+        requested_model="custom_summarizer",
+        request_log_id=None,
+    )
 
 
 async def _call_summarizer_async(
@@ -473,8 +530,10 @@ def _accept_summary_batch_payload(
     dict[str, Any],
     tuple[SummaryObligation, ...],
     InheritanceAudit,
+    SessionSummaryLLMResult,
 ]:
-    payload = parse_llm_summary_response(raw)
+    llm_result = _normalize_llm_result(raw)
+    payload = parse_llm_summary_response(llm_result.content)
     inheritance_audit = validate_inheritance(
         payload,
         obligations,
@@ -489,12 +548,20 @@ def _accept_summary_batch_payload(
         business_payload,
         max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
     )
-    return business_payload, state, build_summary_obligations(state), inheritance_audit
+    return (
+        business_payload,
+        state,
+        build_summary_obligations(state),
+        inheritance_audit,
+        llm_result,
+    )
 
 
 def _summarize_prepared_sync(
     prepared: PreparedSessionSummaryJob,
     summarizer: Callable[[list[dict[str, str]]], Any],
+    *,
+    renew_lease: Callable[[], bool] | None = None,
 ) -> Any:
     _validate_prepared_coverage(prepared)
     prepared.batch_traces.clear()
@@ -503,6 +570,7 @@ def _summarize_prepared_sync(
     obligations = prepared.previous_obligations
     completed_hashes: list[str] = []
     final_payload: dict[str, Any] | None = None
+    final_result: SessionSummaryLLMResult | None = None
     batch_index = 0
     while remaining:
         batch = _build_next_request_batch(
@@ -515,7 +583,13 @@ def _summarize_prepared_sync(
             summarizer,
             [dict(message) for message in batch.messages],
         )
-        final_payload, state, obligations, inheritance_audit = _accept_summary_batch_payload(
+        (
+            final_payload,
+            state,
+            obligations,
+            inheritance_audit,
+            final_result,
+        ) = _accept_summary_batch_payload(
             raw=raw,
             obligations=obligations,
             prepared=prepared,
@@ -525,18 +599,34 @@ def _summarize_prepared_sync(
             batch_index=batch.batch_index,
             fragment_hashes=batch.fragment_hashes,
             inheritance_audit=inheritance_audit,
+            model=final_result.model,
+            requested_model=final_result.requested_model,
+            request_log_id=final_result.request_log_id,
         ))
+        if renew_lease is not None and not renew_lease():
+            raise ValueError("summary_job_lease_lost")
         completed_hashes.extend(batch.fragment_hashes)
         remaining = remaining[len(batch.fragments):]
         batch_index += 1
-    if tuple(completed_hashes) != prepared.manifest.fragment_hashes or final_payload is None:
+    if (
+        tuple(completed_hashes) != prepared.manifest.fragment_hashes
+        or final_payload is None
+        or final_result is None
+    ):
         raise ValueError("summary_input_manifest_mismatch")
-    return final_payload
+    return SessionSummaryLLMResult(
+        content=final_payload,
+        model=final_result.model,
+        requested_model=final_result.requested_model,
+        request_log_id=final_result.request_log_id,
+    )
 
 
 async def _summarize_prepared_async(
     prepared: PreparedSessionSummaryJob,
     summarizer: Callable[[list[dict[str, str]]], Any],
+    *,
+    renew_lease: Callable[[], Any] | None = None,
 ) -> Any:
     _validate_prepared_coverage(prepared)
     prepared.batch_traces.clear()
@@ -545,6 +635,7 @@ async def _summarize_prepared_async(
     obligations = prepared.previous_obligations
     completed_hashes: list[str] = []
     final_payload: dict[str, Any] | None = None
+    final_result: SessionSummaryLLMResult | None = None
     batch_index = 0
     while remaining:
         batch = _build_next_request_batch(
@@ -557,7 +648,13 @@ async def _summarize_prepared_async(
             summarizer,
             [dict(message) for message in batch.messages],
         )
-        final_payload, state, obligations, inheritance_audit = _accept_summary_batch_payload(
+        (
+            final_payload,
+            state,
+            obligations,
+            inheritance_audit,
+            final_result,
+        ) = _accept_summary_batch_payload(
             raw=raw,
             obligations=obligations,
             prepared=prepared,
@@ -567,13 +664,31 @@ async def _summarize_prepared_async(
             batch_index=batch.batch_index,
             fragment_hashes=batch.fragment_hashes,
             inheritance_audit=inheritance_audit,
+            model=final_result.model,
+            requested_model=final_result.requested_model,
+            request_log_id=final_result.request_log_id,
         ))
+        if renew_lease is not None:
+            renewed = renew_lease()
+            if inspect.isawaitable(renewed):
+                renewed = await renewed
+            if not renewed:
+                raise ValueError("summary_job_lease_lost")
         completed_hashes.extend(batch.fragment_hashes)
         remaining = remaining[len(batch.fragments):]
         batch_index += 1
-    if tuple(completed_hashes) != prepared.manifest.fragment_hashes or final_payload is None:
+    if (
+        tuple(completed_hashes) != prepared.manifest.fragment_hashes
+        or final_payload is None
+        or final_result is None
+    ):
         raise ValueError("summary_input_manifest_mismatch")
-    return final_payload
+    return SessionSummaryLLMResult(
+        content=final_payload,
+        model=final_result.model,
+        requested_model=final_result.requested_model,
+        request_log_id=final_result.request_log_id,
+    )
 
 
 def _summary_stable_hash(
@@ -592,15 +707,6 @@ def _summary_stable_hash(
     ).hexdigest()
 
 
-def _resolved_session_summary_model() -> str:
-    try:
-        from clients.classifier_client import resolve_model_route
-
-        return str(resolve_model_route("session_summary").get("model") or "unknown")
-    except Exception:
-        return "unknown"
-
-
 def save_llm_session_summary(
     db: Session,
     *,
@@ -608,12 +714,22 @@ def save_llm_session_summary(
     payload: dict[str, Any],
     source_turns: list[ConversationTurn],
     model: str = "",
+    requested_model: str = "",
     llm_request_log_id: int | None = None,
+    batch_traces: tuple[SummaryBatchTrace, ...] = (),
 ) -> RollingSessionSummary:
     if not source_turns:
         raise ValueError("source_turns is required")
     fallback = db.get(RollingSessionSummary, int(job.fallback_summary_id or 0)) if job.fallback_summary_id else None
     previous = db.get(RollingSessionSummary, int(job.previous_summary_id or 0)) if job.previous_summary_id else None
+    superseded_document_ids = [
+        int(row.id)
+        for row in db.query(RollingSessionSummary.id).filter(
+            RollingSessionSummary.session_id == job.session_id,
+            RollingSessionSummary.status == "active",
+        ).all()
+        if int(row.id or 0) > 0
+    ]
     archive_active_summaries_for_session(db, job.session_id)
 
     pending_turn_ids = [int(turn.id) for turn in source_turns]
@@ -663,11 +779,41 @@ def save_llm_session_summary(
             payload=payload,
         ),
         meta_json=json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
+            "contract_version": 2,
             "created_by": "session_summary_worker",
             "summary_kind": "llm_episode",
             "fallback_summary_id": int(getattr(fallback, "id", 0) or 0),
             "previous_summary_id": int(getattr(previous, "id", 0) or 0),
+            "requested_model": requested_model or "unknown",
+            "superseded_document_ids": superseded_document_ids,
+            "batch_traces": [
+                {
+                    "batch_index": trace.batch_index,
+                    "fragment_hashes": list(trace.fragment_hashes),
+                    "model": trace.model,
+                    "requested_model": trace.requested_model,
+                    "request_log_id": trace.request_log_id,
+                    "inheritance": {
+                        "obligation_count": (
+                            trace.inheritance_audit.obligation_count
+                        ),
+                        "carried_count": (
+                            trace.inheritance_audit.carried_count
+                        ),
+                        "updated_count": (
+                            trace.inheritance_audit.updated_count
+                        ),
+                        "resolved_count": (
+                            trace.inheritance_audit.resolved_count
+                        ),
+                        "state_sha256": (
+                            trace.inheritance_audit.state_sha256
+                        ),
+                    },
+                }
+                for trace in batch_traces
+            ],
         }, ensure_ascii=False),
         created_at=now,
         updated_at=now,
@@ -752,7 +898,23 @@ def finalize_claimed_session_summary_job(
     _validate_completed_coverage(prepared)
     if current_fragments != prepared.fragments or current_manifest != prepared.manifest:
         raise ValueError("summary_input_manifest_mismatch")
-    payload = strip_summary_inheritance(parse_llm_summary_response(raw))
+
+    permit = acquire_summary_finalize_permit(
+        db,
+        int(job.id or 0),
+        owner=owner,
+    )
+    if permit.decision == "lost_lease":
+        return False
+    if permit.decision == "obsolete":
+        mark_summary_job_obsolete(db, job, permit=permit)
+        db.flush()
+        return True
+
+    llm_result = _normalize_llm_result(raw)
+    payload = strip_summary_inheritance(
+        parse_llm_summary_response(llm_result.content)
+    )
     audit_ok, issues = audit_llm_session_summary(
         payload=payload,
         source_turns=source_turns,
@@ -766,15 +928,44 @@ def finalize_claimed_session_summary_job(
         job=job,
         payload=payload,
         source_turns=source_turns,
-        model=model,
+        model=(
+            llm_result.model
+            if isinstance(raw, SessionSummaryLLMResult)
+            else model or llm_result.model
+        ),
+        requested_model=llm_result.requested_model,
+        llm_request_log_id=llm_result.request_log_id,
+        batch_traces=tuple(prepared.batch_traces),
     )
     from core.semantic.jobs import enqueue_index_job
+    from core.semantic.adapters import session_summary_source_revision
+
+    try:
+        summary_meta = json.loads(summary.meta_json or "{}")
+        if not isinstance(summary_meta, dict):
+            summary_meta = {}
+    except (TypeError, json.JSONDecodeError):
+        summary_meta = {}
+    delete_source_ids = {
+        str(item)
+        for item in summary_meta.get("superseded_document_ids", [])
+        if int(item or 0) > 0
+    }
+    delete_source_ids.add(str(summary.id))
 
     enqueue_index_job(
         db,
         source_type="session_summary",
-        source_id=str(summary.id),
+        source_id=str(summary.session_id),
+        job_type="replace",
         index_version="",
+        source_revision=session_summary_source_revision(summary),
+        meta={
+            "contract_version": 2,
+            "job_origin": "business",
+            "document_id": int(summary.id or 0),
+            "delete_source_ids": sorted(delete_source_ids),
+        },
         commit=False,
     )
     mark_summary_job_done(db, job, result_summary_id=int(summary.id or 0))
@@ -820,6 +1011,28 @@ def _fail_claimed_job_with_factory(
         db.close()
 
 
+def _renew_claimed_job_with_factory(
+    session_factory: Callable[[], Session],
+    *,
+    job_id: int,
+    owner: str,
+) -> bool:
+    db = session_factory()
+    try:
+        renewed = renew_summary_job_lease(
+            db,
+            int(job_id),
+            owner=owner,
+        )
+        db.commit()
+        return renewed
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def process_claimed_session_summary_job_short_transactions(
     session_factory: Callable[[], Session],
     *,
@@ -849,7 +1062,15 @@ def process_claimed_session_summary_job_short_transactions(
         return False
 
     try:
-        raw = _summarize_prepared_sync(prepared, summarizer)
+        raw = _summarize_prepared_sync(
+            prepared,
+            summarizer,
+            renew_lease=lambda: _renew_claimed_job_with_factory(
+                session_factory,
+                job_id=int(job_id),
+                owner=owner,
+            ),
+        )
     except Exception as exc:
         logger.warning("session summary job failed before finalize: job_id=%s error=%s", job_id, exc)
         _fail_claimed_job_with_factory(
@@ -860,8 +1081,6 @@ def process_claimed_session_summary_job_short_transactions(
         )
         return False
 
-    resolved_model = _resolved_session_summary_model()
-
     db = session_factory()
     try:
         ok = finalize_claimed_session_summary_job(
@@ -869,7 +1088,6 @@ def process_claimed_session_summary_job_short_transactions(
             prepared,
             raw=raw,
             owner=owner,
-            model=resolved_model,
         )
         db.commit()
         return ok
@@ -916,7 +1134,15 @@ async def process_claimed_session_summary_job_short_transactions_async(
         return False
 
     try:
-        raw = await _summarize_prepared_async(prepared, summarizer)
+        raw = await _summarize_prepared_async(
+            prepared,
+            summarizer,
+            renew_lease=lambda: _renew_claimed_job_with_factory(
+                session_factory,
+                job_id=int(job_id),
+                owner=owner,
+            ),
+        )
     except Exception as exc:
         logger.warning("session summary job failed before finalize: job_id=%s error=%s", job_id, exc)
         _fail_claimed_job_with_factory(
@@ -927,8 +1153,6 @@ async def process_claimed_session_summary_job_short_transactions_async(
         )
         return False
 
-    resolved_model = _resolved_session_summary_model()
-
     db = session_factory()
     try:
         ok = finalize_claimed_session_summary_job(
@@ -936,7 +1160,6 @@ async def process_claimed_session_summary_job_short_transactions_async(
             prepared,
             raw=raw,
             owner=owner,
-            model=resolved_model,
         )
         db.commit()
         return ok

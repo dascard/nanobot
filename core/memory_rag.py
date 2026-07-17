@@ -99,6 +99,21 @@ def _collect_digest_row_ids(items: list[_Candidate]) -> list[int]:
     return row_ids
 
 
+def _collect_summary_document_ids(items: list[_Candidate]) -> list[int]:
+    document_ids: list[int] = []
+    seen: set[int] = set()
+    for item in items:
+        document_id = _safe_json(item.row.meta_json).get("document_id")
+        try:
+            normalized = int(document_id or 0)
+        except (TypeError, ValueError):
+            continue
+        if normalized > 0 and normalized not in seen:
+            seen.add(normalized)
+            document_ids.append(normalized)
+    return document_ids
+
+
 def _query_vector(query: str, embedding_provider: Any) -> list[float] | None:
     if embedding_provider is None:
         return None
@@ -619,7 +634,12 @@ class MemoryRagService:
                 parent["digest_source_id"] = source_id
                 parent["matched_digest_row_ids"] = digest_row_ids
             if source_type == "session_summary":
-                parent["summary_id"] = int(source_id) if str(source_id).isdigit() else source_id
+                document_ids = _collect_summary_document_ids(items)
+                parent["summary_id"] = (
+                    document_ids[0]
+                    if document_ids
+                    else int(source_id) if str(source_id).isdigit() else source_id
+                )
             parents.append(parent)
 
         parents.sort(key=lambda item: item["parent_score"], reverse=True)

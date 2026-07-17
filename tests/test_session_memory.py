@@ -4,7 +4,14 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from core.database import ChatLog, ConversationTurn, RollingSessionSummary, SessionSummaryJob, User
+from core.database import (
+    ChatLog,
+    ConversationTurn,
+    RollingSessionSummary,
+    SemanticIndexJob,
+    SessionSummaryJob,
+    User,
+)
 from tests.async_helpers import run_async
 
 
@@ -153,11 +160,20 @@ def test_build_session_memory_large_session_uses_latest_raw_window(db_session):
 def test_admin_rollup_inputs_large_session_uses_latest_raw_window(db_session):
     from api.admin.session_memory_routes import _build_rollup_inputs
 
+    history_clear_at = _local_now() - timedelta(days=1)
+    db_session.add(User(id="u1", history_clear_at=history_clear_at))
     for i in range(1000):
         _turn(db_session, content=f"管理端历史消息 {i + 1}")
     db_session.commit()
 
-    _active, pending, raw_window, raw_debug, _eligible_debug = _build_rollup_inputs(
+    (
+        _active,
+        pending,
+        raw_window,
+        raw_debug,
+        _eligible_debug,
+        expected_history_clear_at,
+    ) = _build_rollup_inputs(
         db_session,
         session_id="s1",
         user_id="u1",
@@ -170,9 +186,10 @@ def test_admin_rollup_inputs_large_session_uses_latest_raw_window(db_session):
     assert min(turn_ids) > 900
     assert raw_debug["raw_window_start_turn_id"] == min(turn_ids)
     assert all(turn.id < min(turn_ids) for turn in pending)
+    assert expected_history_clear_at == history_clear_at
 
 
-def test_history_clear_at_archives_active_summary(db_session):
+def test_history_clear_at_filters_active_summary_without_read_time_archive(db_session):
     from app.session_memory.rolling_summary import get_active_summary
 
     now = _local_now()
@@ -195,7 +212,45 @@ def test_history_clear_at_archives_active_summary(db_session):
     )
 
     assert summary is None
-    assert row.status == "archived"
+    db_session.refresh(row)
+    assert row.status == "active"
+
+
+def test_best_summary_filters_stale_rows_without_read_time_archive(db_session):
+    from app.session_memory.rolling_summary import get_best_session_summary
+
+    now = _local_now()
+    stale = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="清除点之前的摘要",
+        covered_until_turn_id=10,
+        updated_at=now - timedelta(minutes=2),
+    )
+    fresh = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="清除点之后的摘要",
+        covered_until_turn_id=12,
+        updated_at=now,
+    )
+    db_session.add_all([stale, fresh])
+    db_session.commit()
+
+    best = get_best_session_summary(
+        db_session,
+        "s1",
+        after_clear_at=now - timedelta(minutes=1),
+    )
+
+    assert best is not None
+    assert best.id == fresh.id
+    db_session.refresh(stale)
+    assert stale.status == "active"
 
 
 def test_save_new_summary_archives_old_active(db_session):
@@ -236,6 +291,8 @@ def test_save_new_summary_archives_old_active(db_session):
 
 def test_save_new_summary_archives_all_existing_active_rows(db_session):
     from app.session_memory.rolling_summary import save_new_active_summary
+    from core.database import SemanticIndexJob
+    from core.semantic.adapters import session_summary_source_revision
 
     old_a = RollingSessionSummary(
         session_id="s1",
@@ -279,6 +336,21 @@ def test_save_new_summary_archives_all_existing_active_rows(db_session):
     assert [item.id for item in active_rows] == [row.id]
     assert old_a.status == "archived"
     assert old_b.status == "archived"
+    index_jobs = db_session.query(SemanticIndexJob).all()
+    assert len(index_jobs) == 1
+    index_job = index_jobs[0]
+    assert index_job.source_type == "session_summary"
+    assert index_job.source_id == "s1"
+    assert index_job.job_type == "replace"
+    assert index_job.source_revision == session_summary_source_revision(row)
+    index_meta = json.loads(index_job.meta_json)
+    assert index_meta["job_origin"] == "business"
+    assert index_meta["document_id"] == row.id
+    assert set(index_meta["delete_source_ids"]) == {
+        str(old_a.id),
+        str(old_b.id),
+        str(row.id),
+    }
 
 
 def test_deterministic_summary_compacts_instead_of_appending_raw_text(db_session):
@@ -466,6 +538,180 @@ def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session
     assert debug["rolling_summary_recent_raw_turn_ids"][-1] == 24
 
 
+def test_build_chat_context_rollup_survives_clean_transaction_release(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from core.context_builder import build_chat_context
+    from core.database import Base, release_clean_session_transaction
+    from core.semantic.schema import ensure_semantic_schema
+
+    session_id = "private_rollup_commit_boundary"
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'rollup-commit-boundary.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(bind=engine)
+    ensure_semantic_schema(engine)
+    SessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=engine,
+    )
+    try:
+        with SessionLocal() as db_session:
+            now = _local_now()
+            for index in range(40):
+                _turn(
+                    db_session,
+                    session_id=session_id,
+                    user_id="rollup-user",
+                    role="user" if index % 2 == 0 else "assistant",
+                    content=f"滚动摘要事务边界 {index + 1}",
+                    created_at=now + timedelta(seconds=index),
+                )
+            db_session.commit()
+
+            _header, _messages, debug = build_chat_context(
+                db_session,
+                session_id,
+                user_id="rollup-user",
+                max_total=10000,
+            )
+
+            assert debug["rolling_summary_injected"] is True
+            assert db_session.query(RollingSessionSummary).count() == 1
+            assert db_session.query(SessionSummaryJob).count() == 1
+            assert db_session.query(SemanticIndexJob).count() == 1
+
+            release_clean_session_transaction(
+                db_session,
+                label="test_chat_before_private_decision",
+            )
+
+        with SessionLocal() as verification_db:
+            assert verification_db.query(RollingSessionSummary).count() == 1
+            assert verification_db.query(SessionSummaryJob).count() == 1
+            assert verification_db.query(SemanticIndexJob).count() == 1
+    finally:
+        engine.dispose()
+
+
+def test_build_chat_context_drops_stale_summary_after_history_clear_fence(
+    db_session,
+    monkeypatch,
+):
+    from app.session_memory.rolling_summary import RollupResult
+    from core.context_builder import build_chat_context
+
+    session_id = "private_history_clear_fence_context"
+    user_id = "history-clear-context-user"
+    db_session.add(RollingSessionSummary(
+        session_id=session_id,
+        user_id=user_id,
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="不得继续注入的旧摘要",
+        summary_json='{"summary":"不得继续注入的旧摘要"}',
+        covered_from_turn_id=0,
+        covered_until_turn_id=0,
+        source_turn_count=0,
+    ))
+    for index in range(40):
+        _turn(
+            db_session,
+            session_id=session_id,
+            user_id=user_id,
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"历史清除 fence 上下文 {index + 1}",
+        )
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.session_memory.rolling_summary.maybe_rollup_session_summary",
+        lambda *_args, **_kwargs: RollupResult(
+            skipped_reason="history_clear_changed",
+        ),
+    )
+
+    header, _messages, debug = build_chat_context(
+        db_session,
+        session_id,
+        user_id=user_id,
+        max_total=10000,
+    )
+
+    assert "不得继续注入的旧摘要" not in header
+    assert debug["rolling_summary_injected"] is False
+    assert debug["rolling_summary_skipped_reason"] == "history_clear_changed"
+
+
+def test_build_chat_context_rolls_back_when_semantic_enqueue_fails(
+    tmp_path,
+    monkeypatch,
+):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from core.context_builder import build_chat_context
+    from core.database import Base, release_clean_session_transaction
+    from core.semantic.schema import ensure_semantic_schema
+
+    session_id = "private_rollup_enqueue_rollback"
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'rollup-enqueue-rollback.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(bind=engine)
+    ensure_semantic_schema(engine)
+    SessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=engine,
+    )
+    try:
+        with SessionLocal() as db_session:
+            now = _local_now()
+            for index in range(40):
+                _turn(
+                    db_session,
+                    session_id=session_id,
+                    user_id="rollback-user",
+                    role="user" if index % 2 == 0 else "assistant",
+                    content=f"联合事务回滚 {index + 1}",
+                    created_at=now + timedelta(seconds=index),
+                )
+            db_session.commit()
+            monkeypatch.setattr(
+                "core.semantic.jobs.enqueue_index_job",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError("semantic enqueue failed")
+                ),
+            )
+
+            _header, _messages, debug = build_chat_context(
+                db_session,
+                session_id,
+                user_id="rollback-user",
+                max_total=10000,
+            )
+
+            assert debug["rolling_summary_injected"] is False
+            assert debug["rolling_summary_committed"] is False
+            assert "semantic enqueue failed" in debug["rolling_summary_error"]
+            release_clean_session_transaction(
+                db_session,
+                label="test_chat_rollup_failure_release",
+            )
+
+        with SessionLocal() as verification_db:
+            assert verification_db.query(RollingSessionSummary).count() == 0
+            assert verification_db.query(SessionSummaryJob).count() == 0
+            assert verification_db.query(SemanticIndexJob).count() == 0
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.parametrize(
     ("chat_type", "turn_count"),
     [("group", 24), ("private", 40)],
@@ -632,6 +878,590 @@ def test_rollup_success_enqueues_llm_summary_job(db_session):
     assert job.fallback_summary_id == result.summary.id
 
 
+def test_rollup_keeps_new_equal_coverage_active_summary(db_session):
+    from app.session_memory.rolling_summary import maybe_rollup_session_summary
+
+    previous_turns = [_turn(db_session, content=f"旧摘要来源 {i}") for i in range(3)]
+    stale = RollingSessionSummary(
+        session_id="equal-coverage-rollup",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="旧 fallback",
+        covered_from_turn_id=previous_turns[0].id,
+        covered_until_turn_id=previous_turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in previous_turns]),
+        source_turn_count=len(previous_turns),
+    )
+    db_session.add(stale)
+    db_session.commit()
+
+    db_session.query(RollingSessionSummary).filter(
+        RollingSessionSummary.id == stale.id,
+    ).update({"status": "archived"}, synchronize_session=False)
+    current = RollingSessionSummary(
+        session_id="equal-coverage-rollup",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="新的同覆盖范围 LLM 摘要",
+        covered_from_turn_id=previous_turns[0].id,
+        covered_until_turn_id=previous_turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in previous_turns]),
+        source_turn_count=len(previous_turns),
+    )
+    pending = [
+        _turn(
+            db_session,
+            session_id="equal-coverage-rollup",
+            content=f"后续消息 {i}",
+        )
+        for i in range(3)
+    ]
+    db_session.add(current)
+    db_session.commit()
+
+    result = maybe_rollup_session_summary(
+        db_session,
+        session_id="equal-coverage-rollup",
+        user_id="u1",
+        chat_type="private",
+        active_summary=stale,
+        pending_turns=pending,
+        recent_raw_turn_ids=[],
+        raw_window_start_turn_id=pending[-1].id + 1,
+        force=True,
+    )
+
+    assert result.summary is not None
+    assert result.summary.id == current.id
+    assert result.skipped_reason == "already_rolled"
+    assert result.requires_commit is False
+    assert db_session.get(RollingSessionSummary, current.id).status == "active"
+    assert db_session.query(RollingSessionSummary).count() == 2
+
+
+def test_rollup_equal_coverage_dual_active_keeps_llm_as_cas_head(db_session):
+    from app.session_memory.rolling_summary import (
+        get_best_session_summary,
+        maybe_rollup_session_summary,
+    )
+
+    previous_turns = [
+        _turn(
+            db_session,
+            session_id="dual-active-rollup",
+            content=f"双 active 历史 {i}",
+        )
+        for i in range(3)
+    ]
+    llm_summary = RollingSessionSummary(
+        session_id="dual-active-rollup",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="同覆盖范围的高质量 LLM 摘要",
+        covered_from_turn_id=previous_turns[0].id,
+        covered_until_turn_id=previous_turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in previous_turns]),
+        source_turn_count=len(previous_turns),
+    )
+    db_session.add(llm_summary)
+    db_session.flush()
+    fallback = RollingSessionSummary(
+        session_id="dual-active-rollup",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="较晚写入但不应成为 CAS head 的 fallback",
+        covered_from_turn_id=previous_turns[0].id,
+        covered_until_turn_id=previous_turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in previous_turns]),
+        source_turn_count=len(previous_turns),
+    )
+    db_session.add(fallback)
+    db_session.flush()
+    pending = [
+        _turn(
+            db_session,
+            session_id="dual-active-rollup",
+            content=f"继续滚动 {i}",
+        )
+        for i in range(3)
+    ]
+    db_session.commit()
+
+    selected = get_best_session_summary(db_session, "dual-active-rollup")
+    assert selected.id == llm_summary.id
+    result = maybe_rollup_session_summary(
+        db_session,
+        session_id="dual-active-rollup",
+        user_id="u1",
+        chat_type="private",
+        active_summary=selected,
+        pending_turns=pending,
+        recent_raw_turn_ids=[],
+        raw_window_start_turn_id=pending[-1].id + 1,
+        force=True,
+    )
+
+    assert result.skipped_reason == ""
+    assert result.requires_commit is True
+    assert result.summary is not None
+    assert result.summary.id not in {llm_summary.id, fallback.id}
+    assert result.summary.covered_until_turn_id == pending[-1].id
+    assert db_session.get(RollingSessionSummary, llm_summary.id).status == "archived"
+    assert db_session.get(RollingSessionSummary, fallback.id).status == "archived"
+
+
+def test_admin_archive_obsoletes_pending_and_running_summary_jobs(db_session):
+    from api.admin.session_memory_routes import archive_rolling_summary
+    from app.session_memory.jobs import (
+        SessionSummaryJobRetryConflict,
+        claim_summary_job,
+        enqueue_session_summary_job,
+        retry_session_summary_job,
+    )
+    from app.session_memory.llm_summarizer import (
+        finalize_claimed_session_summary_job,
+        prepare_claimed_session_summary_job,
+    )
+
+    session_id = "admin-archive-job-fence"
+    turns = [
+        _turn(db_session, session_id=session_id, content=f"归档竞态来源 {i}")
+        for i in range(6)
+    ]
+    fallback = RollingSessionSummary(
+        session_id=session_id,
+        user_id="archive-user",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="等待归档的 fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+        source_turn_count=len(turns),
+    )
+    db_session.add(fallback)
+    db_session.flush()
+    running_job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id=session_id,
+        user_id="archive-user",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    pending_job = SessionSummaryJob(
+        session_id=session_id,
+        user_id="archive-user",
+        chat_type="private",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[0].id,
+        source_turn_ids_json=json.dumps([turns[0].id]),
+        fallback_summary_id=fallback.id,
+        status="pending",
+        stable_hash="admin-archive-pending",
+    )
+    failed_job = SessionSummaryJob(
+        session_id=session_id,
+        user_id="archive-user",
+        chat_type="private",
+        covered_from_turn_id=turns[1].id,
+        covered_until_turn_id=turns[1].id,
+        source_turn_ids_json=json.dumps([turns[1].id]),
+        fallback_summary_id=fallback.id,
+        status="failed",
+        error="json_parse_failed",
+        stable_hash="admin-archive-failed",
+    )
+    db_session.add_all([pending_job, failed_job])
+    db_session.commit()
+
+    assert claim_summary_job(
+        db_session,
+        running_job.id,
+        owner="archive-worker",
+    ) is not None
+    prepared = prepare_claimed_session_summary_job(
+        db_session,
+        running_job.id,
+        owner="archive-worker",
+    )
+    assert prepared is not None
+    db_session.commit()
+
+    response = archive_rolling_summary(session_id, db=db_session, _auth=True)
+
+    assert response["archived"] == 1
+    db_session.refresh(running_job)
+    db_session.refresh(pending_job)
+    db_session.refresh(failed_job)
+    assert running_job.status == "obsolete"
+    assert pending_job.status == "obsolete"
+    assert failed_job.status == "obsolete"
+    assert json.loads(running_job.meta_json)["obsolete"]["reason"] == "admin_archive"
+    with pytest.raises(SessionSummaryJobRetryConflict):
+        retry_session_summary_job(db_session, failed_job.id)
+    assert finalize_claimed_session_summary_job(
+        db_session,
+        prepared,
+        raw="归档后不得解析或晋升",
+        owner="archive-worker",
+    ) is False
+    assert db_session.query(RollingSessionSummary).filter(
+        RollingSessionSummary.session_id == session_id,
+        RollingSessionSummary.status == "active",
+    ).count() == 0
+    delete_jobs = db_session.query(SemanticIndexJob).filter(
+        SemanticIndexJob.source_type == "session_summary",
+        SemanticIndexJob.source_id == session_id,
+        SemanticIndexJob.job_type == "delete",
+    ).all()
+    assert len(delete_jobs) == 1
+
+
+def test_mark_clear_obsoletes_user_summary_jobs(db_session):
+    from api.history_log_routes import mark_clear
+    from core.database import OutboundDeliveryControl
+
+    user_id = "history-clear-summary-user"
+    session_id = "history-clear-summary-session"
+    db_session.add(OutboundDeliveryControl(
+        source_type="proactive_outreach",
+        mode="outbox_active",
+        cutover_epoch=1,
+        protocol_version=2,
+        writer_version=0,
+    ))
+    turn = _turn(
+        db_session,
+        session_id=session_id,
+        user_id=user_id,
+        content="清除前的会话内容",
+    )
+    summary = RollingSessionSummary(
+        session_id=session_id,
+        user_id=user_id,
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="清除前的摘要",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+        source_turn_count=1,
+    )
+    db_session.add(summary)
+    db_session.flush()
+    job = SessionSummaryJob(
+        session_id=session_id,
+        user_id=user_id,
+        chat_type="private",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+        fallback_summary_id=summary.id,
+        status="pending",
+        stable_hash="history-clear-pending",
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = mark_clear(user_id, db=db_session, _auth=True)
+
+    assert response["status"] == "success"
+    db_session.refresh(job)
+    assert job.status == "obsolete"
+    assert json.loads(job.meta_json)["obsolete"]["reason"] == "history_cleared"
+    assert db_session.query(ConversationTurn).filter(
+        ConversationTurn.user_id == user_id,
+    ).count() == 0
+    assert db_session.query(RollingSessionSummary).filter(
+        RollingSessionSummary.user_id == user_id,
+        RollingSessionSummary.status == "active",
+    ).count() == 0
+
+
+def test_history_clear_fences_stale_inflight_rollup(tmp_path):
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+
+    from api.history_log_routes import mark_clear
+    from app.session_memory.rolling_summary import maybe_rollup_session_summary
+    from core.database import (
+        Base,
+        OutboundDeliveryControl,
+        configure_sqlite_connection,
+    )
+    from core.semantic.schema import ensure_semantic_schema
+
+    database_url = f"sqlite:///{tmp_path / 'history-clear-rollup-fence.db'}"
+    engine = create_engine(
+        database_url,
+        connect_args={"check_same_thread": False},
+    )
+    event.listen(
+        engine,
+        "connect",
+        lambda connection, _record: configure_sqlite_connection(
+            connection,
+            database_url=database_url,
+        ),
+    )
+    Base.metadata.create_all(bind=engine)
+    ensure_semantic_schema(engine)
+    SessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+        bind=engine,
+    )
+    user_id = "history-clear-race-user"
+    session_id = "history-clear-race-session"
+    try:
+        with SessionLocal() as setup_db:
+            setup_db.add_all([
+                User(id=user_id, name="清除竞态用户"),
+                OutboundDeliveryControl(
+                    source_type="proactive_outreach",
+                    mode="outbox_active",
+                    cutover_epoch=1,
+                    protocol_version=2,
+                    writer_version=0,
+                ),
+            ])
+            for index in range(6):
+                _turn(
+                    setup_db,
+                    session_id=session_id,
+                    user_id=user_id,
+                    content=f"清除前已加载消息 {index}",
+                )
+            setup_db.commit()
+
+        chat_db = SessionLocal()
+        pending = (
+            chat_db.query(ConversationTurn)
+            .filter(ConversationTurn.session_id == session_id)
+            .order_by(ConversationTurn.id.asc())
+            .all()
+        )
+        pending_last_id = pending[-1].id
+        chat_db.expunge_all()
+        chat_db.rollback()
+
+        with SessionLocal() as clear_db:
+            response = mark_clear(user_id, db=clear_db, _auth=True)
+            assert response["status"] == "success"
+
+        result = maybe_rollup_session_summary(
+            chat_db,
+            session_id=session_id,
+            user_id=user_id,
+            chat_type="private",
+            active_summary=None,
+            pending_turns=pending,
+            recent_raw_turn_ids=[],
+            raw_window_start_turn_id=pending_last_id + 1,
+            after_clear_at=None,
+            force=True,
+        )
+        if result.requires_commit:
+            chat_db.commit()
+        else:
+            chat_db.rollback()
+        chat_db.close()
+
+        assert result.summary is None
+        assert result.requires_commit is False
+        assert result.skipped_reason == "history_clear_changed"
+        with SessionLocal() as verification_db:
+            assert verification_db.query(ConversationTurn).count() == 0
+            assert verification_db.query(RollingSessionSummary).count() == 0
+            assert verification_db.query(SessionSummaryJob).count() == 0
+            assert verification_db.query(SemanticIndexJob).count() == 0
+    finally:
+        engine.dispose()
+
+
+def test_rollup_write_fence_serializes_following_history_clear(
+    tmp_path,
+    monkeypatch,
+):
+    import threading
+
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+
+    from api.history_log_routes import mark_clear
+    from app.session_memory import rolling_summary
+    from core.database import (
+        Base,
+        OutboundDeliveryControl,
+        configure_sqlite_connection,
+    )
+    from core.semantic.schema import ensure_semantic_schema
+
+    database_url = f"sqlite:///{tmp_path / 'rollup-before-history-clear.db'}"
+    engine = create_engine(
+        database_url,
+        connect_args={"check_same_thread": False},
+    )
+    event.listen(
+        engine,
+        "connect",
+        lambda connection, _record: configure_sqlite_connection(
+            connection,
+            database_url=database_url,
+        ),
+    )
+    Base.metadata.create_all(bind=engine)
+    ensure_semantic_schema(engine)
+    SessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+        bind=engine,
+    )
+    user_id = "rollup-before-clear-user"
+    session_id = "rollup-before-clear-session"
+    fence_reached = threading.Event()
+    allow_rollup = threading.Event()
+    clear_write_attempted = threading.Event()
+    errors: list[BaseException] = []
+    results: dict[str, object] = {}
+    original_verify = rolling_summary._verify_rollup_write_fence
+
+    def wait_inside_fence(*args, **kwargs):
+        fence_reached.set()
+        if not allow_rollup.wait(timeout=5):
+            raise RuntimeError("rollup fence test timed out")
+        return original_verify(*args, **kwargs)
+
+    def observe_clear_write(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        if (
+            threading.current_thread().name == "history-clear-thread"
+            and "UPDATE outbound_delivery_controls" in str(statement)
+        ):
+            clear_write_attempted.set()
+
+    monkeypatch.setattr(
+        rolling_summary,
+        "_verify_rollup_write_fence",
+        wait_inside_fence,
+    )
+    event.listen(engine, "before_cursor_execute", observe_clear_write)
+    try:
+        with SessionLocal() as setup_db:
+            setup_db.add_all([
+                User(id=user_id, name="先滚动后清除用户"),
+                OutboundDeliveryControl(
+                    source_type="proactive_outreach",
+                    mode="outbox_active",
+                    cutover_epoch=1,
+                    protocol_version=2,
+                    writer_version=0,
+                ),
+            ])
+            for index in range(6):
+                _turn(
+                    setup_db,
+                    session_id=session_id,
+                    user_id=user_id,
+                    content=f"先滚动后清除消息 {index}",
+                )
+            setup_db.commit()
+
+        def run_rollup():
+            try:
+                with SessionLocal() as rollup_db:
+                    pending = (
+                        rollup_db.query(ConversationTurn)
+                        .filter(ConversationTurn.session_id == session_id)
+                        .order_by(ConversationTurn.id.asc())
+                        .all()
+                    )
+                    result = rolling_summary.maybe_rollup_session_summary(
+                        rollup_db,
+                        session_id=session_id,
+                        user_id=user_id,
+                        chat_type="private",
+                        active_summary=None,
+                        pending_turns=pending,
+                        recent_raw_turn_ids=[],
+                        raw_window_start_turn_id=int(pending[-1].id) + 1,
+                        after_clear_at=None,
+                        force=True,
+                    )
+                    if result.requires_commit:
+                        rollup_db.commit()
+                    results["rollup"] = result
+            except BaseException as exc:  # pragma: no cover - 由主线程断言
+                errors.append(exc)
+
+        def run_clear():
+            try:
+                with SessionLocal() as clear_db:
+                    results["clear"] = mark_clear(
+                        user_id,
+                        db=clear_db,
+                        _auth=True,
+                    )
+            except BaseException as exc:  # pragma: no cover - 由主线程断言
+                errors.append(exc)
+
+        rollup_thread = threading.Thread(
+            target=run_rollup,
+            name="rollup-thread",
+        )
+        clear_thread = threading.Thread(
+            target=run_clear,
+            name="history-clear-thread",
+        )
+        rollup_thread.start()
+        assert fence_reached.wait(timeout=5)
+        clear_thread.start()
+        assert clear_write_attempted.wait(timeout=5)
+        allow_rollup.set()
+        rollup_thread.join(timeout=5)
+        clear_thread.join(timeout=5)
+
+        assert rollup_thread.is_alive() is False
+        assert clear_thread.is_alive() is False
+        assert errors == []
+        assert results["rollup"].requires_commit is True
+        assert results["clear"]["status"] == "success"
+        with SessionLocal() as verification_db:
+            assert verification_db.query(ConversationTurn).count() == 0
+            assert verification_db.query(RollingSessionSummary).filter(
+                RollingSessionSummary.status == "active",
+            ).count() == 0
+            summary_job = verification_db.query(SessionSummaryJob).one()
+            assert summary_job.status == "obsolete"
+            assert json.loads(summary_job.meta_json)["obsolete"]["reason"] == (
+                "history_cleared"
+            )
+    finally:
+        allow_rollup.set()
+        event.remove(engine, "before_cursor_execute", observe_clear_write)
+        engine.dispose()
+
+
 def test_admin_enqueue_missing_summary_id_returns_404_without_fallback(db_session):
     from api.admin.session_memory_routes import RollingSummaryEnqueueRequest, enqueue_llm_summary
     from fastapi import HTTPException
@@ -754,7 +1584,16 @@ def test_session_summary_worker_promotes_llm_summary_and_archives_fallback(db_se
 
     index_job = db_session.query(SemanticIndexJob).one()
     assert index_job.source_type == "session_summary"
-    assert index_job.source_id == str(llm_summary.id)
+    assert index_job.source_id == "s1"
+    assert index_job.job_type == "replace"
+    assert index_job.source_revision
+    assert index_job.source_revision != llm_summary.stable_hash
+    index_meta = json.loads(index_job.meta_json)
+    assert index_meta["contract_version"] == 2
+    assert index_meta["job_origin"] == "business"
+    assert index_meta["document_id"] == llm_summary.id
+    assert str(llm_summary.id) in index_meta["delete_source_ids"]
+    assert str(fallback.id) in index_meta["delete_source_ids"]
 
 
 def test_llm_summary_prompt_requires_carrying_previous_summary_forward(db_session):
@@ -1410,6 +2249,7 @@ def test_summary_previous_state_second_batch_uses_full_canonical_json(db_session
         "participants": [],
         "keywords": ["完整状态"],
     }
+    previous_turn = _turn(db_session, content="旧轮次已经进入 previous summary")
     previous = RollingSessionSummary(
         session_id="s1",
         user_id="u1",
@@ -1418,9 +2258,9 @@ def test_summary_previous_state_second_batch_uses_full_canonical_json(db_session
         summary_kind="llm_episode",
         summary_text="旧的 1800 字渲染文本",
         summary_json=json.dumps(previous_state, ensure_ascii=False),
-        covered_from_turn_id=1,
-        covered_until_turn_id=1,
-        source_turn_ids_json="[]",
+        covered_from_turn_id=previous_turn.id,
+        covered_until_turn_id=previous_turn.id,
+        source_turn_ids_json=json.dumps([previous_turn.id]),
     )
     turn = _turn(db_session, content="甲" * 15000)
     fallback = RollingSessionSummary(
@@ -1553,6 +2393,7 @@ def test_summary_input_manifest_drift_blocks_finalize(db_session, drift_kind):
 def test_summary_manifest_rejects_missing_fragment_completion_at_finalize(db_session):
     from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
+        _summarize_prepared_sync,
         finalize_claimed_session_summary_job,
         prepare_claimed_session_summary_job,
     )
@@ -2334,3 +3175,620 @@ def test_worker_run_once_recovers_stale_running_job(db_session, monkeypatch):
     assert result["done"] == 1
     assert job.status == "done"
     assert job.retry_count == 1
+
+
+def test_default_session_summary_summarizer_returns_call_metadata(monkeypatch):
+    from app.session_memory.llm_contract import SessionSummaryLLMResult
+    from app.session_memory.llm_summarizer import (
+        default_llm_summary_summarizer_async,
+    )
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def chat_completion(self, **_kwargs):
+            return {
+                "choices": [{"message": {"content": '{"summary":"真实响应"}'}}],
+                "model": "actual-provider-model",
+                "_nanobot_model_id": "selected-route-model",
+                "_nanobot_requested_model": "requested-route-model",
+                "_nanobot_request_log_id": 321,
+            }
+
+    monkeypatch.setattr("clients.new_api_client.NewAPIClient", FakeClient)
+    monkeypatch.setattr(
+        "clients.classifier_client.resolve_model_route",
+        lambda _key: {
+            "model": "requested-route-model",
+            "api_key": "test-key",
+            "base_url": "http://new-api.test/v1",
+            "temperature": 0.1,
+            "max_tokens": 1200,
+            "enable_thinking": "false",
+        },
+    )
+
+    result = run_async(default_llm_summary_summarizer_async([
+        {"role": "user", "content": "测试"},
+    ]))
+
+    assert isinstance(result, SessionSummaryLLMResult)
+    assert result.content == '{"summary":"真实响应"}'
+    assert result.model == "actual-provider-model"
+    assert result.requested_model == "requested-route-model"
+    assert result.request_log_id == 321
+
+
+def test_session_summary_persists_response_model_metadata(
+    db_session,
+    monkeypatch,
+):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_contract import SessionSummaryLLMResult
+    from app.session_memory import llm_summarizer
+
+    turns = [_turn(db_session, content=f"真实模型追踪 {index}") for index in range(2)]
+    fallback = RollingSessionSummary(
+        session_id="model-trace-session",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="model-trace-session",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    result = llm_summarizer.run_session_summary_worker_once(
+        db_session,
+        summarizer=lambda _messages: SessionSummaryLLMResult(
+            content={
+                "summary": "记录真实响应模型",
+                "inheritance": [],
+                "quality": {"score": 0.9, "issues": []},
+            },
+            model="actual-provider-model",
+            requested_model="requested-route-model",
+            request_log_id=654,
+        ),
+        owner="model-trace-worker",
+    )
+
+    assert result["done"] == 1
+    summary = db_session.get(RollingSessionSummary, job.result_summary_id)
+    assert summary.model == "actual-provider-model"
+    assert summary.llm_model == "actual-provider-model"
+    assert summary.llm_request_log_id == 654
+    meta = json.loads(summary.meta_json)
+    assert meta["requested_model"] == "requested-route-model"
+    assert meta["batch_traces"][0]["model"] == "actual-provider-model"
+    assert meta["batch_traces"][0]["request_log_id"] == 654
+
+
+def test_renew_summary_job_lease_is_owner_fenced(db_session):
+    from app.session_memory.jobs import renew_summary_job_lease
+
+    locked_at = _local_now() - timedelta(minutes=5)
+    renewed_at = _local_now()
+    job = SessionSummaryJob(
+        session_id="lease-session",
+        user_id="u1",
+        chat_type="private",
+        covered_from_turn_id=1,
+        covered_until_turn_id=3,
+        source_turn_ids_json="[1,2,3]",
+        status="running",
+        locked_by="worker-a",
+        locked_at=locked_at,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    assert renew_summary_job_lease(
+        db_session,
+        job.id,
+        owner="worker-b",
+        now=renewed_at,
+    ) is False
+    assert renew_summary_job_lease(
+        db_session,
+        job.id,
+        owner="worker-a",
+        now=renewed_at,
+    ) is True
+
+    db_session.refresh(job)
+    assert job.locked_by == "worker-a"
+    assert job.locked_at == renewed_at
+
+
+def test_summary_batch_stops_when_lease_renewal_is_lost(db_session):
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import (
+        _summarize_prepared_sync,
+        prepare_claimed_session_summary_job,
+    )
+
+    turns = [
+        _turn(db_session, content=f"续租批次 {index} " + "甲" * 2400)
+        for index in range(6)
+    ]
+    fallback = RollingSessionSummary(
+        session_id="lease-batch-session",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="lease-batch-session",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    claim_summary_job(db_session, job.id, owner="worker-a")
+    prepared = prepare_claimed_session_summary_job(
+        db_session,
+        job.id,
+        owner="worker-a",
+    )
+    summarizer_calls = []
+    renew_calls = []
+
+    def summarizer(_messages):
+        summarizer_calls.append(len(summarizer_calls))
+        return {
+            "summary": f"续租批次 {len(summarizer_calls)}",
+            "inheritance": [],
+            "quality": {"score": 0.9, "issues": []},
+        }
+
+    def renew_lease():
+        renew_calls.append(len(renew_calls))
+        return len(renew_calls) == 1
+
+    with pytest.raises(ValueError, match="^summary_job_lease_lost$"):
+        _summarize_prepared_sync(
+            prepared,
+            summarizer,
+            renew_lease=renew_lease,
+        )
+
+    assert len(summarizer_calls) == 2
+    assert len(renew_calls) == 2
+    assert len(prepared.batch_traces) == 2
+
+
+def test_short_transaction_processor_renews_lease_after_each_batch(
+    db_session,
+    monkeypatch,
+):
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory import llm_summarizer
+    from core import database
+
+    turns = [
+        _turn(db_session, content=f"生产续租批次 {index} " + "乙" * 2400)
+        for index in range(6)
+    ]
+    fallback = RollingSessionSummary(
+        session_id="short-transaction-lease-session",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="short-transaction-lease-session",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    assert claim_summary_job(db_session, job.id, owner="worker-a") is not None
+    db_session.commit()
+
+    real_renew = llm_summarizer._renew_claimed_job_with_factory
+    renew_calls = []
+    summarizer_calls = []
+
+    def tracking_renew(session_factory, *, job_id, owner):
+        renewed = real_renew(
+            session_factory,
+            job_id=job_id,
+            owner=owner,
+        )
+        renew_calls.append((job_id, owner, renewed))
+        return renewed
+
+    def summarizer(_messages):
+        summarizer_calls.append(len(summarizer_calls))
+        return {
+            "summary": f"生产续租摘要 {len(summarizer_calls)}",
+            "inheritance": [],
+            "quality": {"score": 0.9, "issues": []},
+        }
+
+    monkeypatch.setattr(
+        llm_summarizer,
+        "_renew_claimed_job_with_factory",
+        tracking_renew,
+    )
+
+    assert llm_summarizer.process_claimed_session_summary_job_short_transactions(
+        database.SessionLocal,
+        job_id=job.id,
+        summarizer=summarizer,
+        owner="worker-a",
+    ) is True
+
+    assert len(summarizer_calls) >= 2
+    assert renew_calls == [
+        (job.id, "worker-a", True)
+        for _index in summarizer_calls
+    ]
+
+
+def test_session_summary_default_worker_owner_is_unique():
+    from workers.session_summary_worker import default_worker_owner
+
+    first = default_worker_owner()
+    second = default_worker_owner()
+
+    assert first != second
+    assert len(first) <= 128
+    assert len(second) <= 128
+    assert first.count(":") >= 2
+
+
+def test_older_summary_finalize_becomes_obsolete_after_newer_coverage(
+    db_session,
+):
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import (
+        _summarize_prepared_sync,
+        finalize_claimed_session_summary_job,
+        prepare_claimed_session_summary_job,
+    )
+    from core.database import SemanticIndexJob
+
+    turns = [
+        _turn(db_session, content=f"coverage CAS {index}")
+        for index in range(4)
+    ]
+    older_fallback = RollingSessionSummary(
+        session_id="coverage-cas-session",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="旧 fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns[:2]]),
+    )
+    newer_fallback = RollingSessionSummary(
+        session_id="coverage-cas-session",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="新 fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add_all([older_fallback, newer_fallback])
+    db_session.commit()
+    older_job, _ = enqueue_session_summary_job(
+        db_session,
+        session_id="coverage-cas-session",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns[:2],
+        previous_summary=None,
+        fallback_summary=older_fallback,
+        force=True,
+    )
+    newer_job, _ = enqueue_session_summary_job(
+        db_session,
+        session_id="coverage-cas-session",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=newer_fallback,
+        force=True,
+    )
+    claim_summary_job(db_session, older_job.id, owner="older-worker")
+    claim_summary_job(db_session, newer_job.id, owner="newer-worker")
+    older_prepared = prepare_claimed_session_summary_job(
+        db_session,
+        older_job.id,
+        owner="older-worker",
+    )
+    newer_prepared = prepare_claimed_session_summary_job(
+        db_session,
+        newer_job.id,
+        owner="newer-worker",
+    )
+
+    def summarize(prepared, label):
+        return _summarize_prepared_sync(
+            prepared,
+            lambda _messages: {
+                "summary": f"{label} coverage 摘要",
+                "inheritance": [],
+                "quality": {"score": 0.9, "issues": []},
+            },
+        )
+
+    assert finalize_claimed_session_summary_job(
+        db_session,
+        newer_prepared,
+        raw=summarize(newer_prepared, "newer"),
+        owner="newer-worker",
+    ) is True
+    newer_summary_id = newer_job.result_summary_id
+    summarize(older_prepared, "older")
+    assert finalize_claimed_session_summary_job(
+        db_session,
+        older_prepared,
+        raw="不是 JSON，但任务已被更高 coverage 淘汰",
+        owner="older-worker",
+    ) is True
+
+    db_session.refresh(older_job)
+    db_session.refresh(newer_job)
+    active = (
+        db_session.query(RollingSessionSummary)
+        .filter_by(session_id="coverage-cas-session", status="active")
+        .all()
+    )
+    assert newer_job.status == "done"
+    assert older_job.status == "obsolete"
+    assert older_job.result_summary_id is None
+    assert [row.id for row in active] == [newer_summary_id]
+    assert active[0].covered_until_turn_id == turns[-1].id
+    assert db_session.query(SemanticIndexJob).filter_by(
+        source_type="session_summary",
+    ).count() == 1
+    obsolete = json.loads(older_job.meta_json)["obsolete"]
+    assert obsolete == {
+        "blocking_summary_id": newer_summary_id,
+        "blocking_coverage": turns[-1].id,
+        "proposed_coverage": turns[1].id,
+        "reason": "higher_active_coverage",
+    }
+
+
+def test_equal_coverage_other_active_summary_makes_job_obsolete(db_session):
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import (
+        _summarize_prepared_sync,
+        finalize_claimed_session_summary_job,
+        prepare_claimed_session_summary_job,
+    )
+    from core.database import SemanticIndexJob
+
+    turn = _turn(db_session, content="同 coverage 竞争")
+    fallback = RollingSessionSummary(
+        session_id="equal-coverage-obsolete",
+        user_id="u1",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="任务自己的 fallback",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    competing = RollingSessionSummary(
+        session_id=fallback.session_id,
+        user_id="u1",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="其他 worker 已生成的同 coverage 摘要",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add_all([fallback, competing])
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id=fallback.session_id,
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=None,
+        fallback_summary=fallback,
+        force=True,
+    )
+    claim_summary_job(db_session, job.id, owner="equal-worker")
+    prepared = prepare_claimed_session_summary_job(
+        db_session,
+        job.id,
+        owner="equal-worker",
+    )
+    _summarize_prepared_sync(
+        prepared,
+        lambda _messages: {
+            "summary": "已完成但不应晋升的同 coverage 摘要",
+            "inheritance": [],
+            "quality": {"score": 0.9, "issues": []},
+        },
+    )
+
+    finalized = finalize_claimed_session_summary_job(
+        db_session,
+        prepared,
+        raw="无效 JSON 也不应被解析，因为 permit 已决定 obsolete",
+        owner="equal-worker",
+    )
+
+    assert finalized is True
+    db_session.refresh(job)
+    assert job.status == "obsolete"
+    assert job.result_summary_id is None
+    assert fallback.status == "active"
+    assert competing.status == "active"
+    assert db_session.query(SemanticIndexJob).count() == 0
+    obsolete = json.loads(job.meta_json)["obsolete"]
+    assert obsolete["blocking_summary_id"] == competing.id
+    assert obsolete["reason"] == "equal_active_coverage"
+
+
+def test_lost_summary_owner_cannot_finalize_or_write(db_session):
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import (
+        finalize_claimed_session_summary_job,
+        prepare_claimed_session_summary_job,
+    )
+    from core.database import SemanticIndexJob
+
+    turn = _turn(db_session, content="失去 owner 后不得 finalize")
+    fallback = RollingSessionSummary(
+        session_id="lost-owner-finalize",
+        user_id="u1",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="必须保留的 fallback",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id=fallback.session_id,
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    claim_summary_job(db_session, job.id, owner="worker-a")
+    prepared = prepare_claimed_session_summary_job(
+        db_session,
+        job.id,
+        owner="worker-a",
+    )
+    job.locked_by = "worker-b"
+    db_session.commit()
+
+    finalized = finalize_claimed_session_summary_job(
+        db_session,
+        prepared,
+        raw="失租后不应解析",
+        owner="worker-a",
+    )
+
+    assert finalized is False
+    db_session.refresh(job)
+    db_session.refresh(fallback)
+    assert job.status == "running"
+    assert job.locked_by == "worker-b"
+    assert fallback.status == "active"
+    assert db_session.query(RollingSessionSummary).count() == 1
+    assert db_session.query(SemanticIndexJob).count() == 0
+
+
+def test_short_transaction_finalize_rolls_back_when_semantic_enqueue_fails(
+    db_session,
+    monkeypatch,
+):
+    from sqlalchemy.orm import sessionmaker
+
+    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import (
+        process_claimed_session_summary_job_short_transactions,
+    )
+    from core.database import SemanticIndexJob
+
+    turn = _turn(db_session, content="semantic enqueue 失败必须全回滚")
+    fallback = RollingSessionSummary(
+        session_id="summary-enqueue-rollback",
+        user_id="u1",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="回滚后仍应 active",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id=fallback.session_id,
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    claim_summary_job(db_session, job.id, owner="rollback-worker")
+    db_session.commit()
+    session_factory = sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    monkeypatch.setattr(
+        "core.semantic.jobs.enqueue_index_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("semantic enqueue failed")
+        ),
+    )
+
+    processed = process_claimed_session_summary_job_short_transactions(
+        session_factory,
+        job_id=job.id,
+        summarizer=lambda _messages: {
+            "summary": "不应持久化的新摘要",
+            "inheritance": [],
+            "quality": {"score": 0.9, "issues": []},
+        },
+        owner="rollback-worker",
+    )
+
+    db_session.expire_all()
+    current_job = db_session.get(type(job), job.id)
+    current_fallback = db_session.get(RollingSessionSummary, fallback.id)
+    assert processed is False
+    assert current_job.status == "pending"
+    assert current_job.retry_count == 1
+    assert current_job.result_summary_id is None
+    assert "semantic enqueue failed" in current_job.error
+    assert current_fallback.status == "active"
+    summaries = db_session.query(RollingSessionSummary).filter_by(
+        session_id=fallback.session_id,
+    ).all()
+    assert [row.id for row in summaries] == [fallback.id]
+    assert db_session.query(SemanticIndexJob).count() == 0

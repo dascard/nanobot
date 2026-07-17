@@ -947,6 +947,10 @@ class NewAPIClient:
                                     )
                                 self.last_usage = result.get("usage", {})
                                 result["_nanobot_model_id"] = target_model
+                                result["_nanobot_requested_model"] = target_model
+                                result["_nanobot_request_log_id"] = (
+                                    int(log_id) if int(log_id or 0) > 0 else None
+                                )
                                 result["_nanobot_complexity"] = complexity
                                 return result
 

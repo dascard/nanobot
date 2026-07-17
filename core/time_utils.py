@@ -17,3 +17,20 @@ def to_db_naive(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value
     return value.astimezone().replace(tzinfo=None)
+
+
+def db_naive_to_utc(value: datetime | None) -> datetime | None:
+    """把数据库本地 naive 墙钟解释为服务器本地时间并转换为 UTC。"""
+
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc)
+
+
+def db_datetime_to_utc_iso(value: datetime | None) -> str:
+    """将数据库时间输出为明确的 UTC ISO-8601（Z）字符串。"""
+
+    converted = db_naive_to_utc(value)
+    if converted is None:
+        return ""
+    return converted.isoformat().replace("+00:00", "Z")

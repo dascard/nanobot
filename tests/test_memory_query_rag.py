@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timedelta
 
+from sqlalchemy import text
+
 from tests.async_helpers import run_async
 
 from core.database import ChatLog, MemoryDigest, RollingSessionSummary, SemanticIndexItem
@@ -108,6 +110,14 @@ def _index_chunks(db, chunks):
     )
 
 
+def _reranker_scores(chunks, scores):
+    assert len(chunks) == len(scores)
+    return {
+        f"{chunk.source_type}:{chunk.source_id}:{chunk.source_sub_id}": score
+        for chunk, score in zip(chunks, scores, strict=True)
+    }
+
+
 def test_memory_digest_adapter_rejects_non_llm_and_failed_quality_sources():
     fallback = MemoryDigest(
         id=90,
@@ -180,6 +190,73 @@ def test_memory_rag_rejects_preexisting_active_fallback_index(db_session):
     assert result["items"] == []
 
 
+def test_archived_session_summary_delete_job_removes_fts_and_recall(db_session):
+    from app.session_memory.rolling_summary import archive_active_summaries_for_session
+    from core.database import SemanticIndexJob
+    from core.memory_rag import MemoryRagService
+    from core.semantic.jobs import claim_next_job
+    from workers.semantic_index_worker import process_semantic_index_job
+
+    summary = RollingSessionSummary(
+        session_id="archive-recall-session",
+        user_id="u1",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="端口归档后不得继续召回",
+        summary_json=json.dumps({
+            "summary": "端口归档后不得继续召回",
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False),
+        quality_score=0.9,
+        stable_hash="archive-recall-stable-hash",
+    )
+    db_session.add(summary)
+    db_session.flush()
+    chunks = chunks_from_session_summary(summary)
+    _index_chunks(db_session, chunks)
+    service = MemoryRagService(
+        db_session,
+        reranker_provider=FixedRerankerProvider(_reranker_scores(chunks, [0.95])),
+    )
+    before = service.query(
+        "端口归档",
+        source="session_summary",
+        session_id=summary.session_id,
+    )
+    assert before["items"]
+
+    archived = archive_active_summaries_for_session(
+        db_session,
+        summary.session_id,
+        enqueue_semantic_delete=True,
+        delete_reason="controlled_archive_test",
+    )
+    job = claim_next_job(db_session, worker_id="archive-delete-worker")
+    result = process_semantic_index_job(
+        db_session,
+        job,
+        chunk_loader=lambda _job: [],
+    )
+
+    assert archived == 1
+    assert result is not None
+    assert result.status == "done"
+    db_session.refresh(summary)
+    index_job = db_session.get(SemanticIndexJob, job.id)
+    assert summary.status == "archived"
+    assert index_job.status == "done"
+    assert all(row.status == "deleted" for row in db_session.query(SemanticIndexItem).all())
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM semantic_index_fts"
+    )).scalar_one() == 0
+    after = service.query(
+        "端口归档",
+        source="session_summary",
+        session_id=summary.session_id,
+    )
+    assert after["items"] == []
+
+
 def test_memory_query_uses_reranker_after_recall(db_session):
     from core.memory_rag import MemoryRagService
 
@@ -193,15 +270,12 @@ def test_memory_query_uses_reranker_after_recall(db_session):
     service = MemoryRagService(
         db_session,
         embedding_provider=KeywordEmbeddingProvider(),
-        reranker_provider=FixedRerankerProvider({
-            "memory_digest:101:card:0": 0.2,
-            "memory_digest:101:card:1": 0.9,
-        }),
+        reranker_provider=FixedRerankerProvider(_reranker_scores(chunks, [0.2, 0.9])),
     )
     result = service.query("端口 模型", source="digest", limit=5)
 
     assert result["degraded"] is False
-    assert result["items"][0]["matched_cards"][0]["source_sub_id"] == "card:1"
+    assert result["items"][0]["matched_cards"][0]["source_sub_id"] == chunks[1].source_sub_id
     assert result["items"][0]["score_breakdown"]["best_card"]["reranker"] == 0.9
 
 
@@ -213,22 +287,24 @@ def test_memory_query_score_breakdown_uses_index_recency(db_session):
         {"title": "旧端口", "text": "端口冲突 recency 旧记录。", "keywords": ["端口"]},
         {"title": "新端口", "text": "端口冲突 recency 新记录。", "keywords": ["端口"]},
     ])
-    _index_chunks(db_session, chunks_from_memory_digest(digest))
+    chunks = chunks_from_memory_digest(digest)
+    _index_chunks(db_session, chunks)
     rows = db_session.query(SemanticIndexItem).filter(
         SemanticIndexItem.source_type == "memory_digest",
         SemanticIndexItem.source_id == "106",
     ).all()
     for row in rows:
-        row.source_updated_at = now if row.source_sub_id == "card:1" else now - timedelta(days=90)
+        row.source_updated_at = (
+            now
+            if row.source_sub_id == chunks[1].source_sub_id
+            else now - timedelta(days=90)
+        )
     db_session.commit()
 
     service = MemoryRagService(
         db_session,
         embedding_provider=KeywordEmbeddingProvider(),
-        reranker_provider=FixedRerankerProvider({
-            "memory_digest:106:card:0": 0.9,
-            "memory_digest:106:card:1": 0.9,
-        }),
+        reranker_provider=FixedRerankerProvider(_reranker_scores(chunks, [0.9, 0.9])),
     )
     result = service.query("端口 recency", source="digest", limit=5)
     cards = {
@@ -236,7 +312,10 @@ def test_memory_query_score_breakdown_uses_index_recency(db_session):
         for card in result["items"][0]["matched_cards"]
     }
 
-    assert cards["card:1"]["score_breakdown"]["recency"] > cards["card:0"]["score_breakdown"]["recency"]
+    assert (
+        cards[chunks[1].source_sub_id]["score_breakdown"]["recency"]
+        > cards[chunks[0].source_sub_id]["score_breakdown"]["recency"]
+    )
 
 
 def test_memory_query_debug_contract_keys(db_session):
@@ -245,12 +324,13 @@ def test_memory_query_debug_contract_keys(db_session):
     digest = _digest_row(601, cards=[
         {"title": "端口预算", "text": "KohakuVQ 端口预算需要固定。", "keywords": ["KohakuVQ", "端口", "预算"]},
     ])
-    _index_chunks(db_session, chunks_from_memory_digest(digest))
+    chunks = chunks_from_memory_digest(digest)
+    _index_chunks(db_session, chunks)
 
     service = MemoryRagService(
         db_session,
         embedding_provider=KeywordEmbeddingProvider(),
-        reranker_provider=FixedRerankerProvider({"memory_digest:601:card:0": 0.9}),
+        reranker_provider=FixedRerankerProvider(_reranker_scores(chunks, [0.9])),
     )
     result = service.query("KohakuVQ 端口预算", source="digest", limit=5, include_debug=True)
 
@@ -359,19 +439,23 @@ def test_memory_query_source_all_returns_digest_and_session_summary(db_session):
         summary_text="KohakuVQ 端口预算来自其他用户会话摘要。",
         summary_json=json.dumps({"summary": "KohakuVQ 端口预算来自其他用户会话摘要。"}, ensure_ascii=False),
     )
-    _index_chunks(db_session, chunks_from_memory_digest(digest))
-    _index_chunks(db_session, chunks_from_memory_digest(other_digest))
-    _index_chunks(db_session, chunks_from_session_summary(summary))
-    _index_chunks(db_session, chunks_from_session_summary(other_summary))
+    digest_chunks = chunks_from_memory_digest(digest)
+    other_digest_chunks = chunks_from_memory_digest(other_digest)
+    summary_chunks = chunks_from_session_summary(summary)
+    other_summary_chunks = chunks_from_session_summary(other_summary)
+    _index_chunks(db_session, digest_chunks)
+    _index_chunks(db_session, other_digest_chunks)
+    _index_chunks(db_session, summary_chunks)
+    _index_chunks(db_session, other_summary_chunks)
 
     service = MemoryRagService(
         db_session,
         embedding_provider=KeywordEmbeddingProvider(),
         reranker_provider=FixedRerankerProvider({
-            "memory_digest:602:card:0": 0.9,
-            "session_summary:702:section:summary": 0.8,
-            "memory_digest:703:card:0": 0.95,
-            "session_summary:704:section:summary": 0.95,
+            **_reranker_scores(digest_chunks, [0.9]),
+            **_reranker_scores(summary_chunks, [0.8]),
+            **_reranker_scores(other_digest_chunks, [0.95]),
+            **_reranker_scores(other_summary_chunks, [0.95]),
         }),
     )
     result = service.query(
@@ -385,7 +469,10 @@ def test_memory_query_source_all_returns_digest_and_session_summary(db_session):
 
     assert result["debug_trace"]["sql_filters"]["source_types"] == ["memory_digest", "session_summary"]
     assert {item["source_type"] for item in result["items"]} == {"memory_digest", "session_summary"}
-    assert {item["source_id"] for item in result["items"]} == {"602", "702"}
+    assert {item["source_id"] for item in result["items"]} == {"602", "s1"}
+    assert next(
+        item for item in result["items"] if item["source_type"] == "session_summary"
+    )["summary_id"] == 702
 
 
 def test_digest_semantic_recall_without_exact_keyword(db_session):
@@ -394,12 +481,13 @@ def test_digest_semantic_recall_without_exact_keyword(db_session):
     digest = _digest_row(102, cards=[
         {"title": "端口", "text": "uvicorn 8000 端口冲突。", "keywords": ["uvicorn"]},
     ])
-    _index_chunks(db_session, chunks_from_memory_digest(digest))
+    chunks = chunks_from_memory_digest(digest)
+    _index_chunks(db_session, chunks)
 
     service = MemoryRagService(
         db_session,
         embedding_provider=KeywordEmbeddingProvider(),
-        reranker_provider=FixedRerankerProvider({"memory_digest:102:card:0": 0.8}),
+        reranker_provider=FixedRerankerProvider(_reranker_scores(chunks, [0.8])),
     )
     result = service.query("部署失败", source="digest", limit=5)
 
@@ -415,13 +503,14 @@ def test_memory_query_does_not_return_raw_chatlog(db_session):
     digest = _digest_row(103, cards=[
         {"title": "端口", "text": "安全摘要：端口冲突。", "keywords": ["端口"]},
     ])
-    _index_chunks(db_session, chunks_from_memory_digest(digest))
+    chunks = chunks_from_memory_digest(digest)
+    _index_chunks(db_session, chunks)
     db_session.commit()
 
     service = MemoryRagService(
         db_session,
         embedding_provider=KeywordEmbeddingProvider(),
-        reranker_provider=FixedRerankerProvider({"memory_digest:103:card:0": 0.8}),
+        reranker_provider=FixedRerankerProvider(_reranker_scores(chunks, [0.8])),
     )
     result = service.query("端口", source="digest", limit=5)
 
@@ -447,7 +536,7 @@ def test_fallback_summary_can_be_indexed_with_lower_prior(db_session):
     service = MemoryRagService(
         db_session,
         embedding_provider=KeywordEmbeddingProvider(),
-        reranker_provider=FixedRerankerProvider({"session_summary:201:section:summary": 0.8}),
+        reranker_provider=FixedRerankerProvider(_reranker_scores(chunks, [0.8])),
     )
     result = service.query("部署失败", source="session_summary", limit=5)
 
@@ -463,16 +552,13 @@ def test_memory_query_merges_multiple_cards_from_same_digest(db_session):
         {"title": "端口 B", "text": "uvicorn 占用端口第二条。", "keywords": ["uvicorn"]},
         {"title": "端口 C", "text": "部署端口第三条。", "keywords": ["部署"]},
     ])
-    _index_chunks(db_session, chunks_from_memory_digest(digest))
+    chunks = chunks_from_memory_digest(digest)
+    _index_chunks(db_session, chunks)
 
     service = MemoryRagService(
         db_session,
         embedding_provider=KeywordEmbeddingProvider(),
-        reranker_provider=FixedRerankerProvider({
-            "memory_digest:104:card:0": 0.7,
-            "memory_digest:104:card:1": 0.9,
-            "memory_digest:104:card:2": 0.8,
-        }),
+        reranker_provider=FixedRerankerProvider(_reranker_scores(chunks, [0.7, 0.9, 0.8])),
     )
     result = service.query("端口", source="digest", limit=5)
 

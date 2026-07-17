@@ -1,4 +1,5 @@
 import pytest
+from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 
 from core.database import User, Persona, ChatLog, ProactiveOutreachLog
@@ -97,3 +98,158 @@ def test_sqlite_connect_args_invalid_busy_timeout_falls_back_short(monkeypatch):
     args = sqlite_connect_args_for_url("sqlite:///./data/test.db")
 
     assert args["timeout"] == 1.0
+
+
+def test_release_clean_transaction_refuses_flushed_writes(db_session):
+    from core.database import release_clean_session_transaction
+
+    db_session.add(User(id="flushed-write-user"))
+    db_session.flush()
+
+    assert list(db_session.new) == []
+    assert release_clean_session_transaction(
+        db_session,
+        label="test_flushed_write_guard",
+    ) is False
+
+    db_session.commit()
+    assert db_session.get(User, "flushed-write-user") is not None
+
+
+def test_nested_rollback_keeps_outer_flushed_write_guard(db_session):
+    from core.database import release_clean_session_transaction
+
+    db_session.add(User(id="outer-flushed-user"))
+    db_session.flush()
+
+    with pytest.raises(RuntimeError, match="rollback nested write"):
+        with db_session.begin_nested():
+            db_session.add(ChatLog(
+                user_id="outer-flushed-user",
+                role="user",
+                content="只回滚 savepoint 内写入",
+            ))
+            db_session.flush()
+            raise RuntimeError("rollback nested write")
+
+    assert release_clean_session_transaction(
+        db_session,
+        label="test_nested_rollback_guard",
+    ) is False
+    db_session.commit()
+    assert db_session.get(User, "outer-flushed-user") is not None
+    assert db_session.query(ChatLog).count() == 0
+
+
+def test_release_clean_transaction_refuses_bulk_dml(db_session):
+    from core.database import release_clean_session_transaction
+
+    db_session.add(User(id="bulk-dml-user", name="before"))
+    db_session.commit()
+    db_session.execute(
+        update(User)
+        .where(User.id == "bulk-dml-user")
+        .values(name="after")
+    )
+
+    assert list(db_session.new) == []
+    assert list(db_session.dirty) == []
+    assert release_clean_session_transaction(
+        db_session,
+        label="test_bulk_dml_guard",
+    ) is False
+    db_session.commit()
+    assert db_session.get(User, "bulk-dml-user").name == "after"
+
+
+def test_nested_only_rollback_allows_clean_transaction_release(db_session):
+    from core.database import release_clean_session_transaction
+
+    db_session.query(User).count()
+    with pytest.raises(RuntimeError, match="rollback nested-only write"):
+        with db_session.begin_nested():
+            db_session.add(ChatLog(
+                user_id="nested-only-user",
+                role="user",
+                content="这条 savepoint 写入会回滚",
+            ))
+            db_session.flush()
+            raise RuntimeError("rollback nested-only write")
+
+    assert db_session.query(ChatLog).count() == 0
+    assert release_clean_session_transaction(
+        db_session,
+        label="test_nested_only_release",
+    ) is True
+    assert db_session.in_transaction() is False
+
+
+def test_release_clean_transaction_refuses_commented_text_dml(db_session):
+    from core.database import release_clean_session_transaction
+
+    db_session.add(User(id="commented-text-user", name="before"))
+    db_session.commit()
+    db_session.execute(
+        text(
+            "-- audit comment\n"
+            "UPDATE users SET name = :name WHERE id = :user_id"
+        ),
+        {"name": "after", "user_id": "commented-text-user"},
+    )
+
+    assert release_clean_session_transaction(
+        db_session,
+        label="test_commented_text_dml_guard",
+    ) is False
+    db_session.commit()
+    assert db_session.get(User, "commented-text-user").name == "after"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "SELECT 1",
+        "-- read-only check\nSELECT 1",
+        "/* read-only check */\nSELECT 1",
+    ),
+)
+def test_release_clean_transaction_releases_proven_read_only_text(
+    db_session,
+    statement,
+):
+    from core.database import release_clean_session_transaction
+
+    assert db_session.execute(text(statement)).scalar() == 1
+    assert release_clean_session_transaction(
+        db_session,
+        label="test_read_only_text_release",
+    ) is True
+    assert db_session.in_transaction() is False
+
+
+def test_text_sql_read_only_allowlist_accepts_mixed_leading_comments():
+    from core.database import _text_sql_is_proven_read_only
+
+    assert _text_sql_is_proven_read_only(
+        "-- first comment\r\n/* second comment */\nSELECT 1"
+    ) is True
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "SELECT 1;",
+        "SELECT 1; UPDATE users SET name = 'unsafe'",
+        "WITH item AS (SELECT 1) SELECT * FROM item",
+        "PRAGMA foreign_keys",
+        "EXPLAIN SELECT 1",
+        "",
+        "-- comment only",
+        "/* unterminated comment",
+        "SELECT/* inline comment */ 1",
+    ),
+)
+def test_text_sql_read_only_allowlist_rejects_unknown_forms(statement):
+    from core.database import _text_sql_is_proven_read_only
+
+    assert _text_sql_is_proven_read_only(statement) is False

@@ -34,6 +34,7 @@ from core.outbound_delivery import (
     start_generation_attempt,
 )
 from core.outbound_delivery_service import (
+    OutboundDeliveryWorkResult,
     OutboundTransportRequest,
     OutboundWorkerConfig,
     deliver_outbound_once,
@@ -100,6 +101,194 @@ def _config(**overrides: Any) -> OutboundWorkerConfig:
     }
     values.update(overrides)
     return OutboundWorkerConfig(**values)
+
+
+def _work_result(
+    outbox_id: int,
+    *,
+    outbox_status: str = "delivered",
+) -> OutboundDeliveryWorkResult:
+    return OutboundDeliveryWorkResult(
+        outbox_id=outbox_id,
+        attempt_id=outbox_id,
+        attempt_no=1,
+        payload_sha256=f"{outbox_id:064x}",
+        outbox_status=outbox_status,
+        run_status=("succeeded" if outbox_status == "delivered" else "queued"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_runs_normal_and_both_legacy_lanes_with_shared_dependencies(
+    monkeypatch,
+):
+    from core import proactive_outreach, scheduled_task_outbound
+    from workers import outbound_delivery_worker as worker
+
+    config = _config(batch_size=2)
+    calls = []
+    takeovers = {}
+    normal_results = [_work_result(1), None]
+
+    async def shared_transport(_request):
+        raise AssertionError("编排测试不得真正调用 transport")
+
+    async def fake_normal(**kwargs):
+        calls.append(("normal", kwargs["transport"], kwargs["config"]))
+        return normal_results.pop(0)
+
+    async def fake_scheduled(**kwargs):
+        calls.append(("scheduled", kwargs["transport"], kwargs["worker_config"]))
+        takeovers["scheduled"] = kwargs["takeover_writer"]
+        assert kwargs["limit"] == 2
+        return [_work_result(2)]
+
+    async def fake_proactive(**kwargs):
+        calls.append(("proactive", kwargs["transport"], kwargs["worker_config"]))
+        takeovers["proactive"] = kwargs["takeover_writer"]
+        assert kwargs["limit"] == 2
+        return [_work_result(3)]
+
+    monkeypatch.setattr(worker, "deliver_outbound_once", fake_normal)
+    monkeypatch.setattr(
+        scheduled_task_outbound,
+        "drain_due_legacy_scheduled_task_outboxes",
+        fake_scheduled,
+    )
+    monkeypatch.setattr(
+        proactive_outreach,
+        "drain_due_legacy_proactive_outboxes",
+        fake_proactive,
+    )
+
+    stats = await worker.run_once_async(
+        transport=shared_transport,
+        session_factory=lambda: None,
+        config=config,
+        owner="worker-lanes",
+        now=NOW,
+        limit=2,
+    )
+
+    assert [call[0] for call in calls] == [
+        "normal",
+        "normal",
+        "scheduled",
+        "proactive",
+    ]
+    assert all(call[1] is shared_transport for call in calls)
+    assert all(call[2] is config for call in calls)
+    assert takeovers["scheduled"].writer_owner == (
+        "worker-lanes:scheduled_legacy"
+    )
+    assert takeovers["proactive"].writer_owner == (
+        "worker-lanes:proactive_legacy"
+    )
+    assert takeovers["scheduled"].writer_token == (
+        takeovers["proactive"].writer_token
+    )
+    assert config.push_token not in repr(takeovers)
+    assert stats["processed"] == 3
+    assert stats["delivered"] == 3
+
+
+@pytest.mark.asyncio
+async def test_worker_legacy_lane_failure_does_not_starve_next_lane(
+    monkeypatch,
+    caplog,
+):
+    from core import proactive_outreach, scheduled_task_outbound
+    from workers import outbound_delivery_worker as worker
+
+    calls = []
+
+    async def transport(_request):
+        raise AssertionError("编排测试不得真正调用 transport")
+
+    async def no_normal(**_kwargs):
+        return None
+
+    async def failed_scheduled(**_kwargs):
+        calls.append("scheduled")
+        raise RuntimeError("legacy-lane-secret")
+
+    async def successful_proactive(**_kwargs):
+        calls.append("proactive")
+        return [_work_result(4)]
+
+    monkeypatch.setattr(worker, "deliver_outbound_once", no_normal)
+    monkeypatch.setattr(
+        scheduled_task_outbound,
+        "drain_due_legacy_scheduled_task_outboxes",
+        failed_scheduled,
+    )
+    monkeypatch.setattr(
+        proactive_outreach,
+        "drain_due_legacy_proactive_outboxes",
+        successful_proactive,
+    )
+
+    stats = await worker.run_once_async(
+        transport=transport,
+        session_factory=lambda: None,
+        config=_config(batch_size=1),
+        owner="worker-lane-isolation",
+        now=NOW,
+    )
+
+    assert calls == ["scheduled", "proactive"]
+    assert stats["processed"] == 1
+    assert "legacy-lane-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_after_legacy_slice_prevents_next_lane_claim(
+    monkeypatch,
+):
+    from core import proactive_outreach, scheduled_task_outbound
+    from workers import outbound_delivery_worker as worker
+
+    stop_event = asyncio.Event()
+    calls = []
+
+    async def transport(_request):
+        raise AssertionError("编排测试不得真正调用 transport")
+
+    async def no_normal(**_kwargs):
+        return None
+
+    async def stop_in_scheduled(**_kwargs):
+        calls.append("scheduled")
+        stop_event.set()
+        return [_work_result(5)]
+
+    async def forbidden_proactive(**_kwargs):
+        calls.append("proactive")
+        return [_work_result(6)]
+
+    monkeypatch.setattr(worker, "deliver_outbound_once", no_normal)
+    monkeypatch.setattr(
+        scheduled_task_outbound,
+        "drain_due_legacy_scheduled_task_outboxes",
+        stop_in_scheduled,
+    )
+    monkeypatch.setattr(
+        proactive_outreach,
+        "drain_due_legacy_proactive_outboxes",
+        forbidden_proactive,
+    )
+
+    stats = await worker.run_once_async(
+        transport=transport,
+        session_factory=lambda: None,
+        config=_config(batch_size=1),
+        owner="worker-stop-between-lanes",
+        stop_event=stop_event,
+        now=NOW,
+    )
+
+    assert calls == ["scheduled"]
+    assert stats["processed"] == 1
 
 
 def _worker_environ(**overrides: str) -> dict[str, str]:

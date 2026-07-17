@@ -90,83 +90,46 @@ def _worker_config() -> OutboundWorkerConfig:
     )
 
 
-def test_legacy_leaf_default_transport_passes_push_token(monkeypatch):
-    import aiohttp
+def test_legacy_producer_without_explicit_transport_only_queues(
+    db_session,
+    monkeypatch,
+):
+    from core import scheduled_task_outbound
 
-    from core import outbound_transport, scheduled_task_outbound
+    _seed_control(db_session, mode="legacy_direct")
+    task = _seed_task(db_session)
+    db_session.commit()
 
-    observed = {}
+    def forbidden_worker_config(*_args, **_kwargs):
+        raise AssertionError("scheduled producer 不得加载 worker 凭据")
 
-    class FakeClientSession:
-        async def __aenter__(self):
-            return self
+    monkeypatch.delenv("NANOBOT_PUSH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        scheduled_task_outbound.OutboundWorkerConfig,
+        "from_env",
+        classmethod(forbidden_worker_config),
+    )
 
-        async def __aexit__(self, *_exc):
-            return False
-
-    async def fake_deliver_once(**kwargs):
-        request = OutboundTransportRequest(
-            push_url="http://qq.test/nanobot/push",
-            target_type="private",
-            target_id="target-sentinel",
-            message="测试消息",
-            timeout_seconds=1,
-            payload_sha256="a" * 64,
-            outbox_id=1,
-            attempt_no=1,
+    result = run_async(
+        scheduled_task_outbound.enqueue_scheduled_task_occurrence(
+            db_session,
+            task_id=task.id,
+            trigger_type="manual",
+            manual_idempotency_key="queue-without-worker-token",
+            config=scheduled_task_outbound.ScheduledTaskProducerConfig.for_tests(
+                endpoint_config_revision=CONFIG_REVISION,
+            ),
+            generator=lambda _snapshot: "只持久化的日报",
+            session_factory=database.SessionLocal,
             now=NOW,
         )
-        return await kwargs["transport"](request)
-
-    async def fake_push(session, **kwargs):
-        observed["session"] = session
-        observed.update(kwargs)
-        return DeliveryOutcome(
-            category="success",
-            error_type="",
-            status_code=200,
-            retry_after_seconds=None,
-            duration_ms=1,
-            safe_summary="",
-            transport_phase="response_received",
-        )
-
-    monkeypatch.setattr(aiohttp, "ClientSession", FakeClientSession)
-    monkeypatch.setattr(
-        scheduled_task_outbound,
-        "deliver_legacy_outbound_once",
-        fake_deliver_once,
-    )
-    monkeypatch.setattr(
-        outbound_transport,
-        "deliver_qq_push_with_session",
-        fake_push,
     )
 
-    run_async(
-        scheduled_task_outbound._deliver_legacy_leaf(
-            result=scheduled_task_outbound.ScheduledTaskEnqueueResult(
-                run_id=1,
-                outbox_id=1,
-                status="queued",
-                delivery_mode="legacy_direct",
-                deduplicated=False,
-                generation_attempted=True,
-            ),
-            producer_config=(
-                scheduled_task_outbound.ScheduledTaskProducerConfig.for_tests(
-                    endpoint_config_revision=CONFIG_REVISION,
-                )
-            ),
-            session_factory=lambda: None,
-            transport=None,
-            worker_config=_worker_config(),
-            fixed_now=NOW,
-            clock=None,
-        )
-    )
-
-    assert observed["push_token"] == "push-token-scheduled-helper-sentinel"
+    db_session.expire_all()
+    outbox = db_session.get(OutboundDeliveryOutbox, result.outbox_id)
+    assert result.status == "queued"
+    assert outbox is not None and outbox.status == "pending"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 0
 
 
 def _claim(db, task: ScheduledTask, *, mode: str = "cron"):
@@ -365,6 +328,78 @@ def test_legacy_direct_persists_payload_before_a_specific_delivery_claim(db_sess
     assert legacy_claim is not None
     assert legacy_claim.outbox_id == queued.outbox_id
     assert db_session.get(OutboundDeliveryOutbox, queued.outbox_id).status == "leased"
+
+
+@pytest.mark.parametrize(
+    "stale_fact",
+    ["owner_token", "protocol", "version", "expired"],
+)
+def test_legacy_worker_rejects_stale_live_writer_snapshot_without_sending(
+    db_session,
+    stale_fact,
+):
+    from core.outbound_delivery_service import deliver_legacy_outbound_once
+
+    _seed_control(db_session, mode="legacy_direct")
+    task = _seed_task(db_session)
+    claim = _claim(db_session, task, mode="manual")
+    generation = _start(db_session, claim, task)
+    queued = _commit(db_session, claim, generation, task)
+    db_session.commit()
+
+    control = db_session.get(OutboundDeliveryControl, SOURCE_TYPE)
+    writer_snapshot = {
+        "owner": str(control.writer_owner),
+        "token": str(control.writer_token),
+        "protocol": int(control.protocol_version),
+        "version": int(control.writer_version),
+    }
+    if stale_fact == "owner_token":
+        control.writer_owner = "replacement-writer"
+        control.writer_token = "replacement-token"
+    elif stale_fact == "protocol":
+        control.protocol_version += 1
+    elif stale_fact == "version":
+        control.writer_version += 1
+    else:
+        control.writer_lease_expires_at = NOW + timedelta(seconds=2)
+    db_session.commit()
+    transport_calls = []
+
+    async def transport(request):
+        transport_calls.append(request.outbox_id)
+        return DeliveryOutcome(
+            category="success",
+            error_type="",
+            status_code=200,
+            retry_after_seconds=None,
+            duration_ms=1,
+            safe_summary="",
+            transport_phase="response_received",
+        )
+
+    result = run_async(
+        deliver_legacy_outbound_once(
+            session_factory=database.SessionLocal,
+            transport=transport,
+            config=_worker_config(),
+            outbox_id=queued.outbox_id,
+            worker_owner="outbound-worker",
+            writer_owner=writer_snapshot["owner"],
+            writer_token=writer_snapshot["token"],
+            writer_protocol_version=writer_snapshot["protocol"],
+            writer_lease_seconds=900,
+            expected_writer_version=writer_snapshot["version"],
+            now=NOW + timedelta(seconds=3),
+        )
+    )
+
+    db_session.expire_all()
+    outbox = db_session.get(OutboundDeliveryOutbox, queued.outbox_id)
+    assert result is None
+    assert transport_calls == []
+    assert outbox.status == "pending"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 0
 
 
 def test_safe_source_cancellation_never_steals_a_delivery_lease(db_session):
@@ -746,6 +781,57 @@ def test_legacy_producer_persists_request_boundary_before_http(db_session):
     assert projected.last_success_at == NOW
 
 
+def test_explicit_legacy_transport_does_not_require_worker_credentials(
+    db_session,
+    monkeypatch,
+):
+    from core import scheduled_task_outbound
+
+    _seed_control(db_session, mode="legacy_direct")
+    task = _seed_task(db_session)
+    db_session.commit()
+
+    def forbidden_worker_config(*_args, **_kwargs):
+        raise AssertionError("显式 transport 不得加载 outbound worker 凭据")
+
+    async def transport(_request: OutboundTransportRequest) -> DeliveryOutcome:
+        return DeliveryOutcome(
+            category="success",
+            error_type="",
+            status_code=200,
+            retry_after_seconds=None,
+            duration_ms=1,
+            safe_summary="",
+            transport_phase="response_received",
+        )
+
+    monkeypatch.delenv("NANOBOT_PUSH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        scheduled_task_outbound.OutboundWorkerConfig,
+        "from_env",
+        classmethod(forbidden_worker_config),
+    )
+
+    result = run_async(
+        scheduled_task_outbound.enqueue_scheduled_task_occurrence(
+            db_session,
+            task_id=task.id,
+            trigger_type="manual",
+            manual_idempotency_key="explicit-transport-without-worker-secret",
+            config=scheduled_task_outbound.ScheduledTaskProducerConfig.for_tests(
+                endpoint_config_revision=CONFIG_REVISION,
+            ),
+            generator=lambda _snapshot: "显式 transport 测试日报",
+            session_factory=database.SessionLocal,
+            legacy_transport=transport,
+            now=NOW,
+        )
+    )
+
+    assert result.status == "delivered"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 1
+
+
 def test_legacy_deduplicated_retry_reuses_persisted_leaf(db_session):
     from core.scheduled_task_outbound import (
         ScheduledTaskProducerConfig,
@@ -973,6 +1059,183 @@ def test_legacy_drain_recovers_pending_leaf_without_occurrence_reentry(
     assert transport_calls == [queued.outbox_id]
     assert outbox.status == "delivered"
     assert db_session.query(OutboundGenerationAttempt).count() == 1
+
+
+def test_worker_scheduled_drain_reuses_live_writer_and_is_idempotent(
+    db_session,
+):
+    from core.scheduled_task_outbound import (
+        drain_due_legacy_scheduled_task_outboxes,
+    )
+
+    _seed_control(db_session, mode="legacy_direct")
+    task = _seed_task(db_session)
+    claim = _claim(db_session, task, mode="manual")
+    generation = _start(db_session, claim, task)
+    queued = _commit(db_session, claim, generation, task)
+    db_session.commit()
+    transport_calls = []
+
+    async def success_transport(request):
+        transport_calls.append(request.outbox_id)
+        return DeliveryOutcome(
+            category="success",
+            error_type="",
+            status_code=200,
+            retry_after_seconds=None,
+            duration_ms=5,
+            safe_summary="",
+            transport_phase="response_received",
+        )
+
+    first = run_async(
+        drain_due_legacy_scheduled_task_outboxes(
+            session_factory=database.SessionLocal,
+            worker_config=_worker_config(),
+            transport=success_transport,
+            now=NOW + timedelta(seconds=3),
+        )
+    )
+    second = run_async(
+        drain_due_legacy_scheduled_task_outboxes(
+            session_factory=database.SessionLocal,
+            worker_config=_worker_config(),
+            transport=success_transport,
+            now=NOW + timedelta(seconds=4),
+        )
+    )
+
+    db_session.expire_all()
+    outbox = db_session.get(OutboundDeliveryOutbox, queued.outbox_id)
+    assert len(first) == 1
+    assert second == []
+    assert transport_calls == [queued.outbox_id]
+    assert outbox.status == "delivered"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 1
+
+
+@pytest.mark.parametrize("initial_status", ["pending", "retry_wait"])
+def test_worker_scheduled_drain_takes_over_expired_writer(
+    db_session,
+    initial_status,
+):
+    from core.outbound_delivery_service import LegacyWriterTakeover
+    from core.scheduled_task_outbound import (
+        drain_due_legacy_scheduled_task_outboxes,
+    )
+
+    _seed_control(db_session, mode="legacy_direct")
+    task = _seed_task(db_session)
+    claim = _claim(db_session, task, mode="manual")
+    generation = _start(db_session, claim, task)
+    queued = _commit(db_session, claim, generation, task)
+    outbox = db_session.get(OutboundDeliveryOutbox, queued.outbox_id)
+    run = db_session.get(OutboundRun, queued.run_id)
+    control = db_session.get(OutboundDeliveryControl, SOURCE_TYPE)
+    outbox.status = initial_status
+    run.status = "queued"
+    if initial_status == "retry_wait":
+        outbox.next_attempt_at = NOW + timedelta(seconds=2)
+    control.writer_lease_expires_at = NOW + timedelta(seconds=1)
+    db_session.commit()
+    transport_calls = []
+
+    async def success_transport(request):
+        transport_calls.append(request.outbox_id)
+        return DeliveryOutcome(
+            category="success",
+            error_type="",
+            status_code=200,
+            retry_after_seconds=None,
+            duration_ms=5,
+            safe_summary="",
+            transport_phase="response_received",
+        )
+
+    results = run_async(
+        drain_due_legacy_scheduled_task_outboxes(
+            session_factory=database.SessionLocal,
+            worker_config=_worker_config(),
+            transport=success_transport,
+            worker_owner="outbound-worker",
+            takeover_writer=LegacyWriterTakeover(
+                writer_owner="outbound-worker:scheduled-legacy",
+                writer_token="scheduled-takeover-token",
+            ),
+            now=NOW + timedelta(seconds=3),
+        )
+    )
+
+    db_session.expire_all()
+    outbox = db_session.get(OutboundDeliveryOutbox, queued.outbox_id)
+    run = db_session.get(OutboundRun, queued.run_id)
+    assert len(results) == 1
+    assert transport_calls == [queued.outbox_id]
+    assert outbox.status == "delivered"
+    assert run.status == "succeeded"
+    assert run.writer_owner == "outbound-worker:scheduled-legacy"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 1
+
+
+def test_worker_scheduled_drain_stop_prevents_next_legacy_claim(db_session):
+    from core.scheduled_task_outbound import (
+        drain_due_legacy_scheduled_task_outboxes,
+    )
+
+    _seed_control(db_session, mode="legacy_direct")
+    queued_ids = []
+    for suffix in ("first", "second"):
+        task = _seed_task(db_session, target_id=f"opaque-{suffix}")
+        claim = _claim(db_session, task, mode="manual")
+        generation = _start(db_session, claim, task)
+        queued_ids.append(_commit(db_session, claim, generation, task).outbox_id)
+    db_session.commit()
+
+    class StopEvent:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+    stop_event = StopEvent()
+    transport_calls = []
+
+    async def stop_after_success(request):
+        transport_calls.append(request.outbox_id)
+        stop_event.set()
+        return DeliveryOutcome(
+            category="success",
+            error_type="",
+            status_code=200,
+            retry_after_seconds=None,
+            duration_ms=5,
+            safe_summary="",
+            transport_phase="response_received",
+        )
+
+    results = run_async(
+        drain_due_legacy_scheduled_task_outboxes(
+            session_factory=database.SessionLocal,
+            worker_config=_worker_config(),
+            transport=stop_after_success,
+            stop_event=stop_event,
+            now=NOW + timedelta(seconds=3),
+            limit=2,
+        )
+    )
+
+    db_session.expire_all()
+    statuses = {
+        db_session.get(OutboundDeliveryOutbox, outbox_id).status
+        for outbox_id in queued_ids
+    }
+    assert len(results) == 1
+    assert len(transport_calls) == 1
+    assert statuses == {"delivered", "pending"}
+    assert db_session.query(OutboundDeliveryAttempt).count() == 1
 
 
 def test_legacy_drain_retries_transient_leaf_after_original_cron_slot(

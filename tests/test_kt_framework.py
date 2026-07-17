@@ -90,6 +90,70 @@ def _stub_session_guidance_resolver(monkeypatch):
     monkeypatch.setattr("nanobot_kt.bridge.resolve_session_guidance", resolve)
 
 
+@pytest.fixture
+def _stub_healthy_reply_route(monkeypatch):
+    """让非路由单测只验证各自目标，不依赖数据库模型注册表。"""
+    candidate = {
+        "id": "test-model",
+        "enabled": True,
+        "provider": "new-api",
+        "intelligence": 12,
+        "cost_input_1m": 0.0,
+        "context_window": 128000,
+        "supports_stream": True,
+        "supports_tools": True,
+        "supports_image": True,
+    }
+
+    monkeypatch.setattr(
+        "clients.classifier_client.resolve_model_route",
+        lambda _key: {
+            "base_url": "http://unit.test/v1",
+            "api_key": "",
+            "provider_id": "newapi",
+            "registry_provider": "new-api",
+            "timeout": 1,
+        },
+    )
+    monkeypatch.setattr(
+        "clients.classifier_client.ensure_model_route_enabled",
+        lambda _key, route=None: route or {},
+    )
+    monkeypatch.setattr(
+        "core.settings_service.settings.get",
+        lambda key, default=None: "" if key == "model.reply" else default,
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.LLM_MODEL_REPLY",
+        "test-model",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.registry.get_model_info",
+        lambda model_id: dict(candidate) if model_id == candidate["id"] else None,
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.registry.get_models_by_provider",
+        lambda _provider: [dict(candidate)],
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.NewAPIClient.sync_models_to_registry",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.NewAPIClient.estimate_complexity",
+        lambda *_args, **_kwargs: 1,
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.NewAPIClient.get_ordered_candidates",
+        lambda *_args, **_kwargs: [dict(candidate)],
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.NewAPIClient.get_failure_tracker",
+        classmethod(lambda _cls: None),
+    )
+
+
 # ── BufferedOutput Tests ──
 
 class TestBufferedOutput:
@@ -856,7 +920,9 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_returns_output(self, MockAgent, mock_load):
+    def test_handle_message_returns_output(
+        self, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         """Test that handle_message() returns reply tool output."""
         from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
@@ -1016,7 +1082,9 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_uses_multimodal_event_for_files(self, MockAgent, mock_load):
+    def test_handle_message_uses_multimodal_event_for_files(
+        self, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         from kohakuterrarium.llm.message import ImagePart
@@ -1284,7 +1352,9 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_passes_runtime_context_to_prompt_runtime(self, MockAgent, mock_load, monkeypatch):
+    def test_handle_message_passes_runtime_context_to_prompt_runtime(
+        self, MockAgent, mock_load, monkeypatch, _stub_healthy_reply_route
+    ):
         from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         from nanobot_kt.prompt_runtime import PromptRuntimeResult
@@ -1381,7 +1451,9 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_passes_platform_to_tool_plan_and_decision(self, MockAgent, mock_load, monkeypatch):
+    def test_handle_message_passes_platform_to_tool_plan_and_decision(
+        self, MockAgent, mock_load, monkeypatch, _stub_healthy_reply_route
+    ):
         from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from core.tool_plan import ToolPlan
         from nanobot_kt.bridge import NanobotBridge
@@ -2337,7 +2409,9 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_prefers_ai_daily_wrapped_html_over_plaintext_rewrite(self, MockAgent, mock_load):
+    def test_handle_message_prefers_ai_daily_wrapped_html_over_plaintext_rewrite(
+        self, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         from nanobot_kt.bridge import NanobotBridge
         mock_config = MagicMock()
         mock_config.name = "test"
@@ -2380,7 +2454,9 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_prefers_group_analysis_html_over_plaintext_rewrite(self, MockAgent, mock_load):
+    def test_handle_message_prefers_group_analysis_html_over_plaintext_rewrite(
+        self, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         from nanobot_kt.bridge import NanobotBridge
 
         mock_config = MagicMock()
@@ -2529,7 +2605,9 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_group_restriction_allows_sticker_search(self, MockAgent, mock_load):
+    def test_group_restriction_allows_sticker_search(
+        self, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         from nanobot_kt.bridge import NanobotBridge
 
         mock_config = MagicMock()
@@ -2613,7 +2691,9 @@ class TestReplyContract:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_reply_tool_json_content_is_sent(self, MockAgent, mock_load):
+    def test_reply_tool_json_content_is_sent(
+        self, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         """reply() JSON 结构化输出 → 正确提取返回。"""
         from nanobot_kt.bridge import NanobotBridge
 
@@ -2654,7 +2734,9 @@ class TestReplyContract:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_html_tool_output_bypasses_reply(self, MockAgent, mock_load):
+    def test_html_tool_output_bypasses_reply(
+        self, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         """HTML 工具输出 → 直出，不经 reply()。"""
         from nanobot_kt.bridge import NanobotBridge
 
@@ -2745,7 +2827,9 @@ class TestReplyContract:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_structured_final_action_without_tool_is_suppressed(self, MockAgent, mock_load, monkeypatch):
+    def test_structured_final_action_without_tool_is_suppressed(
+        self, MockAgent, mock_load, monkeypatch, _stub_healthy_reply_route
+    ):
         """assistant 自报的结构化 no_reply 不能替代真实 no_reply 工具。"""
         import json
 
@@ -3123,7 +3207,9 @@ class TestNoteBotRepliedBridge:
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
-    def test_group_response_calls_note(self, mock_note, MockAgent, mock_load):
+    def test_group_response_calls_note(
+        self, mock_note, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         from nanobot_kt.bridge import NanobotBridge
 
         mock_config = MagicMock()
@@ -3167,7 +3253,9 @@ class TestNoteBotRepliedBridge:
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
-    def test_private_chat_skips_note(self, mock_note, MockAgent, mock_load):
+    def test_private_chat_skips_note(
+        self, mock_note, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         from nanobot_kt.bridge import NanobotBridge
 
         mock_config = MagicMock()
@@ -3211,7 +3299,9 @@ class TestNoteBotRepliedBridge:
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
-    def test_group_dry_run_skips_note(self, mock_note, MockAgent, mock_load):
+    def test_group_dry_run_skips_note(
+        self, mock_note, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         from nanobot_kt.bridge import NanobotBridge
 
         mock_config = MagicMock()
@@ -3295,7 +3385,9 @@ class TestNoteBotRepliedBridge:
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
-    def test_note_exception_preserves_response(self, mock_note, MockAgent, mock_load):
+    def test_note_exception_preserves_response(
+        self, mock_note, MockAgent, mock_load, _stub_healthy_reply_route
+    ):
         from nanobot_kt.bridge import NanobotBridge
 
         mock_note.side_effect = RuntimeError("boom")

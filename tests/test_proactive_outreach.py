@@ -490,8 +490,6 @@ async def test_deliver_outreach_once_skips_duplicate_idempotency_key(monkeypatch
         pushes.append((target_type, target_id, message))
         return True
 
-    monkeypatch.setattr(proactive_outreach, "push_to_qq", fake_push_to_qq)
-
     first = await proactive_outreach.deliver_outreach_once(
         user_id="superuser",
         idempotency_key="outreach:superuser:once",
@@ -503,6 +501,7 @@ async def test_deliver_outreach_once_skips_duplicate_idempotency_key(monkeypatch
         message="刚想起你说今晚要夜跑。",
         forced=False,
         db=db_session,
+        publisher=fake_push_to_qq,
     )
     second = await proactive_outreach.deliver_outreach_once(
         user_id="superuser",
@@ -515,6 +514,7 @@ async def test_deliver_outreach_once_skips_duplicate_idempotency_key(monkeypatch
         message="第二次不应该发送。",
         forced=False,
         db=db_session,
+        publisher=fake_push_to_qq,
     )
 
     assert first["status"] == "sent"
@@ -566,13 +566,12 @@ async def test_run_outreach_once_forces_message_after_max_silence(monkeypatch, d
 
     monkeypatch.setattr(proactive_outreach, "judge_outreach", fake_judge)
     monkeypatch.setattr(proactive_outreach, "generate_outreach_message", fake_generate)
-    monkeypatch.setattr(proactive_outreach, "push_to_qq", fake_push_to_qq)
-
     result = await proactive_outreach.run_outreach_once(
         "superuser",
         db=db_session,
         now=now,
         max_silence_min=2880,
+        publisher=fake_push_to_qq,
     )
 
     assert result["status"] == "sent"
@@ -623,13 +622,12 @@ async def test_run_outreach_once_forces_message_when_never_sent_but_pending_is_s
 
     monkeypatch.setattr(proactive_outreach, "judge_outreach", fail_judge)
     monkeypatch.setattr(proactive_outreach, "generate_outreach_message", fake_generate)
-    monkeypatch.setattr(proactive_outreach, "push_to_qq", fake_push_to_qq)
-
     result = await proactive_outreach.run_outreach_once(
         "superuser",
         db=db_session,
         now=now,
         max_silence_min=2880,
+        publisher=fake_push_to_qq,
     )
 
     assert result["status"] == "sent"
@@ -871,14 +869,13 @@ async def test_run_outreach_due_once_reuses_semantic_key_for_same_due_point(monk
 
     monkeypatch.setattr(proactive_outreach, "judge_outreach", fake_judge)
     monkeypatch.setattr(proactive_outreach, "generate_outreach_message", fake_generate)
-    monkeypatch.setattr(proactive_outreach, "push_to_qq", fake_push_to_qq)
-
     first = await proactive_outreach.run_outreach_due_once(
         "superuser",
         db=db_session,
         now=first_now,
         min_interval_min=0,
         max_silence_min=999999,
+        publisher=fake_push_to_qq,
     )
     second = await proactive_outreach.run_outreach_due_once(
         "superuser",
@@ -886,6 +883,7 @@ async def test_run_outreach_due_once_reuses_semantic_key_for_same_due_point(monk
         now=second_now,
         min_interval_min=0,
         max_silence_min=999999,
+        publisher=fake_push_to_qq,
     )
 
     assert first["status"] == "sent"
@@ -963,8 +961,6 @@ async def test_deliver_outreach_once_marks_request_boundary_before_push(
         observed_statuses.append(row.status)
         return True
 
-    monkeypatch.setattr(proactive_outreach, "push_to_qq", fake_push_to_qq)
-
     result = await proactive_outreach.deliver_outreach_once(
         user_id="superuser",
         idempotency_key="outreach:superuser:sending-before-push",
@@ -976,6 +972,7 @@ async def test_deliver_outreach_once_marks_request_boundary_before_push(
         message="来敲一下门。",
         forced=False,
         db=db_session,
+        publisher=fake_push_to_qq,
     )
 
     assert result["status"] == "sent"
@@ -1004,8 +1001,6 @@ async def test_deliver_outreach_once_treats_sending_as_inflight_and_does_not_rep
     async def fail_push_to_qq(*args, **kwargs):
         raise AssertionError("sending 记录代表可能已投递，不应再次 push")
 
-    monkeypatch.setattr(proactive_outreach, "push_to_qq", fail_push_to_qq)
-
     result = await proactive_outreach.deliver_outreach_once(
         user_id="superuser",
         idempotency_key="outreach:superuser:inflight",
@@ -1017,6 +1012,7 @@ async def test_deliver_outreach_once_treats_sending_as_inflight_and_does_not_rep
         message="不应该发第二次。",
         forced=False,
         db=db_session,
+        publisher=fail_push_to_qq,
     )
 
     assert result["status"] == "skipped_duplicate"
@@ -1253,16 +1249,14 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
 
     stop_event = threading.Event()
     calls = []
-    legacy_drained = False
+    legacy_drain_calls = []
 
     async def fake_legacy_drain():
-        nonlocal legacy_drained
-        legacy_drained = True
+        legacy_drain_calls.append("drain")
         return []
 
     async def fake_due_once(user_id, **kwargs):
         stop_event.set()
-        assert legacy_drained is True
         calls.append((user_id, kwargs))
         return {"status": "pending"}
 
@@ -1303,6 +1297,7 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
 
     proactive_outreach.proactive_outreach_scheduler(stop_event)
 
+    assert legacy_drain_calls == []
     assert calls == [(
         "scheduler-user",
         {
@@ -1316,7 +1311,7 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
     )]
 
 
-def test_disabled_scheduler_uses_delivery_poll_for_legacy_recovery(monkeypatch):
+def test_disabled_scheduler_does_not_load_worker_poll_or_drain(monkeypatch):
     from core import proactive_outreach
 
     class OneCycleEvent:
@@ -1331,11 +1326,15 @@ def test_disabled_scheduler_uses_delivery_poll_for_legacy_recovery(monkeypatch):
             return True
 
     stop_event = OneCycleEvent()
-    drain_calls = []
+    forbidden_calls = []
 
     async def fake_legacy_drain():
-        drain_calls.append("drain")
+        forbidden_calls.append("drain")
         return []
+
+    def fake_worker_poll_interval():
+        forbidden_calls.append("worker-config")
+        return 1.0
 
     monkeypatch.setattr(
         proactive_outreach.settings,
@@ -1359,11 +1358,11 @@ def test_disabled_scheduler_uses_delivery_poll_for_legacy_recovery(monkeypatch):
     monkeypatch.setattr(
         proactive_outreach,
         "_legacy_drain_poll_interval_seconds",
-        lambda: 1.0,
+        fake_worker_poll_interval,
         raising=False,
     )
 
     proactive_outreach.proactive_outreach_scheduler(stop_event)
 
-    assert drain_calls == ["drain"]
-    assert stop_event.waits == [1.0]
+    assert forbidden_calls == []
+    assert stop_event.waits == [60.0]

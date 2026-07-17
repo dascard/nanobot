@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from core.database import KnowledgeChunk, KnowledgeDocument, SessionLocal
 from core.semantic.adapters import chunk_from_knowledge_chunk
-from core.semantic.indexer import upsert_semantic_chunks
+from core.semantic.indexer import source_revision_for_chunks
+from core.semantic.jobs import enqueue_index_job
 from core.time_utils import db_now_naive
 
 
@@ -180,12 +181,15 @@ def best_effort_filter_new_ai_daily_items(
     try:
         return filter_new_ai_daily_items(db, items, query=query)
     except Exception as exc:
-        logger.warning("[ai_daily_ingest] history dedup failed: %s", exc)
+        logger.warning(
+            "[ai_daily_ingest] history dedup failed: error_type=%s",
+            type(exc).__name__,
+        )
         return list(items or []), {
             "input": len(items or []),
             "kept": len(items or []),
             "skipped_seen": 0,
-            "warnings": [str(exc)],
+            "warnings": ["ai_daily_history_dedup_failed"],
         }
     finally:
         db.close()
@@ -268,39 +272,81 @@ def ingest_ai_daily_items(
     created = 0
     updated = 0
     warnings: list[str] = []
-    indexed_chunks: list[KnowledgeChunk] = []
-    for raw_item in items or []:
-        normalized = _normalized_item(raw_item, query)
-        if not normalized.get("title") and not normalized.get("summary"):
-            warnings.append("skip_empty_item")
-            continue
-        document = _find_existing_document(db, normalized)
-        is_new = document is None
-        if document is None:
-            document = KnowledgeDocument(
-                document_kind="ai_daily",
-                created_by="ai_daily",
-                updated_by="ai_daily",
-            )
-            db.add(document)
+    touched_document_ids: set[int] = set()
+    try:
+        for raw_item in items or []:
+            normalized = _normalized_item(raw_item, query)
+            if not normalized.get("title") and not normalized.get("summary"):
+                warnings.append("skip_empty_item")
+                continue
+            document = _find_existing_document(db, normalized)
+            is_new = document is None
+            if document is None:
+                document = KnowledgeDocument(
+                    document_kind="ai_daily",
+                    created_by="ai_daily",
+                    updated_by="ai_daily",
+                )
+                db.add(document)
+                db.flush()
+            _apply_document_payload(document, normalized, created=is_new)
+            _upsert_chunk(db, document, normalized)
             db.flush()
-        _apply_document_payload(document, normalized, created=is_new)
-        chunk = _upsert_chunk(db, document, normalized)
-        indexed_chunks.append(chunk)
-        if is_new:
-            created += 1
-        else:
-            updated += 1
-    db.commit()
+            touched_document_ids.add(int(document.id))
+            if is_new:
+                created += 1
+            else:
+                updated += 1
 
-    semantic_chunks = []
-    for chunk in indexed_chunks:
-        document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == chunk.document_id).first()
-        if document is not None:
-            semantic_chunks.append(chunk_from_knowledge_chunk(chunk, document=document))
-    if semantic_chunks:
-        upsert_semantic_chunks(db, semantic_chunks, index_version=index_version)
-    return {"created": created, "updated": updated, "warnings": warnings}
+        for document_id in sorted(touched_document_ids):
+            document = db.get(KnowledgeDocument, document_id)
+            rows = (
+                db.query(KnowledgeChunk)
+                .filter(
+                    KnowledgeChunk.document_id == document_id,
+                    KnowledgeChunk.status == "active",
+                )
+                .order_by(
+                    KnowledgeChunk.order_index.asc(),
+                    KnowledgeChunk.id.asc(),
+                )
+                .all()
+            )
+            semantic_chunks = [
+                chunk_from_knowledge_chunk(row, document=document)
+                for row in rows
+                if row.text
+            ]
+            if not semantic_chunks:
+                continue
+            enqueue_index_job(
+                db,
+                source_type="knowledge",
+                source_id=str(document_id),
+                job_type="replace",
+                index_version=index_version,
+                source_revision=source_revision_for_chunks(
+                    semantic_chunks,
+                    document_ids=[document_id],
+                ),
+                meta={
+                    "contract_version": 2,
+                    "job_origin": "business",
+                    "document_ids": [document_id],
+                    "delete_source_ids": [],
+                },
+                commit=False,
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "created": created,
+        "updated": updated,
+        "warnings": warnings,
+        "semantic_jobs_enqueued": len(touched_document_ids),
+    }
 
 
 def _items_from_html(html_text: str) -> list[dict[str, Any]]:
@@ -336,7 +382,14 @@ def best_effort_ingest_ai_daily_result(html_text: str, *, query: str = "") -> di
             db.rollback()
         except Exception:
             pass
-        logger.warning("[ai_daily_ingest] best-effort ingest failed: %s", exc)
-        return {"created": 0, "updated": 0, "warnings": [str(exc)]}
+        logger.warning(
+            "[ai_daily_ingest] best-effort ingest failed: error_type=%s",
+            type(exc).__name__,
+        )
+        return {
+            "created": 0,
+            "updated": 0,
+            "warnings": ["ai_daily_ingest_failed"],
+        }
     finally:
         db.close()

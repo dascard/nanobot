@@ -132,6 +132,44 @@ def test_generate_daily_digest_can_filter_specific_session(db_session, monkeypat
     assert db_session.query(MemoryDigest).filter_by(session_id="private_b").count() == 0
 
 
+def test_daily_digest_rolls_back_when_semantic_enqueue_fails(
+    db_session,
+    monkeypatch,
+):
+    from core.database import SemanticIndexJob
+
+    source = ChatLog(
+        user_id="digest-rollback-user",
+        session_id="digest-rollback-session",
+        role="user",
+        content="摘要写入与索引任务必须保持原子",
+        created_at=_local_time(2026, 7, 17, 12, 0, 0),
+    )
+    db_session.add(source)
+    db_session.commit()
+    source_id = int(source.id)
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(
+        "core.semantic.jobs.enqueue_index_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("semantic enqueue failed")
+        ),
+    )
+
+    created = daily_digest.generate_daily_digest_for_date(
+        "2026-07-17",
+        llm_summarizer=_successful_digest_summarizer(
+            "摘要写入与索引任务必须保持原子",
+            evidence_log_id=source.id,
+        ),
+    )
+
+    assert created == 0
+    assert db_session.query(MemoryDigest).count() == 0
+    assert db_session.query(SemanticIndexJob).count() == 0
+    assert db_session.get(ChatLog, source_id) is not None
+
+
 def test_memory_digest_scheduler_reloads_schedule_without_restart(monkeypatch):
     schedule_values = [(True, 4), (True, 8), (True, 8)]
     state = {"index": 0, "stopped": False}
@@ -583,16 +621,16 @@ def test_run_scheduled_tasks_recovers_expired_generation_from_old_slot(
     assert db_session.query(OutboundDeliveryOutbox).count() == 1
 
 
-def test_run_scheduled_tasks_invokes_legacy_compatibility_drain(
+def test_run_scheduled_tasks_never_invokes_legacy_compatibility_drain(
     db_session,
     monkeypatch,
 ):
     now = _local_time(2026, 7, 15, 12, 5, 0)
     calls = []
 
-    async def fake_legacy_drain(**kwargs):
-        calls.append(kwargs["session_factory"])
-        return []
+    async def forbidden_legacy_drain(**_kwargs):
+        calls.append("legacy-drain")
+        raise AssertionError("server 定时任务主循环不得执行 legacy drain")
 
     async def fake_generation_recovery(**_kwargs):
         return []
@@ -602,9 +640,10 @@ def test_run_scheduled_tasks_invokes_legacy_compatibility_drain(
     monkeypatch.setattr(
         daily_digest,
         "drain_due_legacy_scheduled_task_outboxes",
-        fake_legacy_drain,
+        forbidden_legacy_drain,
         raising=False,
     )
+    monkeypatch.setenv("NANOBOT_PUSH_TOKEN", "")
     monkeypatch.setattr(
         daily_digest,
         "recover_expired_scheduled_task_occurrences",
@@ -614,7 +653,7 @@ def test_run_scheduled_tasks_invokes_legacy_compatibility_drain(
     executed = run_async(daily_digest.run_scheduled_tasks())
 
     assert executed == 0
-    assert len(calls) == 1
+    assert calls == []
 
 
 def test_scheduled_task_runner_does_not_require_asyncio_runner(monkeypatch):

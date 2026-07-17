@@ -18,6 +18,7 @@ import aiohttp
 from sqlalchemy.orm import Session
 
 from core.outbound_delivery_service import (
+    LegacyWriterTakeover,
     OutboundTransport,
     OutboundTransportRequest,
     OutboundWorkerConfig,
@@ -28,6 +29,7 @@ from core.outbound_transport import deliver_qq_push_with_session
 
 logger = logging.getLogger("nanobot.outbound_delivery.worker")
 _schema_ready = False
+_LEGACY_WRITER_TOKEN = uuid4().hex
 
 
 def _ensure_schema_ready() -> None:
@@ -90,6 +92,35 @@ def _empty_stats() -> dict[str, int]:
     }
 
 
+def _record_result(
+    stats: dict[str, int],
+    result: Any,
+) -> None:
+    stats["processed"] += 1
+    if result.outbox_status in stats:
+        stats[result.outbox_status] += 1
+
+
+def _merge_stats(
+    target: dict[str, int],
+    source: dict[str, int],
+) -> None:
+    for key in target:
+        target[key] += int(source.get(key, 0))
+
+
+def _legacy_writer_takeover(
+    *,
+    worker_owner: str,
+    lane: str,
+) -> LegacyWriterTakeover:
+    owner = f"{worker_owner}:{lane}"[:128]
+    return LegacyWriterTakeover(
+        writer_owner=owner,
+        writer_token=_LEGACY_WRITER_TOKEN,
+    )
+
+
 async def _run_batch(
     *,
     transport: OutboundTransport,
@@ -113,9 +144,84 @@ async def _run_batch(
         )
         if result is None:
             break
-        stats["processed"] += 1
-        if result.outbox_status in stats:
-            stats[result.outbox_status] += 1
+        _record_result(stats, result)
+    return stats
+
+
+async def _run_worker_cycle(
+    *,
+    transport: OutboundTransport,
+    session_factory: Callable[[], Session],
+    config: OutboundWorkerConfig,
+    owner: str,
+    stop_event: Any | None,
+    now: datetime | None,
+    lane_limit: int,
+) -> dict[str, int]:
+    """每个 lane 各处理一个有界批次，并隔离单 lane 普通异常。"""
+
+    from core.proactive_outreach import (
+        drain_due_legacy_proactive_outboxes,
+    )
+    from core.scheduled_task_outbound import (
+        drain_due_legacy_scheduled_task_outboxes,
+    )
+
+    stats = _empty_stats()
+    try:
+        normal_stats = await _run_batch(
+            transport=transport,
+            session_factory=session_factory,
+            config=config,
+            owner=owner,
+            stop_event=stop_event,
+            now=now,
+            limit=lane_limit,
+        )
+    except Exception as exc:
+        logger.error(
+            "Outbound delivery lane failed lane=outbox error_type=%s",
+            type(exc).__name__,
+        )
+    else:
+        _merge_stats(stats, normal_stats)
+
+    legacy_lanes = (
+        (
+            "scheduled_legacy",
+            drain_due_legacy_scheduled_task_outboxes,
+        ),
+        (
+            "proactive_legacy",
+            drain_due_legacy_proactive_outboxes,
+        ),
+    )
+    for lane_name, drain in legacy_lanes:
+        if stop_event is not None and stop_event.is_set():
+            break
+        try:
+            results = await drain(
+                session_factory=session_factory,
+                worker_config=config,
+                transport=transport,
+                worker_owner=owner,
+                stop_event=stop_event,
+                takeover_writer=_legacy_writer_takeover(
+                    worker_owner=owner,
+                    lane=lane_name,
+                ),
+                now=now,
+                limit=lane_limit,
+            )
+        except Exception as exc:
+            logger.error(
+                "Outbound delivery lane failed lane=%s error_type=%s",
+                lane_name,
+                type(exc).__name__,
+            )
+            continue
+        for result in results:
+            _record_result(stats, result)
     return stats
 
 
@@ -140,14 +246,14 @@ async def run_once_async(
         transport,
         push_token=resolved_config.push_token,
     ) as resolved_transport:
-        return await _run_batch(
+        return await _run_worker_cycle(
             transport=resolved_transport,
             session_factory=factory,
             config=resolved_config,
             owner=owner,
             stop_event=stop_event,
             now=now,
-            limit=batch_size,
+            lane_limit=batch_size,
         )
 
 
@@ -181,14 +287,14 @@ async def run_forever_async(
     ) as resolved_transport:
         while not stop_event.is_set():
             try:
-                stats = await _run_batch(
+                stats = await _run_worker_cycle(
                     transport=resolved_transport,
                     session_factory=factory,
                     config=resolved_config,
                     owner=owner,
                     stop_event=stop_event,
                     now=None,
-                    limit=resolved_config.batch_size,
+                    lane_limit=resolved_config.batch_size,
                 )
                 if stats["processed"]:
                     logger.info("Outbound delivery worker processed: %s", stats)

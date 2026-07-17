@@ -1,10 +1,17 @@
 from tests.async_helpers import run_async
 import json
 
+import pytest
+
 
 def test_ai_daily_ingests_summary_metadata_only(db_session):
     from core.ai_daily_ingest import ingest_ai_daily_items
-    from core.database import KnowledgeChunk, KnowledgeDocument, SemanticIndexItem
+    from core.database import (
+        KnowledgeChunk,
+        KnowledgeDocument,
+        SemanticIndexItem,
+        SemanticIndexJob,
+    )
 
     result = ingest_ai_daily_items(db_session, [{
         "title": "OpenAI 发布新模型",
@@ -23,7 +30,40 @@ def test_ai_daily_ingests_summary_metadata_only(db_session):
     assert "<article" not in chunk.text
     assert doc.url == "https://example.com/openai-model"
     assert json.loads(chunk.citation_json)["url"] == doc.url
-    assert db_session.query(SemanticIndexItem).filter_by(source_type="knowledge").count() == 1
+    assert db_session.query(SemanticIndexItem).filter_by(source_type="knowledge").count() == 0
+    job = db_session.query(SemanticIndexJob).one()
+    assert job.source_type == "knowledge"
+    assert job.source_id == str(doc.id)
+    assert job.job_type == "replace"
+    assert job.status == "pending"
+
+
+def test_ai_daily_ingest_rolls_back_when_semantic_enqueue_fails(
+    db_session,
+    monkeypatch,
+):
+    from core.ai_daily_ingest import ingest_ai_daily_items
+    from core.database import KnowledgeChunk, KnowledgeDocument, SemanticIndexJob
+
+    monkeypatch.setattr(
+        "core.ai_daily_ingest.enqueue_index_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("semantic enqueue failed")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="semantic enqueue failed"):
+        ingest_ai_daily_items(db_session, [{
+            "title": "索引入队失败必须回滚",
+            "url": "https://example.com/rollback",
+            "summary": "业务文档和 chunk 都不能半提交。",
+            "source_name": "Example AI",
+            "published_at": "2026-07-17T08:00:00Z",
+        }], query="AI 日报事务")
+
+    assert db_session.query(KnowledgeDocument).count() == 0
+    assert db_session.query(KnowledgeChunk).count() == 0
+    assert db_session.query(SemanticIndexJob).count() == 0
 
 
 def test_ai_daily_ingest_failure_does_not_fail_tool(monkeypatch):
@@ -80,7 +120,13 @@ def test_ai_daily_ingest_records_warning_in_tool_meta(monkeypatch):
     from creatures.nanobot.prompts.skills.news_search import tool as news_tool
 
     monkeypatch.setattr(news_tool, "_run_news_daily_pipeline", lambda *args, **kwargs: "<article>AI 新闻</article>")
-    monkeypatch.setattr("core.ai_daily_ingest.ingest_ai_daily_html", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("write failed")))
+    secret_sentinel = "db-password-must-not-leak"
+    monkeypatch.setattr(
+        "core.ai_daily_ingest.ingest_ai_daily_html",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError(f"write failed: {secret_sentinel}")
+        ),
+    )
     news_tool._NEWS_SEARCH_CACHE.clear()
 
     result = run_async(news_tool.AiDailyTool().execute({
@@ -89,7 +135,13 @@ def test_ai_daily_ingest_records_warning_in_tool_meta(monkeypatch):
     }))
 
     assert result.success
-    assert result.metadata["ai_daily_ingest"]["warnings"]
+    assert result.metadata["ai_daily_ingest"]["warnings"] == [
+        "ai_daily_ingest_failed"
+    ]
+    assert secret_sentinel not in json.dumps(
+        result.metadata,
+        ensure_ascii=False,
+    )
 
 
 def test_ai_daily_dedup_uses_summary_hash_with_source_and_date(db_session):

@@ -1,4 +1,5 @@
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import inspect, text
@@ -112,7 +113,8 @@ def test_rag_debug_memory_uses_real_pipeline_trace(client, db_session, monkeypat
     )
     db_session.add(digest)
     db_session.commit()
-    upsert_semantic_chunks(db_session, chunks_from_memory_digest(digest), index_version="fake:v1:v1")
+    chunks = chunks_from_memory_digest(digest)
+    upsert_semantic_chunks(db_session, chunks, index_version="fake:v1:v1")
 
     response = client.post(
         "/api/v1/admin/rag/debug/query",
@@ -131,8 +133,11 @@ def test_rag_debug_memory_uses_real_pipeline_trace(client, db_session, monkeypat
     assert payload["score_breakdown"]["fallback_reason"] != "rag_debug_stub"
     assert payload["score_breakdown"]["source_weights_mode"] == "display_only_no_quota"
     assert stages["fts_hits"][0]["bm25_raw"] is not None
-    assert stages["merged_candidates"][0]["candidate_id"] == "memory_digest:701:card:0"
-    assert stages["reranker_input_pairs"][0]["candidate_id"] == "memory_digest:701:card:0"
+    expected_candidate_id = (
+        f"memory_digest:701:{chunks[0].source_sub_id}"
+    )
+    assert stages["merged_candidates"][0]["candidate_id"] == expected_candidate_id
+    assert stages["reranker_input_pairs"][0]["candidate_id"] == expected_candidate_id
     assert stages["final_candidates"][0]["score_breakdown"]["raw_reranker"] == 2.0
     assert payload["score_breakdown"]["reranker_latency_ms"] > 0
 
@@ -281,7 +286,12 @@ def test_rag_debug_status_reports_empty_index_and_reranker_route(client, db_sess
 def test_rag_debug_build_index_from_existing_data(client, db_session, monkeypatch):
     import json
 
-    from core.database import MemoryDigest, SemanticIndexItem
+    from core.database import (
+        AdminAuditLog,
+        MemoryDigest,
+        SemanticIndexItem,
+        SemanticIndexJob,
+    )
 
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     digest = MemoryDigest(
@@ -307,9 +317,356 @@ def test_rag_debug_build_index_from_existing_data(client, db_session, monkeypatc
 
     assert response.status_code == 200
     data = response.json()
-    assert data["result"]["indexed_chunks"] == 1
-    assert data["index"]["indexed_items"] == 1
-    assert db_session.query(SemanticIndexItem).count() == 1
+    assert data["result"]["enqueued"] == 1
+    assert data["index"]["indexed_items"] == 0
+    assert db_session.query(SemanticIndexItem).count() == 0
+    job = db_session.query(SemanticIndexJob).one()
+    assert job.job_type == "replace"
+    assert job.status == "pending"
+    assert db_session.query(AdminAuditLog).filter_by(
+        action="enqueue_semantic_index_backfill_legacy_debug",
+    ).count() == 1
+
+
+def test_legacy_debug_build_index_never_enqueues_orphan_delete(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import SemanticIndexJob
+    from core.semantic.adapters import SemanticChunk
+    from core.semantic.indexer import upsert_semantic_chunks
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    upsert_semantic_chunks(
+        db_session,
+        [SemanticChunk(
+            source_type="memory_digest",
+            source_id="orphan-source",
+            source_sub_id="card:orphan",
+            title="孤儿索引",
+            text="旧 debug 构建入口不得删除该索引",
+            lexical_text="孤儿索引",
+            embedding_text="孤儿索引",
+        )],
+        index_version="legacy:v1",
+        source_revision="orphan-revision",
+    )
+
+    response = client.post(
+        "/api/v1/admin/rag/debug/build-index",
+        headers=_auth_header(),
+        json={"source_type": "memory_digest", "limit_per_source": 1},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["orphan"] == 0
+    assert db_session.query(SemanticIndexJob).filter_by(job_type="delete").count() == 0
+
+
+def test_legacy_debug_build_index_honors_limit_without_full_scan(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import MemoryDigest, SemanticIndexJob
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    for index in range(3):
+        db_session.add(MemoryDigest(
+            user_id=f"u{index}",
+            session_id=f"s{index}",
+            digest_date="2026-07-17",
+            level=2,
+            content=f"有界回填 {index}",
+            meta_json=json.dumps(_recallable_digest_meta(
+                source_id=f"digest-source-{index}",
+                summary_type="recall_card",
+                recall_cards=[{
+                    "type": "fact",
+                    "text": f"有界回填事实 {index}",
+                    "evidence_log_ids": [index + 1],
+                }],
+            ), ensure_ascii=False),
+        ))
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/admin/rag/debug/build-index",
+        headers=_auth_header(),
+        json={"source_type": "memory_digest", "limit_per_source": 1},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["scanned"] == 1
+    assert result["enqueued"] == 1
+    assert result["done"] is False
+    assert result["truncated"] is True
+    assert db_session.query(SemanticIndexJob).count() == 1
+
+
+def test_legacy_debug_build_index_rolls_back_job_and_audit_on_preview_failure(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import AdminAuditLog, MemoryDigest, SemanticIndexJob
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(client._transport, "raise_server_exceptions", False)
+    db_session.add(MemoryDigest(
+        user_id="rollback-user",
+        session_id="rollback-session",
+        digest_date="2026-07-17",
+        level=2,
+        content="事务回滚",
+        meta_json=json.dumps(_recallable_digest_meta(
+            source_id="rollback-source",
+            summary_type="recall_card",
+            recall_cards=[{
+                "type": "fact",
+                "text": "preview 失败时任务与审计必须一起回滚",
+                "evidence_log_ids": [1],
+            }],
+        ), ensure_ascii=False),
+    ))
+    db_session.commit()
+
+    def broken_preview(*_args, **_kwargs):
+        raise RuntimeError("preview failed")
+
+    monkeypatch.setattr(
+        "core.semantic.backfill.preview_semantic_index_backfill",
+        broken_preview,
+    )
+    response = client.post(
+        "/api/v1/admin/rag/debug/build-index",
+        headers=_auth_header(),
+        json={"source_type": "memory_digest", "limit_per_source": 1},
+    )
+
+    assert response.status_code == 500
+    assert db_session.query(SemanticIndexJob).count() == 0
+    assert db_session.query(AdminAuditLog).filter_by(
+        action="enqueue_semantic_index_backfill_legacy_debug",
+    ).count() == 0
+
+
+def test_admin_semantic_index_job_retry_uses_status_and_updated_at_cas(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import AdminAuditLog, SemanticIndexJob
+    from core.time_utils import db_naive_to_utc, to_db_naive
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    updated_at = _local_now()
+    job = SemanticIndexJob(
+        source_type="session_summary",
+        source_id="retry-session",
+        source_revision="revision-1",
+        status="failed",
+        retry_count=3,
+        manual_retry_count=0,
+        updated_at=updated_at,
+        finished_at=updated_at,
+        error="provider timeout",
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    payload = {
+        "expected_status": "failed",
+        "expected_updated_at": db_naive_to_utc(updated_at).isoformat(),
+        "reason": "已修复 provider，允许显式重试",
+    }
+    first = client.post(
+        f"/api/v1/admin/rag/index-jobs/{job.id}/retry",
+        headers=_auth_header(),
+        json=payload,
+    )
+    second = client.post(
+        f"/api/v1/admin/rag/index-jobs/{job.id}/retry",
+        headers=_auth_header(),
+        json=payload,
+    )
+
+    assert first.status_code == 200, first.text
+    returned = first.json()["job"]
+    assert returned["status"] == "pending"
+    assert returned["manual_retry_count"] == 1
+    returned_updated_at = datetime.fromisoformat(
+        returned["updated_at"].replace("Z", "+00:00")
+    )
+    returned_next_retry_at = datetime.fromisoformat(
+        returned["next_retry_at"].replace("Z", "+00:00")
+    )
+    assert returned_updated_at.utcoffset() == timedelta(0)
+    assert returned_next_retry_at.utcoffset() == timedelta(0)
+    assert "lease_token" not in returned
+    assert "meta_json" not in returned
+    assert second.status_code == 409
+    db_session.refresh(job)
+    assert job.retry_count == 3
+    assert job.source_revision == "revision-1"
+    assert job.locked_by == ""
+    assert job.lease_token == ""
+    assert to_db_naive(returned_updated_at) == job.updated_at
+    assert to_db_naive(returned_next_retry_at) == job.next_retry_at
+    audit = db_session.query(AdminAuditLog).filter_by(
+        action="retry_semantic_index_job",
+    ).one()
+    assert json.loads(audit.detail_json)["expected_updated_at"].endswith("Z")
+
+
+def test_admin_semantic_index_job_retry_rejects_active_lease_and_missing_job(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import SemanticIndexJob
+    from core.time_utils import db_naive_to_utc
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    updated_at = _local_now()
+    job = SemanticIndexJob(
+        source_type="memory_digest",
+        source_id="running-source",
+        source_revision="revision-running",
+        status="running",
+        locked_by="worker-a",
+        lease_token="a" * 64,
+        lease_expires_at=updated_at + timedelta(minutes=5),
+        updated_at=updated_at,
+    )
+    db_session.add(job)
+    db_session.commit()
+    payload = {
+        "expected_status": "running",
+        "expected_updated_at": db_naive_to_utc(updated_at).isoformat(),
+        "reason": "尝试抢占仍有效租约",
+    }
+
+    active = client.post(
+        f"/api/v1/admin/rag/index-jobs/{job.id}/retry",
+        headers=_auth_header(),
+        json=payload,
+    )
+    missing = client.post(
+        "/api/v1/admin/rag/index-jobs/999999/retry",
+        headers=_auth_header(),
+        json={**payload, "expected_status": "failed"},
+    )
+
+    assert active.status_code == 409
+    assert missing.status_code == 404
+
+
+def test_admin_semantic_index_job_retry_rejects_naive_expected_time(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import SemanticIndexJob
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    updated_at = _local_now()
+    job = SemanticIndexJob(
+        source_type="session_summary",
+        source_id="naive-time-retry",
+        source_revision="revision-naive",
+        status="failed",
+        updated_at=updated_at,
+        finished_at=updated_at,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.post(
+        f"/api/v1/admin/rag/index-jobs/{job.id}/retry",
+        headers=_auth_header(),
+        json={
+            "expected_status": "failed",
+            "expected_updated_at": updated_at.isoformat(),
+            "reason": "无时区时间必须拒绝",
+        },
+    )
+
+    assert response.status_code == 422
+    db_session.refresh(job)
+    assert job.status == "failed"
+    assert job.manual_retry_count == 0
+
+
+def test_admin_semantic_backfill_preview_is_readonly_and_enqueue_is_audited(
+    client,
+    db_session,
+    monkeypatch,
+):
+    import json
+
+    from core.database import AdminAuditLog, RollingSessionSummary, SemanticIndexJob
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_session.add(RollingSessionSummary(
+        session_id="admin-backfill-session",
+        user_id="u1",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="管理端回填只允许正式入队。",
+        summary_json=json.dumps({
+            "summary": "管理端回填只允许正式入队。",
+        }, ensure_ascii=False),
+    ))
+    db_session.commit()
+    body = {
+        "source_type": "session_summary",
+        "limit": 10,
+        "cursor": "",
+        "index_version": "target:v2",
+    }
+
+    preview = client.post(
+        "/api/v1/admin/rag/index-backfill/preview",
+        headers=_auth_header(),
+        json=body,
+    )
+
+    assert preview.status_code == 200, preview.text
+    assert set(preview.json()) == {
+        "scanned",
+        "current",
+        "missing",
+        "stale",
+        "orphan",
+        "enqueued",
+        "next_cursor",
+        "done",
+        "reasons",
+    }
+    assert preview.json()["missing"] == 1
+    assert preview.json()["enqueued"] == 0
+    assert db_session.query(SemanticIndexJob).count() == 0
+    assert db_session.query(AdminAuditLog).count() == 0
+
+    enqueue = client.post(
+        "/api/v1/admin/rag/index-backfill/enqueue",
+        headers=_auth_header(),
+        json=body,
+    )
+
+    assert enqueue.status_code == 200, enqueue.text
+    assert enqueue.json()["enqueued"] == 1
+    job = db_session.query(SemanticIndexJob).one()
+    assert job.status == "pending"
+    assert job.job_type == "replace"
+    assert job.source_id == "admin-backfill-session"
+    assert "管理端回填" not in job.meta_json
+    assert db_session.query(AdminAuditLog).filter_by(
+        action="enqueue_semantic_index_backfill",
+    ).count() == 1
 
 
 def test_rag_debug_query_runs_sticker_search(client, db_session, monkeypatch):

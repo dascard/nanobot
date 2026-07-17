@@ -90,6 +90,7 @@ class TestNewAPIClientRetry:
         mock_resp.json = AsyncMock(return_value={
             "choices": [{"message": {"role": "assistant", "content": "OK"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "model": "actual-provider-model",
         })
 
         class _RespCM:
@@ -116,7 +117,10 @@ class TestNewAPIClientRetry:
         mock_session.post = MagicMock(return_value=_RespCM(mock_resp))
 
         with patch.object(client, "get_ordered_candidates", side_effect=AssertionError("manual_model 不应走候选路由")):
-            with patch("aiohttp.ClientSession", return_value=_SessionCM(mock_session)):
+            with patch("aiohttp.ClientSession", return_value=_SessionCM(mock_session)), patch(
+                "core.tracing.LLMRequestTracer.record_request",
+                return_value=123,
+            ), patch("core.tracing.LLMRequestTracer.finish_request"):
                 result = await client.chat_completion(
                     messages=[{"role": "user", "content": "描述这张图"}],
                     manual_model="gemma-4",
@@ -124,6 +128,8 @@ class TestNewAPIClientRetry:
 
         assert result["choices"][0]["message"]["content"] == "OK"
         assert result["_nanobot_model_id"] == "gemma-4"
+        assert result["_nanobot_requested_model"] == "gemma-4"
+        assert result["_nanobot_request_log_id"] == 123
 
 
 # ── UnifiedProvider Tests ──

@@ -679,8 +679,15 @@ def _build_ai_daily_tool_result(html_result: str, query: str) -> ToolResult:
             query=query,
         )
     except Exception as exc:
-        logger.warning("[ai_daily] ingest metadata failed: %s", exc)
-        result.metadata["ai_daily_ingest"] = {"created": 0, "updated": 0, "warnings": [str(exc)]}
+        logger.warning(
+            "[ai_daily] ingest metadata failed: error_type=%s",
+            type(exc).__name__,
+        )
+        result.metadata["ai_daily_ingest"] = {
+            "created": 0,
+            "updated": 0,
+            "warnings": ["ai_daily_ingest_metadata_failed"],
+        }
     return result
 
 

@@ -1,3 +1,4 @@
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -50,6 +51,21 @@ def _seed_control(db, *, mode: str = "outbox_active") -> None:
         protocol_version=2,
         writer_version=0,
     ))
+    db.commit()
+
+
+def _activate_legacy_writer(
+    db,
+    *,
+    now: datetime = NOW,
+    owner: str = "server-proactive-writer",
+) -> None:
+    control = db.get(OutboundDeliveryControl, SOURCE_TYPE)
+    assert control is not None
+    control.writer_owner = owner
+    control.writer_token = f"{owner}-token"
+    control.writer_version += 1
+    control.writer_lease_expires_at = now + timedelta(hours=1)
     db.commit()
 
 
@@ -126,17 +142,20 @@ def _transport_outcome(
     )
 
 
+_DEFAULT_PUBLISHER = object()
+
+
 async def _enqueue(
     db,
     *,
     user_id: str = "outbox-user",
     key: str = "outreach:outbox-user:one",
     created_at: datetime = NOW,
-    publisher=None,
+    publisher=_DEFAULT_PUBLISHER,
 ):
     from core import proactive_outreach
 
-    if publisher is None:
+    if publisher is _DEFAULT_PUBLISHER:
         async def publisher(*_args):
             return True
 
@@ -558,7 +577,8 @@ async def test_expired_generation_owner_is_fenced_and_takeover_uses_next_attempt
             assert run.status == "generating"
             assert attempt.status == "started"
             assert lease is not None
-            run.claim_expires_at = datetime.now() - timedelta(seconds=1)
+            assert run.updated_at is not None
+            run.claim_expires_at = run.updated_at - timedelta(seconds=1)
             lease.owner_token = "new-evaluation-owner"
             lease.lease_expires_at = datetime.now() + timedelta(minutes=15)
             takeover.commit()
@@ -603,13 +623,20 @@ async def test_expired_generation_owner_is_fenced_and_takeover_uses_next_attempt
                 .order_by(OutboundGenerationAttempt.attempt_no.asc())
                 .all()
             )
+            assert observer.query(OutboundDeliveryOutbox).count() == 1
             outbox = observer.query(OutboundDeliveryOutbox).one()
+            run = observer.query(OutboundRun).one()
+            row = observer.query(ProactiveOutreachLog).one()
             assert first["status"] == "lease_lost"
             assert second["status"] == "queued"
             assert [(item.attempt_no, item.status) for item in attempts] == [
                 (1, "abandoned"),
                 (2, "succeeded"),
             ]
+            assert attempts[0].error_type == "claim_expired"
+            assert run.status == "queued"
+            assert run.active_outbox_id == outbox.id
+            assert row.message == "新 owner 生成的正文。"
             assert outbox.status == "pending"
     finally:
         Base.metadata.drop_all(engine)
@@ -955,6 +982,80 @@ async def test_history_clear_cancels_safe_queued_outreach(monkeypatch, db_sessio
     assert response["unsafe_outreach_deliveries"] == 0
     assert row.status == "cancelled"
     assert outbox.status == "cancelled"
+
+
+def test_history_clear_archives_summary_and_enqueues_semantic_delete(
+    db_session,
+):
+    from api.history_log_routes import mark_clear
+    from core.database import RollingSessionSummary, SemanticIndexJob
+
+    _seed_control(db_session)
+    summary = RollingSessionSummary(
+        session_id="history-clear-summary-session",
+        user_id="history-clear-summary-user",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="清除前摘要",
+        stable_hash="history-clear-summary-revision",
+    )
+    db_session.add(summary)
+    db_session.commit()
+
+    response = mark_clear(
+        "history-clear-summary-user",
+        db=db_session,
+        _auth=None,
+    )
+
+    db_session.refresh(summary)
+    job = db_session.query(SemanticIndexJob).one()
+    assert response["archived_rolling_summaries"] == 1
+    assert summary.status == "archived"
+    assert job.source_type == "session_summary"
+    assert job.source_id == "history-clear-summary-session"
+    assert job.job_type == "delete"
+    assert job.status == "pending"
+    job_meta = json.loads(job.meta_json)
+    assert job_meta["job_origin"] == "business"
+    assert str(summary.id) in job_meta["delete_source_ids"]
+
+
+def test_history_clear_rolls_back_when_semantic_delete_enqueue_fails(
+    db_session,
+    monkeypatch,
+):
+    from fastapi import HTTPException
+
+    from api.history_log_routes import mark_clear
+    from core.database import RollingSessionSummary, User
+
+    _seed_control(db_session)
+    user = User(id="history-clear-rollback-user")
+    summary = RollingSessionSummary(
+        session_id="history-clear-rollback-session",
+        user_id=user.id,
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="必须保留的摘要",
+    )
+    db_session.add_all([user, summary])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "core.semantic.jobs.enqueue_index_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("semantic enqueue failed")
+        ),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        mark_clear(user.id, db=db_session, _auth=None)
+
+    db_session.expire_all()
+    assert raised.value.status_code == 500
+    assert db_session.get(User, user.id).history_clear_at is None
+    assert db_session.get(RollingSessionSummary, summary.id).status == "active"
 
 
 @pytest.mark.asyncio
@@ -1343,10 +1444,7 @@ async def test_legacy_mode_calls_publisher_only_after_durable_request_boundary(
 ):
     _seed_control(db_session, mode="legacy_direct")
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
-    monkeypatch.setenv(
-        "NANOBOT_PUSH_TOKEN",
-        "push-token-proactive-publisher-sentinel",
-    )
+    monkeypatch.delenv("NANOBOT_PUSH_TOKEN", raising=False)
     factory = sessionmaker(
         autocommit=False,
         autoflush=False,
@@ -1393,6 +1491,143 @@ async def test_legacy_mode_calls_publisher_only_after_durable_request_boundary(
     }]
     assert db_session.query(OutboundRun).count() == 1
     assert db_session.query(OutboundDeliveryOutbox).count() == 1
+    assert db_session.query(OutboundDeliveryAttempt).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_producer_without_explicit_publisher_only_queues(
+    monkeypatch,
+    db_session,
+):
+    _seed_control(db_session, mode="legacy_direct")
+    monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.delenv("NANOBOT_PUSH_TOKEN", raising=False)
+
+    result = await _enqueue(
+        db_session,
+        user_id="legacy-queued-user",
+        key="outreach:legacy-queued-user:one",
+        publisher=None,
+    )
+
+    db_session.expire_all()
+    row = db_session.query(ProactiveOutreachLog).one()
+    outbox = db_session.query(OutboundDeliveryOutbox).one()
+    assert result["status"] == "queued"
+    assert row.status == "queued"
+    assert outbox.status == "pending"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_proactive_drain_reuses_live_writer_and_is_idempotent(
+    monkeypatch,
+    db_session,
+):
+    from core import proactive_outreach
+
+    _seed_control(db_session, mode="legacy_direct")
+    monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    monkeypatch.delenv("NANOBOT_PUSH_TOKEN", raising=False)
+    queued = await _enqueue(
+        db_session,
+        user_id="legacy-worker-user",
+        key="outreach:legacy-worker-user:one",
+        publisher=None,
+    )
+
+    control = db_session.get(OutboundDeliveryControl, SOURCE_TYPE)
+    control.writer_owner = "server-proactive-writer"
+    control.writer_token = "server-proactive-token"
+    control.writer_version += 1
+    control.writer_lease_expires_at = NOW + timedelta(minutes=10)
+    db_session.commit()
+    factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=db_session.get_bind(),
+    )
+    transport_calls = []
+
+    async def success_transport(request):
+        transport_calls.append(request.outbox_id)
+        return _success()
+
+    first = await proactive_outreach.drain_due_legacy_proactive_outboxes(
+        session_factory=factory,
+        worker_config=_worker_config(),
+        transport=success_transport,
+        now=NOW + timedelta(seconds=1),
+    )
+    second = await proactive_outreach.drain_due_legacy_proactive_outboxes(
+        session_factory=factory,
+        worker_config=_worker_config(),
+        transport=success_transport,
+        now=NOW + timedelta(seconds=2),
+    )
+
+    db_session.expire_all()
+    row = db_session.get(ProactiveOutreachLog, queued["log_id"])
+    outbox = db_session.get(OutboundDeliveryOutbox, queued["outbox_id"])
+    assert len(first) == 1
+    assert second == []
+    assert transport_calls == [queued["outbox_id"]]
+    assert row.status == "sent"
+    assert outbox.status == "delivered"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_proactive_drain_takes_over_expired_writer(
+    monkeypatch,
+    db_session,
+):
+    from core import proactive_outreach
+    from core.outbound_delivery_service import LegacyWriterTakeover
+
+    _seed_control(db_session, mode="legacy_direct")
+    monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
+    queued = await _enqueue(
+        db_session,
+        user_id="legacy-expired-writer-user",
+        key="outreach:legacy-expired-writer-user:one",
+        publisher=None,
+    )
+    control = db_session.get(OutboundDeliveryControl, SOURCE_TYPE)
+    control.writer_lease_expires_at = NOW + timedelta(seconds=1)
+    db_session.commit()
+    factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=db_session.get_bind(),
+    )
+    transport_calls = []
+
+    async def success_transport(request):
+        transport_calls.append(request.outbox_id)
+        return _success()
+
+    results = await proactive_outreach.drain_due_legacy_proactive_outboxes(
+        session_factory=factory,
+        worker_config=_worker_config(),
+        transport=success_transport,
+        worker_owner="outbound-worker",
+        takeover_writer=LegacyWriterTakeover(
+            writer_owner="outbound-worker:proactive-legacy",
+            writer_token="proactive-takeover-token",
+        ),
+        now=NOW + timedelta(seconds=3),
+    )
+
+    db_session.expire_all()
+    row = db_session.get(ProactiveOutreachLog, queued["log_id"])
+    run = db_session.get(OutboundRun, row.outbound_run_id)
+    outbox = db_session.get(OutboundDeliveryOutbox, queued["outbox_id"])
+    assert len(results) == 1
+    assert transport_calls == [queued["outbox_id"]]
+    assert row.status == "sent"
+    assert outbox.status == "delivered"
+    assert run.writer_owner == "outbound-worker:proactive-legacy"
     assert db_session.query(OutboundDeliveryAttempt).count() == 1
 
 
@@ -1491,7 +1726,7 @@ async def test_legacy_drain_recovers_committed_leaf_after_producer_crash(
         ),
     ],
 )
-async def test_legacy_default_transport_preserves_structured_failure(
+async def test_legacy_worker_default_transport_preserves_structured_failure(
     monkeypatch,
     db_session,
     outcome,
@@ -1503,9 +1738,8 @@ async def test_legacy_default_transport_preserves_structured_failure(
     from core import outbound_transport, proactive_outreach
 
     _seed_control(db_session, mode="legacy_direct")
-    token = "push-token-proactive-default-sentinel"
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
-    monkeypatch.setenv("NANOBOT_PUSH_TOKEN", token)
+    worker_config = _worker_config()
     observed_tokens = []
 
     async def structured_transport(*_args, **kwargs):
@@ -1518,7 +1752,7 @@ async def test_legacy_default_transport_preserves_structured_failure(
         structured_transport,
     )
 
-    result = await proactive_outreach.deliver_outreach_once(
+    queued = await proactive_outreach.deliver_outreach_once(
         user_id=f"legacy-structured-{outcome.status_code}",
         idempotency_key=f"outreach:legacy-structured:{outcome.status_code}",
         grounding={"recent_messages": []},
@@ -1532,13 +1766,29 @@ async def test_legacy_default_transport_preserves_structured_failure(
         created_at=NOW,
         publisher=None,
     )
+    assert queued["status"] == "queued"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 0
+    assert observed_tokens == []
+
+    _activate_legacy_writer(db_session)
+    factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=db_session.get_bind(),
+    )
+    results = await proactive_outreach.drain_due_legacy_proactive_outboxes(
+        session_factory=factory,
+        worker_config=worker_config,
+        now=NOW + timedelta(seconds=1),
+        jitter=lambda _maximum: 0.0,
+    )
 
     db_session.expire_all()
     row = db_session.query(ProactiveOutreachLog).one()
     run = db_session.query(OutboundRun).one()
     outbox = db_session.query(OutboundDeliveryOutbox).one()
     attempt = db_session.query(OutboundDeliveryAttempt).one()
-    assert result["status"] == expected_status
+    assert len(results) == 1
     assert row.status == expected_status
     assert run.status == expected_run_status
     assert outbox.status == expected_outbox_status
@@ -1546,7 +1796,7 @@ async def test_legacy_default_transport_preserves_structured_failure(
     assert attempt.result_category == outcome.category
     assert attempt.error_type == outcome.error_type
     assert db_session.query(OutboundDeliveryCircuit).count() == circuit_count
-    assert observed_tokens == [token]
+    assert observed_tokens == [worker_config.push_token]
 
 
 @pytest.mark.asyncio
@@ -1554,25 +1804,12 @@ async def test_legacy_drain_retries_same_payload_without_regeneration(
     monkeypatch,
     db_session,
 ):
-    from core import outbound_transport, proactive_outreach
+    from core import proactive_outreach
 
     _seed_control(db_session, mode="legacy_direct")
-    token = "push-token-proactive-env-sentinel"
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
-    monkeypatch.setenv("NANOBOT_PUSH_TOKEN", token)
     first_outcome = _transient_503()
-    observed_tokens = []
-
-    async def transient_transport(*_args, **kwargs):
-        observed_tokens.append(kwargs["push_token"])
-        return first_outcome
-
-    monkeypatch.setattr(
-        outbound_transport,
-        "deliver_qq_push_with_session",
-        transient_transport,
-    )
-    first = await proactive_outreach.deliver_outreach_once(
+    queued = await proactive_outreach.deliver_outreach_once(
         user_id="legacy-drain-retry-user",
         idempotency_key="outreach:legacy-drain-retry-user:one",
         grounding={"recent_messages": []},
@@ -1586,31 +1823,45 @@ async def test_legacy_drain_retries_same_payload_without_regeneration(
         created_at=NOW,
         publisher=None,
     )
-    db_session.expire_all()
-    outbox = db_session.query(OutboundDeliveryOutbox).one()
-    payload_sha256 = outbox.payload_sha256
-    retry_at = outbox.next_attempt_at
-    assert first["status"] == "retry_wait"
-    assert retry_at is not None
+    assert queued["status"] == "queued"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 0
+
+    _activate_legacy_writer(db_session)
     factory = sessionmaker(
         autocommit=False,
         autoflush=False,
         bind=db_session.get_bind(),
     )
+    transport_requests = []
 
-    async def success_transport(*_args, **kwargs):
-        observed_tokens.append(kwargs["push_token"])
-        return _success()
+    async def transient_transport(request):
+        transport_requests.append((request.outbox_id, request.message))
+        return first_outcome
 
-    monkeypatch.setattr(
-        outbound_transport,
-        "deliver_qq_push_with_session",
-        success_transport,
+    first_results = await proactive_outreach.drain_due_legacy_proactive_outboxes(
+        session_factory=factory,
+        worker_config=_worker_config(),
+        transport=transient_transport,
+        now=NOW + timedelta(seconds=1),
+        jitter=lambda _maximum: 0.0,
     )
+
+    db_session.expire_all()
+    outbox = db_session.query(OutboundDeliveryOutbox).one()
+    payload_sha256 = outbox.payload_sha256
+    retry_at = outbox.next_attempt_at
+    assert len(first_results) == 1
+    assert outbox.status == "retry_wait"
+    assert retry_at is not None
+
+    async def success_transport(request):
+        transport_requests.append((request.outbox_id, request.message))
+        return _success()
 
     results = await proactive_outreach.drain_due_legacy_proactive_outboxes(
         session_factory=factory,
         worker_config=_worker_config(),
+        transport=success_transport,
         now=retry_at + timedelta(microseconds=1),
         jitter=lambda _maximum: 0.0,
     )
@@ -1623,9 +1874,9 @@ async def test_legacy_drain_retries_same_payload_without_regeneration(
     assert db_session.query(OutboundRun).count() == 1
     assert db_session.query(OutboundDeliveryOutbox).count() == 1
     assert db_session.query(OutboundDeliveryAttempt).count() == 2
-    assert observed_tokens == [
-        token,
-        "push-token-proactive-helper-sentinel",
+    assert transport_requests == [
+        (outbox.id, "重试时必须复用这条冻结正文。"),
+        (outbox.id, "重试时必须复用这条冻结正文。"),
     ]
 
 
@@ -1634,24 +1885,11 @@ async def test_legacy_drain_terminalizes_leaf_past_retry_deadline(
     monkeypatch,
     db_session,
 ):
-    from core import outbound_transport, proactive_outreach
+    from core import proactive_outreach
 
     _seed_control(db_session, mode="legacy_direct")
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
-    monkeypatch.setenv(
-        "NANOBOT_PUSH_TOKEN",
-        "push-token-proactive-deadline-sentinel",
-    )
-
-    async def transient_transport(*_args, **_kwargs):
-        return _transient_503()
-
-    monkeypatch.setattr(
-        outbound_transport,
-        "deliver_qq_push_with_session",
-        transient_transport,
-    )
-    first = await proactive_outreach.deliver_outreach_once(
+    queued = await proactive_outreach.deliver_outreach_once(
         user_id="legacy-deadline-user",
         idempotency_key="outreach:legacy-deadline-user:one",
         grounding={"recent_messages": []},
@@ -1665,18 +1903,35 @@ async def test_legacy_drain_terminalizes_leaf_past_retry_deadline(
         created_at=NOW,
         publisher=None,
     )
-    db_session.expire_all()
-    outbox = db_session.query(OutboundDeliveryOutbox).one()
-    assert first["status"] == "retry_wait"
-    assert outbox.next_attempt_at is not None
-    scan_at = outbox.next_attempt_at
-    outbox.retry_deadline_at = scan_at - timedelta(microseconds=1)
-    db_session.commit()
+    assert queued["status"] == "queued"
+    assert db_session.query(OutboundDeliveryAttempt).count() == 0
+
+    _activate_legacy_writer(db_session)
     factory = sessionmaker(
         autocommit=False,
         autoflush=False,
         bind=db_session.get_bind(),
     )
+
+    async def transient_transport(_request):
+        return _transient_503()
+
+    first_results = await proactive_outreach.drain_due_legacy_proactive_outboxes(
+        session_factory=factory,
+        worker_config=_worker_config(),
+        transport=transient_transport,
+        now=NOW + timedelta(seconds=1),
+        jitter=lambda _maximum: 0.0,
+    )
+
+    db_session.expire_all()
+    outbox = db_session.query(OutboundDeliveryOutbox).one()
+    assert len(first_results) == 1
+    assert outbox.status == "retry_wait"
+    assert outbox.next_attempt_at is not None
+    scan_at = outbox.next_attempt_at
+    outbox.retry_deadline_at = scan_at - timedelta(microseconds=1)
+    db_session.commit()
     transport_calls = []
 
     async def forbidden_transport(request):
@@ -1709,23 +1964,10 @@ async def test_fenced_expired_legacy_leaf_does_not_poison_terminalization_batch(
     monkeypatch,
     db_session,
 ):
-    from core import outbound_transport, proactive_outreach
+    from core import proactive_outreach
 
     _seed_control(db_session, mode="legacy_direct")
     monkeypatch.setenv("NANOBOT_QQ_PUSH_CONFIG_REVISION", CONFIG_REVISION)
-    monkeypatch.setenv(
-        "NANOBOT_PUSH_TOKEN",
-        "push-token-proactive-fencing-sentinel",
-    )
-
-    async def transient_transport(*_args, **_kwargs):
-        return _transient_503()
-
-    monkeypatch.setattr(
-        outbound_transport,
-        "deliver_qq_push_with_session",
-        transient_transport,
-    )
     for index in (1, 2):
         result = await proactive_outreach.deliver_outreach_once(
             user_id=f"legacy-poison-user-{index}",
@@ -1741,7 +1983,27 @@ async def test_fenced_expired_legacy_leaf_does_not_poison_terminalization_batch(
             created_at=NOW + timedelta(seconds=index),
             publisher=None,
         )
-        assert result["status"] == "retry_wait"
+        assert result["status"] == "queued"
+
+    assert db_session.query(OutboundDeliveryAttempt).count() == 0
+    _activate_legacy_writer(db_session)
+    factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=db_session.get_bind(),
+    )
+
+    async def transient_transport(_request):
+        return _transient_503()
+
+    first_results = await proactive_outreach.drain_due_legacy_proactive_outboxes(
+        session_factory=factory,
+        worker_config=_worker_config(),
+        transport=transient_transport,
+        now=NOW + timedelta(seconds=3),
+        jitter=lambda _maximum: 0.0,
+    )
+    assert len(first_results) == 2
 
     db_session.expire_all()
     rows = db_session.query(ProactiveOutreachLog).order_by(
@@ -1755,11 +2017,6 @@ async def test_fenced_expired_legacy_leaf_does_not_poison_terminalization_batch(
     for outbox in outboxes:
         outbox.retry_deadline_at = scan_at - timedelta(microseconds=1)
     db_session.commit()
-    factory = sessionmaker(
-        autocommit=False,
-        autoflush=False,
-        bind=db_session.get_bind(),
-    )
     transport_calls = []
 
     async def forbidden_transport(request):
@@ -1794,6 +2051,7 @@ async def test_fenced_expired_legacy_leaf_does_not_poison_terminalization_batch(
         outbox.last_error_type == "retry_exhausted"
         for outbox in outboxes
     )
+    assert db_session.query(OutboundDeliveryAttempt).count() == 2
 
 
 @pytest.mark.asyncio
@@ -1814,15 +2072,18 @@ async def test_outreach_runtime_lease_does_not_reuse_old_source_time(
         autoflush=False,
         bind=db_session.get_bind(),
     )
-    source_created_at = datetime.now() - timedelta(minutes=20)
+    runtime_now = datetime.now(timezone.utc).replace(tzinfo=None)
+    source_created_at = runtime_now - timedelta(minutes=20)
+    expiry_summaries = []
 
     async def publisher(*_args):
         with factory() as scanner:
-            expire_stale_delivery_leases(
+            summary = expire_stale_delivery_leases(
                 scanner,
                 endpoint_key="qq_push",
-                now=datetime.now(),
+                now=runtime_now,
             )
+            expiry_summaries.append(summary)
             scanner.commit()
         return True
 
@@ -1842,11 +2103,21 @@ async def test_outreach_runtime_lease_does_not_reuse_old_source_time(
     )
 
     db_session.expire_all()
+    row = db_session.query(ProactiveOutreachLog).one()
+    run = db_session.query(OutboundRun).one()
     outbox = db_session.query(OutboundDeliveryOutbox).one()
     attempt = db_session.query(OutboundDeliveryAttempt).one()
     assert result["status"] == "sent"
+    assert [summary.total for summary in expiry_summaries] == [0]
+    assert row.status == "sent"
+    assert run.status == "succeeded"
+    assert run.active_outbox_id == outbox.id
     assert outbox.status == "delivered"
+    assert outbox.lease_owner is None
+    assert outbox.lease_token is None
+    assert outbox.lease_expires_at is None
     assert attempt.status == "succeeded"
+    assert attempt.request_started is True
 
 
 @pytest.mark.asyncio

@@ -6,16 +6,18 @@ import json
 import re
 import time
 import uuid
+from typing import Literal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import AwareDatetime, BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.admin.common import verify_admin
 from api.admin.rag_benchmark_routes import router as rag_benchmark_router
 from core.database import RagDebugRun, get_db
 from core.semantic.schema import ensure_semantic_schema
+from core.time_utils import db_datetime_to_utc_iso
 
 
 router = APIRouter(prefix="/rag", tags=["admin-rag"])
@@ -33,6 +35,19 @@ class RagDebugBuildIndexRequest(BaseModel):
     source_type: str = Field(default="all")
     limit_per_source: int = Field(default=500, ge=1, le=5000)
     index_version: str = Field(default="")
+
+
+class SemanticIndexJobRetryRequest(BaseModel):
+    expected_status: Literal["failed", "running"]
+    expected_updated_at: AwareDatetime
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class SemanticIndexBackfillRequest(BaseModel):
+    source_type: str = Field(default="all")
+    limit: int = Field(default=100, ge=1, le=5000)
+    cursor: str = Field(default="", max_length=4096)
+    index_version: str = Field(default="", max_length=255)
 
 
 def _safe_json_loads(raw: str | None, fallback: Any) -> Any:
@@ -621,30 +636,200 @@ def get_rag_debug_status(
 @router.post("/debug/build-index")
 def build_rag_debug_index(
     body: RagDebugBuildIndexRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
+    admin_user: str = Depends(verify_admin),
 ):
+    from api.admin.common import client_ip
+    from core.database import AdminAuditLog
     from core.semantic.backfill import (
         build_semantic_index_from_existing_data,
         preview_semantic_index_backfill,
     )
 
-    ensure_semantic_schema(db.bind)
-    result = build_semantic_index_from_existing_data(
-        db,
-        source_type=body.source_type,
-        limit_per_source=body.limit_per_source,
-        index_version=body.index_version,
-    )
-    return {
-        "ok": True,
-        "result": result,
-        "index": preview_semantic_index_backfill(
+    try:
+        ensure_semantic_schema(db.bind)
+        result = build_semantic_index_from_existing_data(
             db,
             source_type=body.source_type,
             limit_per_source=body.limit_per_source,
-        ),
+            index_version=body.index_version,
+            commit=False,
+        )
+        db.add(AdminAuditLog(
+            admin_user=str(admin_user or "admin")[:255],
+            action="enqueue_semantic_index_backfill_legacy_debug",
+            target_type="semantic_index_backfill",
+            target_id=body.source_type,
+            detail_json=json.dumps({
+                "source_type": body.source_type,
+                "index_version": body.index_version,
+                "scanned": result["scanned"],
+                "missing": result["missing"],
+                "stale": result["stale"],
+                "orphan": result["orphan"],
+                "enqueued": result["enqueued"],
+                "truncated": result["truncated"],
+            }, ensure_ascii=False, sort_keys=True),
+            ip_address=client_ip(request),
+        ))
+        db.flush()
+        preview = preview_semantic_index_backfill(
+            db,
+            source_type=body.source_type,
+            limit_per_source=body.limit_per_source,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="semantic_backfill_enqueue_failed",
+        ) from exc
+    return {
+        "ok": True,
+        "result": result,
+        "index": preview,
     }
+
+
+def _semantic_job_to_dict(row) -> dict[str, Any]:
+    return {
+        "id": int(row.id or 0),
+        "source_type": str(row.source_type or ""),
+        "source_id": str(row.source_id or ""),
+        "job_type": str(row.job_type or ""),
+        "index_version": str(row.index_version or ""),
+        "source_revision": str(row.source_revision or ""),
+        "status": str(row.status or ""),
+        "retry_count": int(row.retry_count or 0),
+        "max_retry": int(row.max_retry or 0),
+        "attempt_count": int(row.attempt_count or 0),
+        "manual_retry_count": int(row.manual_retry_count or 0),
+        "next_retry_at": db_datetime_to_utc_iso(row.next_retry_at),
+        "updated_at": db_datetime_to_utc_iso(row.updated_at),
+    }
+
+
+@router.post("/index-backfill/preview")
+def preview_semantic_index_backfill_admin(
+    body: SemanticIndexBackfillRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.semantic.backfill import preview_semantic_index_backfill_page
+
+    try:
+        return preview_semantic_index_backfill_page(
+            db,
+            source_type=body.source_type,
+            limit=body.limit,
+            cursor=body.cursor,
+            index_version=body.index_version,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/index-backfill/enqueue")
+def enqueue_semantic_index_backfill_admin(
+    body: SemanticIndexBackfillRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin_user: str = Depends(verify_admin),
+):
+    from api.admin.common import client_ip
+    from core.database import AdminAuditLog
+    from core.semantic.backfill import enqueue_semantic_index_backfill
+
+    try:
+        result = enqueue_semantic_index_backfill(
+            db,
+            source_type=body.source_type,
+            limit=body.limit,
+            cursor=body.cursor,
+            index_version=body.index_version,
+        )
+        db.add(AdminAuditLog(
+            admin_user=str(admin_user or "admin")[:255],
+            action="enqueue_semantic_index_backfill",
+            target_type="semantic_index_backfill",
+            target_id=body.source_type,
+            detail_json=json.dumps({
+                "source_type": body.source_type,
+                "index_version": body.index_version,
+                "scanned": result["scanned"],
+                "missing": result["missing"],
+                "stale": result["stale"],
+                "orphan": result["orphan"],
+                "enqueued": result["enqueued"],
+                "done": result["done"],
+            }, ensure_ascii=False, sort_keys=True),
+            ip_address=client_ip(request),
+        ))
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return result
+
+
+@router.post("/index-jobs/{job_id}/retry")
+def retry_semantic_index_job_admin(
+    job_id: int,
+    body: SemanticIndexJobRetryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin_user: str = Depends(verify_admin),
+):
+    from api.admin.common import client_ip
+    from core.database import AdminAuditLog
+    from core.semantic.jobs import (
+        SemanticIndexJobNotFound,
+        SemanticIndexJobRetryConflict,
+        retry_semantic_index_job,
+    )
+
+    try:
+        row = retry_semantic_index_job(
+            db,
+            job_id=job_id,
+            expected_status=body.expected_status,
+            expected_updated_at=body.expected_updated_at,
+            reason=body.reason,
+            commit=False,
+        )
+        db.add(AdminAuditLog(
+            admin_user=str(admin_user or "admin")[:255],
+            action="retry_semantic_index_job",
+            target_type="semantic_index_job",
+            target_id=str(job_id),
+            detail_json=json.dumps({
+                "expected_status": body.expected_status,
+                "expected_updated_at": db_datetime_to_utc_iso(
+                    body.expected_updated_at
+                ),
+                "reason": body.reason,
+                "result_status": "pending",
+            }, ensure_ascii=False, sort_keys=True),
+            ip_address=client_ip(request),
+        ))
+        db.commit()
+        db.refresh(row)
+    except SemanticIndexJobNotFound as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SemanticIndexJobRetryConflict as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"job": _semantic_job_to_dict(row)}
 
 
 @router.get("/debug/runs")

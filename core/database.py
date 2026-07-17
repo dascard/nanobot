@@ -19,7 +19,10 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.engine import make_url
+from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.sql.dml import Delete, Insert, Update
+from sqlalchemy.sql.elements import TextClause
 
 from config import DATABASE_URL
 from core.outbound_delivery_schema import (
@@ -61,6 +64,125 @@ def sqlite_connect_args_for_url(database_url: str) -> dict:
     }
 
 
+_SESSION_WRITE_TRANSACTION_IDS = "nanobot_write_transaction_ids"
+_SESSION_COMMITTED_NESTED_IDS = "nanobot_committed_nested_ids"
+
+
+def _current_session_write_transaction(db):
+    nested = getattr(db, "get_nested_transaction", None)
+    if callable(nested):
+        nested_transaction = nested()
+        if nested_transaction is not None:
+            return nested_transaction
+    root = getattr(db, "get_transaction", None)
+    return root() if callable(root) else None
+
+
+def _mark_session_transaction_write(db) -> None:
+    transaction = _current_session_write_transaction(db)
+    if transaction is None:
+        return
+    db.info.setdefault(_SESSION_WRITE_TRANSACTION_IDS, set()).add(
+        id(transaction)
+    )
+
+
+def _text_sql_is_proven_read_only(raw_sql: str) -> bool:
+    """只放行可保守识别的单条 SELECT；其他原始 SQL 一律按可能写入处理。"""
+
+    remaining = str(raw_sql or "")
+    if ";" in remaining:
+        return False
+    while True:
+        remaining = remaining.lstrip()
+        if remaining.startswith("--"):
+            line_ends = [
+                position
+                for position in (
+                    remaining.find("\n", 2),
+                    remaining.find("\r", 2),
+                )
+                if position >= 0
+            ]
+            if not line_ends:
+                return False
+            remaining = remaining[min(line_ends) + 1:]
+            continue
+        if remaining.startswith("/*"):
+            comment_end = remaining.find("*/", 2)
+            if comment_end < 0:
+                return False
+            remaining = remaining[comment_end + 2:]
+            continue
+        break
+    first_token = remaining.split(None, 1)
+    return bool(first_token) and first_token[0].upper() == "SELECT"
+
+
+def _orm_execute_may_write(execute_state) -> bool:
+    if execute_state.is_insert or execute_state.is_update or execute_state.is_delete:
+        return True
+    statement = execute_state.statement
+    if isinstance(statement, (Insert, Update, Delete)):
+        return True
+    if isinstance(statement, TextClause):
+        return not _text_sql_is_proven_read_only(statement.text)
+    return False
+
+
+@event.listens_for(OrmSession, "do_orm_execute", retval=True)
+def _remember_session_execute_writes(execute_state):
+    result = execute_state.invoke_statement()
+    if _orm_execute_may_write(execute_state):
+        _mark_session_transaction_write(execute_state.session)
+    return result
+
+
+@event.listens_for(OrmSession, "after_flush")
+def _remember_flushed_session_writes(db, _flush_context) -> None:
+    """记录已发送到数据库、但尚未提交的 ORM 写入。"""
+
+    if db.new or db.dirty or db.deleted:
+        _mark_session_transaction_write(db)
+
+
+@event.listens_for(OrmSession, "after_commit")
+def _remember_committed_nested_transaction(db) -> None:
+    nested = getattr(db, "get_nested_transaction", None)
+    transaction = nested() if callable(nested) else None
+    if transaction is not None:
+        db.info.setdefault(_SESSION_COMMITTED_NESTED_IDS, set()).add(
+            id(transaction)
+        )
+
+
+@event.listens_for(OrmSession, "after_transaction_end")
+def _clear_flushed_session_writes(db, transaction) -> None:
+    """按事务层级传播或丢弃写标记。"""
+
+    parent = getattr(
+        transaction,
+        "parent",
+        getattr(transaction, "_parent", None),
+    )
+    if parent is None:
+        db.info.pop(_SESSION_WRITE_TRANSACTION_IDS, None)
+        db.info.pop(_SESSION_COMMITTED_NESTED_IDS, None)
+        return
+    if not bool(getattr(transaction, "nested", False)):
+        return
+
+    write_ids = db.info.setdefault(_SESSION_WRITE_TRANSACTION_IDS, set())
+    committed_ids = db.info.setdefault(_SESSION_COMMITTED_NESTED_IDS, set())
+    transaction_id = id(transaction)
+    had_writes = transaction_id in write_ids
+    committed = transaction_id in committed_ids
+    write_ids.discard(transaction_id)
+    committed_ids.discard(transaction_id)
+    if had_writes and committed:
+        write_ids.add(id(parent))
+
+
 def release_clean_session_transaction(db, *, label: str = "", logger=None) -> bool:
     """释放只读/干净的 Session 事务，避免跨长 await 持有 SQLite 事务。"""
     try:
@@ -71,15 +193,31 @@ def release_clean_session_transaction(db, *, label: str = "", logger=None) -> bo
         dirty_count = len(getattr(db, "dirty", ()) or ())
         deleted_count = len(getattr(db, "deleted", ()) or ())
         pending_count = new_count + dirty_count + deleted_count
-        if pending_count:
+        write_ids = getattr(db, "info", {}).get(
+            _SESSION_WRITE_TRANSACTION_IDS,
+            set(),
+        )
+        root_transaction = getattr(db, "get_transaction", lambda: None)()
+        nested_transaction = getattr(
+            db,
+            "get_nested_transaction",
+            lambda: None,
+        )()
+        flushed_writes = any(
+            transaction is not None and id(transaction) in write_ids
+            for transaction in (root_transaction, nested_transaction)
+        )
+        if pending_count or flushed_writes:
             if logger is not None:
                 logger.warning(
-                    "[DB] skip releasing session transaction label=%s pending=%d new=%d dirty=%d deleted=%d",
+                    "[DB] skip releasing session transaction label=%s pending=%d "
+                    "new=%d dirty=%d deleted=%d flushed=%d",
                     label or "unknown",
                     pending_count,
                     new_count,
                     dirty_count,
                     deleted_count,
+                    int(flushed_writes),
                 )
             return False
         db.rollback()
@@ -1617,6 +1755,7 @@ class SemanticIndexItem(Base):
     embedding_model = Column(String, default="")
     embedding_status = Column(String, index=True, default="pending")
     index_version = Column(String, index=True, default="")
+    source_revision = Column(String, nullable=False, default="", server_default="")
     quality_score = Column(Float, default=0.0)
     trust_level = Column(String, index=True, default="medium")
     source_prior = Column(Float, default=0.5)
@@ -1633,6 +1772,13 @@ class SemanticIndexItem(Base):
             "index_version",
             name="uq_semantic_source_sub_version",
         ),
+        Index(
+            "idx_semantic_item_source_revision_v2",
+            "source_type",
+            "source_id",
+            "source_revision",
+            "status",
+        ),
     )
 
 
@@ -1647,16 +1793,45 @@ class SemanticIndexJob(Base):
     source_sub_id = Column(String, index=True, default="")
     job_type = Column(String, index=True, default="upsert")
     index_version = Column(String, index=True, default="")
+    source_revision = Column(String, nullable=False, default="", server_default="")
     status = Column(String, index=True, default="pending")
     retry_count = Column(Integer, default=0)
     max_retry = Column(Integer, default=3)
+    attempt_count = Column(Integer, nullable=False, default=0, server_default="0")
+    manual_retry_count = Column(Integer, nullable=False, default=0, server_default="0")
     next_retry_at = Column(DateTime, nullable=True)
     locked_by = Column(String, default="")
     locked_at = Column(DateTime, nullable=True)
+    lease_token = Column(String(64), nullable=False, default="", server_default="")
+    lease_expires_at = Column(DateTime, nullable=True)
     error = Column(Text, default="")
+    meta_json = Column(Text, nullable=False, default="{}", server_default="{}")
     created_at = Column(DateTime, default=datetime.now, index=True)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     finished_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "idx_semantic_job_claim_v2",
+            "status",
+            "next_retry_at",
+            "id",
+        ),
+        Index(
+            "idx_semantic_job_lease_v2",
+            "status",
+            "lease_expires_at",
+            "id",
+        ),
+        Index(
+            "idx_semantic_job_source_revision_v2",
+            "source_type",
+            "source_id",
+            "index_version",
+            "source_revision",
+            "status",
+        ),
+    )
 
 
 class RagDebugRun(Base):

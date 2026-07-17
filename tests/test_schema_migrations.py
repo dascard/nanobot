@@ -119,6 +119,148 @@ def test_summary_model_safe_defaults_migration_is_exact_and_one_time():
     assert value == "0.2"
 
 
+def test_semantic_index_reconcile_v2_migrates_legacy_jobs_idempotently():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE semantic_index_items ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "source_type TEXT NOT NULL DEFAULT '', "
+            "source_id TEXT NOT NULL DEFAULT '', "
+            "source_sub_id TEXT NOT NULL DEFAULT '', "
+            "index_version TEXT DEFAULT '', "
+            "visibility TEXT DEFAULT 'recall', "
+            "embedding_status TEXT DEFAULT 'pending', "
+            "status TEXT DEFAULT 'active')"
+        ))
+        conn.execute(text(
+            "CREATE TABLE semantic_index_jobs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "source_type TEXT NOT NULL DEFAULT '', "
+            "source_id TEXT NOT NULL DEFAULT '', "
+            "source_sub_id TEXT DEFAULT '', "
+            "job_type TEXT DEFAULT 'upsert', "
+            "index_version TEXT DEFAULT '', "
+            "status TEXT DEFAULT 'pending', "
+            "retry_count INTEGER DEFAULT 0, "
+            "max_retry INTEGER DEFAULT 3, "
+            "next_retry_at DATETIME, "
+            "locked_by TEXT DEFAULT '', "
+            "locked_at DATETIME, "
+            "error TEXT DEFAULT '', "
+            "created_at DATETIME, "
+            "updated_at DATETIME, "
+            "finished_at DATETIME)"
+        ))
+        conn.execute(text(
+            "INSERT INTO semantic_index_jobs "
+            "(id, source_type, source_id, status, retry_count, max_retry, "
+            "locked_by, locked_at, error, next_retry_at, finished_at) VALUES "
+            "(1, 'memory_digest', '11', 'running', 1, 3, "
+            "'legacy-worker', '2026-07-17 01:00:00', 'legacy-running', NULL, NULL), "
+            "(2, 'session_summary', 's1', 'failed', 2, 3, '', NULL, "
+            "'temporary-provider-error', '2026-07-17 02:00:00', NULL), "
+            "(3, 'session_summary', 'terminal', 'failed', 2, 3, '', NULL, "
+            "'terminal-provider-error', '2026-07-17 02:30:00', "
+            "'2026-07-17 02:40:00')"
+        ))
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    job_columns = {
+        column["name"]
+        for column in inspector.get_columns("semantic_index_jobs")
+    }
+    item_columns = {
+        column["name"]
+        for column in inspector.get_columns("semantic_index_items")
+    }
+    assert {
+        "lease_token",
+        "lease_expires_at",
+        "attempt_count",
+        "manual_retry_count",
+        "source_revision",
+        "meta_json",
+    } <= job_columns
+    assert "source_revision" in item_columns
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT id, status, retry_count, locked_by, locked_at, error, "
+            "lease_token, lease_expires_at, next_retry_at, finished_at "
+            "FROM semantic_index_jobs ORDER BY id"
+        )).mappings().all()
+        migration_count = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE version = '20260717_semantic_index_reconcile_v2'"
+        )).scalar_one()
+        index_names = {
+            row[0]
+            for row in conn.execute(text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'index' AND name LIKE 'idx_semantic_%_v2'"
+            )).fetchall()
+        }
+
+    assert rows[0]["status"] == "pending"
+    assert rows[0]["retry_count"] == 1
+    assert rows[0]["locked_by"] == ""
+    assert rows[0]["locked_at"] is None
+    assert rows[0]["lease_token"] == ""
+    assert rows[0]["lease_expires_at"] is None
+    assert rows[0]["error"] == "migration_requeued_legacy_running"
+    assert rows[1]["status"] == "pending"
+    assert rows[1]["retry_count"] == 2
+    assert rows[1]["next_retry_at"] is not None
+    assert rows[2]["status"] == "failed"
+    assert rows[2]["error"] == "terminal-provider-error"
+    assert rows[2]["finished_at"] is not None
+    assert migration_count == 1
+    assert index_names == {
+        "idx_semantic_job_claim_v2",
+        "idx_semantic_job_lease_v2",
+        "idx_semantic_job_source_revision_v2",
+        "idx_semantic_item_source_revision_v2",
+    }
+
+    from core.database import SemanticIndexItem, SemanticIndexJob
+
+    orm_indexes = {
+        index.name: tuple(column.name for column in index.columns)
+        for table in (SemanticIndexJob.__table__, SemanticIndexItem.__table__)
+        for index in table.indexes
+        if index.name and index.name.endswith("_v2")
+    }
+    assert orm_indexes == {
+        "idx_semantic_job_claim_v2": ("status", "next_retry_at", "id"),
+        "idx_semantic_job_lease_v2": ("status", "lease_expires_at", "id"),
+        "idx_semantic_job_source_revision_v2": (
+            "source_type",
+            "source_id",
+            "index_version",
+            "source_revision",
+            "status",
+        ),
+        "idx_semantic_item_source_revision_v2": (
+            "source_type",
+            "source_id",
+            "source_revision",
+            "status",
+        ),
+    }
+    assert "ix_semantic_index_jobs_source_revision" not in {
+        index.name for index in SemanticIndexJob.__table__.indexes
+    }
+    assert "ix_semantic_index_items_source_revision" not in {
+        index.name for index in SemanticIndexItem.__table__.indexes
+    }
+
+
 def test_prompt_template_resolution_columns_apply_after_legacy_trace_migration():
     from core.schema_migrations import run_schema_migrations
 

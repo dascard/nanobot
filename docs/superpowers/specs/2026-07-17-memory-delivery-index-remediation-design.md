@@ -3,7 +3,7 @@
 ## 状态
 
 - 日期：2026-07-17
-- 状态：已批准，待按实施计划执行
+- 状态：已批准，代码验证完成，待版本化提交与部署前门禁
 - 基线提交：`0f0b6293371aa539aad718793f2713937f428eaf`
 - 目标：生成一个可安全部署的后继版本，替代当前不能直接上线的目标提交
 - 实施计划：`.Codex/plans/memory-delivery-index-remediation.md`
@@ -139,6 +139,39 @@ transport、异常、outcome、日志和持久化记录均不得保存 header �
 Compose 继续使用 worker 最小环境 allowlist，只给 outbound worker 增加 `NANOBOT_PUSH_TOKEN`。server、session-summary worker 和 semantic-index worker 不需要该变量。`.env.example` 增加空占位，生产 `.env` 仍由部署阶段安全配置，不进入提交。
 
 本次不验证 URL scheme，不阻止当前内网 HTTP，也不新增 `NANOBOT_QQ_PUSH_ALLOW_INSECURE_HTTP`。`NANOBOT_QQ_PUSH_CONFIG_REVISION` 继续表示 endpoint 配置版本；Token 轮换时部署流程必须同步递增 revision，但 revision 不包含 Token 指纹。
+
+### 凭据隔离后的 legacy compatibility drain
+
+Compose 必须继续让 `nanobot-server` 的 `NANOBOT_PUSH_TOKEN` 为空，不能为了兼容
+`legacy_direct` 把凭据放回 server。`daily_digest.run_scheduled_tasks()` 和
+`proactive_outreach_scheduler()` 只负责发现、生成和持久化 occurrence；两条主循环不得构造
+`OutboundWorkerConfig`、创建 QQ HTTP session 或主动执行 legacy drain。scheduled producer 仅在
+调用方显式注入 `legacy_transport` 时保留同步兼容行为；proactive producer 仅在显式注入
+`publisher` 时保留旧三态兼容行为。没有显式注入时，即使 control 仍为 `legacy_direct`，producer
+也只提交不可变 outbox，并返回 `queued`。
+
+持有 push Token 的 outbound worker 在每个轮询周期依次执行三个独立、有界的 lane：普通
+outbox、scheduled legacy 和 proactive legacy。三个 lane 复用同一份
+`OutboundWorkerConfig` 和同一个 transport；每个 lane 最多处理 `batch_size` 条，单个 lane
+异常只记录安全错误类型并继续后续 lane，因此持续积压的普通 outbox 或其中一种 legacy 来源
+都不能永久饿死其他来源。停止信号在每次新 claim 前检查；已经开始的 HTTP 请求必须完成持久化
+结算，停止后不得领取下一条。
+
+普通 `deliver_outbound_once()` 继续拒绝 `legacy_direct`。worker 只能通过两条 source-specific
+drain 调用 `deliver_legacy_outbound_once()`，不能增加绕过 source/cutover fencing 的通用 claim。
+跨进程兼容 drain 先只读快照 control 当前仍有效的 writer owner、token、protocol、version
+和到期时间。真正 claim 必须在同一个数据库事务和 source control 写锁内重新校验：source
+type 一致、owner/token/protocol/version 未变化且 lease 仍未过期；任一事实变化都返回无
+claim，不能发起 HTTP。
+
+如果存在到期 legacy leaf、但原 writer lease 已过期，worker 使用进程内随机、source-scoped
+的 takeover identity 走现有 `acquire_or_renew_delivery_writer()`；只有成功取得 source 写锁和
+writer lease 后，才能按现有 CAS 把 queued/blocked run 重绑到新 writer，再领取 outbox。活动
+writer 存在时不得抢占；普通 outbox claim 仍不得领取 legacy。writer token 不是 push 凭据，
+但同样禁止进入日志、异常正文、API、meta、repr 或统计结果。
+
+该整改不修改数据库 schema、cutover 状态机、投递幂等键、deadline、attempt 审计或来源状态
+投影。明文 HTTP 限制仍按已确认边界留待独立安全改造。
 
 ## Session Summary 契约
 
@@ -471,6 +504,29 @@ Session Summary 当前使用代码内专用结构化 Prompt，canonical Prompt R
 4. 若实现过程中实际改变模板变量、标记或工具返回结构，必须同批更新 canonical 默认模板，并通过正式 Runtime migration plan/apply 处理生产 override；不得直接复制覆盖 Runtime。
 
 ## 错误处理与可观测性
+
+### 最终审查补充门禁
+
+事务释放、worker 错误持久化与历史清除并发采用失败闭合策略：
+
+- ORM Session 对原始 `TextClause` 采用只读 allowlist：仅允许无分号、剥离连续前导行/块注释后
+  首 token 精确为 `SELECT` 的单条文本作为可证明只读。CTE、PRAGMA、EXPLAIN、多语句、未知
+  方言和任何非 SELECT 文本都标记当前根事务或 savepoint 为“可能写入”，避免 clean release
+  把已执行写入回滚；同时保留项目中 `text("SELECT 1")` 的 await 前事务释放合同。
+- semantic worker 不持久化普通异常的 `str(exc)`。普通 `ValueError` 只保存
+  `semantic_index_permanent_error:ValueError`，其他普通异常只保存固定前缀与异常类型；若未来
+  需要保留业务错误码，必须使用专用异常类型和显式枚举，不能把任意字符串当作机器码。
+- live rolling summary 写路径在单个 savepoint 中先取得 SQLite 写序列化点，再重新读取
+  `User.history_clear_at`、确认全部 pending `ConversationTurn` 仍存在且属于预期 scope，并重新
+  执行 active summary coverage CAS。任一 fence 变化都回滚 savepoint，不创建摘要、摘要任务或
+  semantic job；历史清除变化返回稳定原因 `history_clear_changed`。
+- rolling summary 先取得写序列化点时，后续 `mark-clear` 必须等待并在摘要提交后归档它；
+  `mark-clear` 先提交时，旧 turns 的 rollup 必须被 fence 拒绝。禁止靠读取时过滤或事后补偿
+  代替该串行化边界。
+- `enqueue_index_job(commit=False)` 属于既有业务事务的一部分，不得在内部运行 DDL 或通过
+  `Engine.begin()` 初始化 schema；migration、启动流程和 backfill 等独立维护入口必须在开启
+  业务 unit-of-work 前显式准备 semantic schema，避免 StaticPool/SQLite 提交同一底层连接并
+  破坏 savepoint 或原子写入。
 
 - 配置错误只记录键名和错误类型，不记录 Token、header、URL 凭据或请求正文。
 - Session Summary 失败使用稳定错误枚举：input manifest mismatch、request budget exceeded、state budget exceeded、inheritance gate failed、lost lease、LLM/JSON failure。

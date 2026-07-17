@@ -813,6 +813,58 @@ def _semantic_rag_tables(conn: Any, engine: Any, db_path: str | None) -> None:
     ])
 
 
+def _semantic_index_reconcile_v2(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """为语义索引任务增加可 fencing 的租约和逻辑源 revision。"""
+
+    _add_missing_columns(conn, "semantic_index_items", {
+        "source_revision": "TEXT NOT NULL DEFAULT ''",
+    })
+    _add_missing_columns(conn, "semantic_index_jobs", {
+        "source_revision": "TEXT NOT NULL DEFAULT ''",
+        "lease_token": "TEXT NOT NULL DEFAULT ''",
+        "lease_expires_at": "DATETIME",
+        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        "manual_retry_count": "INTEGER NOT NULL DEFAULT 0",
+        "meta_json": "TEXT NOT NULL DEFAULT '{}'",
+    })
+
+    tables = _table_names(conn)
+    if "semantic_index_jobs" in tables:
+        now = db_now_naive()
+        conn.execute(text(
+            "UPDATE semantic_index_jobs SET "
+            "status = 'pending', locked_by = '', locked_at = NULL, "
+            "lease_token = '', lease_expires_at = NULL, "
+            "next_retry_at = COALESCE(next_retry_at, :now), "
+            "error = 'migration_requeued_legacy_running', "
+            "finished_at = NULL, updated_at = :now "
+            "WHERE status = 'running'"
+        ), {"now": now})
+        conn.execute(text(
+            "UPDATE semantic_index_jobs SET "
+            "status = 'pending', locked_by = '', locked_at = NULL, "
+            "lease_token = '', lease_expires_at = NULL, "
+            "finished_at = NULL, updated_at = :now "
+            "WHERE status = 'failed' AND next_retry_at IS NOT NULL "
+            "AND finished_at IS NULL AND retry_count < max_retry"
+        ), {"now": now})
+
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_semantic_job_claim_v2 "
+        "ON semantic_index_jobs(status, next_retry_at, id)",
+        "CREATE INDEX IF NOT EXISTS idx_semantic_job_lease_v2 "
+        "ON semantic_index_jobs(status, lease_expires_at, id)",
+        "CREATE INDEX IF NOT EXISTS idx_semantic_job_source_revision_v2 "
+        "ON semantic_index_jobs(source_type, source_id, index_version, source_revision, status)",
+        "CREATE INDEX IF NOT EXISTS idx_semantic_item_source_revision_v2 "
+        "ON semantic_index_items(source_type, source_id, source_revision, status)",
+    ])
+
+
 def _knowledge_library_tables(conn: Any, engine: Any, db_path: str | None) -> None:
     conn.execute(text(
         "CREATE TABLE IF NOT EXISTS knowledge_sources ("
@@ -1709,6 +1761,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "20260716_summary_model_safe_defaults",
         "normalize session summary and memory digest model settings",
         _summary_model_safe_defaults,
+    ),
+    (
+        "20260717_semantic_index_reconcile_v2",
+        "semantic index reconcile lease and source revision",
+        _semantic_index_reconcile_v2,
     ),
 ]
 

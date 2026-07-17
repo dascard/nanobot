@@ -31,7 +31,6 @@ from core.outbound_transport import (
 )
 from core.safe_diagnostics import safe_response_summary
 from core.scheduled_task_outbound import (
-    drain_due_legacy_scheduled_task_outboxes,
     enqueue_scheduled_task_occurrence,
     recover_expired_scheduled_task_occurrences,
     scheduled_cron_matches,
@@ -261,7 +260,7 @@ def _already_digested(db, session_id: str, digest_date: str) -> bool:
     return False
 
 
-def _archive_existing_digests(db, session_id: str, digest_date: str) -> None:
+def _archive_existing_digests(db, session_id: str, digest_date: str) -> list[MemoryDigest]:
     rows = (
         db.query(MemoryDigest)
         .filter(
@@ -276,6 +275,7 @@ def _archive_existing_digests(db, session_id: str, digest_date: str) -> None:
         meta = safe_digest_meta(row.meta_json)
         meta["status"] = "archived"
         row.meta_json = json.dumps(meta, ensure_ascii=False)
+    return rows
 
 
 def _build_memory_digest_result(
@@ -425,8 +425,9 @@ def _write_memory_digest_rows(
         start_id=int(start_id or 0),
         end_id=int(end_id or 0),
     )
+    archived_rows = []
     if force and result.status == "active":
-        _archive_existing_digests(db, session_id, target_date)
+        archived_rows = _archive_existing_digests(db, session_id, target_date)
 
     d0 = MemoryDigest(
         user_id=uid,
@@ -483,16 +484,37 @@ def _write_memory_digest_rows(
         db.add(d2)
         db.flush()
         written_rows.append(d2)
+    from core.semantic.adapters import memory_digest_source_id, memory_digest_source_revision
     from core.semantic.jobs import enqueue_index_job
 
-    for row in written_rows:
-        enqueue_index_job(
-            db,
-            source_type="memory_digest",
-            source_id=str(row.id),
-            index_version="",
-            commit=False,
-        )
+    logical_source_id = memory_digest_source_id(written_rows[0])
+    source_revision = memory_digest_source_revision(written_rows)
+    delete_source_ids = {
+        str(row.id)
+        for row in [*archived_rows, *written_rows]
+        if int(getattr(row, "id", 0) or 0) > 0
+    }
+    for row in archived_rows:
+        archived_source_id = memory_digest_source_id(row)
+        if archived_source_id and archived_source_id != logical_source_id:
+            delete_source_ids.add(archived_source_id)
+    enqueue_index_job(
+        db,
+        source_type="memory_digest",
+        source_id=logical_source_id,
+        job_type="replace",
+        index_version="",
+        source_revision=source_revision,
+        meta={
+            "contract_version": 2,
+            "job_origin": "business",
+            "document_ids": [int(row.id) for row in written_rows],
+            "delete_source_ids": sorted(delete_source_ids),
+            "session_id": session_id,
+            "digest_date": target_date,
+        },
+        commit=False,
+    )
     return result.status == "active"
 
 
@@ -897,16 +919,6 @@ async def _generate_task_message(task: ScheduledTask) -> str | None:
 async def run_scheduled_tasks() -> int:
     """检查到期任务并交给持久化出站 producer。"""
     executed = 0
-    try:
-        await drain_due_legacy_scheduled_task_outboxes(
-            session_factory=SessionLocal,
-        )
-    except Exception as exc:
-        logger.error(
-            "Scheduled task legacy drain failed error_type=%s",
-            type(exc).__name__,
-        )
-
     try:
         recovered = await recover_expired_scheduled_task_occurrences(
             session_factory=SessionLocal,

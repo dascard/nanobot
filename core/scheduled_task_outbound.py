@@ -35,11 +35,15 @@ from core.outbound_delivery import (
     start_generation_attempt,
 )
 from core.outbound_delivery_service import (
+    CustomTransportConfig,
+    LegacyWriterLeaseSnapshot,
+    LegacyWriterTakeover,
     OutboundDeliveryWorkResult,
     OutboundTransport,
     OutboundTransportRequest,
     OutboundWorkerConfig,
     deliver_legacy_outbound_once,
+    snapshot_live_legacy_writer,
 )
 
 
@@ -533,13 +537,15 @@ async def _deliver_legacy_leaf(
     if result.delivery_mode != "legacy_direct" or result.outbox_id is None:
         return
     factory = session_factory or _default_session_factory()
-    resolved_worker_config = worker_config or OutboundWorkerConfig.from_env()
 
-    async def deliver(resolved_transport: OutboundTransport) -> None:
+    async def deliver(
+        resolved_transport: OutboundTransport,
+        execution_config,
+    ) -> None:
         await deliver_legacy_outbound_once(
             session_factory=factory,
             transport=resolved_transport,
-            config=resolved_worker_config,
+            config=execution_config,
             outbox_id=result.outbox_id,
             worker_owner=producer_config.producer_owner,
             writer_owner=producer_config.producer_owner,
@@ -551,8 +557,15 @@ async def _deliver_legacy_leaf(
         )
 
     if transport is not None:
-        await deliver(transport)
+        execution_config = worker_config or CustomTransportConfig(
+            endpoint_config_revision=(
+                producer_config.endpoint_config_revision
+            ),
+        )
+        await deliver(transport, execution_config)
         return
+
+    resolved_worker_config = worker_config or OutboundWorkerConfig.from_env()
 
     import aiohttp
 
@@ -572,7 +585,7 @@ async def _deliver_legacy_leaf(
                 timeout_seconds=request.timeout_seconds,
             )
 
-        await deliver(qq_transport)
+        await deliver(qq_transport, resolved_worker_config)
 
 
 async def _maybe_deliver_legacy(
@@ -587,6 +600,8 @@ async def _maybe_deliver_legacy(
     clock: Callable[[], datetime] | None,
 ) -> ScheduledTaskEnqueueResult:
     _finish_read_transaction(db)
+    if transport is None:
+        return result
     await _deliver_legacy_leaf(
         result=result,
         producer_config=producer_config,
@@ -615,6 +630,9 @@ async def drain_due_legacy_scheduled_task_outboxes(
     now: datetime | None = None,
     clock: Callable[[], datetime] | None = None,
     jitter: Callable[[float], float] | None = None,
+    worker_owner: str | None = None,
+    stop_event: Any | None = None,
+    takeover_writer: LegacyWriterTakeover | None = None,
     limit: int | None = None,
 ) -> list[OutboundDeliveryWorkResult]:
     """自动投递安全到期的 legacy leaf，普通 worker 仍不领取它们。"""
@@ -622,7 +640,6 @@ async def drain_due_legacy_scheduled_task_outboxes(
     if now is not None and clock is not None:
         raise ValueError("now 与 clock 不能同时提供")
     factory = session_factory or _default_session_factory()
-    resolved_producer = producer_config or ScheduledTaskProducerConfig.from_env()
     resolved_worker = worker_config or OutboundWorkerConfig.from_env()
     batch_limit = resolved_worker.batch_size if limit is None else limit
     if type(batch_limit) is not int or batch_limit < 1 or batch_limit > 1000:
@@ -630,7 +647,14 @@ async def drain_due_legacy_scheduled_task_outboxes(
     clock_source = clock or (lambda: datetime.now(timezone.utc))
     current = _utc_naive(now if now is not None else clock_source())
     discovery = factory()
+    writer_snapshot: LegacyWriterLeaseSnapshot | None = None
     try:
+        if producer_config is None:
+            writer_snapshot = snapshot_live_legacy_writer(
+                discovery,
+                source_type=SOURCE_TYPE,
+                now=current,
+            )
         outbox_ids = [
             int(row[0])
             for row in (
@@ -677,24 +701,47 @@ async def drain_due_legacy_scheduled_task_outboxes(
     finally:
         discovery.close()
 
+    if producer_config is not None:
+        writer_owner = producer_config.producer_owner
+        writer_token = producer_config.writer_token
+        writer_protocol_version = OUTBOUND_PROTOCOL_VERSION
+        writer_lease_seconds = producer_config.writer_lease_seconds
+        expected_writer_version = None
+    elif writer_snapshot is not None:
+        writer_owner = writer_snapshot.writer_owner
+        writer_token = writer_snapshot.writer_token
+        writer_protocol_version = writer_snapshot.protocol_version
+        writer_lease_seconds = DEFAULT_WRITER_LEASE_SECONDS
+        expected_writer_version = writer_snapshot.writer_version
+    elif takeover_writer is not None:
+        writer_owner = takeover_writer.writer_owner
+        writer_token = takeover_writer.writer_token
+        writer_protocol_version = OUTBOUND_PROTOCOL_VERSION
+        writer_lease_seconds = DEFAULT_WRITER_LEASE_SECONDS
+        expected_writer_version = None
+    else:
+        return []
+    delivery_owner = str(worker_owner or writer_owner).strip()
+
     async def deliver_batch(
         resolved_transport: OutboundTransport,
     ) -> list[OutboundDeliveryWorkResult]:
         results: list[OutboundDeliveryWorkResult] = []
         for outbox_id in outbox_ids:
+            if stop_event is not None and stop_event.is_set():
+                break
             try:
                 result = await deliver_legacy_outbound_once(
                     session_factory=factory,
                     transport=resolved_transport,
                     config=resolved_worker,
                     outbox_id=outbox_id,
-                    worker_owner=resolved_producer.producer_owner,
-                    writer_owner=resolved_producer.producer_owner,
-                    writer_token=resolved_producer.writer_token,
-                    writer_protocol_version=OUTBOUND_PROTOCOL_VERSION,
-                    writer_lease_seconds=(
-                        resolved_producer.writer_lease_seconds
-                    ),
+                    worker_owner=delivery_owner,
+                    writer_owner=writer_owner,
+                    writer_token=writer_token,
+                    writer_protocol_version=writer_protocol_version,
+                    writer_lease_seconds=writer_lease_seconds,
+                    expected_writer_version=expected_writer_version,
                     now=now,
                     clock=clock,
                     jitter=jitter,

@@ -9,13 +9,14 @@ from datetime import datetime
 from typing import Any
 from collections.abc import Sequence
 
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.session_memory import config
 from app.session_memory.summarizer import build_rolling_summary_payload, render_summary_text
 from app.session_memory.windowing import estimate_tokens, should_rollup
-from core.database import ConversationTurn, RollingSessionSummary
-from core.time_utils import db_now_naive
+from core.database import ConversationTurn, RollingSessionSummary, User
+from core.time_utils import db_now_naive, to_db_naive
 
 
 @dataclass
@@ -29,6 +30,15 @@ class RollupResult:
     dry_run: bool = False
     threshold: dict[str, Any] = field(default_factory=dict)
     summary_job_id: int = 0
+    requires_commit: bool = False
+
+
+class _RollupFenceRejected(RuntimeError):
+    """历史清除或来源 turn 已变化，当前 rollup 不得继续。"""
+
+
+class _RollupHeadChanged(RuntimeError):
+    """active summary 已变化，当前 rollup 应让位给新 head。"""
 
 
 def get_active_summary(
@@ -38,6 +48,8 @@ def get_active_summary(
     after_clear_at: datetime | None = None,
     mutate_stale: bool = True,
 ) -> RollingSessionSummary | None:
+    """读取可消费摘要；过期过滤不得在读路径隐式修改业务状态。"""
+
     row = (
         db.query(RollingSessionSummary)
         .filter(
@@ -50,10 +62,6 @@ def get_active_summary(
     if row is None:
         return None
     if after_clear_at and row.updated_at and row.updated_at <= after_clear_at:
-        if mutate_stale:
-            row.status = "archived"
-            row.updated_at = db_now_naive()
-            db.flush()
         return None
     return row
 
@@ -83,16 +91,10 @@ def get_best_session_summary(
         return None
 
     valid: list[RollingSessionSummary] = []
-    archived_at = db_now_naive()
     for row in rows:
         if after_clear_at and row.updated_at and row.updated_at <= after_clear_at:
-            if mutate_stale:
-                row.status = "archived"
-                row.updated_at = archived_at
             continue
         valid.append(row)
-    if mutate_stale and len(valid) != len(rows):
-        db.flush()
     if not valid:
         return None
 
@@ -124,7 +126,68 @@ def get_best_session_summary(
     return valid[0]
 
 
-def archive_active_summaries_for_session(db: Session, session_id: str) -> int:
+def _enqueue_archived_summary_delete_jobs(
+    db: Session,
+    rows: Sequence[RollingSessionSummary],
+    *,
+    reason: str,
+) -> None:
+    from core.semantic.jobs import enqueue_index_job
+
+    grouped: dict[str, list[RollingSessionSummary]] = {}
+    for row in rows:
+        source_id = str(row.session_id or "").strip()
+        if source_id:
+            grouped.setdefault(source_id, []).append(row)
+    for source_id, source_rows in sorted(grouped.items()):
+        document_ids = sorted(int(row.id or 0) for row in source_rows if row.id)
+        revision_payload = {
+            "v": 1,
+            "operation": "delete",
+            "reason": str(reason or "summary_archived"),
+            "session_id": source_id,
+            "document_ids": document_ids,
+            "stable_hashes": sorted(
+                str(row.stable_hash or "") for row in source_rows
+            ),
+        }
+        source_revision = "delete_" + hashlib.sha256(
+            json.dumps(
+                revision_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        enqueue_index_job(
+            db,
+            source_type="session_summary",
+            source_id=source_id,
+            job_type="delete",
+            index_version="",
+            source_revision=source_revision,
+            meta={
+                "contract_version": 2,
+                "job_origin": "business",
+                "operation": "delete",
+                "reason": str(reason or "summary_archived"),
+                "document_ids": document_ids,
+                "delete_source_ids": [
+                    source_id,
+                    *(str(item) for item in document_ids),
+                ],
+            },
+            commit=False,
+        )
+
+
+def archive_active_summaries_for_session(
+    db: Session,
+    session_id: str,
+    *,
+    enqueue_semantic_delete: bool = False,
+    delete_reason: str = "summary_archived",
+) -> int:
     rows = (
         db.query(RollingSessionSummary)
         .filter(
@@ -138,11 +201,23 @@ def archive_active_summaries_for_session(db: Session, session_id: str) -> int:
         row.status = "archived"
         row.updated_at = archived_at
     if rows:
+        if enqueue_semantic_delete:
+            _enqueue_archived_summary_delete_jobs(
+                db,
+                rows,
+                reason=delete_reason,
+            )
         db.flush()
     return len(rows)
 
 
-def archive_active_summaries_for_user(db: Session, user_id: str) -> int:
+def archive_active_summaries_for_user(
+    db: Session,
+    user_id: str,
+    *,
+    enqueue_semantic_delete: bool = False,
+    delete_reason: str = "summary_archived",
+) -> int:
     rows = (
         db.query(RollingSessionSummary)
         .filter(
@@ -156,6 +231,12 @@ def archive_active_summaries_for_user(db: Session, user_id: str) -> int:
         row.status = "archived"
         row.updated_at = archived_at
     if rows:
+        if enqueue_semantic_delete:
+            _enqueue_archived_summary_delete_jobs(
+                db,
+                rows,
+                reason=delete_reason,
+            )
         db.flush()
     return len(rows)
 
@@ -200,6 +281,15 @@ def save_new_active_summary(
 ) -> RollingSessionSummary:
     if not pending_turns:
         raise ValueError("pending_turns is required")
+    superseded_rows = (
+        db.query(RollingSessionSummary)
+        .filter(
+            RollingSessionSummary.session_id == str(session_id or ""),
+            RollingSessionSummary.status == "active",
+        )
+        .order_by(RollingSessionSummary.id.asc())
+        .all()
+    )
     archive_active_summaries_for_session(db, session_id)
 
     summary_text = render_summary_text(summary_json)
@@ -265,7 +355,95 @@ def save_new_active_summary(
     )
     db.add(row)
     db.flush()
+    from core.semantic.adapters import session_summary_source_revision
+    from core.semantic.jobs import enqueue_index_job
+
+    superseded_document_ids = sorted(
+        int(item.id or 0)
+        for item in superseded_rows
+        if int(item.id or 0) > 0
+    )
+    enqueue_index_job(
+        db,
+        source_type="session_summary",
+        source_id=str(row.session_id),
+        job_type="replace",
+        index_version="",
+        source_revision=session_summary_source_revision(row),
+        meta={
+            "contract_version": 2,
+            "job_origin": "business",
+            "document_id": int(row.id or 0),
+            "superseded_document_ids": superseded_document_ids,
+            "delete_source_ids": sorted({
+                str(row.id),
+                *(str(item) for item in superseded_document_ids),
+            }),
+        },
+        commit=False,
+    )
     return row
+
+
+def _acquire_rollup_write_serialization(
+    db: Session,
+    *,
+    user_id: str,
+    session_id: str,
+    pending_turn_ids: Sequence[int],
+) -> None:
+    """在创建 savepoint 前建立物理根写事务，避免 SQLite 提前释放写锁。"""
+
+    if user_id:
+        statement = (
+            update(User)
+            .where(User.id == user_id)
+            .values(history_clear_at=User.history_clear_at)
+        )
+    else:
+        statement = (
+            update(ConversationTurn)
+            .where(
+                ConversationTurn.id == int(pending_turn_ids[0]),
+                ConversationTurn.session_id == session_id,
+            )
+            .values(id=ConversationTurn.id)
+        )
+    db.execute(statement.execution_options(synchronize_session=False))
+
+
+def _verify_rollup_write_fence(
+    db: Session,
+    *,
+    user_id: str,
+    session_id: str,
+    pending_turn_ids: Sequence[int],
+    expected_history_clear_at: datetime | None,
+) -> None:
+    if user_id:
+        user_row = db.execute(
+            select(User.id, User.history_clear_at).where(User.id == user_id)
+        ).one_or_none()
+        current_history_clear_at = user_row[1] if user_row is not None else None
+        if to_db_naive(current_history_clear_at) != to_db_naive(
+            expected_history_clear_at
+        ):
+            raise _RollupFenceRejected("history_clear_changed")
+
+    unique_turn_ids = list(dict.fromkeys(int(item) for item in pending_turn_ids))
+    if len(unique_turn_ids) != len(pending_turn_ids):
+        raise _RollupFenceRejected("history_clear_changed")
+    update_result = db.execute(
+        update(ConversationTurn)
+        .where(
+            ConversationTurn.id.in_(unique_turn_ids),
+            ConversationTurn.session_id == session_id,
+        )
+        .values(id=ConversationTurn.id)
+        .execution_options(synchronize_session=False)
+    )
+    if int(update_result.rowcount or 0) != len(unique_turn_ids):
+        raise _RollupFenceRejected("history_clear_changed")
 
 
 def maybe_rollup_session_summary(
@@ -300,17 +478,7 @@ def maybe_rollup_session_summary(
         return result
 
     old_covered = int(getattr(active_summary, "covered_until_turn_id", 0) or 0)
-    fresh = get_active_summary(
-        db,
-        session_id,
-        after_clear_at=after_clear_at,
-        mutate_stale=not dry_run,
-    )
-    if fresh is not None and int(fresh.covered_until_turn_id or 0) > old_covered:
-        result.summary = fresh
-        result.skipped_reason = "already_rolled"
-        return result
-
+    old_summary_id = int(getattr(active_summary, "id", 0) or 0)
     payload = build_rolling_summary_payload(
         previous_summary=active_summary,
         pending_turns=pending_turns,
@@ -333,31 +501,88 @@ def maybe_rollup_session_summary(
     if dry_run:
         return result
 
-    result.summary = save_new_active_summary(
-        db,
-        old_summary=active_summary,
-        session_id=session_id,
-        user_id=user_id,
-        chat_type=chat_type,
-        summary_json=payload,
-        pending_turns=pending_turns,
-        raw_window_start_turn_id=raw_window_start_turn_id,
-        model="deterministic",
-        prompt_sha256=prompt_sha256,
-    )
-    if config.SESSION_SUMMARY_LLM_ENABLED:
-        from app.session_memory.jobs import enqueue_session_summary_job
-
-        job, _created = enqueue_session_summary_job(
+    try:
+        _acquire_rollup_write_serialization(
             db,
-            session_id=session_id,
             user_id=user_id,
-            chat_type=chat_type,
-            pending_turns=pending_turns,
-            previous_summary=active_summary,
-            fallback_summary=result.summary,
-            recent_raw_turn_ids=result.recent_raw_turn_ids,
-            current_user_input=current_user_input,
+            session_id=session_id,
+            pending_turn_ids=pending_ids,
         )
-        result.summary_job_id = int(job.id or 0)
-    return result
+        with db.begin_nested():
+            _verify_rollup_write_fence(
+                db,
+                user_id=user_id,
+                session_id=session_id,
+                pending_turn_ids=pending_ids,
+                expected_history_clear_at=after_clear_at,
+            )
+            db.expire_all()
+            fresh = get_best_session_summary(
+                db,
+                session_id,
+                after_clear_at=after_clear_at,
+                mutate_stale=True,
+            )
+            fresh_summary_id = int(getattr(fresh, "id", 0) or 0)
+            fresh_covered = int(
+                getattr(fresh, "covered_until_turn_id", 0) or 0
+            )
+            if (fresh_summary_id, fresh_covered) != (
+                old_summary_id,
+                old_covered,
+            ):
+                raise _RollupHeadChanged("active_summary_changed")
+
+            result.summary = save_new_active_summary(
+                db,
+                old_summary=fresh,
+                session_id=session_id,
+                user_id=user_id,
+                chat_type=chat_type,
+                summary_json=payload,
+                pending_turns=pending_turns,
+                raw_window_start_turn_id=raw_window_start_turn_id,
+                model="deterministic",
+                prompt_sha256=prompt_sha256,
+            )
+            if config.SESSION_SUMMARY_LLM_ENABLED:
+                from app.session_memory.jobs import enqueue_session_summary_job
+
+                job, _created = enqueue_session_summary_job(
+                    db,
+                    session_id=session_id,
+                    user_id=user_id,
+                    chat_type=chat_type,
+                    pending_turns=pending_turns,
+                    previous_summary=fresh,
+                    fallback_summary=result.summary,
+                    recent_raw_turn_ids=result.recent_raw_turn_ids,
+                    current_user_input=current_user_input,
+                )
+                result.summary_job_id = int(job.id or 0)
+        result.requires_commit = True
+        return result
+    except _RollupFenceRejected:
+        db.rollback()
+        result.summary = None
+        result.summary_text = ""
+        result.summary_job_id = 0
+        result.requires_commit = False
+        result.skipped_reason = "history_clear_changed"
+        return result
+    except _RollupHeadChanged:
+        db.rollback()
+        result.summary = get_best_session_summary(
+            db,
+            session_id,
+            after_clear_at=after_clear_at,
+            mutate_stale=False,
+        )
+        result.summary_text = ""
+        result.summary_job_id = 0
+        result.requires_commit = False
+        result.skipped_reason = "already_rolled"
+        return result
+    except Exception:
+        db.rollback()
+        raise

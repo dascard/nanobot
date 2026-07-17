@@ -123,12 +123,20 @@ def mark_clear(
         cancelled_evaluations = db.query(ProactiveOutreachLease).filter(
             ProactiveOutreachLease.user_id == user_id,
         ).delete(synchronize_session=False)
-        try:
-            from app.session_memory.rolling_summary import archive_active_summaries_for_user
+        from app.session_memory.rolling_summary import archive_active_summaries_for_user
+        from app.session_memory.jobs import obsolete_summary_jobs_for_scope
 
-            archived = archive_active_summaries_for_user(db, user_id)
-        except Exception:
-            archived = 0
+        archived = archive_active_summaries_for_user(
+            db,
+            user_id,
+            enqueue_semantic_delete=True,
+            delete_reason="history_cleared",
+        )
+        obsoleted_summary_jobs = obsolete_summary_jobs_for_scope(
+            db,
+            user_id=user_id,
+            reason="history_cleared",
+        )
         db.commit()
         logger.info(
             "[/mark-clear] 清除点已设置，删除上下文=%s，归档摘要=%s，"
@@ -143,6 +151,7 @@ def mark_clear(
             "message": "已标记清除点",
             "deleted_context_rows": deleted,
             "archived_rolling_summaries": archived,
+            "obsoleted_summary_jobs": obsoleted_summary_jobs,
             "cancelled_outreach_candidates": cancelled_outreach,
             "cancelled_outreach_evaluations": cancelled_evaluations,
             "cancelled_outreach_deliveries": cancelled_deliveries,

@@ -169,6 +169,19 @@ def _build_transient_rollup_summary(
     )
 
 
+def _commit_rollup_unit_of_work(db, rollup_result) -> bool:
+    """提交上下文构建产生的摘要及其派生任务。"""
+
+    if not bool(getattr(rollup_result, "requires_commit", False)):
+        return False
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return True
+
+
 def build_session_memory(
     db, session_id: str, user_id: str = "",
     max_per_msg: int = 300, max_total: int = 4000,
@@ -224,6 +237,7 @@ def build_session_memory(
         "rolling_summary_recent_raw_turn_ids": [],
         "rolling_summary_skipped_reason": "",
         "rolling_summary_error": "",
+        "rolling_summary_committed": False,
         "rolling_summary_eligible_skipped": [],
     }
 
@@ -281,7 +295,9 @@ def build_session_memory(
                 after_clear_at=history_clear_at,
                 dry_run=read_only,
             )
-            if rollup_result.summary is not None:
+            if rollup_result.skipped_reason == "history_clear_changed":
+                active_summary = None
+            elif rollup_result.summary is not None:
                 active_summary = rollup_result.summary
             elif read_only and rollup_result.summary_text:
                 active_summary = _build_transient_rollup_summary(
@@ -294,7 +310,18 @@ def build_session_memory(
                 )
             debug["rolling_summary_skipped_reason"] = rollup_result.skipped_reason
             debug["rolling_summary_error"] = rollup_result.error
+            debug["rolling_summary_committed"] = _commit_rollup_unit_of_work(
+                db,
+                rollup_result,
+            )
         except Exception as exc:
+            db.rollback()
+            active_summary = get_best_session_summary(
+                db,
+                session_id,
+                after_clear_at=history_clear_at,
+                mutate_stale=False,
+            )
             logger.warning("[Context] rolling summary rollup failed: %s", exc)
             debug["rolling_summary_error"] = str(exc)
 
@@ -751,7 +778,9 @@ def build_chat_context(
                 after_clear_at=history_clear_at,
                 dry_run=read_only,
             )
-            if rollup_result.summary is not None:
+            if rollup_result.skipped_reason == "history_clear_changed":
+                active_summary = None
+            elif rollup_result.summary is not None:
                 active_summary = rollup_result.summary
             elif read_only and rollup_result.summary_text:
                 active_summary = _build_transient_rollup_summary(
@@ -764,9 +793,11 @@ def build_chat_context(
                 )
             skipped_reason = rollup_result.skipped_reason
             rollup_error = rollup_result.error
+            rollup_committed = _commit_rollup_unit_of_work(db, rollup_result)
         else:
             skipped_reason = "empty_pending"
             rollup_error = ""
+            rollup_committed = False
 
         summary_header = render_rolling_summary_context(active_summary)
         debug.update({
@@ -793,6 +824,7 @@ def build_chat_context(
             "rolling_summary_recent_raw_turn_ids": list(raw_debug.get("raw_window_turn_ids") or []),
             "rolling_summary_skipped_reason": skipped_reason,
             "rolling_summary_error": rollup_error,
+            "rolling_summary_committed": rollup_committed,
             "rolling_summary_eligible_skipped": (
                 list(raw_debug.get("raw_window_skipped") or [])
                 + list(pending_debug.get("pending_skipped") or [])
@@ -801,6 +833,7 @@ def build_chat_context(
             "rolling_summary_raw_window_count": len(rolling_raw_window),
         })
     except Exception as exc:
+        db.rollback()
         logger.warning("[Context] group rolling summary render failed: %s", exc)
         debug.update({
             "rolling_summary_enabled": True,

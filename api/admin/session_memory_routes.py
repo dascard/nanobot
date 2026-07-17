@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,7 +20,11 @@ from app.session_memory.windowing import (
     load_pending_for_summary_turns,
     raw_window_limits,
 )
-from app.session_memory.jobs import enqueue_session_summary_job, retry_session_summary_job
+from app.session_memory.jobs import (
+    SessionSummaryJobRetryConflict,
+    enqueue_session_summary_job,
+    retry_session_summary_job,
+)
 from app.session_memory.admin_browser import AdminSessionMemoryBrowser, _session_aliases
 from core.daily_digest import generate_daily_digest_for_date
 from core.database import ConversationTurn, MemoryDigest, RollingSessionSummary, SessionSummaryJob, User, get_db
@@ -87,6 +92,25 @@ def _summary_to_dict(row: RollingSessionSummary | None) -> dict:
 def _job_to_dict(row: SessionSummaryJob | None) -> dict:
     if row is None:
         return {}
+    try:
+        meta = json.loads(row.meta_json or "{}")
+        if not isinstance(meta, dict):
+            meta = {}
+    except (TypeError, json.JSONDecodeError):
+        meta = {}
+    raw_obsolete = meta.get("obsolete")
+    obsolete = {}
+    if isinstance(raw_obsolete, dict):
+        obsolete = {
+            "blocking_summary_id": raw_obsolete.get("blocking_summary_id"),
+            "blocking_coverage": int(
+                raw_obsolete.get("blocking_coverage") or 0
+            ),
+            "proposed_coverage": int(
+                raw_obsolete.get("proposed_coverage") or 0
+            ),
+            "reason": str(raw_obsolete.get("reason") or "")[:128],
+        }
     return {
         "id": row.id,
         "session_id": row.session_id,
@@ -106,6 +130,7 @@ def _job_to_dict(row: SessionSummaryJob | None) -> dict:
         "locked_at": row.locked_at.isoformat() if row.locked_at else "",
         "error": row.error,
         "stable_hash": row.stable_hash,
+        "obsolete": obsolete,
         "created_at": row.created_at.isoformat() if row.created_at else "",
         "updated_at": row.updated_at.isoformat() if row.updated_at else "",
     }
@@ -173,7 +198,14 @@ def _build_rollup_inputs(
         "raw_window": raw_debug,
         "pending": pending_debug,
     }
-    return active_summary, pending, raw_window, raw_debug, eligible_debug
+    return (
+        active_summary,
+        pending,
+        raw_window,
+        raw_debug,
+        eligible_debug,
+        history_clear_at,
+    )
 
 
 @router.get("/session-memory/sessions")
@@ -305,7 +337,14 @@ def run_rolling_summary(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    active, pending, raw_window, raw_debug, eligible_debug = _build_rollup_inputs(
+    (
+        active,
+        pending,
+        raw_window,
+        raw_debug,
+        eligible_debug,
+        history_clear_at,
+    ) = _build_rollup_inputs(
         db,
         session_id=session_id,
         user_id=body.user_id,
@@ -321,6 +360,7 @@ def run_rolling_summary(
         recent_raw_turn_ids=raw_debug.get("raw_window_turn_ids") or [],
         raw_window_start_turn_id=int(raw_debug.get("raw_window_start_turn_id") or 0),
         current_user_input=body.current_user_input,
+        after_clear_at=history_clear_at,
         force=body.force,
         dry_run=body.dry_run,
     )
@@ -351,9 +391,32 @@ def archive_rolling_summary(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    archived = archive_active_summaries_for_session(db, session_id)
-    db.commit()
-    return {"session_id": session_id, "archived": archived}
+    try:
+        from app.session_memory.jobs import obsolete_summary_jobs_for_scope
+
+        archived = archive_active_summaries_for_session(
+            db,
+            session_id,
+            enqueue_semantic_delete=True,
+            delete_reason="admin_archive",
+        )
+        obsoleted_jobs = obsolete_summary_jobs_for_scope(
+            db,
+            session_id=session_id,
+            reason="admin_archive",
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="session_summary_archive_failed",
+        ) from exc
+    return {
+        "session_id": session_id,
+        "archived": archived,
+        "obsoleted_jobs": obsoleted_jobs,
+    }
 
 
 @router.post("/session-memory/{session_id}/rolling-summary/enqueue-llm")
@@ -438,6 +501,8 @@ def retry_llm_summary_job(
 ):
     try:
         job = retry_session_summary_job(db, job_id)
+    except SessionSummaryJobRetryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     db.commit()

@@ -976,3 +976,199 @@ git diff --stat 0f0b629..HEAD
 - [ ] **步骤 8：进入生产部署阶段**
 
 生产阶段重新读取 AGENTS/deploy 文件并执行：备份 → 清除 shell 继承 Token → 停旧 semantic worker → migration → 重建四服务 → HTTP/DB/容器闭环。真实日报和生产归档/全量索引重建仍遵循原专项授权边界。
+
+## 任务 9：把 legacy compatibility drain 移交 outbound worker
+
+**文件：**
+
+- 修改：`core/outbound_delivery.py`
+- 修改：`core/outbound_delivery_service.py`
+- 修改：`core/scheduled_task_outbound.py`
+- 修改：`core/daily_digest.py`
+- 修改：`core/proactive_outreach.py`
+- 修改：`workers/outbound_delivery_worker.py`
+- 测试：`tests/test_scheduled_task_outbound.py`
+- 测试：`tests/test_proactive_outbound_delivery.py`
+- 测试：`tests/test_proactive_outreach.py`
+- 测试：`tests/test_daily_digest.py`
+- 测试：`tests/test_outbound_delivery_worker.py`
+
+- [ ] **步骤 1：编写 server 与 producer 红测**
+
+把 daily/proactive scheduler 的旧 drain 断言改为禁止调用；把
+`OutboundWorkerConfig.from_env()` 替换为一旦调用就失败的测试替身，并清空
+`NANOBOT_PUSH_TOKEN`。scheduled producer 在 `legacy_direct` 且未传
+`legacy_transport` 时，断言只创建一个 pending outbox、零 delivery attempt；proactive producer
+未传 `publisher` 时执行同样断言。显式 transport/publisher 的原同步兼容测试继续保留。
+
+- [ ] **步骤 2：运行 server 与 producer 红测**
+
+运行：
+
+```bash
+timeout 180s python -B -m pytest \
+  tests/test_scheduled_task_outbound.py \
+  tests/test_proactive_outbound_delivery.py \
+  tests/test_proactive_outreach.py \
+  tests/test_daily_digest.py \
+  -k "legacy or scheduler or run_scheduled_tasks" -q -p no:cacheprovider
+```
+
+预期：FAIL，失败点分别证明默认 producer 仍读取 worker 凭据并直推、两个 server 主循环仍执行
+legacy drain。
+
+- [ ] **步骤 3：编写 worker lane、停止和 fencing 红测**
+
+在 worker 测试中注入三个 lane，断言普通、scheduled legacy、proactive legacy 使用同一个
+transport/config 且各自收到有界 `limit`；scheduled lane 抛异常时 proactive lane 仍执行；预置
+或中途设置 stop 后不再调用下一次 source-specific claim。新增 stale writer 测试：快照后改变
+control 的 owner/token/version，调用兼容 claim，断言返回空、transport 零调用、outbox 保持
+pending。重复轮询已 delivered leaf，断言不会产生第二个 attempt。
+
+- [ ] **步骤 4：运行 worker 与 fencing 红测**
+
+运行：
+
+```bash
+timeout 180s python -B -m pytest \
+  tests/test_outbound_delivery_worker.py \
+  tests/test_scheduled_task_outbound.py \
+  tests/test_proactive_outbound_delivery.py \
+  -k "legacy or lane or stop or writer" -q -p no:cacheprovider
+```
+
+预期：FAIL，worker 尚未执行 compatibility lane，旧读取也没有 writer version/有效 lease 的
+事务内复核入口。
+
+- [ ] **步骤 5：实现最小职责迁移**
+
+给 legacy claim 增加可选的 live writer snapshot CAS：显式 producer 路径维持现有
+acquire/renew；worker 优先接受 control 中仍有效的 owner/token/protocol/version，并在 source
+写锁事务内复核，不续租、不回显 token。若存在到期 leaf 但原 writer 已过期，worker 使用
+进程内 source-scoped takeover identity 走现有 writer acquire/rebind CAS；活动 writer 不得被
+抢占。两条 source-specific drain 在每次 claim 前检查 stop，并把 snapshot 或 takeover 合同传给
+现有 `deliver_legacy_outbound_once()`。
+
+scheduled/proactive producer 只有显式 transport/publisher 才同步投递；daily/proactive scheduler
+删除 drain 和 worker poll 配置读取。outbound worker 新增三个 lane 的单周期编排，每 lane 独立
+使用 `batch_size`，共用已解析 config/transport，异常按 lane 隔离。
+
+- [ ] **步骤 6：运行聚焦绿灯**
+
+运行：
+
+```bash
+timeout 300s python -B -m pytest \
+  tests/test_scheduled_task_outbound.py \
+  tests/test_proactive_outbound_delivery.py \
+  tests/test_proactive_outreach.py \
+  tests/test_daily_digest.py \
+  tests/test_outbound_delivery_worker.py \
+  -q -p no:cacheprovider
+```
+
+预期：全部 PASS；普通 worker 原入口仍不领取 `legacy_direct`。
+
+- [ ] **步骤 7：运行原回归、Compose 与静态验证**
+
+所有命令使用 OS `timeout`。重跑既有四组 758 项回归、真实 Compose sentinel 渲染、
+`compileall`、目标 Ruff、`git diff --check` 和敏感信息扫描。预期 0 failures，server 渲染环境仍
+没有有效 push Token，outbound worker 仍获得 sentinel。
+
+- [ ] **步骤 8：追加提交并复审**
+
+只按文件显式暂存，不使用 `git add -A` 或 `git add .`。提交信息：
+
+```text
+fix(投递): 将遗留兼容消费移交出站 worker
+```
+
+提交后交回原质量审查者，Critical/Important 必须清零；Minor 只记录已明确排除的 revision 重复。
+
+## 任务 10：最终审查补充门禁
+
+**文件：**
+
+- 修改：`core/database.py`
+- 修改：`workers/semantic_index_worker.py`
+- 修改：`app/session_memory/rolling_summary.py`
+- 修改：`core/semantic/jobs.py`
+- 修改：`core/semantic/backfill.py`
+- 按红测需要修改：`core/context_builder.py`
+- 测试：`tests/test_database.py`
+- 测试：`tests/test_semantic_index_worker.py`
+- 测试：`tests/test_session_memory.py`
+
+- [x] **步骤 1：编写并验证三个失败测试**
+
+测试分别覆盖：注释开头的 `TextClause` DML 不得被 clean release 回滚；普通
+`ValueError` 正文不得进入 semantic job；`mark-clear` 已提交后，持有旧 detached turns 的
+rollup 不得复活摘要或任务。
+
+运行：
+
+```bash
+python -B -m pytest \
+  tests/test_database.py::test_release_clean_transaction_refuses_commented_text_dml \
+  tests/test_semantic_index_worker.py::test_permanent_worker_error_never_persists_value_error_text \
+  tests/test_session_memory.py::test_history_clear_fences_stale_inflight_rollup \
+  -v -p no:cacheprovider
+```
+
+隔离 Python 3.11 容器中的已确认结果：`3 failed`，且均因目标门禁缺失而失败。
+
+- [x] **步骤 2：让原始 TextClause 写识别失败闭合**
+
+`_orm_execute_may_write()` 对原始文本采用只读 allowlist：无分号，跳过连续前导行/块注释后，
+仅首 token 精确为 `SELECT` 时允许 clean release；CTE、PRAGMA、EXPLAIN、多语句和未知文本
+全部失败闭合为可能写入。运行数据库事务测试，确认纯 SELECT 和 ORM 只读查询仍可释放，
+注释 DML、bulk DML、flush 和 nested commit/rollback 的写标记仍正确。
+
+- [x] **步骤 3：禁止 semantic worker 持久化普通异常正文**
+
+`_safe_worker_error()` 对普通异常始终返回 `f"{prefix}:{type(exc).__name__}"`。已有 embedding
+错误码继续由 embedding 校验函数显式返回，不经过普通异常正文放行。运行 permanent、retryable、
+embedding 错误脱敏测试。
+
+- [x] **步骤 4：实现 history-clear 与 rollup 的事务 fence**
+
+在 `maybe_rollup_session_summary()` 的非 dry-run 写路径中使用 `begin_nested()`：
+
+1. 对 User 或 pending turn scope 做 no-op UPDATE，取得写序列化点；
+2. 在锁内重新读取 `history_clear_at`，与调用方捕获的 clear point 比较；
+3. 对全部唯一 pending turn ID 做带 `session_id`、必要时带 `user_id` 的 no-op UPDATE，并要求
+   affected 数量完全一致；
+4. 在锁内重新调用 `get_best_session_summary()` 完成 coverage CAS；
+5. 只有 fence 全部成立时，才保存 fallback、SessionSummaryJob 和 SemanticIndexJob；
+6. fence 失败通过内部异常回滚 savepoint，返回 `summary=None`、`requires_commit=False` 和稳定
+   `skipped_reason`，其中清除点变化或旧 turns 消失统一为 `history_clear_changed`。
+
+若上下文构建发现 `history_clear_changed`，不得继续注入调用前加载的旧 active summary。
+
+事务型 semantic job 入队使用 `commit=False` 时不得运行 schema DDL；rolling summary 的
+savepoint 回归证明隐式 `ensure_semantic_schema()` 会在 StaticPool/SQLite 下提交同一底层连接并
+破坏 savepoint。维护型 backfill 在扫描和入队前显式准备 schema。
+
+- [x] **步骤 5：运行补充门禁聚焦回归**
+
+```bash
+python -B -m pytest tests/test_database.py tests/test_semantic_index_worker.py \
+  tests/test_session_memory.py -q -p no:cacheprovider
+```
+
+预期：全部 PASS；随后重跑原 365 项聚焦组合、Prompt Runtime 458 项和完整测试。
+
+实际验证（2026-07-17，Python 3.11 隔离容器、`--network none`、空生产凭据）：
+
+- 事务/semantic/session 三文件：`132 passed`；
+- 记忆、日报、迁移、semantic、RAG 聚焦组合：`309 passed`；
+- Prompt Runtime、KT Bridge 与工具合同扩大组合：`580 passed`；
+- scheduled/proactive/outbound 投递链：`207 passed`；
+- 首轮完整测试：`4878 passed, 6 skipped, 1 failed`，唯一失败证明原始
+  `text("SELECT 1")` 的 clean release 合同被过度保守策略破坏；
+- 增加只读 allowlist 红测并修复后，最终完整测试：
+  `4892 passed, 6 skipped, 0 failed`；
+- `git diff --check` 与 `compileall api app clients core workers tests` 退出码均为 0；
+- 两轮最终中文审查均为 Critical 0、Important 0；指出的反向 clear/rollup 时序与
+  TextClause allowlist 边界两个 Minor 均已补充测试；
+- Ruff：测试镜像与宿主均未安装，明确标记为尚未执行。

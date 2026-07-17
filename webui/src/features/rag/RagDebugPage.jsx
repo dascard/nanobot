@@ -196,12 +196,12 @@ export function RagDebugPage() {
             <div className="text-xs text-slate-500">
               可构建 {indexStatus.buildable_chunks || 0} chunks · 来源 {indexStatus.source_types?.join(', ') || sourceType}
             </div>
-            {buildResult && <div className="mt-1 text-[11px] text-emerald-400">已写入 {buildResult.indexed_chunks || 0} chunks</div>}
+            {buildResult && <div className="mt-1 text-[11px] text-emerald-400">已入队 {buildResult.enqueued || 0} 个索引任务</div>}
           </div>
           <button onClick={buildIndex} disabled={buildLoading || statusLoading || !indexStatus.buildable_chunks}
             className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-700 px-3 text-xs font-medium text-slate-100 hover:bg-slate-600 disabled:opacity-50">
             <Database className="h-4 w-4" aria-hidden="true" />
-            {buildLoading ? '构建中' : (indexStatus.indexed_items > 0 ? '刷新索引' : '构建索引')}
+            {buildLoading ? '入队中' : (indexStatus.indexed_items > 0 ? '刷新索引' : '构建索引')}
           </button>
         </div>
       </Card>

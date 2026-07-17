@@ -1054,7 +1054,7 @@ def test_generate_daily_digest_falls_back_when_llm_summarizer_raises(db_session,
     assert db_session.query(MemoryDigest).filter_by(session_id="group_42").count() == 0
 
 
-def test_successful_daily_digest_enqueues_each_written_row_for_semantic_index(
+def test_successful_daily_digest_enqueues_one_logical_source_for_semantic_index(
     db_session, monkeypatch
 ):
     from core import daily_digest
@@ -1088,10 +1088,22 @@ def test_successful_daily_digest_enqueues_each_written_row_for_semantic_index(
     )
 
     digest_ids = [row.id for row in db_session.query(MemoryDigest).order_by(MemoryDigest.id).all()]
+    digest_source_ids = {
+        json.loads(row.meta_json)["source_id"]
+        for row in db_session.query(MemoryDigest).all()
+    }
     jobs = db_session.query(SemanticIndexJob).order_by(SemanticIndexJob.id).all()
     assert created == 1
-    assert [int(job.source_id) for job in jobs] == digest_ids
-    assert all(job.source_type == "memory_digest" for job in jobs)
+    assert len(jobs) == 1
+    assert jobs[0].source_type == "memory_digest"
+    assert {jobs[0].source_id} == digest_source_ids
+    assert jobs[0].job_type == "replace"
+    assert jobs[0].source_revision
+    job_meta = json.loads(jobs[0].meta_json)
+    assert job_meta["contract_version"] == 2
+    assert job_meta["job_origin"] == "business"
+    assert job_meta["document_ids"] == digest_ids
+    assert set(job_meta["delete_source_ids"]) == {str(item) for item in digest_ids}
 
 
 def test_memory_recall_excludes_legacy_by_default(client, db_session):

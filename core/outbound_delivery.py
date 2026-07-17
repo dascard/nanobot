@@ -3042,9 +3042,10 @@ def claim_legacy_direct_outbox(
     writer_lease_seconds: int | float,
     endpoint_key: str,
     endpoint_config_revision: str,
+    expected_writer_version: int | None = None,
     now: datetime | None = None,
 ) -> DeliveryClaimHandle | None:
-    """由兼容 producer 领取指定 legacy leaf，普通 worker 不会调用。"""
+    """由 source-specific 兼容入口领取指定 legacy leaf。"""
 
     owner = _text(worker_owner, name="worker_owner", max_length=128)
     seconds = _positive_seconds(lease_seconds, name="lease_seconds")
@@ -3072,6 +3073,14 @@ def claim_legacy_direct_outbox(
         name="endpoint_config_revision",
         max_length=128,
     )
+    if (
+        expected_writer_version is not None
+        and (
+            type(expected_writer_version) is not int
+            or expected_writer_version < 0
+        )
+    ):
+        raise ValueError("expected_writer_version 必须是非负整数")
     outbox_probe = db.get(OutboundDeliveryOutbox, int(outbox_id))
     run_probe = (
         db.get(OutboundRun, int(outbox_probe.run_id))
@@ -3105,17 +3114,32 @@ def claim_legacy_direct_outbox(
         )
     ):
         return None
-    writer = acquire_or_renew_delivery_writer(
-        db,
-        source_type=str(run.source_type),
-        owner=normalized_writer_owner,
-        token=normalized_writer_token,
-        protocol_version=writer_protocol_version,
-        lease_seconds=normalized_writer_lease_seconds,
-        now=current,
-    )
-    if not writer.acquired:
-        return None
+    if expected_writer_version is None:
+        writer = acquire_or_renew_delivery_writer(
+            db,
+            source_type=str(run.source_type),
+            owner=normalized_writer_owner,
+            token=normalized_writer_token,
+            protocol_version=writer_protocol_version,
+            lease_seconds=normalized_writer_lease_seconds,
+            now=current,
+        )
+        if not writer.acquired:
+            return None
+    else:
+        try:
+            writer_control = _require_writer(
+                db,
+                source_type=str(run.source_type),
+                owner=normalized_writer_owner,
+                token=normalized_writer_token,
+                protocol_version=writer_protocol_version,
+                current=current,
+            )
+        except OutboundFencingError:
+            return None
+        if int(writer_control.writer_version) != expected_writer_version:
+            return None
     outbox = db.get(OutboundDeliveryOutbox, int(outbox_id))
     run = db.get(OutboundRun, int(run_probe.id))
     if (

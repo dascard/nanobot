@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from core.database import OutboundDeliveryControl
 from core.outbound_delivery import (
     cancel_invalid_delivery_before_send,
     DeliveryClaimHandle,
@@ -63,6 +64,15 @@ class OutboundTransport(Protocol):
         self,
         request: "OutboundTransportRequest",
     ) -> DeliveryOutcome: ...
+
+
+class OutboundExecutionConfig(Protocol):
+    """执行一次持久化投递所需的非敏感配置合同。"""
+
+    push_url: str
+    push_timeout_seconds: float
+    endpoint_config_revision: str
+    lease_seconds: float
 
 
 class DeliveryContractError(ValueError):
@@ -161,6 +171,48 @@ class OutboundWorkerConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomTransportConfig:
+    """显式注入 transport 时使用，不持有任何投递凭据。"""
+
+    endpoint_config_revision: str
+    push_url: str = DEFAULT_PUSH_URL
+    push_timeout_seconds: float = DEFAULT_PUSH_TIMEOUT_SECONDS
+    lease_seconds: float = DEFAULT_LEASE_SECONDS
+
+    def __post_init__(self) -> None:
+        push_url = str(self.push_url or "").strip()
+        parsed = urlsplit(push_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("QQBOT_PUSH_URL 必须是有效的 HTTP(S) URL")
+        object.__setattr__(self, "push_url", push_url)
+
+        revision = resolve_qq_push_config_revision({
+            "NANOBOT_QQ_PUSH_CONFIG_REVISION": (
+                self.endpoint_config_revision
+            ),
+        })
+        object.__setattr__(self, "endpoint_config_revision", revision)
+
+        _require_positive_number(
+            self.push_timeout_seconds,
+            name="QQBOT_PUSH_TIMEOUT",
+        )
+        _require_positive_number(
+            self.lease_seconds,
+            name="NANOBOT_OUTBOUND_LEASE_SECONDS",
+        )
+        minimum_lease = (
+            float(self.push_timeout_seconds)
+            + DELIVERY_LEASE_SETTLEMENT_MARGIN_SECONDS
+        )
+        if float(self.lease_seconds) <= minimum_lease:
+            raise ValueError(
+                "NANOBOT_OUTBOUND_LEASE_SECONDS 必须大于 QQBOT_PUSH_TIMEOUT "
+                "并预留结算时间"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class OutboundTransportRequest:
     push_url: str = field(repr=False)
     target_type: str
@@ -181,6 +233,36 @@ class OutboundDeliveryWorkResult:
     payload_sha256: str
     outbox_status: str
     run_status: str
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyWriterLeaseSnapshot:
+    """供 source-specific drain 短暂传递的活动 writer fencing 事实。"""
+
+    source_type: str
+    writer_owner: str
+    writer_token: str = field(repr=False)
+    protocol_version: int
+    writer_version: int
+    lease_expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyWriterTakeover:
+    """活动 writer 已过期时由兼容 lane 使用的接管身份。"""
+
+    writer_owner: str
+    writer_token: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        owner = str(self.writer_owner or "").strip()
+        token = str(self.writer_token or "").strip()
+        if not owner or len(owner) > 128:
+            raise ValueError("writer_owner 必须是 1-128 字符")
+        if not token or len(token) > 64:
+            raise ValueError("writer_token 必须是 1-64 字符")
+        object.__setattr__(self, "writer_owner", owner)
+        object.__setattr__(self, "writer_token", token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +314,39 @@ def _utc_naive(value: datetime | None) -> datetime:
     if current.tzinfo is None:
         return current
     return current.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def snapshot_live_legacy_writer(
+    db: Session,
+    *,
+    source_type: str,
+    now: datetime | None = None,
+) -> LegacyWriterLeaseSnapshot | None:
+    """只读活动 writer；真正 claim 会在 source 写锁内重新校验。"""
+
+    source = str(source_type or "").strip()
+    if not source or len(source) > 32:
+        raise ValueError("source_type 必须是 1-32 字符")
+    current = _utc_naive(now)
+    row = db.get(OutboundDeliveryControl, source)
+    if (
+        row is None
+        or not str(row.writer_owner or "").strip()
+        or not str(row.writer_token or "").strip()
+        or int(row.protocol_version) < 1
+        or int(row.writer_version) < 0
+        or row.writer_lease_expires_at is None
+        or _utc_naive(row.writer_lease_expires_at) <= current
+    ):
+        return None
+    return LegacyWriterLeaseSnapshot(
+        source_type=source,
+        writer_owner=str(row.writer_owner),
+        writer_token=str(row.writer_token),
+        protocol_version=int(row.protocol_version),
+        writer_version=int(row.writer_version),
+        lease_expires_at=_utc_naive(row.writer_lease_expires_at),
+    )
 
 
 def _canonical_json(value: Mapping[str, Any]) -> str:
@@ -414,7 +529,7 @@ async def _deliver_claim(
     claim: DeliveryClaimHandle,
     session_factory: Callable[[], Session],
     transport: OutboundTransport,
-    config: OutboundWorkerConfig,
+    config: OutboundExecutionConfig,
     current: datetime,
     completion_now_is_fixed: bool,
     clock_source: Callable[[], datetime],
@@ -600,19 +715,20 @@ async def deliver_legacy_outbound_once(
     *,
     session_factory: Callable[[], Session],
     transport: OutboundTransport,
-    config: OutboundWorkerConfig,
+    config: OutboundExecutionConfig,
     outbox_id: int,
     worker_owner: str,
     writer_owner: str,
     writer_token: str,
     writer_protocol_version: int,
     writer_lease_seconds: float,
+    expected_writer_version: int | None = None,
     now: datetime | None = None,
     clock: Callable[[], datetime] | None = None,
     jitter: Callable[[float], float] | None = None,
     settlement_retry_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> OutboundDeliveryWorkResult | None:
-    """领取并投递一条指定 legacy leaf；独立 worker 不会走此入口。"""
+    """由 source-specific 兼容 lane 领取并投递一条指定 legacy leaf。"""
 
     owner = str(worker_owner or "").strip()
     if not owner or len(owner) > 128:
@@ -641,6 +757,7 @@ async def deliver_legacy_outbound_once(
             writer_lease_seconds=writer_lease_seconds,
             endpoint_key=QQ_ENDPOINT_KEY,
             endpoint_config_revision=config.endpoint_config_revision,
+            expected_writer_version=expected_writer_version,
             now=current,
         ),
     )

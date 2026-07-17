@@ -90,6 +90,19 @@ class SummaryBatchTrace:
     batch_index: int
     fragment_hashes: tuple[str, ...]
     inheritance_audit: InheritanceAudit
+    model: str = "custom_summarizer"
+    requested_model: str = "custom_summarizer"
+    request_log_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionSummaryLLMResult:
+    """单次摘要模型调用的内容与不可变追踪事实。"""
+
+    content: object
+    model: str
+    requested_model: str
+    request_log_id: int | None
 
 
 def _text_sha256(text: str) -> str:
