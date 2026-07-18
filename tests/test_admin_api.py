@@ -988,6 +988,7 @@ class TestPersonaAdmin:
             assert row.last_injected_at is None
 
     def test_persona_extract_returns_502_when_llm_content_is_empty(self, client, auth_header, monkeypatch):
+        captured = {}
         now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(User(id="u-persona", name="画像用户"))
@@ -1001,7 +1002,21 @@ class TestPersonaAdmin:
             db.commit()
 
         async def fake_chat_completion(self, **kwargs):
+            captured.update({
+                "api_key": self.api_key,
+                "base_url": self.base_url,
+                **kwargs,
+            })
             return {"choices": [{"message": {"content": None}}]}
+
+        monkeypatch.setattr(
+            "clients.classifier_client.resolve_model_route",
+            lambda route_key: {
+                "model": "persona-json-model",
+                "api_key": "persona-route-key",
+                "base_url": "http://persona-route.invalid/v1",
+            } if route_key == "fast" else {},
+        )
 
         monkeypatch.setattr(
             "clients.new_api_client.NewAPIClient.chat_completion",
@@ -1016,6 +1031,13 @@ class TestPersonaAdmin:
 
         assert r.status_code == 502
         assert "空内容" in r.text
+        assert captured["api_key"] == "persona-route-key"
+        assert captured["base_url"] == "http://persona-route.invalid/v1"
+        assert captured["manual_model"] == "persona-json-model"
+        assert captured["temperature"] == 0.1
+        assert captured["max_tokens"] == 1600
+        assert captured["llm_source"] == "persona_extract_admin"
+        assert captured["enable_thinking"] is False
 
     def test_persona_update_fact_rejects_duplicate_content(self, client, auth_header):
         from core.persona_preprocess import content_hash

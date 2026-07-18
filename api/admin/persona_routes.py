@@ -285,19 +285,25 @@ async def persona_extract_user(
     )
 
     from clients.new_api_client import NewAPIClient
+    from clients.classifier_client import resolve_model_route
     from config import NEW_API_BASE_URL, NEW_API_KEY
     from core.legacy_adapter import EvolutionUtils
 
-    client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+    route = resolve_model_route("fast")
+    client = NewAPIClient(
+        api_key=route.get("api_key") or NEW_API_KEY,
+        base_url=route.get("base_url") or NEW_API_BASE_URL,
+    )
     resp = await client.chat_completion(
         messages=[
             {"role": "system", "content": CANDIDATE_EXTRACTION_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
-        model_tier="fast",
+        manual_model=str(route.get("model") or ""),
         temperature=0.1,
         max_tokens=1600,
         llm_source="persona_extract_admin",
+        enable_thinking=False,
     )
     if not isinstance(resp, dict) or "choices" not in resp:
         raise HTTPException(status_code=502, detail=str(resp.get("error", resp))[:300] if isinstance(resp, dict) else "LLM failed")
