@@ -177,6 +177,8 @@ def test_memory_digest_prompt_v2_templates_load_without_hardcoded_main_prompt():
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
     assert "three-level memory digest" in messages[0]["content"]
+    assert "validator requires lexical grounding" in messages[0]["content"]
+    assert "must occur verbatim in the cited evidence" in messages[1]["content"]
     assert "{{" not in messages[1]["content"]
     assert prompt_meta["template"] == "tasks/memory_digest_system + tasks/memory_digest_user"
     assert prompt_meta["system_source"] in {"default", "runtime"}

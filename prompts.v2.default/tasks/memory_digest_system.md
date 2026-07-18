@@ -1,6 +1,6 @@
 ---
 name: 长期记忆摘要系统提示词
-version: 2
+version: 3
 kind: task
 tool_name: memory_digest
 description: memory_digests 长期摘要 LLM 的 system prompt。
@@ -44,6 +44,10 @@ Rules:
 - Prefer Chinese output unless the source is mostly English technical content.
 - Keep project names, table names, function names, file names, and configuration names accurate.
 - Every recall card must cite 1-8 evidence_log_ids whose message text directly supports that exact card. If direct evidence is unclear, omit the card.
+- The validator requires lexical grounding.
+- Every recall card text must reuse at least one distinctive, meaningful term verbatim from its cited evidence.
+- At least one keywords entry must occur verbatim in the cited evidence.
+- Prefer concrete project names, modules, configuration names, functions, or user wording from the evidence.
 
 Return JSON in this exact shape:
 
