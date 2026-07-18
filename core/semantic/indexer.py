@@ -222,6 +222,53 @@ def soft_delete_existing_source_rows(
     return len(rows)
 
 
+def soft_delete_exact_source_items(
+    db: Session,
+    *,
+    source_type: str,
+    source_id: str,
+    item_ids: Sequence[int],
+    now: datetime | None = None,
+) -> int:
+    """按扫描快照中的精确条目 ID 清理孤儿索引。"""
+
+    normalized_ids: set[int] = set()
+    for item_id in item_ids:
+        if isinstance(item_id, bool) or not isinstance(item_id, (int, str)):
+            raise ValueError("semantic_delete_item_id_invalid")
+        normalized_text = str(item_id).strip()
+        if not normalized_text.isdigit():
+            raise ValueError("semantic_delete_item_id_invalid")
+        normalized_id = int(normalized_text)
+        if normalized_id <= 0:
+            raise ValueError("semantic_delete_item_id_invalid")
+        normalized_ids.add(normalized_id)
+    if not normalized_ids:
+        return 0
+
+    rows = (
+        db.query(SemanticIndexItem)
+        .filter(
+            SemanticIndexItem.id.in_(sorted(normalized_ids)),
+            SemanticIndexItem.source_type == str(source_type or ""),
+            SemanticIndexItem.source_id == str(source_id or ""),
+            SemanticIndexItem.status == "active",
+        )
+        .all()
+    )
+    deleted_at = now or db_now_naive()
+    for row in rows:
+        row.status = "deleted"
+        row.deleted_at = deleted_at
+        row.updated_at = deleted_at
+        db.execute(
+            text("DELETE FROM semantic_index_fts WHERE rowid = :rowid"),
+            {"rowid": int(row.id or 0)},
+        )
+    db.flush()
+    return len(rows)
+
+
 def reconcile_semantic_source(
     db: Session,
     *,
@@ -232,6 +279,7 @@ def reconcile_semantic_source(
     expected_chunks: list[SemanticChunk],
     delete_source_ids: Sequence[str],
     lease: SemanticJobLease,
+    delete_item_ids: Sequence[int] = (),
     embeddings: dict[str, bytes] | None = None,
     embedding_model: str = "",
     embedding_enabled: bool | None = None,
@@ -247,7 +295,23 @@ def reconcile_semantic_source(
     normalized_source_type = str(source_type or "").strip()
     normalized_source_id = str(source_id or "").strip()
     normalized_revision = str(source_revision or "").strip()
-    if not normalized_source_type or not normalized_source_id or not normalized_revision:
+    job_meta = semantic_job_meta(job)
+    job_origin = semantic_job_origin(job)
+    exact_delete_item_ids = tuple(delete_item_ids)
+    orphan_exact_delete = (
+        str(job.job_type or "") == "delete"
+        and job_origin == "backfill"
+        and str(job_meta.get("backfill_category") or "") == "orphan"
+        and bool(exact_delete_item_ids)
+        and not expected_chunks
+    )
+    empty_source_orphan_delete = not normalized_source_id and orphan_exact_delete
+    if (
+        not normalized_source_type
+        or not normalized_revision
+        or (not normalized_source_id and not empty_source_orphan_delete)
+        or (exact_delete_item_ids and not orphan_exact_delete)
+    ):
         raise ValueError("semantic_reconcile_identity_incomplete")
     if (
         str(job.source_type or "") != normalized_source_type
@@ -266,7 +330,6 @@ def reconcile_semantic_source(
         .order_by(SemanticIndexJob.id.desc())
         .all()
     )
-    job_origin = semantic_job_origin(job)
     latest_business_job = next(
         (item for item in sibling_jobs if semantic_job_origin(item) == "business"),
         None,
@@ -332,6 +395,13 @@ def reconcile_semantic_source(
         source_ids=(normalized_source_id, *tuple(delete_source_ids)),
         index_version=None,
     )
+    if exact_delete_item_ids:
+        soft_delete_exact_source_items(
+            db,
+            source_type=normalized_source_type,
+            source_id=normalized_source_id,
+            item_ids=exact_delete_item_ids,
+        )
     rows = upsert_semantic_chunks(
         db,
         expected_chunks,

@@ -1336,6 +1336,11 @@ def enqueue_semantic_index_backfill(
                 "backfill_reasons": list(item.reasons),
                 "observed_business_head": observed_business_head,
                 "document_ids": list(snapshot.document_ids),
+                "delete_item_ids": (
+                    list(snapshot.document_ids)
+                    if item.category == "orphan"
+                    else []
+                ),
                 "document_id": (
                     snapshot.document_ids[0]
                     if snapshot.source_type == "session_summary" and snapshot.document_ids

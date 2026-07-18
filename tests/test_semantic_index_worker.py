@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -1156,6 +1157,8 @@ def test_backfill_orphan_delete_uses_business_head_observed_at_scan(db_session):
     backfill_job = db_session.query(SemanticIndexJob).filter(
         SemanticIndexJob.id != business_job.id,
     ).one()
+    backfill_meta = json.loads(backfill_job.meta_json)
+    assert backfill_meta["delete_item_ids"] == backfill_meta["document_ids"]
     claimed_backfill = claim_next_job(
         db_session,
         worker_id="backfill-worker",
@@ -1177,3 +1180,116 @@ def test_backfill_orphan_delete_uses_business_head_observed_at_scan(db_session):
     assert db_session.execute(text(
         "SELECT COUNT(*) FROM semantic_index_fts"
     )).scalar_one() == 0
+
+
+def test_legacy_empty_source_orphan_delete_uses_exact_item_ids(db_session):
+    from core.semantic.indexer import upsert_semantic_chunks
+    from core.semantic.jobs import claim_next_job, enqueue_index_job
+    from workers.semantic_index_worker import process_semantic_index_job
+
+    ensure_semantic_schema(db_session.bind)
+    chunks = [
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="",
+            source_sub_id=f"legacy:{index}",
+            title="历史孤儿索引",
+            text=f"历史孤儿索引 {index}",
+            lexical_text=f"历史孤儿索引 {index}",
+            embedding_text=f"历史孤儿索引 {index}",
+        )
+        for index in range(3)
+    ]
+    rows = upsert_semantic_chunks(
+        db_session,
+        chunks,
+        index_version="legacy:v1",
+        source_revision="legacy-empty-source",
+    )
+    job = enqueue_index_job(
+        db_session,
+        source_type="memory_digest",
+        source_id="",
+        job_type="delete",
+        index_version="legacy:v1",
+        source_revision="orphan-legacy-empty-source",
+        meta={
+            "job_origin": "backfill",
+            "backfill_category": "orphan",
+            "document_ids": [rows[0].id, rows[1].id],
+        },
+    )
+    claimed = claim_next_job(db_session, worker_id="legacy-orphan-worker")
+
+    result = process_semantic_index_job(
+        db_session,
+        claimed,
+        chunk_loader=lambda _job: (_ for _ in ()).throw(
+            AssertionError("delete 任务不得加载业务正文")
+        ),
+        embedding_provider=lambda: (_ for _ in ()).throw(
+            AssertionError("delete 任务不得调用 embedding")
+        ),
+    )
+
+    assert result is not None
+    assert result.status == "done"
+    db_session.expire_all()
+    assert {
+        row.id: row.status
+        for row in db_session.query(SemanticIndexItem).order_by(SemanticIndexItem.id).all()
+    } == {
+        rows[0].id: "deleted",
+        rows[1].id: "deleted",
+        rows[2].id: "active",
+    }
+    assert db_session.execute(text(
+        "SELECT rowid FROM semantic_index_fts ORDER BY rowid"
+    )).scalars().all() == [rows[2].id]
+
+
+def test_business_delete_cannot_use_empty_source_id(db_session):
+    from core.semantic.indexer import upsert_semantic_chunks
+    from core.semantic.jobs import claim_next_job, enqueue_index_job
+    from workers.semantic_index_worker import process_semantic_index_job
+
+    ensure_semantic_schema(db_session.bind)
+    row = upsert_semantic_chunks(
+        db_session,
+        [SemanticChunk(
+            source_type="memory_digest",
+            source_id="",
+            source_sub_id="business-empty-source",
+            title="不得由业务任务删除",
+            text="不得由业务任务删除",
+            lexical_text="不得由业务任务删除",
+            embedding_text="不得由业务任务删除",
+        )],
+        index_version="legacy:v1",
+        source_revision="business-empty-source",
+    )[0]
+    enqueue_index_job(
+        db_session,
+        source_type="memory_digest",
+        source_id="",
+        job_type="delete",
+        index_version="legacy:v1",
+        source_revision="business-delete-empty-source",
+        meta={"delete_item_ids": [row.id]},
+    )
+    claimed = claim_next_job(db_session, worker_id="business-delete-worker")
+
+    result = process_semantic_index_job(
+        db_session,
+        claimed,
+        chunk_loader=lambda _job: [],
+    )
+
+    assert result is not None
+    assert result.status == "failed"
+    assert result.error == "semantic_index_permanent_error:ValueError"
+    db_session.refresh(row)
+    assert row.status == "active"
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM semantic_index_fts"
+    )).scalar_one() == 1

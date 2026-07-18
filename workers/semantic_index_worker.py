@@ -227,6 +227,17 @@ def process_semantic_index_job(
         delete_source_ids = job_meta.get("delete_source_ids")
         if not isinstance(delete_source_ids, list):
             delete_source_ids = []
+        delete_item_ids = job_meta.get("delete_item_ids")
+        if not isinstance(delete_item_ids, list):
+            delete_item_ids = []
+        if (
+            not delete_item_ids
+            and str(job.job_type or "") == "delete"
+            and str(job_meta.get("backfill_category") or "") == "orphan"
+        ):
+            legacy_document_ids = job_meta.get("document_ids")
+            if isinstance(legacy_document_ids, list):
+                delete_item_ids = legacy_document_ids
         terminal_status = "done_with_warning" if embedding_error else "done"
         rows = reconcile_semantic_source(
             db,
@@ -237,6 +248,7 @@ def process_semantic_index_job(
             expected_chunks=[] if job.job_type == "delete" else chunks,
             delete_source_ids=delete_source_ids,
             lease=renewed,
+            delete_item_ids=delete_item_ids,
             embeddings=embeddings,
             embedding_enabled=embedding_provider is not None,
             status=terminal_status,
