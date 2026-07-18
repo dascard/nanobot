@@ -59,12 +59,9 @@ def _inject_persona_context(
     services: ChatRuntimeRouteServices,
     safe_user_input: str,
 ) -> tuple[str, dict[str, Any]]:
-    # 私聊画像以本次动态门禁结果为准；旧快照不得在 miss/异常时回流。
-    persona_text = runtime_input.persona_text if runtime_input.is_group else ""
+    # 所有聊天画像均以本次动态门禁结果为准；旧快照不得绕过关闭开关回流。
+    persona_text = ""
     ctx_debug = dict(runtime_input.ctx_debug)
-    if runtime_input.is_group:
-        return persona_text, ctx_debug
-
     try:
         persona_result = services.build_persona_context(
             user_id=runtime_input.req.user_id,

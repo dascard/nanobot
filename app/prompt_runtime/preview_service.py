@@ -133,7 +133,10 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
 
     persona_text = ""
     if user_id:
-        persona = db.query(Persona).filter(Persona.user_id == user_id).first()
+        persona = db.query(Persona).filter(
+            Persona.user_id == user_id,
+            Persona.status == "active",
+        ).first()
         if persona and persona.persona_json:
             persona_text = persona.persona_json
 

@@ -839,6 +839,8 @@ class NewAPIClient:
         headers = self._build_headers()
         last_error: str | None = None
         tracker = self._safe_get_failure_tracker()
+        attempted_models: list[str] = []
+        attempt_log_ids: list[int] = []
 
         # Iterate candidates in priority order, with configurable retry per model.
         # 429 → switch immediately; 502/503/504 → retry then switch.
@@ -851,6 +853,8 @@ class NewAPIClient:
                             f"(complexity={complexity}, intel={model.get('intelligence')})")
 
             for attempt in range(_attempts):  # per-model retry from settings
+                if target_model and target_model not in attempted_models:
+                    attempted_models.append(target_model)
                 payload = self._build_payload(
                     messages,
                     tools,
@@ -892,6 +896,8 @@ class NewAPIClient:
                     )
                 except Exception as _e:
                     logger.warning("record llm api request failed: %s", _e)
+                if int(log_id or 0) > 0:
+                    attempt_log_ids.append(int(log_id))
                 async with self._request_session() as session:
                     try:
                         async with session.post(
@@ -978,11 +984,19 @@ class NewAPIClient:
                                 logger.warning(f"new-api: {target_model} 429 rate-limited, switching")
                                 break  # break inner loop, move to next model
                             elif attempt == 0:
-                                logger.warning(f"new-api: {target_model} {resp.status}, retrying ({last_error})")
+                                logger.warning(
+                                    "new-api: %s status=%s, retrying",
+                                    target_model,
+                                    resp.status,
+                                )
                                 await asyncio.sleep(1)
                                 continue  # retry same model
                             else:
-                                logger.warning(f"new-api: {target_model} failed ({last_error}), switching")
+                                logger.warning(
+                                    "new-api: %s status=%s failed, switching",
+                                    target_model,
+                                    resp.status,
+                                )
                                 break  # exhausted retries, move to next model
 
                     except asyncio.TimeoutError as e:
@@ -1025,10 +1039,19 @@ class NewAPIClient:
                                 tracker.record_failure(target_model),
                                 label="record_failure",
                             )
-                        logger.warning(f"new-api network error: {target_model}, {e}, switching")
+                        logger.warning(
+                            "new-api network error: model=%s error_type=%s, switching",
+                            target_model,
+                            type(e).__name__,
+                        )
                         break  # network error → next model immediately
 
-        return {"error": "AllModelsFailed", "detail": last_error or "Unknown"}
+        return {
+            "error": "AllModelsFailed",
+            "detail": last_error or "Unknown",
+            "_nanobot_requested_models": attempted_models,
+            "_nanobot_request_log_ids": list(dict.fromkeys(attempt_log_ids)),
+        }
 
     async def chat_completion_stream(
         self,

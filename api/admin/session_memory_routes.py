@@ -6,10 +6,12 @@ import json
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.admin.common import verify_admin
+from api.memory_digest_contract import safe_memory_digest_report
+from app.memory_digest.retrieval_service import validate_digest_date_range
 from app.session_memory.rolling_summary import (
     archive_active_summaries_for_session,
     get_best_session_summary,
@@ -26,7 +28,7 @@ from app.session_memory.jobs import (
     retry_session_summary_job,
 )
 from app.session_memory.admin_browser import AdminSessionMemoryBrowser, _session_aliases
-from core.daily_digest import generate_daily_digest_for_date
+from core.daily_digest import generate_daily_digest_for_date_report
 from core.database import ConversationTurn, MemoryDigest, RollingSessionSummary, SessionSummaryJob, User, get_db
 
 router = APIRouter()
@@ -48,9 +50,10 @@ class RollingSummaryEnqueueRequest(BaseModel):
 
 
 class MemoryDigestRunAdminRequest(BaseModel):
-    target_date: str = ""
-    user_id: str = ""
+    target_date: str = Field(default="", max_length=10)
+    user_id: str = Field(default="", max_length=128)
     force: bool = True
+    retry_failed: bool = False
 
 
 def _summary_to_dict(row: RollingSessionSummary | None) -> dict:
@@ -254,6 +257,10 @@ def list_session_memory_digests(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
+    try:
+        date_start, date_end = validate_digest_date_range(date_start, date_end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return AdminSessionMemoryBrowser(db).list_digests(
         session_id,
         digest_limit_per_session=digest_limit_per_session,
@@ -266,38 +273,49 @@ def list_session_memory_digests(
 
 
 @router.post("/session-memory/{session_id}/digests/run")
-def run_session_memory_digest(
+async def run_session_memory_digest(
     session_id: str,
     body: MemoryDigestRunAdminRequest,
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    aliases = _session_aliases(session_id)
-    latest = (
-        db.query(MemoryDigest)
-        .filter(MemoryDigest.session_id.in_(aliases))
-        .order_by(MemoryDigest.digest_date.desc(), MemoryDigest.id.desc())
-        .first()
-    )
+    if len(session_id) > 256:
+        raise HTTPException(status_code=422, detail="session_id is too long")
     target_date = str(body.target_date or "").strip()
+    latest = None
     if not target_date:
+        aliases = _session_aliases(session_id)
+        latest = (
+            db.query(MemoryDigest)
+            .filter(MemoryDigest.session_id.in_(aliases))
+            .order_by(MemoryDigest.digest_date.desc(), MemoryDigest.id.desc())
+            .first()
+        )
         target_date = str(getattr(latest, "digest_date", "") or "").strip()
     if not target_date:
         raise HTTPException(status_code=404, detail="latest memory digest date not found")
 
-    selected_user_id = str(body.user_id or getattr(latest, "user_id", "") or session_id).strip()
-    created = generate_daily_digest_for_date(
-        target_date=target_date,
-        user_id=selected_user_id or None,
-        session_id=session_id,
-        force=bool(body.force),
-    )
+    selected_user_id = str(body.user_id or "").strip()
+    if len(selected_user_id) > 128:
+        raise HTTPException(status_code=422, detail="user_id is too long")
+    # 结束为解析默认日期而开启的只读事务，LLM 等待期间不持有 DB 事务。
+    db.rollback()
+    try:
+        report = await generate_daily_digest_for_date_report(
+            target_date=target_date,
+            user_id=selected_user_id or None,
+            session_id=session_id,
+            force=bool(body.force),
+            retry_failed=bool(body.retry_failed),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
+        **safe_memory_digest_report(report),
         "session_id": session_id,
-        "target_date": target_date,
         "user_id": selected_user_id,
         "force": bool(body.force),
-        "created_sessions": created,
+        "retry_failed": bool(body.retry_failed),
     }
 
 

@@ -333,6 +333,119 @@ def test_llm_digest_summarizes_all_source_rows_in_audited_batches():
     assert {card["evidence_log_ids"][0] for card in result.meta["recall_cards"]} == {1, 81, 161}
 
 
+def test_async_llm_digest_heartbeats_before_and_after_every_batch():
+    import re
+
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm_async
+
+    heartbeat_calls: list[int] = []
+    batch_calls: list[list[int]] = []
+
+    async def heartbeat():
+        heartbeat_calls.append(len(batch_calls))
+
+    async def summarizer(messages):
+        ids = [
+            int(item)
+            for item in re.findall(r"\[log_id=(\d+)\]", messages[-1]["content"])
+        ]
+        batch_calls.append(ids)
+        first_id = ids[0]
+        return json.dumps({
+            "preview": {"brief": f"批次 {len(batch_calls)} 摘要", "keywords": [f"批次{first_id}"]},
+            "long_summary": {"topic_flow": f"本批覆盖从批次{first_id}开始的长期摘要消息。"},
+            "recall_cards": [{
+                "card_id": "card_1",
+                "type": "fact",
+                "text": f"批次{first_id}包含长期摘要分批处理事实。",
+                "keywords": [f"批次{first_id}", "长期摘要"],
+                "importance": 0.8,
+                "evidence_log_ids": [first_id],
+            }],
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False)
+
+    result = run_async(build_memory_digest_with_llm_async(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[
+            _log(id=index, content=f"批次{index}包含长期摘要分批处理事实")
+            for index in range(1, 82)
+        ],
+        summarizer=summarizer,
+        heartbeat=heartbeat,
+    ))
+
+    assert result.status == "active"
+    assert [len(batch) for batch in batch_calls] == [80, 1]
+    assert len(heartbeat_calls) == 4
+
+
+def test_async_llm_digest_keeps_all_request_audit_when_final_merge_fails(
+    monkeypatch,
+):
+    from app.memory_digest import llm_builder
+    from app.memory_digest.builder import MemoryDigestBuildResult
+
+    calls = 0
+
+    async def summarizer(_messages):
+        nonlocal calls
+        calls += 1
+        return llm_builder.MemoryDigestLlmOutput(
+            content="{}",
+            model=f"actual-model-{calls}",
+            requested_model="requested-model",
+            request_log_id=100 + calls,
+            actual_model_observed=True,
+        )
+
+    monkeypatch.setattr(
+        llm_builder,
+        "_build_memory_digest_result_from_raw",
+        lambda *_args, **_kwargs: MemoryDigestBuildResult(
+            status="active",
+            meta={
+                "generator": "llm",
+                "llm_status": "success",
+                "quality": {"score": 0.9, "issues": []},
+            },
+            level_contents={0: "详细", 1: "预览", 2: "召回"},
+        ),
+    )
+    monkeypatch.setattr(
+        llm_builder,
+        "_merge_batch_results",
+        lambda *_args, **_kwargs: MemoryDigestBuildResult(
+            status="failed",
+            meta={
+                "generator": "deterministic_fallback",
+                "llm_status": "failed",
+            },
+            level_contents={},
+        ),
+    )
+
+    result = run_async(llm_builder.build_memory_digest_with_llm_async(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[
+            _log(id=index, content=f"第 {index} 条长期有效摘要来源")
+            for index in range(1, 82)
+        ],
+        summarizer=summarizer,
+    ))
+
+    assert calls == 2
+    assert result.status == "failed"
+    assert result.meta["llm_models"] == ["actual-model-1", "actual-model-2"]
+    assert result.meta["llm_requested_models"] == ["requested-model"]
+    assert result.meta["llm_request_log_ids"] == [101, 102]
+    assert result.meta["llm_actual_model_observed"] is True
+
+
 def test_llm_digest_rejects_card_whose_named_evidence_does_not_support_it():
     from app.memory_digest.llm_builder import audit_llm_digest_meta
 
@@ -492,7 +605,12 @@ def test_default_memory_digest_summarizer_returns_resolved_model_name(monkeypatc
     )
 
     async def fake_chat_completion(self, **_kwargs):
-        return {"choices": [{"message": {"content": "{}"}}]}
+        return {
+            "choices": [{"message": {"content": "{}"}}],
+            "model": "actual-summary-model",
+            "_nanobot_requested_model": "summary-model-v2",
+            "_nanobot_request_log_id": 321,
+        }
 
     monkeypatch.setattr(
         "clients.new_api_client.NewAPIClient.chat_completion",
@@ -504,8 +622,82 @@ def test_default_memory_digest_summarizer_returns_resolved_model_name(monkeypatc
     ]))
 
     assert isinstance(result, MemoryDigestLlmOutput)
-    assert result.model == "summary-model-v2"
+    assert result.model == "actual-summary-model"
+    assert result.requested_model == "summary-model-v2"
+    assert result.request_log_id == 321
     assert result.content == "{}"
+
+
+def test_default_memory_digest_summarizer_does_not_invent_actual_model(monkeypatch):
+    from app.memory_digest.llm_builder import default_llm_memory_digest_summarizer_async
+
+    monkeypatch.setattr(
+        "clients.classifier_client.resolve_model_route",
+        lambda _key: {
+            "api_key": "test",
+            "base_url": "http://example.invalid/v1",
+            "temperature": 0.1,
+            "model": "requested-summary-model",
+            "max_tokens": 1800,
+            "enable_thinking": "false",
+        },
+    )
+
+    async def fake_chat_completion(self, **_kwargs):
+        return {
+            "choices": [{"message": {"content": "{}"}}],
+            "_nanobot_model_id": "requested-summary-model",
+            "_nanobot_requested_model": "requested-summary-model",
+            "_nanobot_request_log_id": 654,
+        }
+
+    monkeypatch.setattr(
+        "clients.new_api_client.NewAPIClient.chat_completion",
+        fake_chat_completion,
+    )
+
+    result = run_async(default_llm_memory_digest_summarizer_async([
+        {"role": "user", "content": "测试"},
+    ]))
+
+    assert result.model == "unknown"
+    assert result.actual_model_observed is False
+    assert result.requested_model == "requested-summary-model"
+    assert result.request_log_id == 654
+
+
+def test_memory_digest_source_id_covers_full_source_manifest():
+    from app.memory_digest.llm_builder import _source_id
+
+    common = {
+        "session_id": "group_42",
+        "digest_date": "2026-05-22",
+    }
+    first = _source_id(
+        **common,
+        source_rows=[
+            {"log_id": 1, "line": "第一条"},
+            {"log_id": 3, "line": "第三条"},
+        ],
+    )
+    changed_middle = _source_id(
+        **common,
+        source_rows=[
+            {"log_id": 1, "line": "第一条"},
+            {"log_id": 2, "line": "第二条"},
+            {"log_id": 3, "line": "第三条"},
+        ],
+    )
+    changed_content = _source_id(
+        **common,
+        source_rows=[
+            {"log_id": 1, "line": "第一条被修改"},
+            {"log_id": 3, "line": "第三条"},
+        ],
+    )
+
+    assert first != changed_middle
+    assert first != changed_content
 
 
 @pytest.mark.parametrize(
@@ -1196,10 +1388,23 @@ def test_digest_status_respects_explicit_archived_for_legacy_meta():
 
 
 def test_memory_recall_rejects_invalid_date_filters(client):
-    r = client.get("/api/v1/memory/recall?keyword=KohakuVQ&date_start=2026-5-2")
+    malformed = client.get(
+        "/api/v1/memory/recall?keyword=KohakuVQ&date_start=2026-5-2"
+    )
+    invalid_calendar = client.get(
+        "/api/v1/memory/recall?keyword=KohakuVQ&date_start=2026-02-30"
+    )
+    reversed_range = client.get(
+        "/api/v1/memory/recall?keyword=KohakuVQ"
+        "&date_start=2026-05-03&date_end=2026-05-02"
+    )
 
-    assert r.status_code == 400
-    assert "date_start" in r.json()["detail"]
+    assert malformed.status_code == 400
+    assert "date_start" in malformed.json()["detail"]
+    assert invalid_calendar.status_code == 400
+    assert "date_start" in invalid_calendar.json()["detail"]
+    assert reversed_range.status_code == 400
+    assert "date_start" in reversed_range.json()["detail"]
 
 
 def test_memory_query_tool_search_and_expand(db_session, monkeypatch):
@@ -1262,13 +1467,20 @@ def test_memory_query_tool_rejects_invalid_date_range(monkeypatch):
     from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
 
     tool = MemoryQueryTool()
-    result = run_async(tool._execute({
+    malformed = run_async(tool._execute({
         "mode": "time",
         "date_start": "2026-5-2",
     }))
+    reversed_range = run_async(tool._execute({
+        "mode": "time",
+        "date_start": "2026-05-03",
+        "date_end": "2026-05-02",
+    }))
 
-    assert result.error
-    assert "date_start" in result.error
+    assert malformed.error
+    assert "date_start" in malformed.error
+    assert reversed_range.error
+    assert "date_start" in reversed_range.error
 
 
 def test_memory_query_tool_session_summary_search_and_expand(db_session, monkeypatch):

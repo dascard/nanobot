@@ -119,6 +119,102 @@ def test_summary_model_safe_defaults_migration_is_exact_and_one_time():
     assert value == "0.2"
 
 
+def test_memory_digest_jobs_migration_is_idempotent_and_enforces_source_key():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE memory_digests ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "digest_date TEXT, content TEXT, meta_json TEXT)"
+        ))
+        conn.execute(text(
+            "INSERT INTO memory_digests(id, digest_date, content, meta_json) "
+            "VALUES (7, '2026-07-17', '历史摘要正文', '{\"status\":\"active\"}')"
+        ))
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    assert "memory_digest_jobs" in inspector.get_table_names()
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("memory_digest_jobs")
+    }
+    assert {
+        "session_id",
+        "digest_date",
+        "source_revision",
+        "status",
+        "lease_token",
+        "lease_expires_at",
+        "attempt_count",
+        "retry_count",
+        "error_type",
+        "error_summary",
+        "result_digest_count",
+        "result_source_id",
+        "result_root_digest_id",
+        "result_semantic_job_id",
+    } <= columns
+    indexes = {
+        row["name"]: tuple(row["column_names"])
+        for row in inspector.get_indexes("memory_digest_jobs")
+    }
+    assert indexes["idx_memory_digest_job_claim"] == (
+        "status",
+        "lease_expires_at",
+        "id",
+    )
+    digest_columns = {
+        column["name"]
+        for column in inspector.get_columns("memory_digests")
+    }
+    assert "generation_job_id" in digest_columns
+    digest_indexes = {
+        row["name"]: tuple(row["column_names"])
+        for row in inspector.get_indexes("memory_digests")
+    }
+    assert digest_indexes["ix_memory_digests_generation_job_id"] == (
+        "generation_job_id",
+    )
+    with engine.connect() as conn:
+        historical = conn.execute(text(
+            "SELECT id, digest_date, content, meta_json, generation_job_id "
+            "FROM memory_digests WHERE id = 7"
+        )).mappings().one()
+    assert dict(historical) == {
+        "id": 7,
+        "digest_date": "2026-07-17",
+        "content": "历史摘要正文",
+        "meta_json": '{"status":"active"}',
+        "generation_job_id": None,
+    }
+
+    with engine.begin() as conn:
+        values = {
+            "session_id": "session-1",
+            "digest_date": "2026-07-18",
+        }
+        conn.execute(
+            text(
+                "INSERT INTO memory_digest_jobs(session_id, digest_date) "
+                "VALUES (:session_id, :digest_date)"
+            ),
+            values,
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO memory_digest_jobs(session_id, digest_date) "
+                    "VALUES (:session_id, :digest_date)"
+                ),
+                values,
+            )
+
+
 def test_semantic_index_reconcile_v2_migrates_legacy_jobs_idempotently():
     from core.schema_migrations import run_schema_migrations
 
@@ -650,3 +746,41 @@ def test_persona_fact_governance_columns_are_added_to_existing_table():
     assert rows[0].evidence_log_ids_json == "[]"
     assert rows[1].status == "review"
     assert rows[1].inject_policy == "manual_only"
+
+
+def test_memory_cleanup_governance_adds_archive_state_and_run_ledger():
+    from core.schema_migrations import _memory_cleanup_governance
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE personas ("
+            "user_id TEXT PRIMARY KEY, persona_json TEXT, updated_at DATETIME)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE persona_behaviors ("
+            "id INTEGER PRIMARY KEY, user_id TEXT, pattern TEXT)"
+        ))
+        _memory_cleanup_governance(conn, engine, None)
+        _memory_cleanup_governance(conn, engine, None)
+
+    inspector = inspect(engine)
+    persona_columns = {item["name"] for item in inspector.get_columns("personas")}
+    behavior_columns = {
+        item["name"] for item in inspector.get_columns("persona_behaviors")
+    }
+    assert {"status", "archive_meta_json"}.issubset(persona_columns)
+    assert {"status", "archive_meta_json"}.issubset(behavior_columns)
+    assert "memory_cleanup_runs" in inspector.get_table_names()
+    indexes = {item["name"] for item in inspector.get_indexes("memory_cleanup_runs")}
+    assert "idx_memory_cleanup_run_status" in indexes
+
+    with engine.connect() as conn:
+        conn.execute(text(
+            "INSERT INTO personas(user_id, persona_json) VALUES ('u1', '{}')"
+        ))
+        row = conn.execute(text(
+            "SELECT status, archive_meta_json FROM personas WHERE user_id='u1'"
+        )).one()
+    assert row.status == "active"
+    assert row.archive_meta_json == "{}"

@@ -18,6 +18,16 @@ import aiohttp
 from sqlalchemy import and_
 
 from app.memory_digest.builder import MemoryDigestBuilder
+from app.memory_digest.jobs import (
+    MemoryDigestJobClaim,
+    MemoryDigestJobLeaseLost,
+    claim_memory_digest_job,
+    finish_memory_digest_job,
+    heartbeat_memory_digest_job,
+    memory_digest_job_retryable,
+    memory_digest_source_snapshot,
+    settle_memory_digest_job_without_rows,
+)
 from app.memory_digest.llm_builder import build_memory_digest_with_llm, build_memory_digest_with_llm_async
 from app.memory_digest.renderer import render_recall_card
 from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
@@ -313,6 +323,7 @@ async def _build_memory_digest_result_async(
     logs: list[ChatLog],
     use_llm: bool | None,
     llm_summarizer: Callable[[list[dict[str, str]]], Any] | None,
+    heartbeat: Callable[[], Any] | None = None,
 ):
     llm_enabled = MEMORY_DIGEST_LLM_ENABLED if use_llm is None else bool(use_llm)
     if not llm_enabled:
@@ -329,6 +340,7 @@ async def _build_memory_digest_result_async(
         logs=logs,
         summarizer=llm_summarizer,
         llm_enabled=True,
+        heartbeat=heartbeat,
     )
 
 
@@ -412,9 +424,10 @@ def _write_memory_digest_rows(
     logs: list[ChatLog],
     result,
     force: bool,
-) -> bool:
+    generation_job_id: int | None = None,
+) -> dict[str, Any] | None:
     if result.status != "active" or str(result.meta.get("generator") or "") != "llm":
-        return False
+        return None
     start_id = logs[0].id
     end_id = logs[-1].id
     uid = logs[0].user_id or ""
@@ -439,6 +452,7 @@ def _write_memory_digest_rows(
         meta_json=json.dumps(_digest_row_meta(meta, summary_type="detailed_digest"), ensure_ascii=False),
         source_start_log_id=start_id,
         source_end_log_id=end_id,
+        generation_job_id=generation_job_id,
     )
     db.add(d0)
     db.flush()
@@ -454,6 +468,7 @@ def _write_memory_digest_rows(
         meta_json=json.dumps(_digest_row_meta(meta, summary_type="preview_digest"), ensure_ascii=False),
         source_start_log_id=start_id,
         source_end_log_id=end_id,
+        generation_job_id=generation_job_id,
     )
     db.add(d1)
     db.flush()
@@ -480,6 +495,7 @@ def _write_memory_digest_rows(
             meta_json=json.dumps(card_meta, ensure_ascii=False),
             source_start_log_id=start_id,
             source_end_log_id=end_id,
+            generation_job_id=generation_job_id,
         )
         db.add(d2)
         db.flush()
@@ -498,7 +514,7 @@ def _write_memory_digest_rows(
         archived_source_id = memory_digest_source_id(row)
         if archived_source_id and archived_source_id != logical_source_id:
             delete_source_ids.add(archived_source_id)
-    enqueue_index_job(
+    semantic_job = enqueue_index_job(
         db,
         source_type="memory_digest",
         source_id=logical_source_id,
@@ -512,10 +528,15 @@ def _write_memory_digest_rows(
             "delete_source_ids": sorted(delete_source_ids),
             "session_id": session_id,
             "digest_date": target_date,
+            "generation_job_id": generation_job_id,
         },
         commit=False,
     )
-    return result.status == "active"
+    return {
+        "digest_ids": [int(row.id) for row in written_rows],
+        "logical_source_id": logical_source_id,
+        "semantic_job_id": int(semantic_job.id),
+    }
 
 
 def generate_daily_digest_for_date(
@@ -581,6 +602,486 @@ def generate_daily_digest_for_date(
         db.close()
 
 
+def _memory_digest_failure_type(result: object) -> str:
+    meta = getattr(result, "meta", None)
+    if not isinstance(meta, Mapping):
+        return "build_failed"
+    structured = str(meta.get("failure_type") or "").strip()
+    if structured in {
+        "model_error",
+        "output_invalid",
+        "quality_rejected",
+        "generator_not_llm",
+        "input_invalid",
+        "template_invalid",
+        "build_failed",
+    }:
+        return structured
+    raw = " ".join(
+        str(value or "")
+        for value in (
+            meta.get("fallback_reason"),
+            meta.get("llm_error"),
+            meta.get("status"),
+            meta.get("llm_status"),
+        )
+    ).lower()
+    if any(token in raw for token in ("json_", "schema_invalid", "output_invalid")):
+        return "output_invalid"
+    if any(token in raw for token in ("evidence", "quality", "audit", "recall_card")):
+        return "quality_rejected"
+    if any(token in raw for token in ("timeout", "connection", "provider", "gateway", "llm_")):
+        return "model_error"
+    if str(meta.get("generator") or "") != "llm":
+        return "generator_not_llm"
+    return "build_failed"
+
+
+def _memory_digest_failure_retryable(error_type: str) -> bool:
+    return error_type in {
+        "model_error",
+        "output_invalid",
+        "quality_rejected",
+        "build_failed",
+    }
+
+
+def _memory_digest_result_payload(
+    *,
+    session_id: str,
+    status: str,
+    job_id: int | None = None,
+    retryable: bool = False,
+    error_type: str = "",
+) -> dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "status": status,
+        "job_id": job_id,
+        "retryable": bool(retryable),
+        "error_type": str(error_type or "")[:64],
+    }
+
+
+def _memory_digest_job_trace_meta(meta: object) -> dict[str, Any]:
+    if not isinstance(meta, Mapping):
+        return {"schema_version": 1}
+    quality = meta.get("quality")
+    return {
+        "schema_version": 1,
+        "llm_models": list(meta.get("llm_models") or []),
+        "llm_requested_models": list(meta.get("llm_requested_models") or []),
+        "llm_request_log_ids": list(meta.get("llm_request_log_ids") or []),
+        "llm_actual_model_observed": bool(
+            meta.get("llm_actual_model_observed", False)
+        ),
+        "quality_score": (
+            quality.get("score")
+            if isinstance(quality, Mapping)
+            else None
+        ),
+    }
+
+
+def _memory_digest_report(
+    *,
+    target_date: str,
+    results: list[dict[str, Any]],
+    no_input: bool = False,
+) -> dict[str, Any]:
+    counts = {
+        "created": 0,
+        "skipped": 0,
+        "no_input": 1 if no_input else 0,
+        "failed": 0,
+        "in_progress": 0,
+    }
+    for item in results:
+        status = str(item.get("status") or "")
+        if status in counts:
+            counts[status] += 1
+    if no_input:
+        status = "no_input"
+    elif counts["failed"] and counts["created"]:
+        status = "partial"
+    elif counts["failed"]:
+        status = "failed"
+    elif counts["in_progress"]:
+        status = "partial"
+    else:
+        status = "ok"
+    return {
+        "status": status,
+        "target_date": target_date,
+        "created_sessions": counts["created"],
+        "counts": counts,
+        "results": results,
+    }
+
+
+def _settle_memory_digest_failure(
+    claim: MemoryDigestJobClaim,
+    *,
+    session_id: str,
+    error_type: str,
+    retryable: bool,
+    meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        row = settle_memory_digest_job_without_rows(
+            db,
+            claim,
+            status="failed",
+            error_type=error_type,
+            error_summary=f"memory_digest_failed:{error_type}",
+            retryable=retryable,
+            meta=meta,
+        )
+        if row is None:
+            return _memory_digest_result_payload(
+                session_id=session_id,
+                status="in_progress",
+                job_id=claim.job_id,
+                error_type="lease_lost",
+            )
+        return _memory_digest_result_payload(
+            session_id=session_id,
+            status="failed",
+            job_id=claim.job_id,
+            retryable=bool(retryable and memory_digest_job_retryable(row)),
+            error_type=error_type,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "MemoryDigest failure settlement failed: session_id=%s error_type=%s",
+            session_id,
+            type(exc).__name__,
+        )
+        return _memory_digest_result_payload(
+            session_id=session_id,
+            status="failed",
+            job_id=claim.job_id,
+            error_type="job_settlement_failed",
+        )
+    finally:
+        db.close()
+
+
+async def _generate_memory_digest_session_report(
+    *,
+    target_date: str,
+    current_session_id: str,
+    logs: list[ChatLog],
+    source_user_id: str | None,
+    force: bool,
+    retry_failed: bool,
+    use_llm: bool | None,
+    llm_summarizer: Callable[[list[dict[str, str]]], Any] | None,
+) -> dict[str, Any]:
+    snapshot = memory_digest_source_snapshot(
+        session_id=current_session_id,
+        digest_date=target_date,
+        logs=logs,
+    )
+    claim_db = SessionLocal()
+    try:
+        if (
+            not force
+            and not retry_failed
+            and _already_digested(claim_db, current_session_id, target_date)
+        ):
+            return _memory_digest_result_payload(
+                session_id=current_session_id,
+                status="skipped",
+            )
+        claim = claim_memory_digest_job(
+            claim_db,
+            snapshot,
+            force=force,
+            retry_failed=retry_failed,
+        )
+    except Exception as exc:
+        claim_db.rollback()
+        logger.error(
+            "MemoryDigest claim failed: session_id=%s error_type=%s",
+            current_session_id,
+            type(exc).__name__,
+        )
+        return _memory_digest_result_payload(
+            session_id=current_session_id,
+            status="failed",
+            error_type="claim_failed",
+        )
+    finally:
+        claim_db.close()
+
+    if claim.decision in {"done", "skipped"}:
+        return _memory_digest_result_payload(
+            session_id=current_session_id,
+            status="skipped",
+            job_id=claim.job_id,
+        )
+    if claim.decision == "in_progress":
+        return _memory_digest_result_payload(
+            session_id=current_session_id,
+            status="in_progress",
+            job_id=claim.job_id,
+        )
+    if claim.decision == "failed":
+        return _memory_digest_result_payload(
+            session_id=current_session_id,
+            status="failed",
+            job_id=claim.job_id,
+            retryable=claim.retryable,
+            error_type=claim.error_type,
+        )
+
+    def heartbeat() -> None:
+        heartbeat_db = SessionLocal()
+        try:
+            heartbeat_memory_digest_job(heartbeat_db, claim)
+        finally:
+            heartbeat_db.close()
+
+    try:
+        result = await _build_memory_digest_result_async(
+            user_id=snapshot.user_id,
+            session_id=current_session_id,
+            digest_date=target_date,
+            logs=logs,
+            use_llm=use_llm,
+            llm_summarizer=llm_summarizer,
+            heartbeat=heartbeat,
+        )
+    except MemoryDigestJobLeaseLost:
+        return _memory_digest_result_payload(
+            session_id=current_session_id,
+            status="in_progress",
+            job_id=claim.job_id,
+            error_type="lease_lost",
+        )
+    except Exception as exc:
+        logger.error(
+            "MemoryDigest build raised: session_id=%s error_type=%s",
+            current_session_id,
+            type(exc).__name__,
+        )
+        return _settle_memory_digest_failure(
+            claim,
+            session_id=current_session_id,
+            error_type="model_error",
+            retryable=True,
+        )
+
+    if result.status == "skipped":
+        settle_db = SessionLocal()
+        try:
+            row = settle_memory_digest_job_without_rows(
+                settle_db,
+                claim,
+                status="skipped",
+            )
+        except Exception as exc:
+            settle_db.rollback()
+            logger.error(
+                "MemoryDigest skipped settlement failed: session_id=%s error_type=%s",
+                current_session_id,
+                type(exc).__name__,
+            )
+            return _settle_memory_digest_failure(
+                claim,
+                session_id=current_session_id,
+                error_type="job_settlement_failed",
+                retryable=True,
+            )
+        finally:
+            settle_db.close()
+        return _memory_digest_result_payload(
+            session_id=current_session_id,
+            status="skipped" if row is not None else "in_progress",
+            job_id=claim.job_id,
+            error_type="" if row is not None else "lease_lost",
+        )
+
+    generator = str(getattr(result, "meta", {}).get("generator") or "")
+    if result.status != "active" or generator != "llm":
+        error_type = _memory_digest_failure_type(result)
+        return _settle_memory_digest_failure(
+            claim,
+            session_id=current_session_id,
+            error_type=error_type,
+            retryable=_memory_digest_failure_retryable(error_type),
+            meta=_memory_digest_job_trace_meta(getattr(result, "meta", None)),
+        )
+
+    write_db = SessionLocal()
+    try:
+        fresh_by_session = _collect_daily_digest_logs_by_session(
+            write_db,
+            target_date=target_date,
+            user_id=source_user_id,
+            session_id=current_session_id,
+        )
+        fresh_logs = fresh_by_session.get(current_session_id, [])
+        fresh_snapshot = memory_digest_source_snapshot(
+            session_id=current_session_id,
+            digest_date=target_date,
+            logs=fresh_logs,
+        )
+        if fresh_snapshot.source_revision != claim.source_revision:
+            row = settle_memory_digest_job_without_rows(
+                write_db,
+                claim,
+                status="failed",
+                error_type="source_changed",
+                error_summary="memory_digest_failed:source_changed",
+                retryable=True,
+            )
+            return _memory_digest_result_payload(
+                session_id=current_session_id,
+                status="failed" if row is not None else "in_progress",
+                job_id=claim.job_id,
+                retryable=bool(
+                    row is not None and memory_digest_job_retryable(row)
+                ),
+                error_type="source_changed" if row is not None else "lease_lost",
+            )
+
+        write_result = _write_memory_digest_rows(
+            write_db,
+            session_id=current_session_id,
+            target_date=target_date,
+            logs=fresh_logs,
+            result=result,
+            force=bool(force or retry_failed),
+            generation_job_id=claim.job_id,
+        )
+        if not write_result:
+            raise RuntimeError("memory_digest_rows_not_written")
+        digest_ids = list(write_result["digest_ids"])
+        finish_memory_digest_job(
+            write_db,
+            claim,
+            result_digest_count=len(digest_ids),
+            result_source_id=str(write_result["logical_source_id"]),
+            result_root_digest_id=int(digest_ids[0]),
+            result_semantic_job_id=int(write_result["semantic_job_id"]),
+            meta=_memory_digest_job_trace_meta(result.meta),
+        )
+        write_db.commit()
+    except MemoryDigestJobLeaseLost:
+        write_db.rollback()
+        return _memory_digest_result_payload(
+            session_id=current_session_id,
+            status="in_progress",
+            job_id=claim.job_id,
+            error_type="lease_lost",
+        )
+    except Exception as exc:
+        write_db.rollback()
+        logger.error(
+            "MemoryDigest write failed: session_id=%s error_type=%s",
+            current_session_id,
+            type(exc).__name__,
+        )
+        return _settle_memory_digest_failure(
+            claim,
+            session_id=current_session_id,
+            error_type="write_failed",
+            retryable=True,
+        )
+    finally:
+        write_db.close()
+
+    return _memory_digest_result_payload(
+        session_id=current_session_id,
+        status="created",
+        job_id=claim.job_id,
+    )
+
+
+async def generate_daily_digest_for_date_report(
+    target_date: str,
+    user_id: str | None = None,
+    *,
+    session_id: str | None = None,
+    force: bool = False,
+    retry_failed: bool = False,
+    use_llm: bool | None = None,
+    llm_summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
+) -> dict[str, Any]:
+    """生成结构化运行报告；LLM 调用期间不持有数据库会话。"""
+
+    normalized_target_date = str(target_date or "").strip()
+    try:
+        parsed_target_date = datetime.strptime(
+            normalized_target_date,
+            "%Y-%m-%d",
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("target_date must be a valid YYYY-MM-DD date") from exc
+    if parsed_target_date.strftime("%Y-%m-%d") != normalized_target_date:
+        raise ValueError("target_date must be a valid YYYY-MM-DD date")
+    try:
+        parsed_target_date + timedelta(days=1)
+    except OverflowError as exc:
+        raise ValueError("target_date is outside the supported date range") from exc
+    target_date = normalized_target_date
+
+    snapshot_db = SessionLocal()
+    try:
+        by_session = _collect_daily_digest_logs_by_session(
+            snapshot_db,
+            target_date=target_date,
+            user_id=user_id,
+            session_id=session_id,
+        )
+    finally:
+        snapshot_db.close()
+    if not by_session:
+        return _memory_digest_report(
+            target_date=target_date,
+            results=[],
+            no_input=True,
+        )
+
+    results = []
+    for current_session_id, logs in by_session.items():
+        try:
+            item = await _generate_memory_digest_session_report(
+                target_date=target_date,
+                current_session_id=current_session_id,
+                logs=logs,
+                source_user_id=user_id,
+                force=force,
+                retry_failed=retry_failed,
+                use_llm=use_llm,
+                llm_summarizer=llm_summarizer,
+            )
+        except Exception as exc:
+            logger.error(
+                "MemoryDigest session processing failed: session_id=%s error_type=%s",
+                current_session_id,
+                type(exc).__name__,
+            )
+            item = _memory_digest_result_payload(
+                session_id=current_session_id,
+                status="failed",
+                error_type="session_processing_failed",
+            )
+        results.append(item)
+    report = _memory_digest_report(target_date=target_date, results=results)
+    if report["created_sessions"]:
+        logger.info(
+            "Daily digest generated for %d session(s), date=%s",
+            report["created_sessions"],
+            target_date,
+        )
+    return report
+
+
 async def generate_daily_digest_for_date_async(
     target_date: str,
     user_id: str | None = None,
@@ -591,58 +1092,17 @@ async def generate_daily_digest_for_date_async(
     llm_summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
 ) -> int:
     """
-    Summarize one day of chat logs with an async LLM boundary.
-
-    The database work remains synchronous; only the LLM summarizer boundary is
-    awaited here so sync callers never have to run an awaitable implicitly.
+    兼容旧调用方的异步入口，只返回成功创建的 session 数。
     """
-    db = SessionLocal()
-    created = 0
-    try:
-        by_session = _collect_daily_digest_logs_by_session(
-            db,
-            target_date=target_date,
-            user_id=user_id,
-            session_id=session_id,
-        )
-
-        for session_id, logs in by_session.items():
-            if not logs:
-                continue
-            if not force and _already_digested(db, session_id, target_date):
-                continue
-
-            result = await _build_memory_digest_result_async(
-                user_id=logs[0].user_id or "",
-                session_id=session_id,
-                digest_date=target_date,
-                logs=logs,
-                use_llm=use_llm,
-                llm_summarizer=llm_summarizer,
-            )
-
-            if _write_memory_digest_rows(
-                db,
-                session_id=session_id,
-                target_date=target_date,
-                logs=logs,
-                result=result,
-                force=force,
-            ):
-                created += 1
-
-        db.commit()
-        if created > 0:
-            logger.info(
-                f"Daily digest generated for {created} session(s), date={target_date}"
-            )
-        return created
-    except Exception:
-        db.rollback()
-        logger.exception(f"Daily digest failed for date={target_date}")
-        return 0
-    finally:
-        db.close()
+    report = await generate_daily_digest_for_date_report(
+        target_date=target_date,
+        user_id=user_id,
+        session_id=session_id,
+        force=force,
+        use_llm=use_llm,
+        llm_summarizer=llm_summarizer,
+    )
+    return int(report["created_sessions"])
 
 
 def run_daily_digest_once() -> int:

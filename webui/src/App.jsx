@@ -1954,7 +1954,6 @@ function SessionSummaryBrowser({ mode }) {
     api.post(`/session-memory/${encodeURIComponent(selectedSession)}/digests/run`, {
       force: true,
       target_date: selectedSessionInfo?.latest_digest_date || '',
-      user_id: selectedSessionInfo?.user_id || '',
     })
       .then(() => refreshAfterOperation())
       .catch(e => setOperationError(formatApiError(e)))

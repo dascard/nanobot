@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from core.database import (
     ConversationTurn,
@@ -334,6 +335,67 @@ def test_admin_session_memory_summary_and_digest_details_are_per_session(client,
     assert digest_item["source_start_log_id"] == 200
     assert digest_item["source_end_log_id"] == 260
     assert digest_item["content"] == "完整长期摘要内容"
+
+
+def test_admin_session_memory_digest_details_reject_invalid_calendar_date(
+    client,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    response = client.get(
+        "/api/v1/admin/session-memory/sessions/private_1/digests",
+        headers=_auth_header(),
+        params={"date_start": "2026-02-30"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "date_start must be a valid YYYY-MM-DD date"
+
+
+def test_admin_session_memory_digest_details_reject_reversed_date_range(
+    client,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    response = client.get(
+        "/api/v1/admin/session-memory/sessions/private_1/digests",
+        headers=_auth_header(),
+        params={
+            "date_start": "2026-05-29",
+            "date_end": "2026-05-28",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == (
+        "date_start must be earlier than or equal to date_end"
+    )
+
+
+def test_admin_session_memory_digest_details_do_not_reclassify_internal_value_error(
+    client,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(client._transport, "raise_server_exceptions", False)
+
+    def raise_corrupt_row_error(*_args, **_kwargs):
+        raise ValueError("corrupt-row-private-sentinel")
+
+    monkeypatch.setattr(
+        "api.admin.session_memory_routes.AdminSessionMemoryBrowser.list_digests",
+        raise_corrupt_row_error,
+    )
+
+    response = client.get(
+        "/api/v1/admin/session-memory/sessions/private_1/digests",
+        headers=_auth_header(),
+    )
+
+    assert response.status_code == 500
+    assert "corrupt-row-private-sentinel" not in response.text
 
 
 def test_admin_session_memory_digest_details_expose_generation_metadata(client, db_session, monkeypatch):
@@ -696,7 +758,7 @@ def test_admin_session_memory_long_digest_run_endpoint_regenerates_selected_sess
     db_session.commit()
     calls = []
 
-    def fake_generate_daily_digest_for_date(*, target_date, user_id=None, session_id=None, force=False, **kwargs):
+    async def fake_generate_daily_digest_for_date_report(*, target_date, user_id=None, session_id=None, force=False, **kwargs):
         calls.append({
             "target_date": target_date,
             "user_id": user_id,
@@ -704,11 +766,23 @@ def test_admin_session_memory_long_digest_run_endpoint_regenerates_selected_sess
             "force": force,
             "kwargs": kwargs,
         })
-        return 1
+        return {
+            "status": "ok",
+            "target_date": target_date,
+            "created_sessions": 1,
+            "counts": {
+                "created": 1,
+                "skipped": 0,
+                "no_input": 0,
+                "failed": 0,
+                "in_progress": 0,
+            },
+            "results": [],
+        }
 
     monkeypatch.setattr(
-        "api.admin.session_memory_routes.generate_daily_digest_for_date",
-        fake_generate_daily_digest_for_date,
+        "api.admin.session_memory_routes.generate_daily_digest_for_date_report",
+        fake_generate_daily_digest_for_date_report,
     )
 
     response = client.post(
@@ -721,8 +795,17 @@ def test_admin_session_memory_long_digest_run_endpoint_regenerates_selected_sess
     assert response.json()["created_sessions"] == 1
     assert calls == [{
         "target_date": "2026-05-31",
-        "user_id": "group_1",
+        "user_id": None,
         "session_id": "group_1",
         "force": True,
-        "kwargs": {},
+        "kwargs": {"retry_failed": False},
     }]
+
+
+def test_webui_long_digest_regeneration_does_not_add_sender_filter():
+    source = Path("webui/src/App.jsx").read_text(encoding="utf-8")
+    block = source.split("const regenerateLongDigest = useCallback", 1)[1]
+    block = block.split("const retrySummaryJob = useCallback", 1)[0]
+
+    assert "target_date: selectedSessionInfo?.latest_digest_date || ''" in block
+    assert "user_id:" not in block

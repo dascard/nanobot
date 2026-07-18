@@ -259,7 +259,10 @@ def get_context(
     _auth=Depends(verify_token),
 ):
     """返回拼合后的系统设定 + 用户画像 + 近期上下文，供前端注入脚本使用。"""
-    persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
+    persona_obj = db.query(Persona).filter(
+        Persona.user_id == user_id,
+        Persona.status == "active",
+    ).first()
     sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == user_id).first()
 
     # 提取最近上下文 (Stateless Sliding Window)

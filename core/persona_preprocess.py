@@ -160,7 +160,10 @@ class PersonaStateMachine:
         # 一次性预取所有现有 facts（避免 N+1）
         existing_facts = (
             self.db.query(PersonaFact)
-            .filter(PersonaFact.user_id == self.user_id)
+            .filter(
+                PersonaFact.user_id == self.user_id,
+                PersonaFact.status.notin_(("archived", "rejected")),
+            )
             .order_by(PersonaFact.last_seen.desc())
             .limit(MAX_FACTS_PER_USER)
             .all()
@@ -327,6 +330,7 @@ class PersonaStateMachine:
                 PersonaFact.user_id == self.user_id,
                 PersonaFact.memory_type == memory_type,
                 PersonaFact.content_hash == target_hash,
+                PersonaFact.status.notin_(("archived", "rejected")),
             )
             .first()
         )
@@ -646,6 +650,7 @@ class PersonaStateMachine:
             .filter(
                 PersonaFact.user_id == self.user_id,
                 PersonaFact.confidence != "归档",
+                PersonaFact.status.notin_(("archived", "rejected")),
             )
             .all()
         )
@@ -676,6 +681,7 @@ class PersonaStateMachine:
             .filter(
                 PersonaFact.user_id == self.user_id,
                 PersonaFact.confidence != "归档",
+                PersonaFact.status.notin_(("archived", "rejected")),
             )
             .order_by(PersonaFact.evidence_count.asc())
             .all()

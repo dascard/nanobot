@@ -31,7 +31,7 @@ class SQLAnalysisTool(BaseTool):
         "sender_name,session_name,role=user/assistant/ambient/tool/model,content,created_at,message_id,meta_json)；"
         "conversation_turns 精简对话上下文(id,user_id,session_id,role=user/assistant,content,created_at,meta_json)；"
         "users 用户/群聊(id,name,history_clear_at,created_at)；"
-        "personas 用户画像(user_id,persona_json,updated_at)。"
+        "personas 用户画像(user_id,persona_json,status,updated_at；仅 active 可消费)。"
         "私聊查“上一句/刚才说过什么/聊天记录/某用户历史发言”时优先查 chat_logs 或 conversation_turns。"
         "群聊现场消息主要是 role='ambient'；当前群消息在工具执行前通常已入库，"
         "查上一条群消息要排除 runtime_context.current_message_id，或使用 ORDER BY id DESC LIMIT 1 OFFSET 1。"

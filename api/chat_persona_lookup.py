@@ -54,9 +54,13 @@ def resolve_chat_persona_snapshot(
     matched_user_id: str | None = None
     for candidate in candidates:
         persona_obj = db.query(persona_model).filter(persona_model.user_id == candidate).first()
-        if persona_obj is not None:
+        if (
+            persona_obj is not None
+            and str(getattr(persona_obj, "status", "active") or "") == "active"
+        ):
             matched_user_id = candidate
             break
+        persona_obj = None
 
     persona_json = str(getattr(persona_obj, "persona_json", "{}") if persona_obj else "{}")
     persona_data, parse_failed = _parse_persona_json(persona_json)

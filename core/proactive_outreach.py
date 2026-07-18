@@ -886,7 +886,10 @@ def build_outreach_grounding(
 
     current = now or datetime.now()
     with _session_scope(db) as session:
-        persona = session.query(Persona).filter(Persona.user_id == user_id).first()
+        persona = session.query(Persona).filter(
+            Persona.user_id == user_id,
+            Persona.status == "active",
+        ).first()
         recent_rows = (
             _private_conversation_query(
                 session,

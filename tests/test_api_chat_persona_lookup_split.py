@@ -37,12 +37,21 @@ class FakeQuery:
         value = self.db.rows.get(self.current_user_id)
         if value is None:
             return None
-        return SimpleNamespace(user_id=self.current_user_id, persona_json=value)
+        return SimpleNamespace(
+            user_id=self.current_user_id,
+            persona_json=value,
+            status=self.db.statuses.get(self.current_user_id, "active"),
+        )
 
 
 class FakeDb:
-    def __init__(self, rows: dict[str, str]) -> None:
+    def __init__(
+        self,
+        rows: dict[str, str],
+        statuses: dict[str, str] | None = None,
+    ) -> None:
         self.rows = rows
+        self.statuses = statuses or {}
         self.queries: list[str] = []
 
     def query(self, model: Any) -> FakeQuery:
@@ -106,6 +115,29 @@ def test_resolve_persona_snapshot_uses_first_matching_candidate_and_formatter():
     assert snapshot.persona_data == {"persona_summary": "fallback"}
     assert snapshot.persona_text == "persona:fallback"
     assert formatter_calls == [{"persona_summary": "fallback"}]
+
+
+def test_resolve_persona_snapshot_skips_archived_candidate():
+    from api.chat_persona_lookup import resolve_chat_persona_snapshot
+
+    db = FakeDb(
+        {
+            "u1": json.dumps({"persona_summary": "archived"}),
+            "private_u1": json.dumps({"persona_summary": "active"}),
+        },
+        statuses={"u1": "archived"},
+    )
+
+    snapshot = resolve_chat_persona_snapshot(
+        db,
+        "u1",
+        persona_model=FakePersonaModel,
+        format_persona=lambda data: str(data.get("persona_summary") or ""),
+    )
+
+    assert db.queries == ["u1", "private_u1"]
+    assert snapshot.matched_user_id == "private_u1"
+    assert snapshot.persona_text == "active"
 
 
 def test_resolve_persona_snapshot_falls_back_to_empty_data_for_missing_or_invalid_json():
@@ -174,7 +206,11 @@ def test_parent_persona_lookup_wrapper_remains_patchable(monkeypatch):
     assert calls == [(db, "u-patched", routes.Persona)]
 
 
-def test_proxy_chat_persona_fallback_still_reaches_bridge_metadata(client, db_session, monkeypatch):
+def test_proxy_chat_group_persona_does_not_bypass_disabled_gate(
+    client,
+    db_session,
+    monkeypatch,
+):
     from core.database import Persona
     from unittest.mock import AsyncMock, patch
 
@@ -204,4 +240,4 @@ def test_proxy_chat_persona_fallback_still_reaches_bridge_metadata(client, db_se
 
     assert response.status_code == 200
     _, kwargs = mock_bridge.handle_message.await_args
-    assert "fallback persona" in kwargs["metadata"]["persona_text"]
+    assert kwargs["metadata"]["persona_text"] == ""

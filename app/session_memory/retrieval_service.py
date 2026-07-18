@@ -9,15 +9,17 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.memory_digest.retrieval_service import validate_digest_date
+from app.memory_digest.retrieval_service import validate_digest_date_range
 from core.database import RollingSessionSummary
 
 
 def _date_bounds(date_start: str = "", date_end: str = "") -> tuple[datetime | None, datetime | None]:
-    start = validate_digest_date(date_start, "date_start")
-    end = validate_digest_date(date_end, "date_end")
+    start, end = validate_digest_date_range(date_start, date_end)
     start_dt = datetime.fromisoformat(start) if start else None
-    end_dt = datetime.fromisoformat(end) + timedelta(days=1) if end else None
+    try:
+        end_dt = datetime.fromisoformat(end) + timedelta(days=1) if end else None
+    except OverflowError as exc:
+        raise ValueError("date_end is outside the supported date range") from exc
     return start_dt, end_dt
 
 

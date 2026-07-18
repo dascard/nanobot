@@ -8,7 +8,11 @@ from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
-from app.memory_digest.retrieval_service import MemoryDigestRetrievalService, validate_digest_date
+from app.memory_digest.retrieval_service import (
+    MemoryDigestRetrievalService,
+    validate_digest_date,
+    validate_digest_date_range,
+)
 from app.session_memory.retrieval_service import SessionSummaryRetrievalService
 from core.uow import UnitOfWork
 
@@ -304,8 +308,10 @@ class MemoryQueryTool(BaseTool):
     @staticmethod
     def _validate_date_args(args: dict[str, Any]) -> None:
         validate_digest_date(str(args.get("digest_date") or "").strip(), "digest_date")
-        validate_digest_date(str(args.get("date_start") or "").strip(), "date_start")
-        validate_digest_date(str(args.get("date_end") or "").strip(), "date_end")
+        validate_digest_date_range(
+            str(args.get("date_start") or "").strip(),
+            str(args.get("date_end") or "").strip(),
+        )
 
     def _search(
         self,

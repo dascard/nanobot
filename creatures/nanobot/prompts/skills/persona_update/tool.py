@@ -79,9 +79,10 @@ class PersonaUpdateTool(BaseTool):
             db = SessionLocal()
             try:
                 # 1. Read existing persona
-
-                # 1. Read existing persona
-                persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
+                persona_obj = db.query(Persona).filter(
+                    Persona.user_id == user_id,
+                    Persona.status == "active",
+                ).first()
                 existing_persona = persona_obj.persona_json if persona_obj else "{}"
 
                 # 2. Read recent chat logs (last 50)

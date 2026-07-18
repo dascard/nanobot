@@ -1698,6 +1698,100 @@ def _summary_model_safe_defaults(conn: Any, engine: Any, db_path: str | None) ->
         )
 
 
+def _memory_digest_jobs(conn: Any, engine: Any, db_path: str | None) -> None:
+    """创建 MemoryDigest 生成、租约和重试账本。"""
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS memory_digest_jobs ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "session_id TEXT NOT NULL, "
+        "digest_date TEXT NOT NULL, "
+        "user_id TEXT NOT NULL DEFAULT '', "
+        "source_start_log_id INTEGER NOT NULL DEFAULT 0, "
+        "source_end_log_id INTEGER NOT NULL DEFAULT 0, "
+        "source_log_count INTEGER NOT NULL DEFAULT 0, "
+        "source_revision TEXT NOT NULL DEFAULT '', "
+        "status TEXT NOT NULL DEFAULT 'pending', "
+        "locked_by TEXT NOT NULL DEFAULT '', "
+        "lease_token TEXT NOT NULL DEFAULT '', "
+        "lease_expires_at DATETIME, "
+        "attempt_count INTEGER NOT NULL DEFAULT 0, "
+        "retry_count INTEGER NOT NULL DEFAULT 0, "
+        "max_retry INTEGER NOT NULL DEFAULT 3, "
+        "next_retry_at DATETIME, "
+        "result_digest_count INTEGER NOT NULL DEFAULT 0, "
+        "result_source_id TEXT NOT NULL DEFAULT '', "
+        "result_root_digest_id INTEGER, "
+        "result_semantic_job_id INTEGER, "
+        "error_type TEXT NOT NULL DEFAULT '', "
+        "error_summary TEXT NOT NULL DEFAULT '', "
+        "meta_json TEXT NOT NULL DEFAULT '{}', "
+        "finished_at DATETIME, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT uq_memory_digest_job_source "
+        "UNIQUE(session_id, digest_date)"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_memory_digest_job_claim "
+        "ON memory_digest_jobs(status, lease_expires_at, id)",
+        "CREATE INDEX IF NOT EXISTS idx_memory_digest_job_retry "
+        "ON memory_digest_jobs(status, next_retry_at, id)",
+    ])
+    _add_missing_columns(conn, "memory_digests", {
+        "generation_job_id": "INTEGER",
+    })
+    if "memory_digests" in _table_names(conn):
+        _create_indexes(conn, [
+            "CREATE INDEX IF NOT EXISTS ix_memory_digests_generation_job_id "
+            "ON memory_digests(generation_job_id)",
+        ])
+
+
+def _memory_cleanup_governance(conn: Any, engine: Any, db_path: str | None) -> None:
+    """为历史记忆归档提供显式状态和幂等执行账本。"""
+
+    _add_missing_columns(conn, "personas", {
+        "status": "TEXT NOT NULL DEFAULT 'active'",
+        "archive_meta_json": "TEXT NOT NULL DEFAULT '{}'",
+    })
+    _add_missing_columns(conn, "persona_behaviors", {
+        "status": "TEXT NOT NULL DEFAULT 'active'",
+        "archive_meta_json": "TEXT NOT NULL DEFAULT '{}'",
+    })
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS memory_cleanup_runs ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "cleanup_version VARCHAR(64) NOT NULL DEFAULT '', "
+        "bundle_sha256 VARCHAR(64) NOT NULL, "
+        "status VARCHAR(24) NOT NULL DEFAULT 'applying', "
+        "actor VARCHAR(255) NOT NULL DEFAULT 'cli', "
+        "audit_log_id INTEGER, "
+        "target_counts_json TEXT NOT NULL DEFAULT '{}', "
+        "result_json TEXT NOT NULL DEFAULT '{}', "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "applied_at DATETIME, "
+        "CONSTRAINT uq_memory_cleanup_run_bundle_sha256 UNIQUE(bundle_sha256)"
+        ")"
+    ))
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_memory_cleanup_run_status "
+        "ON memory_cleanup_runs(status, id)",
+    ]
+    tables = _table_names(conn)
+    if "personas" in tables:
+        indexes.append(
+            "CREATE INDEX IF NOT EXISTS ix_personas_status ON personas(status)"
+        )
+    if "persona_behaviors" in tables:
+        indexes.append(
+            "CREATE INDEX IF NOT EXISTS ix_persona_behaviors_status "
+            "ON persona_behaviors(status)"
+        )
+    _create_indexes(conn, indexes)
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -1766,6 +1860,16 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "20260717_semantic_index_reconcile_v2",
         "semantic index reconcile lease and source revision",
         _semantic_index_reconcile_v2,
+    ),
+    (
+        "20260718_memory_digest_jobs",
+        "memory digest generation lease and retry ledger",
+        _memory_digest_jobs,
+    ),
+    (
+        "20260718_memory_cleanup_governance",
+        "memory cleanup archive state and execution ledger",
+        _memory_cleanup_governance,
     ),
 ]
 

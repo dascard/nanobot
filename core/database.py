@@ -298,6 +298,19 @@ class Persona(Base):
     __tablename__ = "personas"
     user_id = Column(String, primary_key=True, index=True)
     persona_json = Column(Text, default="{}")
+    status = Column(
+        String,
+        index=True,
+        nullable=False,
+        default="active",
+        server_default=text("'active'"),
+    )
+    archive_meta_json = Column(
+        Text,
+        nullable=False,
+        default="{}",
+        server_default=text("'{}'"),
+    )
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
@@ -577,7 +590,64 @@ class MemoryDigest(Base):
     meta_json = Column(Text, default="{}")
     source_start_log_id = Column(Integer, nullable=True)
     source_end_log_id = Column(Integer, nullable=True)
+    generation_job_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.now)
+
+
+class MemoryDigestJob(Base):
+    """单个 session/date 的 MemoryDigest 生成与重试账本。"""
+
+    __tablename__ = "memory_digest_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "digest_date",
+            name="uq_memory_digest_job_source",
+        ),
+        Index(
+            "idx_memory_digest_job_claim",
+            "status",
+            "lease_expires_at",
+            "id",
+        ),
+        Index(
+            "idx_memory_digest_job_retry",
+            "status",
+            "next_retry_at",
+            "id",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, nullable=False)
+    digest_date = Column(String, nullable=False)
+    user_id = Column(String, nullable=False, default="", server_default=text("''"))
+
+    source_start_log_id = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    source_end_log_id = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    source_log_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    source_revision = Column(String(64), nullable=False, default="", server_default=text("''"))
+
+    status = Column(String(24), nullable=False, default="pending", server_default=text("'pending'"))
+    locked_by = Column(String(128), nullable=False, default="", server_default=text("''"))
+    lease_token = Column(String(64), nullable=False, default="", server_default=text("''"))
+    lease_expires_at = Column(DateTime, nullable=True)
+
+    attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    retry_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    max_retry = Column(Integer, nullable=False, default=3, server_default=text("3"))
+    next_retry_at = Column(DateTime, nullable=True)
+
+    result_digest_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    result_source_id = Column(String(128), nullable=False, default="", server_default=text("''"))
+    result_root_digest_id = Column(Integer, nullable=True)
+    result_semantic_job_id = Column(Integer, nullable=True)
+    error_type = Column(String(64), nullable=False, default="", server_default=text("''"))
+    error_summary = Column(Text, nullable=False, default="", server_default=text("''"))
+    meta_json = Column(Text, nullable=False, default="{}", server_default=text("'{}'"))
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
 
 
 class ScheduledTask(Base):
@@ -1130,6 +1200,19 @@ class PersonaBehavior(Base):
     source_log_ids = Column(Text, default="[]")
     last_observed = Column(DateTime, nullable=True)
     confidence = Column(String, default="可能")
+    status = Column(
+        String,
+        index=True,
+        nullable=False,
+        default="active",
+        server_default=text("'active'"),
+    )
+    archive_meta_json = Column(
+        Text,
+        nullable=False,
+        default="{}",
+        server_default=text("'{}'"),
+    )
     created_at = Column(DateTime, default=datetime.now)
 
 
@@ -1355,6 +1438,31 @@ class AdminAuditLog(Base):
     detail_json = Column(Text, default="{}")
     ip_address = Column(String, default="")
     created_at = Column(DateTime, default=datetime.now)
+
+
+class MemoryCleanupRun(Base):
+    """生产记忆清洗的一次性、可审计执行记录。"""
+
+    __tablename__ = "memory_cleanup_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cleanup_version = Column(String(64), nullable=False, default="")
+    bundle_sha256 = Column(String(64), nullable=False)
+    status = Column(String(24), nullable=False, default="applying")
+    actor = Column(String(255), nullable=False, default="cli")
+    audit_log_id = Column(Integer, nullable=True)
+    target_counts_json = Column(Text, nullable=False, default="{}")
+    result_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=datetime.now)
+    applied_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "bundle_sha256",
+            name="uq_memory_cleanup_run_bundle_sha256",
+        ),
+        Index("idx_memory_cleanup_run_status", "status", "id"),
+    )
 
 
 class UserBlockRule(Base):

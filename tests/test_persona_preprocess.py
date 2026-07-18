@@ -209,6 +209,66 @@ class TestProcessCandidatesWithMockEmbedder:
         assert len(facts) == 2
         assert facts[0].cluster_id != facts[1].cluster_id
 
+    def test_rebuild_does_not_merge_into_archived_fact(
+        self,
+        state_machine,
+        db_session,
+        monkeypatch,
+    ):
+        from core.persona_preprocess import content_hash
+
+        vector = np.pad(np.array([1.0], dtype=np.float32), (0, 767))
+        monkeypatch.setattr(
+            "core.persona_preprocess.embed_text",
+            lambda _text: vector,
+        )
+        logs = [
+            ChatLog(
+                user_id="test_user_01",
+                session_id="private_test_user_01",
+                role="user",
+                content="用户证据一",
+            ),
+            ChatLog(
+                user_id="test_user_01",
+                session_id="private_test_user_01",
+                role="user",
+                content="用户证据二",
+            ),
+        ]
+        db_session.add_all(logs)
+        db_session.flush()
+        archived = PersonaFact(
+            user_id="test_user_01",
+            content="用户喜欢简洁代码",
+            content_hash=content_hash("用户喜欢简洁代码"),
+            evidence_count=0,
+            evidence_log_ids_json="[]",
+            confidence="归档",
+            status="archived",
+            inject_policy="never",
+            memory_type="stable_preference",
+        )
+        db_session.add(archived)
+        db_session.commit()
+
+        stats = state_machine.process_candidates([{
+            "text": "用户喜欢简洁代码",
+            "memory_type": "stable_preference",
+            "confidence_hint": "high",
+            "should_inject": True,
+            "evidence_log_ids": [row.id for row in logs],
+        }])
+
+        assert stats["created"] == 1
+        assert stats["merged"] == 0
+        facts = db_session.query(PersonaFact).order_by(PersonaFact.id.asc()).all()
+        assert len(facts) == 2
+        assert facts[0].status == "archived"
+        assert facts[0].evidence_count == 0
+        assert facts[1].status == "active"
+        assert json.loads(facts[1].evidence_log_ids_json) == [row.id for row in logs]
+
     def test_legacy_behavior_candidate_uses_governed_fact_table(
         self,
         state_machine,

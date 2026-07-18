@@ -7,10 +7,9 @@ import inspect
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
-from collections.abc import Iterable
 
 from core.database import ChatLog
 from core.prompt_v2.section_renderer import sha256_text
@@ -108,6 +107,27 @@ class SyncSummarizerContractError(TypeError):
 class MemoryDigestModelError(RuntimeError):
     """记忆摘要模型调用或响应合同失败。"""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        requested_models: Iterable[str] = (),
+        request_log_ids: Iterable[int] = (),
+    ) -> None:
+        super().__init__(message)
+        self.requested_models = tuple(
+            str(model or "").strip()
+            for model in requested_models
+            if str(model or "").strip()
+        )
+        self.request_log_ids = tuple(
+            int(log_id)
+            for log_id in request_log_ids
+            if isinstance(log_id, int)
+            and not isinstance(log_id, bool)
+            and log_id > 0
+        )
+
 
 class MemoryDigestOutputError(ValueError):
     """记忆摘要模型输出不满足 JSON 根合同。"""
@@ -117,6 +137,9 @@ class MemoryDigestOutputError(ValueError):
 class MemoryDigestLlmOutput:
     content: str
     model: str
+    requested_model: str = ""
+    request_log_id: int | None = None
+    actual_model_observed: bool = True
 
 
 def _safe_json_loads(raw: str) -> dict[str, Any]:
@@ -164,6 +187,16 @@ async def _call_summarizer_async(
     return result
 
 
+async def _call_heartbeat_async(
+    heartbeat: Callable[[], Any] | None,
+) -> None:
+    if heartbeat is None:
+        return
+    result = heartbeat()
+    if inspect.isawaitable(result):
+        await result
+
+
 def _as_str(value: Any, *, max_chars: int = 500) -> str:
     text = str(value or "").strip()
     text = re.sub(r"\s+", " ", text)
@@ -207,10 +240,28 @@ def _as_float(value: Any, *, default: float = 0.0) -> float:
 
 
 def _source_id(*, session_id: str, digest_date: str, source_rows: list[dict[str, Any]]) -> str:
-    ids = [int(row["log_id"]) for row in source_rows if row.get("log_id")]
-    start = min(ids) if ids else 0
-    end = max(ids) if ids else 0
-    raw = f"{digest_date}|{session_id}|{start}|{end}|memory_digest_v2"
+    manifest = [
+        {
+            "log_id": int(row.get("log_id") or 0),
+            "time": str(row.get("time") or ""),
+            "role": str(row.get("role") or ""),
+            "is_bot": bool(row.get("is_bot")),
+            "sender": str(row.get("sender") or ""),
+            "content": str(row.get("content") or row.get("line") or ""),
+        }
+        for row in source_rows
+    ]
+    raw = json.dumps(
+        {
+            "schema": "memory_digest_source_v3",
+            "digest_date": digest_date,
+            "session_id": session_id,
+            "rows": manifest,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
@@ -300,13 +351,43 @@ async def default_llm_memory_digest_summarizer_async(
         enable_thinking=route.get("enable_thinking", "false"),
     )
     if isinstance(response, dict) and response.get("error"):
+        raw_requested_models = response.get("_nanobot_requested_models")
+        if not isinstance(raw_requested_models, (list, tuple)):
+            raw_requested_models = [
+                response.get("_nanobot_requested_model")
+                or response.get("_nanobot_model_id")
+                or route.get("model")
+                or ""
+            ]
+        raw_request_log_ids = response.get("_nanobot_request_log_ids")
+        if not isinstance(raw_request_log_ids, (list, tuple)):
+            raw_request_log_ids = [response.get("_nanobot_request_log_id")]
         raise MemoryDigestModelError(
-            str(response.get("detail") or response.get("error"))
+            str(response.get("detail") or response.get("error")),
+            requested_models=raw_requested_models,
+            request_log_ids=raw_request_log_ids,
         )
     try:
+        raw_log_id = response.get("_nanobot_request_log_id")
+        request_log_id = (
+            int(raw_log_id)
+            if isinstance(raw_log_id, int)
+            and not isinstance(raw_log_id, bool)
+            and raw_log_id > 0
+            else None
+        )
+        observed_model = str(response.get("model") or "").strip()
         return MemoryDigestLlmOutput(
             content=str(response["choices"][0]["message"].get("content") or ""),
-            model=str(route.get("model") or "unknown"),
+            model=observed_model or "unknown",
+            requested_model=str(
+                response.get("_nanobot_requested_model")
+                or response.get("_nanobot_model_id")
+                or route.get("model")
+                or "unknown"
+            ).strip() or "unknown",
+            request_log_id=request_log_id,
+            actual_model_observed=bool(observed_model),
         )
     except (AttributeError, IndexError, KeyError, TypeError) as exc:
         raise MemoryDigestModelError("llm_response_missing_content") from exc
@@ -547,6 +628,7 @@ def _fallback_result(
     error: str = "",
     prompt_meta: dict[str, Any] | None = None,
     result_status: str | None = None,
+    failure_type: str = "",
 ) -> MemoryDigestBuildResult:
     prompt_meta = prompt_meta or {}
     meta = {
@@ -573,6 +655,8 @@ def _fallback_result(
         },
         "fallback_reason": error[:500] if error else None,
     }
+    if failure_type:
+        meta["failure_type"] = str(failure_type)[:64]
     if error:
         meta["llm_error"] = error[:500]
     level_contents = (
@@ -614,6 +698,7 @@ def _prepare_llm_digest_context(
             status="input_invalid",
             error="source_rows_empty",
             result_status="failed",
+            failure_type="input_invalid",
         )
 
     try:
@@ -643,6 +728,7 @@ def _prepare_llm_digest_context(
             status="input_invalid",
             error=type(exc).__name__,
             result_status="failed",
+            failure_type="input_invalid",
         )
     except TaskInvocationError as exc:
         logger.warning(
@@ -656,6 +742,7 @@ def _prepare_llm_digest_context(
             status="template_invalid",
             error=type(exc).__name__,
             result_status="failed",
+            failure_type="template_invalid",
         )
     first_batch = batches[0]
     prompt_meta = {
@@ -797,6 +884,48 @@ def _merge_batch_results(
                 issues=[],
                 should_inject_preview=True,
             ),
+            "llm_models": _unique_strings(
+                (
+                    model
+                    for item in results
+                    for model in (
+                        item.meta.get("llm_models")
+                        if isinstance(item.meta.get("llm_models"), list)
+                        else [item.meta.get("llm_model")]
+                    )
+                ),
+                limit=32,
+                item_chars=128,
+            ),
+            "llm_requested_models": _unique_strings(
+                (
+                    model
+                    for item in results
+                    for model in (
+                        item.meta.get("llm_requested_models")
+                        if isinstance(item.meta.get("llm_requested_models"), list)
+                        else []
+                    )
+                ),
+                limit=32,
+                item_chars=128,
+            ),
+            "llm_request_log_ids": list(dict.fromkeys(
+                int(log_id)
+                for item in results
+                for log_id in (
+                    item.meta.get("llm_request_log_ids")
+                    if isinstance(item.meta.get("llm_request_log_ids"), list)
+                    else []
+                )
+                if isinstance(log_id, int)
+                and not isinstance(log_id, bool)
+                and log_id > 0
+            )),
+            "llm_actual_model_observed": all(
+                bool(item.meta.get("llm_actual_model_observed", False))
+                for item in results
+            ),
         }
 
     audit_ok, issues = audit_llm_digest_meta(meta, source_rows=context.source_rows)
@@ -807,6 +936,7 @@ def _merge_batch_results(
             error=",".join(issues),
             prompt_meta=context.prompt_meta,
             result_status="failed",
+            failure_type="quality_rejected",
         )
     return MemoryDigestBuildResult(
         status="active",
@@ -836,17 +966,102 @@ def _build_memory_digest_result_from_raw(
     )
     audit_ok, issues = audit_llm_digest_meta(meta, source_rows=context.source_rows)
     if not audit_ok:
-        return _fallback_result(
+        result = _fallback_result(
             context.fallback,
             status="fallback",
             error=",".join(issues),
             prompt_meta=context.prompt_meta,
             result_status="failed",
+            failure_type="quality_rejected",
         )
+    else:
+        result = MemoryDigestBuildResult(
+            status="active",
+            meta=meta,
+            level_contents=render_digest_levels(meta),
+        )
+    if not isinstance(raw, MemoryDigestLlmOutput):
+        return result
+    return _with_llm_output_trace(result, [raw])
+
+
+def _with_llm_output_trace(
+    result: MemoryDigestBuildResult,
+    outputs: Iterable[MemoryDigestLlmOutput],
+) -> MemoryDigestBuildResult:
+    rows = list(outputs)
+    if not rows:
+        return result
+    models = _unique_strings(
+        (row.model for row in rows),
+        limit=32,
+        item_chars=128,
+    )
+    requested_models = _unique_strings(
+        (row.requested_model for row in rows),
+        limit=32,
+        item_chars=128,
+    )
+    request_log_ids = list(dict.fromkeys(
+        int(row.request_log_id)
+        for row in rows
+        if isinstance(row.request_log_id, int)
+        and not isinstance(row.request_log_id, bool)
+        and row.request_log_id > 0
+    ))
+    traced_meta = {
+        **result.meta,
+        "llm_model": models[-1] if models else "unknown",
+        "llm_models": models,
+        "llm_requested_models": requested_models,
+        "llm_request_log_ids": request_log_ids,
+        "llm_actual_model_observed": all(
+            bool(row.actual_model_observed)
+            for row in rows
+        ),
+    }
     return MemoryDigestBuildResult(
-        status="active",
+        status=result.status,
+        meta=traced_meta,
+        level_contents=result.level_contents,
+    )
+
+
+def _with_llm_failure_trace(
+    result: MemoryDigestBuildResult,
+    outputs: Iterable[MemoryDigestLlmOutput],
+    error: BaseException,
+) -> MemoryDigestBuildResult:
+    traced = _with_llm_output_trace(result, outputs)
+    meta = dict(traced.meta)
+    requested_models = _unique_strings(
+        [
+            *(meta.get("llm_requested_models") or []),
+            *list(getattr(error, "requested_models", ()) or ()),
+        ],
+        limit=64,
+        item_chars=128,
+    )
+    request_log_ids = list(dict.fromkeys(
+        int(log_id)
+        for log_id in [
+            *(meta.get("llm_request_log_ids") or []),
+            *list(getattr(error, "request_log_ids", ()) or ()),
+        ]
+        if isinstance(log_id, int)
+        and not isinstance(log_id, bool)
+        and log_id > 0
+    ))
+    meta.update({
+        "llm_models": list(meta.get("llm_models") or []),
+        "llm_requested_models": requested_models,
+        "llm_request_log_ids": request_log_ids,
+        "llm_actual_model_observed": False,
+    })
+    return MemoryDigestBuildResult(
+        status=traced.status,
         meta=meta,
-        level_contents=render_digest_levels(meta),
+        level_contents=traced.level_contents,
     )
 
 
@@ -876,6 +1091,7 @@ def build_memory_digest_with_llm(
             error="sync_summarizer_required: use build_memory_digest_with_llm_async",
             prompt_meta=context.prompt_meta,
             result_status="failed",
+            failure_type="generator_not_llm",
         )
     results: list[MemoryDigestBuildResult] = []
     for batch in context.batches:
@@ -887,13 +1103,19 @@ def build_memory_digest_with_llm(
             MemoryDigestModelError,
             SyncSummarizerContractError,
         ) as exc:
-            logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
+            logger.warning(
+                "memory digest llm fallback: session_id=%s date=%s error_type=%s",
+                session_id,
+                digest_date,
+                type(exc).__name__,
+            )
             return _fallback_result(
                 context.fallback,
                 status="fallback",
                 error=str(exc),
                 prompt_meta=context.prompt_meta,
                 result_status="failed",
+                failure_type="model_error",
             )
         try:
             result = _build_memory_digest_result_from_raw(
@@ -904,13 +1126,19 @@ def build_memory_digest_with_llm(
                 user_id=user_id,
             )
         except MemoryDigestOutputError as exc:
-            logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
+            logger.warning(
+                "memory digest llm fallback: session_id=%s date=%s error_type=%s",
+                session_id,
+                digest_date,
+                type(exc).__name__,
+            )
             return _fallback_result(
                 context.fallback,
                 status="fallback",
                 error=str(exc),
                 prompt_meta=context.prompt_meta,
                 result_status="failed",
+                failure_type="output_invalid",
             )
         if result.status != "active":
             return result
@@ -926,6 +1154,7 @@ async def build_memory_digest_with_llm_async(
     logs: Iterable[ChatLog],
     summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
     llm_enabled: bool = True,
+    heartbeat: Callable[[], Any] | None = None,
 ) -> MemoryDigestBuildResult:
     context, early_result = _prepare_llm_digest_context(
         user_id=user_id,
@@ -939,18 +1168,31 @@ async def build_memory_digest_with_llm_async(
     assert context is not None
     summarizer = summarizer or default_llm_memory_digest_summarizer_async
     results: list[MemoryDigestBuildResult] = []
+    traced_outputs: list[MemoryDigestLlmOutput] = []
     for batch in context.batches:
         try:
-            raw = await _call_summarizer_async(summarizer, batch.messages)
+            await _call_heartbeat_async(heartbeat)
+            try:
+                raw = await _call_summarizer_async(summarizer, batch.messages)
+            finally:
+                await _call_heartbeat_async(heartbeat)
         except (ConnectionError, TimeoutError, MemoryDigestModelError) as exc:
-            logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
-            return _fallback_result(
+            logger.warning(
+                "memory digest llm fallback: session_id=%s date=%s error_type=%s",
+                session_id,
+                digest_date,
+                type(exc).__name__,
+            )
+            return _with_llm_failure_trace(_fallback_result(
                 context.fallback,
                 status="fallback",
                 error=str(exc),
                 prompt_meta=context.prompt_meta,
                 result_status="failed",
-            )
+                failure_type="model_error",
+            ), traced_outputs, exc)
+        if isinstance(raw, MemoryDigestLlmOutput):
+            traced_outputs.append(raw)
         try:
             result = _build_memory_digest_result_from_raw(
                 raw,
@@ -960,15 +1202,22 @@ async def build_memory_digest_with_llm_async(
                 user_id=user_id,
             )
         except MemoryDigestOutputError as exc:
-            logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
-            return _fallback_result(
+            logger.warning(
+                "memory digest llm fallback: session_id=%s date=%s error_type=%s",
+                session_id,
+                digest_date,
+                type(exc).__name__,
+            )
+            return _with_llm_output_trace(_fallback_result(
                 context.fallback,
                 status="fallback",
                 error=str(exc),
                 prompt_meta=context.prompt_meta,
                 result_status="failed",
-            )
+                failure_type="output_invalid",
+            ), traced_outputs)
         if result.status != "active":
-            return result
+            return _with_llm_output_trace(result, traced_outputs)
         results.append(result)
-    return _merge_batch_results(context, results)
+    merged = _merge_batch_results(context, results)
+    return _with_llm_output_trace(merged, traced_outputs)

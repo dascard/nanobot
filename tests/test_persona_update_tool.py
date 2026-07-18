@@ -74,14 +74,19 @@ async def test_persona_update_uses_runtime_actor_and_enters_existing_flow(
 ):
     from creatures.nanobot.prompts.skills.persona_update.tool import PersonaUpdateTool
 
-    captured = {"opened": 0, "queried_user_ids": []}
+    captured = {"opened": 0, "queried_user_ids": [], "filters": []}
 
     class FakeQuery:
         def __init__(self, model):
             self.model = model
 
-        def filter(self, expression):
-            captured["queried_user_ids"].append(str(expression.right.value))
+        def filter(self, *expressions):
+            for expression in expressions:
+                field = str(getattr(expression.left, "name", ""))
+                value = str(expression.right.value)
+                captured["filters"].append((field, value))
+                if field == "user_id":
+                    captured["queried_user_ids"].append(value)
             return self
 
         def first(self):
@@ -115,6 +120,7 @@ async def test_persona_update_uses_runtime_actor_and_enters_existing_flow(
     assert "没有找到" in result.output
     assert captured["opened"] == 1
     assert captured["queried_user_ids"] == ["actor-user", "actor-user"]
+    assert ("status", "active") in captured["filters"]
 
 
 @pytest.mark.asyncio

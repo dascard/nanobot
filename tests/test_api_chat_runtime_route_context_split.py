@@ -129,7 +129,7 @@ def test_chat_runtime_route_context_module_does_not_import_parent_routes_or_prom
         assert needle not in source
 
 
-def test_build_chat_runtime_route_context_skips_group_persona_injection():
+def test_build_chat_runtime_route_context_applies_group_persona_gate():
     from api.chat_runtime_route_context import ChatRuntimeRouteInput, build_chat_runtime_route_context
 
     calls: dict[str, list[Any]] = {}
@@ -150,15 +150,19 @@ def test_build_chat_runtime_route_context_skips_group_persona_injection():
 
     context = build_chat_runtime_route_context(runtime_input, services=_services(calls))
 
-    assert "persona" not in calls
+    assert calls["persona"] == [(
+        "u-runtime-route",
+        "群聊问题 files=1",
+        [{"role": "user", "content": "上一轮"}],
+    )]
     assert context.safe_user_input == "群聊问题 files=1"
     assert context.enriched_query == "<user_input>\n群聊问题 files=1\n</user_input>"
     assert context.bridge_meta["chat_type"] == "group"
     assert context.bridge_meta["stream"] is True
     assert context.bridge_meta["runtime_preset"] == "full"
     assert context.platform == "qq"
-    assert context.persona_text == "群聊画像"
-    assert context.ctx_debug == {"source": "history"}
+    assert context.persona_text == "动态画像"
+    assert context.ctx_debug == {"source": "history", "persona": "ok"}
 
 
 def test_build_chat_runtime_route_context_injects_private_persona_with_safe_multimodal_input():

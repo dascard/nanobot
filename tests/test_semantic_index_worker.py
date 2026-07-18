@@ -646,7 +646,19 @@ def test_deleted_source_marks_index_deleted(db_session):
     )
     job = claim_next_job(db_session, worker_id="worker-a")
 
-    result = process_semantic_index_job(db_session, job, chunk_loader=lambda _job: [])
+    def fail_loader(_job):
+        raise AssertionError("delete job 不应读取业务源")
+
+    class FailEmbeddingProvider:
+        def embed(self, _texts):
+            raise AssertionError("delete job 不应调用 embedding provider")
+
+    result = process_semantic_index_job(
+        db_session,
+        job,
+        chunk_loader=fail_loader,
+        embedding_provider=FailEmbeddingProvider(),
+    )
 
     assert result.status == "done"
     row = db_session.query(SemanticIndexItem).one()
@@ -926,6 +938,42 @@ def test_default_worker_loader_aggregates_memory_digest_logical_source(db_sessio
     assert db_session.execute(text(
         "SELECT COUNT(*) FROM semantic_index_fts"
     )).scalar_one() == 3
+
+
+def test_default_worker_loader_does_not_index_archived_group_memory(db_session):
+    from core.database import GroupMemory
+    from core.semantic.jobs import claim_next_job, enqueue_index_job
+    from workers.semantic_index_worker import (
+        _default_chunk_loader,
+        process_semantic_index_job,
+    )
+
+    ensure_semantic_schema(db_session.bind)
+    row = GroupMemory(
+        group_id="group_42",
+        memory_type="style",
+        content="已归档群记忆不得重新进入索引",
+        content_hash="archived-group-memory",
+        status="archived",
+    )
+    db_session.add(row)
+    db_session.flush()
+    enqueue_index_job(
+        db_session,
+        source_type="group_memory",
+        source_id=str(row.id),
+        source_revision="archived-revision",
+    )
+    job = claim_next_job(db_session, worker_id="worker-a")
+
+    result = process_semantic_index_job(
+        db_session,
+        job,
+        chunk_loader=_default_chunk_loader(db_session),
+    )
+
+    assert result.status == "done"
+    assert db_session.query(SemanticIndexItem).count() == 0
 
 
 def test_older_source_revision_job_is_superseded_without_index_writes(db_session):

@@ -5,12 +5,17 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.common_auth import verify_token
-from app.memory_digest.retrieval_service import MemoryDigestRetrievalService, validate_digest_date
-from core.daily_digest import generate_daily_digest_for_date
+from api.memory_digest_contract import safe_memory_digest_report
+from app.memory_digest.retrieval_service import (
+    MemoryDigestRetrievalService,
+    validate_digest_date,
+    validate_digest_date_range,
+)
+from core.daily_digest import generate_daily_digest_for_date_report
 from core.database import ChatLog, MemoryDigest, get_db
 from core.time_utils import db_now_naive
 
@@ -19,9 +24,10 @@ router = APIRouter(tags=["memory"])
 
 
 class MemoryDigestRunRequest(BaseModel):
-    target_date: str | None = None  # YYYY-MM-DD
-    user_id: str | None = None
+    target_date: str | None = Field(default=None, max_length=10)  # YYYY-MM-DD
+    user_id: str = Field(min_length=1, max_length=128)
     force: bool = False
+    retry_failed: bool = False
 
 
 def _validate_memory_digest_date_filters(
@@ -31,11 +37,12 @@ def _validate_memory_digest_date_filters(
     date_end: str = "",
 ) -> tuple[str, str, str]:
     try:
-        return (
-            validate_digest_date(digest_date, "digest_date"),
-            validate_digest_date(date_start, "date_start"),
-            validate_digest_date(date_end, "date_end"),
+        normalized_digest_date = validate_digest_date(digest_date, "digest_date")
+        normalized_start, normalized_end = validate_digest_date_range(
+            date_start,
+            date_end,
         )
+        return normalized_digest_date, normalized_start, normalized_end
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -115,25 +122,38 @@ def get_memory_digests(
 
 
 @router.post("/memory/digests/run")
-def run_memory_digests(
+async def run_memory_digests(
     req: MemoryDigestRunRequest,
     _auth=Depends(verify_token),
 ):
     """手动触发指定日期的每日记忆摘要任务。"""
+    user_id = str(req.user_id or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=422, detail="user_id is required")
+    if len(user_id) > 128:
+        raise HTTPException(status_code=422, detail="user_id is too long")
+    if req.force or req.retry_failed:
+        raise HTTPException(
+            status_code=403,
+            detail="force and retry_failed require admin authorization",
+        )
     target_date = req.target_date
     if not target_date:
         target_date = (db_now_naive().date() - timedelta(days=1)).isoformat()
 
-    created = generate_daily_digest_for_date(
-        target_date=target_date,
-        user_id=req.user_id,
-        force=req.force,
-    )
+    try:
+        report = await generate_daily_digest_for_date_report(
+            target_date=target_date,
+            user_id=user_id,
+            force=False,
+            retry_failed=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
-        "status": "ok",
-        "target_date": target_date,
-        "force": req.force,
-        "created_sessions": created,
+        **safe_memory_digest_report(report),
+        "force": False,
+        "retry_failed": False,
     }
 
 

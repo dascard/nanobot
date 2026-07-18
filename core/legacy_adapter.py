@@ -203,7 +203,10 @@ class SQLiteMemory:
         """提取人（User）的画像 (返回 JSON 字符串)"""
         db = self._get_session()
         try:
-            persona = db.query(Persona).filter(Persona.user_id == user_id).first()
+            persona = db.query(Persona).filter(
+                Persona.user_id == user_id,
+                Persona.status == "active",
+            ).first()
             return persona.persona_json if persona else "{}"
         finally:
             db.close()
@@ -327,6 +330,8 @@ class SQLiteMemory:
             now = db_now_naive()
             if persona_obj:
                 persona_obj.persona_json = _json.dumps(data, ensure_ascii=False)
+                if str(persona_obj.status or "") == "archived":
+                    persona_obj.status = "review"
                 persona_obj.updated_at = now
             else:
                 db.add(Persona(user_id=user_id,

@@ -56,10 +56,10 @@ PRAGMA table_info(chat_logs)
 ```
 
 ### 画像
-- `personas`: 压缩画像 JSON (user_id, persona_json, updated_at)
+- `personas`: 压缩画像 JSON (user_id, persona_json, status, updated_at)，仅 `active` 可进入运行时
   - persona_json: {"facts": [{content, domain, confidence, evidence, type}], "count": N}
 - `persona_facts`: 结构化事实 (id, user_id, domain_primary, content, embedding, cluster_centroid, cluster_id, evidence_count, confidence, fact_type, ...)
-- `persona_behaviors`: 行为模式 (id, user_id, domain_primary, pattern, embedding, frequency, last_observed, ...)
+- `persona_behaviors`: 行为模式 (id, user_id, domain_primary, pattern, embedding, frequency, last_observed, status, ...)
 
 ### 记忆与其他
 - `memory_digests`: 每日日志压缩 (id, user_id, session_id, digest_date, level, content, meta_json, ...)

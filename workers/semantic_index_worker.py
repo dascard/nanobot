@@ -161,7 +161,10 @@ def _default_chunk_loader(db: Session) -> ChunkLoader:
         if source_type == "group_memory":
             from core.database import GroupMemory
 
-            row = db.query(GroupMemory).filter(GroupMemory.id == int(source_id)).first()
+            row = db.query(GroupMemory).filter(
+                GroupMemory.id == int(source_id),
+                GroupMemory.status == "active",
+            ).first()
             return [chunk_from_group_memory(row)] if row is not None else []
         if source_type == "sticker":
             from core.database import StickerMemory
@@ -209,7 +212,8 @@ def process_semantic_index_job(
     ensure_semantic_schema(db.bind)
     lease = semantic_job_lease(job)
     try:
-        chunks = chunk_loader(job)
+        # delete 只做索引清除，不读取业务正文，也不调用 embedding provider。
+        chunks = [] if str(job.job_type or "") == "delete" else chunk_loader(job)
         embeddings, embedding_error = _embedding_bytes_by_sub_id(chunks, embedding_provider)
         renewed = heartbeat_job(
             db,

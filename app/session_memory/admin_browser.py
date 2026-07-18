@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.memory_digest.retrieval_service import validate_digest_date_range
 from app.memory_digest.renderer import render_digest_levels
 from core.database import MemoryDigest, RollingSessionSummary
 
@@ -533,6 +534,7 @@ WHERE
     ) -> dict[str, Any]:
         limit = max(1, min(int(digest_limit_per_session or 50), 200))
         aliases = _session_aliases(session_id)
+        date_start, date_end = validate_digest_date_range(date_start, date_end)
         query = self.db.query(MemoryDigest).filter(MemoryDigest.session_id.in_(aliases))
         if date_start:
             query = query.filter(MemoryDigest.digest_date >= date_start)

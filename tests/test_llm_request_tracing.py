@@ -621,6 +621,8 @@ def test_new_api_chat_completion_audits_invalid_json_response(monkeypatch):
 
     assert result["error"] == "AllModelsFailed"
     assert "invalid JSON" in result["detail"]
+    assert result["_nanobot_requested_models"] == ["model-invalid-json"]
+    assert result["_nanobot_request_log_ids"] == [655]
     assert len(finished) == 1
     assert finished[0]["status"] == "error"
     assert finished[0]["response_status"] == 200

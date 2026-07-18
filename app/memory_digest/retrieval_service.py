@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, or_
@@ -36,9 +37,30 @@ def digest_status(meta: dict[str, Any]) -> str:
 
 def validate_digest_date(value: str, field_name: str) -> str:
     date_value = str(value or "").strip()
-    if date_value and not _DATE_RE.fullmatch(date_value):
-        raise ValueError(f"{field_name} must be YYYY-MM-DD")
+    if not date_value:
+        return ""
+    if not _DATE_RE.fullmatch(date_value):
+        raise ValueError(f"{field_name} must be a valid YYYY-MM-DD date")
+    try:
+        parsed = datetime.strptime(date_value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name} must be a valid YYYY-MM-DD date"
+        ) from exc
+    if parsed.strftime("%Y-%m-%d") != date_value:
+        raise ValueError(f"{field_name} must be a valid YYYY-MM-DD date")
     return date_value
+
+
+def validate_digest_date_range(
+    date_start: str,
+    date_end: str,
+) -> tuple[str, str]:
+    start = validate_digest_date(date_start, "date_start")
+    end = validate_digest_date(date_end, "date_end")
+    if start and end and start > end:
+        raise ValueError("date_start must be earlier than or equal to date_end")
+    return start, end
 
 
 def _is_legacy(meta: dict[str, Any]) -> bool:
@@ -80,8 +102,7 @@ class MemoryDigestRetrievalService:
         include_legacy: bool = True,
     ) -> list[dict[str, Any]]:
         digest_date = validate_digest_date(digest_date, "digest_date")
-        date_start = validate_digest_date(date_start, "date_start")
-        date_end = validate_digest_date(date_end, "date_end")
+        date_start, date_end = validate_digest_date_range(date_start, date_end)
         target_limit = max(1, min(int(limit), 500))
         query = self.db.query(MemoryDigest)
         if user_id:
@@ -138,8 +159,7 @@ class MemoryDigestRetrievalService:
         if not key:
             return []
         digest_date = validate_digest_date(digest_date, "digest_date")
-        date_start = validate_digest_date(date_start, "date_start")
-        date_end = validate_digest_date(date_end, "date_end")
+        date_start, date_end = validate_digest_date_range(date_start, date_end)
         target_limit = max(1, min(int(limit), 200))
         reveal_to_level = max(0, min(2, int(reveal_to_level)))
         base = self.db.query(MemoryDigest).filter(MemoryDigest.level == 2)

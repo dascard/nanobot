@@ -3,7 +3,7 @@ import json
 import logging
 
 import pytest
-from core.database import ChatLog
+from core.database import ChatLog, Persona
 from fastapi import BackgroundTasks
 
 
@@ -76,6 +76,20 @@ def test_get_context_default(client):
     assert data["user_id"] == "new_user"
     assert data["persona_json"] == "{}"
     assert "智能助手" in data["system_prompt"]
+
+
+def test_get_context_excludes_archived_persona(client, db_session):
+    db_session.add(Persona(
+        user_id="archived-context-user",
+        persona_json='{"facts":[{"content":"不得返回的旧画像"}]}',
+        status="archived",
+    ))
+    db_session.commit()
+
+    response = client.get("/api/v1/context?user_id=archived-context-user")
+
+    assert response.status_code == 200
+    assert response.json()["persona_json"] == "{}"
 
 def test_get_context_with_auth(client):
     """测试如果开启强制鉴权，不带 Auth 头应该失败"""

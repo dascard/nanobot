@@ -311,6 +311,8 @@ async def persona_extract_user(
     persona = db.query(Persona).filter(Persona.user_id == user_id).first()
     if persona:
         persona.persona_json = persona_summary
+        if str(persona.status or "") == "archived":
+            persona.status = "review"
         persona.updated_at = db_now_naive()
     else:
         db.add(Persona(user_id=user_id, persona_json=persona_summary))
