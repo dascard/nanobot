@@ -493,6 +493,133 @@ def _normalize_llm_meta(
     return meta
 
 
+def _recall_card_audit_issues(
+    card: Any,
+    *,
+    source_rows: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """按单张召回卡执行证据与内容门禁。"""
+
+    issues: list[str] = []
+    normalized_card = card if isinstance(card, dict) else {}
+    text = str(normalized_card.get("text") or card or "").strip()
+    audited_card_text = json.dumps(
+        normalized_card if normalized_card else card,
+        ensure_ascii=False,
+    )
+    if len(text) > _CARD_MAX_CHARS:
+        issues.append("recall_card_too_long")
+    if _URL_RE.search(audited_card_text):
+        issues.append("contains_url")
+    if _CREDENTIAL_RE.search(audited_card_text):
+        issues.append("contains_credential_material")
+    if _PROMPT_INJECTION_RE.search(audited_card_text):
+        issues.append("contains_prompt_injection_text")
+
+    source_log_ids = {
+        int(row.get("log_id"))
+        for row in (source_rows or [])
+        if str(row.get("log_id") or "").isdigit()
+    }
+    source_by_id = {
+        int(row.get("log_id")): row
+        for row in (source_rows or [])
+        if str(row.get("log_id") or "").isdigit()
+    }
+    source_text = "\n".join(
+        str(row.get("line") or "").strip()
+        for row in (source_rows or [])
+    )
+
+    evidence_ids = normalized_card.get("evidence_log_ids") or []
+    if isinstance(evidence_ids, list) and evidence_ids and source_log_ids:
+        evidence_lines: list[str] = []
+        evidence_valid = True
+        for evidence_id in evidence_ids:
+            try:
+                normalized_id = int(evidence_id)
+            except (TypeError, ValueError):
+                evidence_valid = False
+                break
+            if normalized_id not in source_log_ids:
+                evidence_valid = False
+                break
+            evidence_lines.append(
+                str(source_by_id[normalized_id].get("line") or "")
+            )
+        if not evidence_valid:
+            issues.append("recall_card_evidence_not_in_source")
+        else:
+            evidence_text = "\n".join(evidence_lines)
+            keywords = normalized_card.get("keywords") or []
+            keyword_values = [
+                str(item).strip()
+                for item in keywords
+                if str(item).strip()
+            ]
+            keyword_supported = (
+                not keyword_values
+                or any(
+                    keyword.lower() in evidence_text.lower()
+                    for keyword in keyword_values
+                )
+            )
+            if evidence_text and (
+                not keyword_supported
+                or not _has_keyword_overlap(text, evidence_text, min_overlap=1)
+            ):
+                issues.append("recall_card_evidence_not_grounded")
+
+            if str(normalized_card.get("type") or "") == "preference" and any(
+                str(source_by_id[int(evidence_id)].get("role") or "")
+                not in {"user", "ambient"}
+                or bool(source_by_id[int(evidence_id)].get("is_bot"))
+                for evidence_id in evidence_ids
+            ):
+                issues.append("preference_evidence_invalid_role")
+
+    if (not isinstance(evidence_ids, list) or not evidence_ids) and source_text:
+        if not _has_keyword_overlap(text, source_text):
+            issues.append("recall_card_not_grounded")
+
+    if _is_generic_card_text(text):
+        issues.append("recall_card_too_generic")
+    if re.search(r"(/[\w.-]+){2,}|[A-Za-z]:\\|[\w.-]+\.py:\d+", text):
+        issues.append("recall_card_contains_log_path")
+    return list(dict.fromkeys(issues))
+
+
+def _apply_recall_card_governance(
+    meta: dict[str, Any],
+    *,
+    source_rows: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """仅保留通过候选级证据门禁的召回卡，并记录非正文审计统计。"""
+
+    cards = meta.get("recall_cards") if isinstance(meta.get("recall_cards"), list) else []
+    accepted: list[dict[str, Any]] = []
+    rejection_reason_counts: dict[str, int] = {}
+    for card in cards:
+        card_issues = _recall_card_audit_issues(card, source_rows=source_rows)
+        if not card_issues and isinstance(card, dict):
+            accepted.append(card)
+            continue
+        for issue in card_issues or ["recall_card_schema_invalid"]:
+            rejection_reason_counts[issue] = rejection_reason_counts.get(issue, 0) + 1
+
+    meta["recall_cards"] = accepted
+    meta["recall_card_governance"] = {
+        "generated_count": len(cards),
+        "evidence_accepted_count": len(accepted),
+        "evidence_rejected_count": len(cards) - len(accepted),
+        "retained_count": len(accepted),
+        "rejection_reason_counts": dict(sorted(rejection_reason_counts.items())),
+    }
+    if cards and not accepted:
+        return list(rejection_reason_counts)
+    return []
+
+
 def audit_llm_digest_meta(
     meta: dict[str, Any],
     *,
@@ -531,7 +658,6 @@ def audit_llm_digest_meta(
     audited_text = json.dumps({
         "preview": preview,
         "long_summary": long_summary,
-        "recall_cards": cards,
     }, ensure_ascii=False)
     if _URL_RE.search(audited_text):
         issues.append("contains_url")
@@ -540,84 +666,10 @@ def audit_llm_digest_meta(
     if _PROMPT_INJECTION_RE.search(audited_text):
         issues.append("contains_prompt_injection_text")
 
-    # 构建 source 上下文（用于 grounded 检查）
-    source_log_ids: set[int] = set()
-    source_text: str = ""
-    if source_rows:
-        for row in source_rows:
-            lid = row.get("log_id")
-            if lid is not None:
-                source_log_ids.add(int(lid))
-        source_text = "\n".join(
-            str(row.get("line") or "").strip() for row in source_rows
-        )
-    source_by_id = {
-        int(row.get("log_id")): row
-        for row in (source_rows or [])
-        if str(row.get("log_id") or "").isdigit()
-    }
-
     for card in cards:
-        text = str(card.get("text") if isinstance(card, dict) else card or "").strip()
-        if len(text) > _CARD_MAX_CHARS:
-            issues.append("recall_card_too_long")
+        issues.extend(_recall_card_audit_issues(card, source_rows=source_rows))
 
-        # evidence_log_ids 必须存在于 source
-        evidence_ids = card.get("evidence_log_ids") if isinstance(card, dict) else []
-        if isinstance(evidence_ids, list) and evidence_ids and source_log_ids:
-            evidence_lines: list[str] = []
-            for eid in evidence_ids:
-                try:
-                    if int(eid) not in source_log_ids:
-                        issues.append("recall_card_evidence_not_in_source")
-                        break
-                    evidence_lines.extend(
-                        str(row.get("line") or "")
-                        for row in (source_rows or [])
-                        if int(row.get("log_id") or 0) == int(eid)
-                    )
-                except (TypeError, ValueError):
-                    issues.append("recall_card_evidence_not_in_source")
-                    break
-            evidence_text = "\n".join(evidence_lines)
-            keywords = card.get("keywords") if isinstance(card, dict) else []
-            keyword_values = [str(item).strip() for item in keywords or [] if str(item).strip()]
-            keyword_supported = (
-                not keyword_values
-                or any(keyword.lower() in evidence_text.lower() for keyword in keyword_values)
-            )
-            if evidence_text and (
-                not keyword_supported
-                or not _has_keyword_overlap(text, evidence_text, min_overlap=1)
-            ):
-                issues.append("recall_card_evidence_not_grounded")
-            if str(card.get("type") or "") == "preference":
-                evidence_rows = [
-                    source_by_id.get(int(eid))
-                    for eid in evidence_ids
-                    if str(eid).isdigit()
-                ]
-                if any(
-                    row is None
-                    or str(row.get("role") or "") not in {"user", "ambient"}
-                    or bool(row.get("is_bot"))
-                    for row in evidence_rows
-                ):
-                    issues.append("preference_evidence_invalid_role")
-
-        # 无 evidence → 检查词面重合
-        if (not isinstance(evidence_ids, list) or not evidence_ids) and source_text:
-            if not _has_keyword_overlap(text, source_text):
-                issues.append("recall_card_not_grounded")
-
-        # 泛化句检测（正则）
-        if _is_generic_card_text(text):
-            issues.append("recall_card_too_generic")
-
-        # 路径/栈帧
-        if re.search(r"(/[\w.-]+){2,}|[A-Za-z]:\\|[\w.-]+\.py:\d+", text):
-            issues.append("recall_card_contains_log_path")
-
+    issues = list(dict.fromkeys(issues))
     return not issues, issues
 
 
@@ -833,6 +885,22 @@ def _merge_batch_results(
             _as_float((item.meta.get("quality") or {}).get("score"), default=0.0)
             for item in results
         ]
+        governance_rows = [
+            item.meta.get("recall_card_governance")
+            if isinstance(item.meta.get("recall_card_governance"), dict)
+            else {}
+            for item in results
+        ]
+        rejection_reason_counts: dict[str, int] = {}
+        for governance in governance_rows:
+            raw_counts = governance.get("rejection_reason_counts")
+            if not isinstance(raw_counts, dict):
+                continue
+            for reason, count in raw_counts.items():
+                rejection_reason_counts[str(reason)] = (
+                    rejection_reason_counts.get(str(reason), 0)
+                    + max(0, int(count or 0))
+                )
         base = dict(results[0].meta)
         meta = {
             **base,
@@ -879,6 +947,22 @@ def _merge_batch_results(
                 ),
             },
             "recall_cards": merged_cards,
+            "recall_card_governance": {
+                "generated_count": sum(
+                    max(0, int(item.get("generated_count") or 0))
+                    for item in governance_rows
+                ),
+                "evidence_accepted_count": sum(
+                    max(0, int(item.get("evidence_accepted_count") or 0))
+                    for item in governance_rows
+                ),
+                "evidence_rejected_count": sum(
+                    max(0, int(item.get("evidence_rejected_count") or 0))
+                    for item in governance_rows
+                ),
+                "retained_count": len(merged_cards),
+                "rejection_reason_counts": dict(sorted(rejection_reason_counts.items())),
+            },
             "quality": build_quality(
                 score=min(scores) if scores else 0.0,
                 issues=[],
@@ -964,8 +1048,13 @@ def _build_memory_digest_result_from_raw(
         prompt_meta=context.prompt_meta,
         llm_model=llm_model,
     )
+    all_rejected_issues = _apply_recall_card_governance(
+        meta,
+        source_rows=context.source_rows,
+    )
     audit_ok, issues = audit_llm_digest_meta(meta, source_rows=context.source_rows)
     if not audit_ok:
+        issues = list(dict.fromkeys([*all_rejected_issues, *issues]))
         result = _fallback_result(
             context.fallback,
             status="fallback",

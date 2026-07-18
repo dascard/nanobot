@@ -476,6 +476,93 @@ def test_llm_digest_rejects_card_whose_named_evidence_does_not_support_it():
     assert "recall_card_evidence_not_grounded" in issues
 
 
+def test_llm_digest_keeps_grounded_cards_and_records_rejected_candidates():
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm
+
+    def fake_summarizer(_messages):
+        return json.dumps({
+            "preview": {"brief": "长期摘要来源治理"},
+            "long_summary": {"topic_flow": "确认长期摘要的数据来源。"},
+            "recall_cards": [
+                {
+                    "card_id": "card_1",
+                    "type": "design_rule",
+                    "text": "长期摘要必须从 ChatLog 生成。",
+                    "keywords": ["ChatLog"],
+                    "importance": 0.9,
+                    "evidence_log_ids": [1],
+                },
+                {
+                    "card_id": "card_2",
+                    "type": "preference",
+                    "text": "用户偏好 Rust。",
+                    "keywords": ["ChatLog"],
+                    "importance": 0.9,
+                    "evidence_log_ids": [1],
+                },
+            ],
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False)
+
+    result = build_memory_digest_with_llm(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[
+            _log(id=1, content="长期摘要从 ChatLog 生成"),
+            _log(id=2, content="召回卡必须逐条检查证据"),
+        ],
+        summarizer=fake_summarizer,
+    )
+
+    assert result.status == "active"
+    assert [card["card_id"] for card in result.meta["recall_cards"]] == ["card_1"]
+    assert result.meta["quality"]["issues"] == []
+    assert result.meta["recall_card_governance"] == {
+        "generated_count": 2,
+        "evidence_accepted_count": 1,
+        "evidence_rejected_count": 1,
+        "retained_count": 1,
+        "rejection_reason_counts": {"recall_card_evidence_not_grounded": 1},
+    }
+    assert "Rust" not in result.level_contents[2]
+
+
+def test_llm_digest_still_fails_when_all_recall_cards_are_rejected():
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm
+
+    def fake_summarizer(_messages):
+        return json.dumps({
+            "preview": {"brief": "长期摘要来源治理"},
+            "long_summary": {"topic_flow": "确认长期摘要的数据来源。"},
+            "recall_cards": [{
+                "card_id": "card_1",
+                "type": "preference",
+                "text": "用户偏好 Rust。",
+                "keywords": ["ChatLog"],
+                "importance": 0.9,
+                "evidence_log_ids": [1],
+            }],
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False)
+
+    result = build_memory_digest_with_llm(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[
+            _log(id=1, content="长期摘要从 ChatLog 生成"),
+            _log(id=2, content="召回卡必须逐条检查证据"),
+        ],
+        summarizer=fake_summarizer,
+    )
+
+    assert result.status == "failed"
+    assert result.meta["generator"] == "deterministic_fallback"
+    assert "recall_card_evidence_not_grounded" in result.meta["fallback_reason"]
+    assert "recall_cards_empty" in result.meta["fallback_reason"]
+
+
 def test_llm_digest_rejects_credentials_and_assistant_as_user_preference_evidence():
     from app.memory_digest.llm_builder import audit_llm_digest_meta
 
