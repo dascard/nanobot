@@ -9,6 +9,7 @@ from core.database import (
     OutboundDeliveryControl,
     Persona,
     ProactiveOutreachLog,
+    User,
 )
 
 
@@ -132,6 +133,13 @@ def test_build_outreach_grounding_includes_precomputed_time_anchors(db_session):
     }
     assert grounding["days_since_last_outreach"] == pytest.approx(2.0)
     assert grounding["recent_threads"] == ["接口联调卡住，晚点继续看"]
+    assert grounding["recent_outreaches"] == [{
+        "status": "sent",
+        "forced": False,
+        "message": "两天前主动问过你接口联调。",
+        "next_intent": "",
+        "created_at": "2026-07-05T15:30:00",
+    }]
 
 
 def test_grounding_keeps_last_sent_message_when_newer_pending_exists(db_session):
@@ -142,7 +150,7 @@ def test_grounding_keeps_last_sent_message_when_newer_pending_exists(db_session)
         ProactiveOutreachLog(
             user_id="grounding-last-sent",
             idempotency_key="outreach:grounding-last-sent:sent",
-            status="sent",
+            status="sent_after_ambiguous_replay",
             message="两天前真正发送的内容",
             next_intent="",
             created_at=now - timedelta(days=2),
@@ -166,9 +174,60 @@ def test_grounding_keeps_last_sent_message_when_newer_pending_exists(db_session)
     )
 
     assert grounding["days_since_last_outreach"] == pytest.approx(2.0)
-    assert grounding["last_outreach"]["status"] == "sent"
+    assert grounding["last_outreach"]["status"] == "sent_after_ambiguous_replay"
     assert grounding["last_outreach"]["message"] == "两天前真正发送的内容"
+    assert [item["message"] for item in grounding["recent_outreaches"]] == [
+        "两天前真正发送的内容"
+    ]
     assert grounding["next_intent"] == "等待新的具体话题"
+
+
+def test_grounding_does_not_duplicate_delivery_context_in_recent_messages(db_session):
+    from core.proactive_outreach import build_outreach_grounding
+
+    now = datetime(2026, 7, 18, 12, 0, 0)
+    db_session.add_all([
+        ConversationTurn(
+            user_id="delivery-context-user",
+            session_id="private_delivery-context-user",
+            role="user",
+            content="最近在处理接口联调。",
+            created_at=now - timedelta(hours=3),
+        ),
+        ConversationTurn(
+            user_id="delivery-context-user",
+            session_id="private_delivery-context-user",
+            role="assistant",
+            content="[主动外呼已发送] 刚才已经问过接口联调。",
+            meta_json='{"kind":"outbound_delivery_summary"}',
+            created_at=now - timedelta(hours=2),
+        ),
+        ProactiveOutreachLog(
+            user_id="delivery-context-user",
+            idempotency_key="outreach:delivery-context-user:sent",
+            message="刚才已经问过接口联调。",
+            status="sent",
+            created_at=now - timedelta(hours=2),
+        ),
+    ])
+    db_session.commit()
+
+    grounding = build_outreach_grounding(
+        "delivery-context-user",
+        db=db_session,
+        now=now,
+        thread_extractor=lambda messages: [
+            item["content"] for item in messages
+        ],
+    )
+
+    assert [item["content"] for item in grounding["recent_messages"]] == [
+        "最近在处理接口联调。"
+    ]
+    assert grounding["recent_threads"] == ["最近在处理接口联调。"]
+    assert [item["message"] for item in grounding["recent_outreaches"]] == [
+        "刚才已经问过接口联调。"
+    ]
 
 
 def test_extract_recent_threads_uses_injected_llm_call():
@@ -437,7 +496,8 @@ def test_generate_outreach_message_uses_reply_route_and_positive_prompt(monkeypa
     assert calls[0]["route_key"] == "outreach_generate"
     assert "可以表达你自己的状态和情绪" in calls[0]["system_prompt"]
     assert "recent_threads" in calls[0]["system_prompt"]
-    assert "避免与上次主动消息" in calls[0]["system_prompt"]
+    assert "recent_outreaches" in calls[0]["system_prompt"]
+    assert "避免重复已发过的话题" in calls[0]["system_prompt"]
     forbidden_markers = ["禁止", "黑名单", "语义越界", "情感依赖", "shadow", "dry-run"]
     assert all(marker not in calls[0]["system_prompt"] for marker in forbidden_markers)
 
@@ -478,6 +538,180 @@ def test_generate_outreach_message_sends_compact_grounding_only_as_user_message(
     assert "项目收尾有点累" in calls[0]["user_message"]
     assert long_recent_message not in calls[0]["system_prompt"]
     assert long_recent_message not in calls[0]["user_message"]
+
+
+def test_generate_outreach_message_includes_bounded_recent_outreach_history():
+    from core import proactive_outreach
+
+    long_outreach = "上次已经分享过这个话题。" * 100
+    calls = []
+
+    def fake_call_model_route(**kwargs):
+        calls.append(kwargs)
+        return "这次换一个完全不同的话题。"
+
+    proactive_outreach.generate_outreach_message(
+        {
+            "recent_threads": ["换一个新话题"],
+            "recent_outreaches": [
+                {"message": long_outreach, "created_at": "2026-07-18T10:00:00"}
+            ],
+            "last_outreach": {"message": long_outreach},
+        },
+        "避免重复",
+        model_call=fake_call_model_route,
+    )
+
+    payload = calls[0]["user_message"]
+    assert "recent_outreaches" in payload
+    assert long_outreach not in payload
+    assert long_outreach[:300] in payload
+
+
+@pytest.mark.asyncio
+async def test_run_outreach_once_defers_same_topic_without_new_user_input(
+    monkeypatch,
+    db_session,
+):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 18, 12, 0, 0)
+    last_user_at = now - timedelta(hours=4)
+    last_user_content = "我的接口联调还没处理完。"
+    db_session.add(ConversationTurn(
+        user_id="repeat-topic-user",
+        session_id="private_repeat-topic-user",
+        role="user",
+        content=last_user_content,
+        created_at=last_user_at,
+    ))
+    db_session.add(ProactiveOutreachLog(
+        user_id="repeat-topic-user",
+        idempotency_key="outreach:repeat-topic-user:sent",
+        grounding_json=(
+            '{"last_user_message":{"content":"我的接口联调还没处理完。",'
+            '"created_at":"2026-07-18T08:00:00"}}'
+        ),
+        judge_should=True,
+        judge_reason="已跟进接口联调",
+        next_intent="继续跟进接口联调",
+        message="刚才已经问过接口联调的进展。",
+        status="sent",
+        forced=False,
+        created_at=now - timedelta(hours=2),
+    ))
+    db_session.commit()
+
+    def fake_judge(*_args, **_kwargs):
+        return {
+            "should_reach_out": True,
+            "reason": "再问一次接口联调",
+            "next_check_at": (now + timedelta(hours=3)).isoformat(),
+            "next_intent": "继续跟进接口联调",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
+    def fail_generate(*_args, **_kwargs):
+        raise AssertionError("重复话题应在生成前被拦截")
+
+    result = await proactive_outreach.run_outreach_once(
+        "repeat-topic-user",
+        db=db_session,
+        now=now,
+        judge_fn=fake_judge,
+        generator_fn=fail_generate,
+        thread_extractor=lambda _messages: ["接口联调还没完成"],
+        repeat_topic_cooldown_min=1440,
+    )
+
+    assert result["status"] == "skipped_repeated_topic"
+    assert result["reason_code"] == "same_next_intent"
+    assert result["next_check_at"] == "2026-07-19T10:00:00"
+    pending = db_session.query(ProactiveOutreachLog).filter_by(status="pending").one()
+    assert pending.message == ""
+    assert pending.judge_reason == "重复话题门禁:same_next_intent"
+
+
+def test_repeated_topic_guard_allows_same_intent_after_new_user_input(db_session):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 18, 12, 0, 0)
+    db_session.add(ProactiveOutreachLog(
+        user_id="new-anchor-user",
+        idempotency_key="outreach:new-anchor-user:sent",
+        grounding_json=(
+            '{"last_user_message":{"content":"旧的接口联调进度",'
+            '"created_at":"2026-07-18T08:00:00"}}'
+        ),
+        next_intent="继续跟进接口联调",
+        message="已经跟进过旧进度。",
+        status="sent",
+        created_at=now - timedelta(hours=2),
+    ))
+    db_session.commit()
+
+    guarded = proactive_outreach._repeated_topic_guard(
+        db_session,
+        user_id="new-anchor-user",
+        grounding={
+            "last_user_message": {
+                "content": "刚有了新的接口联调结果",
+                "created_at": "2026-07-18T11:30:00",
+            }
+        },
+        judge={
+            "next_intent": "继续跟进接口联调",
+            "research_query": "",
+        },
+        now=now,
+        cooldown_min=1440,
+    )
+
+    assert guarded is None
+
+
+def test_repeated_topic_guard_ignores_outreach_before_history_clear(db_session):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 18, 12, 0, 0)
+    db_session.add(User(
+        id="cleared-anchor-user",
+        history_clear_at=now - timedelta(hours=1),
+    ))
+    db_session.add(ProactiveOutreachLog(
+        user_id="cleared-anchor-user",
+        idempotency_key="outreach:cleared-anchor-user:sent",
+        grounding_json=(
+            '{"last_user_message":{"content":"清除前的话题",'
+            '"created_at":"2026-07-18T08:00:00"}}'
+        ),
+        next_intent="继续跟进清除前的话题",
+        message="清除前已发送。",
+        status="sent",
+        created_at=now - timedelta(hours=2),
+    ))
+    db_session.commit()
+
+    guarded = proactive_outreach._repeated_topic_guard(
+        db_session,
+        user_id="cleared-anchor-user",
+        grounding={
+            "last_user_message": {
+                "content": "清除前的话题",
+                "created_at": "2026-07-18T08:00:00",
+            }
+        },
+        judge={
+            "next_intent": "继续跟进清除前的话题",
+            "research_query": "",
+        },
+        now=now,
+        cooldown_min=1440,
+    )
+
+    assert guarded is None
 
 
 @pytest.mark.asyncio
@@ -727,13 +961,11 @@ async def test_run_outreach_due_once_skips_until_next_check_at(monkeypatch, db_s
         "superuser",
         db=db_session,
         now=now,
-        surge_min_prob=0.0,
-        surge_max_prob=0.0,
-        random_fn=lambda: 1.0,
     )
 
     assert result["status"] == "skipped_not_due"
     assert result["next_check_at"] == "2026-07-06T13:00:00"
+    assert result["surge_roll"] is None
 
 
 @pytest.mark.asyncio
@@ -875,6 +1107,7 @@ async def test_run_outreach_due_once_reuses_semantic_key_for_same_due_point(monk
         now=first_now,
         min_interval_min=0,
         max_silence_min=999999,
+        repeat_topic_cooldown_min=0,
         publisher=fake_push_to_qq,
     )
     second = await proactive_outreach.run_outreach_due_once(
@@ -883,6 +1116,7 @@ async def test_run_outreach_due_once_reuses_semantic_key_for_same_due_point(monk
         now=second_now,
         min_interval_min=0,
         max_silence_min=999999,
+        repeat_topic_cooldown_min=0,
         publisher=fake_push_to_qq,
     )
 
@@ -1051,6 +1285,7 @@ async def test_run_outreach_due_once_surge_hit_runs_judge_before_next_check(monk
         "superuser",
         db=db_session,
         now=now,
+        allow_early_surge=True,
         surge_min_prob=0.5,
         surge_max_prob=0.5,
         random_fn=lambda: 0.25,
@@ -1091,6 +1326,7 @@ async def test_run_outreach_due_once_surge_miss_skips_until_next_check(monkeypat
         "superuser",
         db=db_session,
         now=now,
+        allow_early_surge=True,
         surge_min_prob=0.1,
         surge_max_prob=0.1,
         random_fn=lambda: 0.99,
@@ -1266,6 +1502,7 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
         "proactive_outreach.max_check_interval_min": 1440,
         "proactive_outreach.max_silence_min": 2880,
         "proactive_outreach.ambiguous_hold_min": 75,
+        "proactive_outreach.repeat_topic_cooldown_min": 720,
     }
     monkeypatch.setattr(
         proactive_outreach.settings,
@@ -1305,6 +1542,8 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
             "max_check_interval_min": 1440,
             "max_silence_min": 2880,
             "ambiguous_hold_min": 75,
+            "repeat_topic_cooldown_min": 720,
+            "allow_early_surge": True,
             "surge_min_prob": proactive_outreach.DEFAULT_SURGE_MIN_PROB,
             "surge_max_prob": proactive_outreach.DEFAULT_SURGE_MAX_PROB,
         },

@@ -55,6 +55,7 @@ DEFAULT_CLAIM_LEASE_SECONDS = 900.0
 DEFAULT_WRITER_LEASE_SECONDS = 900.0
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_RETRY_DEADLINE_SECONDS = 86400.0
+CRON_OCCURRENCE_LATE_CLAIM_GRACE_SECONDS = 120.0
 _PROCESS_OWNER = (
     f"scheduled-task:{socket.gethostname().strip() or 'host'}:{uuid4().hex}"
 )[:128]
@@ -855,6 +856,16 @@ async def enqueue_scheduled_task_occurrence(
             if not scheduled_cron_matches(snapshot.cron_expr, local_slot):
                 raise ScheduledTaskOutboundError(
                     "定时任务当前槽已不再匹配最新 cron"
+                )
+            slot_age_seconds = (
+                current - occurrence.scheduled_for
+            ).total_seconds()
+            if (
+                slot_age_seconds < 0
+                or slot_age_seconds > CRON_OCCURRENCE_LATE_CLAIM_GRACE_SECONDS
+            ):
+                raise ScheduledTaskOutboundError(
+                    "cron occurrence 只能在到点后的补领窗口内创建"
                 )
         destination_snapshot = {
             "target_type": snapshot.target_type,

@@ -47,6 +47,8 @@ _MANAGED_SETTING_KEYS = (
     "proactive_outreach.max_check_interval_min",
     "proactive_outreach.max_silence_min",
     "proactive_outreach.ambiguous_hold_min",
+    "proactive_outreach.repeat_topic_cooldown_min",
+    "proactive_outreach.allow_early_surge",
     "proactive_outreach.surge_min_prob",
     "proactive_outreach.surge_max_prob",
 )

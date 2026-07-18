@@ -718,6 +718,7 @@ def _schedule_gate(
     surge_min_prob: float = DEFAULT_SURGE_MIN_PROB,
     surge_max_prob: float = DEFAULT_SURGE_MAX_PROB,
     surge_roll: float = 1.0,
+    allow_early_surge: bool = True,
 ) -> dict[str, Any]:
     due_decision = evaluate_outreach_due_gate(
         now=now,
@@ -730,6 +731,7 @@ def _schedule_gate(
         surge_min_prob=surge_min_prob,
         surge_max_prob=surge_max_prob,
         surge_roll=surge_roll,
+        allow_early_surge=allow_early_surge,
     )
     if due_decision["status"] not in {"due", "forced"}:
         return due_decision

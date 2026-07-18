@@ -10,12 +10,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import exists, func, or_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from core.database import (
+    ConversationTurn,
     OutboundDeliveryAttempt,
     OutboundDeliveryCircuit,
     OutboundDeliveryControl,
@@ -26,6 +28,7 @@ from core.database import (
     ScheduledTask,
     User,
 )
+from core.message_envelope import envelope_to_message, is_html_reply
 
 
 OUTBOUND_PROTOCOL_VERSION = 2
@@ -66,6 +69,8 @@ _CONTROL_TRANSITIONS = {
     ("outbox_active", "outbox_draining"),
     ("outbox_draining", "legacy_direct"),
 }
+_OUTBOUND_CONTEXT_TIMEZONE = ZoneInfo("Asia/Shanghai")
+_OUTBOUND_CONTEXT_TEXT_LIMIT = 800
 
 
 class OutboundDeliveryError(RuntimeError):
@@ -291,6 +296,99 @@ def _text(value: Any, *, name: str, max_length: int) -> str:
 
 def _summary(value: Any) -> str:
     return str(value or "")[:1000]
+
+
+def _outbound_context_local_time(value: datetime) -> datetime:
+    utc_value = _utc_naive(value).replace(tzinfo=timezone.utc)
+    return utc_value.astimezone(_OUTBOUND_CONTEXT_TIMEZONE).replace(tzinfo=None)
+
+
+def _compact_outbound_context_text(value: str) -> str:
+    compact = " ".join(str(value or "").split())
+    if len(compact) <= _OUTBOUND_CONTEXT_TEXT_LIMIT:
+        return compact
+    return compact[:_OUTBOUND_CONTEXT_TEXT_LIMIT] + "…"
+
+
+def _json_object_or_empty(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
+        return {}
+    return parsed if type(parsed) is dict else {}
+
+
+def _append_delivered_outbound_context(
+    db: Session,
+    *,
+    run: OutboundRun,
+    outbox: OutboundDeliveryOutbox,
+    delivered_at: datetime,
+) -> None:
+    """为已确认投递的私聊外呼写入幂等的精简上下文事件。"""
+
+    source_type = str(run.source_type or "")
+    if source_type not in {"proactive_outreach", "scheduled_task"}:
+        return
+    if str(outbox.target_type or "") != "private":
+        return
+    destination = _json_object_or_empty(outbox.destination_snapshot_json)
+    user_id = str(destination.get("target_id") or "").strip()
+    if not user_id:
+        return
+    event_id = f"outbound-delivery:{source_type}:{int(outbox.id)}"
+    source_ids_json = json.dumps([event_id], ensure_ascii=False)
+    already_exists = db.query(
+        exists().where(
+            ConversationTurn.user_id == user_id,
+            ConversationTurn.session_id == f"private_{user_id}",
+            ConversationTurn.source_message_ids_json == source_ids_json,
+        )
+    ).scalar()
+    if already_exists:
+        return
+
+    payload = _json_object_or_empty(outbox.payload_json)
+    message = envelope_to_message(payload)
+    if source_type == "proactive_outreach":
+        if is_html_reply(message):
+            content = f"[主动外呼已发送] HTML报告，{len(message)}字符"
+        else:
+            body = _compact_outbound_context_text(message)
+            content = f"[主动外呼已发送] {body or '已投递'}"
+    else:
+        snapshot = _json_object_or_empty(run.source_snapshot_json)
+        task_name = _compact_outbound_context_text(
+            str(snapshot.get("name") or "定时任务")
+        )
+        if is_html_reply(message):
+            content = (
+                f"[定时任务已发送] {task_name}"
+                f"（HTML报告，{len(message)}字符）"
+            )
+        else:
+            body = _compact_outbound_context_text(message)
+            content = f"[定时任务已发送] {task_name}：{body or '已投递'}"
+
+    db.add(ConversationTurn(
+        user_id=user_id,
+        session_id=f"private_{user_id}",
+        role="assistant",
+        content=content,
+        created_at=_outbound_context_local_time(delivered_at),
+        source_message_ids_json=source_ids_json,
+        meta_json=json.dumps(
+            {
+                "kind": "outbound_delivery_summary",
+                "source_type": source_type,
+                "run_id": int(run.id),
+                "outbox_id": int(outbox.id),
+                "delivered_at_utc": _utc_naive(delivered_at).isoformat(),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+    ))
 
 
 def _scheduled_task_id(run: OutboundRun) -> int | None:
@@ -5023,6 +5121,13 @@ def settle_delivery_attempt(
         error_summary=failure_summary,
         succeeded=outbox_status == "delivered",
     )
+    if outbox_status == "delivered" and delivered_at is not None:
+        _append_delivered_outbound_context(
+            db,
+            run=run,
+            outbox=outbox,
+            delivered_at=delivered_at,
+        )
     db.flush()
     return DeliverySettlementResult(
         applied=True,

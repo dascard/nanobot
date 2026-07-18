@@ -1420,6 +1420,10 @@ async def run_scheduled_tasks() -> int:
                 task_id=task_id,
                 local_time=local_now,
             )
+            occurrence_now = occurrence.scheduled_for + timedelta(
+                seconds=local_now.second,
+                microseconds=local_now.microsecond,
+            )
             logger.info("Running scheduled task task_id=%s", task_id)
             result = await enqueue_scheduled_task_occurrence(
                 db,
@@ -1428,6 +1432,7 @@ async def run_scheduled_tasks() -> int:
                 scheduled_for=occurrence.scheduled_for,
                 generator=_generate_task_message,
                 session_factory=SessionLocal,
+                now=occurrence_now,
             )
             if (
                 not result.deduplicated

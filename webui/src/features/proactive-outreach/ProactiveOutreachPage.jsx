@@ -31,6 +31,8 @@ const SETTING_LABELS = {
   'proactive_outreach.max_check_interval_min': '最晚再考虑',
   'proactive_outreach.max_silence_min': '最长沉默',
   'proactive_outreach.ambiguous_hold_min': '投递不确定冻结',
+  'proactive_outreach.repeat_topic_cooldown_min': '重复话题冷却',
+  'proactive_outreach.allow_early_surge': '允许提前评估',
   'proactive_outreach.surge_min_prob': '冲击下限',
   'proactive_outreach.surge_max_prob': '冲击上限',
 }
@@ -359,6 +361,8 @@ export function ProactiveOutreachPage() {
             'proactive_outreach.max_check_interval_min',
             'proactive_outreach.max_silence_min',
             'proactive_outreach.ambiguous_hold_min',
+            'proactive_outreach.repeat_topic_cooldown_min',
+            'proactive_outreach.allow_early_surge',
             'proactive_outreach.surge_min_prob',
             'proactive_outreach.surge_max_prob',
           ].map(key => (

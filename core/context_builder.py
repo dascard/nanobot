@@ -196,6 +196,7 @@ def build_session_memory(
         maybe_rollup_session_summary,
     )
     from app.session_memory.windowing import (
+        is_allowed_leading_assistant,
         load_latest_raw_window,
         load_pending_for_summary_turns,
         raw_window_limits,
@@ -366,7 +367,11 @@ def build_session_memory(
         if cur_dt is not None:
             prev_dt = cur_dt
 
-    while history_messages and history_messages[0]["role"] == "assistant":
+    while (
+        history_messages
+        and history_messages[0]["role"] == "assistant"
+        and not is_allowed_leading_assistant(history_messages[0])
+    ):
         history_messages.pop(0)
     if not history_messages:
         debug["skipped_no_context"] = skipped_no_context

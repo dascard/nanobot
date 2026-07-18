@@ -164,6 +164,8 @@ def test_proactive_outreach_status_reports_redacted_target_and_runtime(
     settings_by_key = {item["key"]: item for item in data["settings"]}
     assert settings_by_key["proactive_outreach.enabled"]["value"] is True
     assert settings_by_key["proactive_outreach.ambiguous_hold_min"]["value"] == 120
+    assert settings_by_key["proactive_outreach.repeat_topic_cooldown_min"]["value"] == 1440
+    assert settings_by_key["proactive_outreach.allow_early_surge"]["value"] is False
     assert "bot.super_user_ids" not in settings_by_key
     assert data["stats"]["total"] == 2
     assert data["stats"]["by_status"]["sent"] == 1
@@ -371,6 +373,18 @@ def test_proactive_outreach_setting_update_is_scoped(proactive_client):
         json={"value": 0},
         headers=_auth_header(),
     )
+    repeat_cooldown = proactive_client.put(
+        "/api/v1/admin/proactive-outreach/settings/"
+        "proactive_outreach.repeat_topic_cooldown_min",
+        json={"value": 720},
+        headers=_auth_header(),
+    )
+    early_surge = proactive_client.put(
+        "/api/v1/admin/proactive-outreach/settings/"
+        "proactive_outreach.allow_early_surge",
+        json={"value": False},
+        headers=_auth_header(),
+    )
     removed_super_user_setting = proactive_client.put(
         "/api/v1/admin/proactive-outreach/settings/bot.super_user_ids",
         json={"value": "u-proactive"},
@@ -378,6 +392,8 @@ def test_proactive_outreach_setting_update_is_scoped(proactive_client):
     )
 
     assert ok.status_code == 200, ok.text
+    assert repeat_cooldown.status_code == 200, repeat_cooldown.text
+    assert early_surge.status_code == 200, early_surge.text
     assert ok.json()["value"] is True
     assert denied.status_code == 400
     assert ambiguity_hold.status_code == 200, ambiguity_hold.text

@@ -72,6 +72,7 @@ def evaluate_outreach_due_gate(
     surge_min_prob: float = DEFAULT_SURGE_MIN_PROB,
     surge_max_prob: float = DEFAULT_SURGE_MAX_PROB,
     surge_roll: float | None = None,
+    allow_early_surge: bool = False,
 ) -> dict[str, Any]:
     """复现生产 due 阶段：安静时段、强制兜底、next-check 与 surge。"""
 
@@ -94,6 +95,14 @@ def evaluate_outreach_due_gate(
 
     probability = 0.0
     if next_check_at is not None and next_check_at > now:
+        if not allow_early_surge:
+            return {
+                "status": "skipped_not_due",
+                "forced": False,
+                "next_check_at": next_check_at.isoformat(),
+                "surge_probability": 0.0,
+                "surge_roll": None,
+            }
         probability = calculate_outreach_surge_probability(
             last_interaction_at=last_interaction_at,
             now=now,

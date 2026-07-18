@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from core.database import (
     Base,
+    ConversationTurn,
     OutboundDeliveryAttempt,
     OutboundDeliveryCircuit,
     OutboundDeliveryControl,
@@ -1360,6 +1361,19 @@ async def test_history_clear_after_request_boundary_preserves_delivery_fact(
     assert attempt.request_started is True
     assert outbox.status == expected_outbox_status
     assert row.status == expected_source_status
+    context_rows = db_session.query(ConversationTurn).filter_by(
+        user_id=user_id,
+        session_id=f"private_{user_id}",
+        role="assistant",
+    ).all()
+    if outcome_kind == "success":
+        assert len(context_rows) == 1
+        assert context_rows[0].content.startswith("[主动外呼已发送] ")
+        assert json.loads(context_rows[0].source_message_ids_json) == [
+            f"outbound-delivery:proactive_outreach:{queued['outbox_id']}"
+        ]
+    else:
+        assert context_rows == []
 
 
 @pytest.mark.asyncio

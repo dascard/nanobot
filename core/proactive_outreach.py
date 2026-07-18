@@ -12,6 +12,7 @@ import random
 import secrets
 import threading
 import time
+import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -108,8 +109,12 @@ _OUTREACH_PROCESS_OWNER = (
 )[:128]
 _OUTREACH_WRITER_TOKEN = secrets.token_hex(32)
 MODEL_GROUNDING_RECENT_MESSAGE_LIMIT = 8
+MODEL_GROUNDING_RECENT_OUTREACH_LIMIT = 5
 MODEL_GROUNDING_TEXT_LIMIT = 480
 MODEL_GROUNDING_MESSAGE_TEXT_LIMIT = 240
+MODEL_GROUNDING_OUTREACH_TEXT_LIMIT = 600
+PERSISTED_RECENT_OUTREACH_TEXT_LIMIT = 800
+DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN = 1440
 logger = logging.getLogger("nanobot.proactive_outreach")
 # 兼容现有调用方显式注入旧三态 publisher；生产默认保持为空并走结构化 transport。
 push_to_qq: Callable[[str, str, str], Any] | None = None
@@ -146,7 +151,7 @@ RECENT_THREADS_PROMPT = """从最近对话中提炼主动外呼可自然跟进�
 OUTREACH_JUDGE_PROMPT = """你在判断:此刻是否值得主动给你最亲密的朋友发一条消息。
 
 你会在用户消息中收到一份精简 grounding JSON。
-优先看 recent_threads、recent_threads_diagnostics、now、hours_since_last_user_message、last_user_message、days_since_last_outreach、next_intent、last_outreach；原始 recent_messages 只作补充。recent_threads_diagnostics.status=error 表示提炼失败，不等于用户没有可跟进内容。
+优先看 recent_threads、recent_threads_diagnostics、now、hours_since_last_user_message、last_user_message、days_since_last_outreach、next_intent、recent_outreaches 和 last_outreach；原始 recent_messages 只作补充。recent_threads_diagnostics.status=error 表示提炼失败，不等于用户没有可跟进内容。
 
 原则:
 - 你是主动的一方,像真人朋友——想到了就找 ta,不必等 ta 开口
@@ -156,6 +161,7 @@ OUTREACH_JUDGE_PROMPT = """你在判断:此刻是否值得主动给你最亲密�
 - 发完或不发都自己决定几小时后再考虑(next_check_in_hours)
 - 普通跟进选择 outreach_kind=message；明确值得先查资料再分享时选择 research
 - 选择 research 时 research_query 必须具体、可搜索，且扎根当前 grounding
+- recent_outreaches 中 sent/sent_after_ambiguous_replay 是已确认投递，sending/ambiguous 也可能已到达；都不要重复话题，没有新用户输入时尤其保守
 
 输出 JSON:{"should_reach_out": bool, "reason": str, "next_check_in_hours": number, "next_intent": str, "outreach_kind": "message|research", "research_query": str}"""
 
@@ -167,7 +173,7 @@ OUTREACH_GENERATOR_PROMPT = """你是 nanobot,要给最亲密的朋友主动发�
 要求:
 - 优先从 recent_threads 或 persona 里挑一个具体锚点展开,不要泛泛问候；若 recent_threads_diagnostics.status=error，只能改用最近消息或 persona 中已有的事实
 - 扎根上下文,提到 ta 说过的具体事或你的近况感受
-- 避免与上次主动消息(last_outreach.message)重复话题或措辞
+- 对照 recent_outreaches 和 last_outreach.message，避免重复已发过的话题、资料或措辞
 - 温暖自然,像真的想起 ta 了
 - 可以表达你自己的状态和情绪(想 ta、无聊、看到什么想分享)
 - 结尾不必催回复
@@ -644,12 +650,38 @@ def _compact_recent_message_for_model(item: Any) -> dict[str, Any]:
     return compact
 
 
+def _compact_recent_outreach_for_model(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {
+            "message": _truncate_text(
+                str(item),
+                MODEL_GROUNDING_OUTREACH_TEXT_LIMIT,
+            )
+        }
+    compact: dict[str, Any] = {}
+    for key in ("status", "forced", "message", "next_intent", "created_at"):
+        if key not in item:
+            continue
+        limit = (
+            MODEL_GROUNDING_OUTREACH_TEXT_LIMIT
+            if key == "message"
+            else MODEL_GROUNDING_TEXT_LIMIT
+        )
+        compact[key] = _compact_model_value(item.get(key), max_chars=limit)
+    return compact
+
+
 def _grounding_json_for_model(grounding: dict[str, Any]) -> str:
     compact: dict[str, Any] = {}
     for key, value in grounding.items():
-        if key == "recent_messages":
+        if key in {"recent_messages", "recent_outreaches"}:
             continue
-        limit = MODEL_GROUNDING_MESSAGE_TEXT_LIMIT if key in {"last_user_message", "last_outreach"} else MODEL_GROUNDING_TEXT_LIMIT
+        if key == "last_outreach":
+            limit = MODEL_GROUNDING_OUTREACH_TEXT_LIMIT
+        elif key == "last_user_message":
+            limit = MODEL_GROUNDING_MESSAGE_TEXT_LIMIT
+        else:
+            limit = MODEL_GROUNDING_TEXT_LIMIT
         compact[key] = _compact_model_value(value, max_chars=limit)
 
     recent_messages = grounding.get("recent_messages")
@@ -657,6 +689,12 @@ def _grounding_json_for_model(grounding: dict[str, Any]) -> str:
         compact["recent_messages"] = [
             _compact_recent_message_for_model(item)
             for item in recent_messages[-MODEL_GROUNDING_RECENT_MESSAGE_LIMIT:]
+        ]
+    recent_outreaches = grounding.get("recent_outreaches")
+    if isinstance(recent_outreaches, list) and recent_outreaches:
+        compact["recent_outreaches"] = [
+            _compact_recent_outreach_for_model(item)
+            for item in recent_outreaches[-MODEL_GROUNDING_RECENT_OUTREACH_LIMIT:]
         ]
     return _grounding_json(compact)
 
@@ -874,6 +912,11 @@ def _private_conversation_query(
     return query
 
 
+def _is_outbound_delivery_context_turn(row: ConversationTurn) -> bool:
+    meta = _json_object(row.meta_json)
+    return str(meta.get("kind") or "") == "outbound_delivery_summary"
+
+
 def build_outreach_grounding(
     user_id: str,
     *,
@@ -890,16 +933,21 @@ def build_outreach_grounding(
             Persona.user_id == user_id,
             Persona.status == "active",
         ).first()
-        recent_rows = (
+        recent_candidates = (
             _private_conversation_query(
                 session,
                 user_id,
                 roles=("user", "assistant", "model"),
             )
             .order_by(ConversationTurn.created_at.desc(), ConversationTurn.id.desc())
-            .limit(max(1, int(recent_limit)))
+            .limit(max(20, min(500, int(recent_limit) * 4)))
             .all()
         )
+        recent_rows = [
+            row
+            for row in recent_candidates
+            if not _is_outbound_delivery_context_turn(row)
+        ][:max(1, int(recent_limit))]
         recent_messages = [
             {
                 "role": "assistant" if row.role == "model" else (row.role or ""),
@@ -928,12 +976,18 @@ def build_outreach_grounding(
             ProactiveOutreachLog.created_at.desc(),
             ProactiveOutreachLog.id.desc(),
         ).first()
-        last_outreach = outreach_state_query.filter(
-            ProactiveOutreachLog.status.in_(("sent", "sending"))
+        recent_outreach_rows = outreach_state_query.filter(
+            ProactiveOutreachLog.status.in_((
+                "sending",
+                "ambiguous",
+                "sent",
+                "sent_after_ambiguous_replay",
+            ))
         ).order_by(
             ProactiveOutreachLog.created_at.desc(),
             ProactiveOutreachLog.id.desc(),
-        ).first()
+        ).limit(MODEL_GROUNDING_RECENT_OUTREACH_LIMIT).all()
+        last_outreach = recent_outreach_rows[0] if recent_outreach_rows else None
         last_user_hours = _hours_since(current, last_user_row.created_at if last_user_row else None)
         last_outreach_hours = _hours_since(
             current,
@@ -981,6 +1035,19 @@ def build_outreach_grounding(
                 if latest_outreach_state is not None
                 else ""
             ),
+            "recent_outreaches": [
+                {
+                    "status": row.status or "",
+                    "forced": bool(row.forced),
+                    "message": _truncate_text(
+                        row.message or "",
+                        PERSISTED_RECENT_OUTREACH_TEXT_LIMIT,
+                    ),
+                    "next_intent": _truncate_text(row.next_intent or ""),
+                    "created_at": _iso_or_empty(row.created_at),
+                }
+                for row in reversed(recent_outreach_rows)
+            ],
             "last_outreach": {
                 "status": last_outreach.status or "",
                 "forced": bool(last_outreach.forced),
@@ -2820,7 +2887,7 @@ def _latest_outreach_row(session: Session, user_id: str) -> ProactiveOutreachLog
 
 
 def _last_sent_outreach(session: Session, user_id: str) -> ProactiveOutreachLog | None:
-    return (
+    query = (
         session.query(ProactiveOutreachLog)
         .filter(ProactiveOutreachLog.user_id == user_id)
         .filter(
@@ -2828,9 +2895,91 @@ def _last_sent_outreach(session: Session, user_id: str) -> ProactiveOutreachLog 
                 ("sent", "sent_after_ambiguous_replay")
             )
         )
-        .order_by(ProactiveOutreachLog.created_at.desc(), ProactiveOutreachLog.id.desc())
-        .first()
     )
+    clear_at = _history_clear_at(session, user_id)
+    if clear_at is not None:
+        query = query.filter(ProactiveOutreachLog.created_at > clear_at)
+    return query.order_by(
+        ProactiveOutreachLog.created_at.desc(),
+        ProactiveOutreachLog.id.desc(),
+    ).first()
+
+
+def _normalized_topic_text(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
+def _generation_input_grounding(value: dict[str, Any]) -> dict[str, Any]:
+    metadata = value.get(outbound_delivery.PROACTIVE_GENERATION_METADATA_KEY)
+    if isinstance(metadata, dict):
+        input_grounding = metadata.get("input_grounding")
+        if isinstance(input_grounding, dict):
+            return input_grounding
+    return value
+
+
+def _last_user_anchor(grounding: dict[str, Any]) -> tuple[str, str]:
+    resolved = _generation_input_grounding(grounding)
+    last_user = resolved.get("last_user_message")
+    if not isinstance(last_user, dict):
+        return "", ""
+    return (
+        _normalized_topic_text(last_user.get("content")),
+        str(last_user.get("created_at") or "").strip(),
+    )
+
+
+def _previous_research_query(grounding: dict[str, Any]) -> str:
+    metadata = grounding.get(outbound_delivery.PROACTIVE_GENERATION_METADATA_KEY)
+    if not isinstance(metadata, dict):
+        return ""
+    judge = metadata.get("judge")
+    if not isinstance(judge, dict):
+        return ""
+    return _normalized_topic_text(judge.get("research_query"))
+
+
+def _repeated_topic_guard(
+    session: Session,
+    *,
+    user_id: str,
+    grounding: dict[str, Any],
+    judge: dict[str, Any],
+    now: datetime,
+    cooldown_min: int,
+) -> dict[str, Any] | None:
+    """同一用户锚点未变化时，阻止同意图或同研究查询重复外呼。"""
+
+    if cooldown_min <= 0:
+        return None
+    previous = _last_sent_outreach(session, user_id)
+    if previous is None or previous.created_at is None:
+        return None
+    cooldown_until = previous.created_at + timedelta(minutes=cooldown_min)
+    if now >= cooldown_until:
+        return None
+    previous_grounding = _json_object(previous.grounding_json)
+    current_anchor = _last_user_anchor(grounding)
+    previous_anchor = _last_user_anchor(previous_grounding)
+    if current_anchor != previous_anchor:
+        return None
+
+    current_query = _normalized_topic_text(judge.get("research_query"))
+    previous_query = _previous_research_query(previous_grounding)
+    current_intent = _normalized_topic_text(judge.get("next_intent"))
+    previous_intent = _normalized_topic_text(previous.next_intent)
+    if current_query and current_query == previous_query:
+        reason_code = "same_research_query"
+    elif current_intent and current_intent == previous_intent:
+        reason_code = "same_next_intent"
+    else:
+        return None
+    return {
+        "reason_code": reason_code,
+        "matched_log_id": int(previous.id),
+        "cooldown_until": cooldown_until,
+    }
 
 
 def _last_effective_outreach(session: Session, user_id: str) -> ProactiveOutreachLog | None:
@@ -3242,6 +3391,7 @@ async def _run_outreach_once_acquired(
     max_check_interval_min: int = DEFAULT_MAX_CHECK_INTERVAL_MIN,
     max_silence_min: int = DEFAULT_MAX_SILENCE_MIN,
     ambiguous_hold_min: int = DEFAULT_AMBIGUOUS_HOLD_MIN,
+    repeat_topic_cooldown_min: int = DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
@@ -3674,6 +3824,56 @@ async def _run_outreach_once_acquired(
                 "log_id": row.id,
                 "forced": False,
             }
+        repeated_topic = _repeated_topic_guard(
+            session,
+            user_id=user_id,
+            grounding=grounding,
+            judge=judge,
+            now=current,
+            cooldown_min=max(0, int(repeat_topic_cooldown_min)),
+        )
+        if repeated_topic is not None:
+            cooldown_until = repeated_topic["cooldown_until"]
+            deferred_next_check = max(
+                next_check_at or current,
+                cooldown_until,
+            )
+            reason_code = str(repeated_topic["reason_code"])
+            row = _upsert_pending_schedule(
+                session,
+                user_id=user_id,
+                idempotency_key=_outreach_key(
+                    user_id,
+                    deferred_next_check,
+                    forced=False,
+                ),
+                grounding=grounding,
+                judge_reason=f"重复话题门禁:{reason_code}",
+                next_check_at=deferred_next_check,
+                next_intent=str(judge.get("next_intent") or ""),
+                created_at=generation_at,
+                evaluation_owner_token=evaluation_owner_token,
+            )
+            if row is None:
+                return {
+                    "status": "lease_lost",
+                    "log_id": None,
+                    "forced": False,
+                }
+            if row.status != "pending":
+                return _pending_schedule_conflict_result(
+                    session,
+                    row=row,
+                    user_id=user_id,
+                )
+            return {
+                "status": "skipped_repeated_topic",
+                "reason_code": reason_code,
+                "matched_log_id": int(repeated_topic["matched_log_id"]),
+                "next_check_at": deferred_next_check.isoformat(),
+                "log_id": int(row.id),
+                "forced": False,
+            }
         kind = (
             "research"
             if str(judge.get("outreach_kind") or "message") == "research"
@@ -3724,6 +3924,7 @@ async def run_outreach_once(
     max_check_interval_min: int = DEFAULT_MAX_CHECK_INTERVAL_MIN,
     max_silence_min: int = DEFAULT_MAX_SILENCE_MIN,
     ambiguous_hold_min: int = DEFAULT_AMBIGUOUS_HOLD_MIN,
+    repeat_topic_cooldown_min: int = DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
@@ -3758,6 +3959,7 @@ async def run_outreach_once(
                 max_check_interval_min=max_check_interval_min,
                 max_silence_min=max_silence_min,
                 ambiguous_hold_min=ambiguous_hold_min,
+                repeat_topic_cooldown_min=repeat_topic_cooldown_min,
                 judge_fn=judge_fn,
                 generator_fn=generator_fn,
                 research_fn=research_fn,
@@ -3830,6 +4032,8 @@ async def run_outreach_due_once(
     max_check_interval_min: int | None = None,
     max_silence_min: int | None = None,
     ambiguous_hold_min: int | None = None,
+    repeat_topic_cooldown_min: int | None = None,
+    allow_early_surge: bool = False,
     surge_min_prob: float | None = None,
     surge_max_prob: float | None = None,
     random_fn: Callable[[], float] | None = None,
@@ -3866,6 +4070,7 @@ async def run_outreach_due_once(
             "surge_max_prob": surge_max_prob
             if surge_max_prob is not None
             else DEFAULT_SURGE_MAX_PROB,
+            "allow_early_surge": bool(allow_early_surge),
         }
         decision = evaluate_outreach_due_gate(**policy_kwargs)
         if decision["status"] == "surge_roll_required":
@@ -3881,7 +4086,11 @@ async def run_outreach_due_once(
                 "status": "skipped_not_due",
                 "next_check_at": str(decision["next_check_at"]),
                 "surge_probability": float(decision["surge_probability"]),
-                "surge_roll": float(decision["surge_roll"]),
+                "surge_roll": (
+                    float(decision["surge_roll"])
+                    if decision.get("surge_roll") is not None
+                    else None
+                ),
             }
 
     return await run_outreach_once(
@@ -3901,6 +4110,11 @@ async def run_outreach_due_once(
             ambiguous_hold_min
             if ambiguous_hold_min is not None
             else DEFAULT_AMBIGUOUS_HOLD_MIN
+        ),
+        repeat_topic_cooldown_min=(
+            repeat_topic_cooldown_min
+            if repeat_topic_cooldown_min is not None
+            else DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN
         ),
         publisher=publisher,
     )
@@ -3952,6 +4166,14 @@ def proactive_outreach_scheduler(stop_event: threading.Event) -> None:
                         ambiguous_hold_min=settings.get_int(
                             "proactive_outreach.ambiguous_hold_min",
                             DEFAULT_AMBIGUOUS_HOLD_MIN,
+                        ),
+                        repeat_topic_cooldown_min=settings.get_int(
+                            "proactive_outreach.repeat_topic_cooldown_min",
+                            DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
+                        ),
+                        allow_early_surge=settings.get_bool(
+                            "proactive_outreach.allow_early_surge",
+                            False,
                         ),
                         surge_min_prob=settings.get_float(
                             "proactive_outreach.surge_min_prob",

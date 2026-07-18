@@ -9,6 +9,7 @@ import pytest
 
 from core import database, outbound_delivery
 from core.database import (
+    ConversationTurn,
     OutboundDeliveryCircuit,
     OutboundDeliveryAttempt,
     OutboundDeliveryControl,
@@ -185,7 +186,19 @@ def _start(db, claim, task: ScheduledTask):
     )
 
 
-def _commit(db, claim, generation, task: ScheduledTask):
+def _commit(
+    db,
+    claim,
+    generation,
+    task: ScheduledTask,
+    *,
+    message: str = "已生成日报",
+):
+    message_type = "html" if message.lstrip().lower().startswith((
+        "<article",
+        "<!doctype",
+        "<html",
+    )) else "text"
     return outbound_delivery.commit_generated_outbox(
         db,
         run_id=claim.run_id,
@@ -198,8 +211,8 @@ def _commit(db, claim, generation, task: ScheduledTask):
         target_type="private",
         endpoint_key=ENDPOINT_KEY,
         payload={
-            "reply": "已生成日报",
-            "messages": [{"type": "text", "text": "已生成日报"}],
+            "reply": message,
+            "messages": [{"type": message_type, "text": message}],
         },
         max_attempts=3,
         retry_deadline_at=NOW + timedelta(hours=1),
@@ -273,6 +286,105 @@ def test_scheduled_task_projection_is_atomic_from_generation_to_delivery(db_sess
     assert projected.delivery_status == "delivered"
     assert projected.last_success_at == NOW + timedelta(seconds=5)
     assert projected.last_error_summary == ""
+    context_row = db_session.query(ConversationTurn).filter_by(
+        user_id="opaque-user",
+        session_id="private_opaque-user",
+        role="assistant",
+    ).one()
+    assert context_row.content == "[定时任务已发送] AI 日报：已生成日报"
+    assert json.loads(context_row.source_message_ids_json) == [
+        f"outbound-delivery:scheduled_task:{queued.outbox_id}"
+    ]
+    assert json.loads(context_row.meta_json)["outbox_id"] == queued.outbox_id
+    from core.context_builder import build_session_memory
+
+    _header, context_messages, _debug = build_session_memory(
+        db_session,
+        "private_opaque-user",
+        user_id="opaque-user",
+        read_only=True,
+    )
+    assert context_messages[-1]["content"].endswith(context_row.content)
+
+
+def test_scheduled_html_delivery_keeps_final_html_in_outbox_and_pointer_in_context(
+    db_session,
+):
+    _seed_control(db_session)
+    task = _seed_task(db_session)
+    claim = _claim(db_session, task)
+    generation = _start(db_session, claim, task)
+    html = (
+        '<article class="news-brief"><h1>AI 日报</h1>'
+        '<p>最终替换后的日报正文</p></article>'
+    )
+    queued = _commit(
+        db_session,
+        claim,
+        generation,
+        task,
+        message=html,
+    )
+    delivery = outbound_delivery.claim_due_outbox(
+        db_session,
+        worker_owner="worker-html",
+        lease_seconds=60,
+        endpoint_config_revision=CONFIG_REVISION,
+        now=NOW + timedelta(seconds=3),
+    )
+    assert delivery is not None
+    outbound_delivery.mark_delivery_request_started(
+        db_session,
+        outbox_id=delivery.outbox_id,
+        attempt_id=delivery.attempt_id,
+        worker_owner=delivery.worker_owner,
+        lease_token=delivery.lease_token,
+        now=NOW + timedelta(seconds=4),
+    )
+    first = outbound_delivery.settle_delivery_attempt(
+        db_session,
+        outbox_id=delivery.outbox_id,
+        attempt_id=delivery.attempt_id,
+        worker_owner=delivery.worker_owner,
+        lease_token=delivery.lease_token,
+        outcome="succeeded",
+        transport_phase="response_received",
+        http_status=200,
+        result_category="success",
+        error_type="",
+        safe_summary="",
+        duration_ms=8,
+        now=NOW + timedelta(seconds=5),
+    )
+    repeated = outbound_delivery.settle_delivery_attempt(
+        db_session,
+        outbox_id=delivery.outbox_id,
+        attempt_id=delivery.attempt_id,
+        worker_owner=delivery.worker_owner,
+        lease_token=delivery.lease_token,
+        outcome="succeeded",
+        transport_phase="response_received",
+        http_status=200,
+        result_category="success",
+        error_type="",
+        safe_summary="",
+        duration_ms=8,
+        now=NOW + timedelta(seconds=6),
+    )
+
+    outbox = db_session.get(OutboundDeliveryOutbox, queued.outbox_id)
+    assert json.loads(outbox.payload_json)["reply"] == html
+    assert first.applied is True
+    assert repeated.applied is False
+    context_rows = db_session.query(ConversationTurn).filter_by(
+        session_id="private_opaque-user",
+        role="assistant",
+    ).all()
+    assert len(context_rows) == 1
+    assert context_rows[0].content == (
+        f"[定时任务已发送] AI 日报（HTML报告，{len(html)}字符）"
+    )
+    assert html not in context_rows[0].content
 
 
 def test_generation_failure_updates_attempt_but_never_success(db_session):
@@ -539,6 +651,45 @@ def test_same_cron_slot_generates_once_and_keeps_first_snapshot(db_session):
     assert db_session.query(OutboundRun).count() == 1
     assert db_session.query(OutboundGenerationAttempt).count() == 1
     assert db_session.query(OutboundDeliveryOutbox).count() == 1
+
+
+@pytest.mark.parametrize(
+    "scheduled_for",
+    [NOW + timedelta(days=1), NOW - timedelta(days=1)],
+)
+def test_cron_occurrence_cannot_be_claimed_outside_late_grace(
+    db_session,
+    scheduled_for,
+):
+    from core.scheduled_task_outbound import (
+        ScheduledTaskOutboundError,
+        ScheduledTaskProducerConfig,
+        enqueue_scheduled_task_occurrence,
+    )
+
+    _seed_control(db_session)
+    task = _seed_task(db_session)
+    db_session.commit()
+    generated = []
+
+    with pytest.raises(ScheduledTaskOutboundError, match="补领窗口"):
+        run_async(enqueue_scheduled_task_occurrence(
+            db_session,
+            task_id=task.id,
+            trigger_type="cron",
+            scheduled_for=scheduled_for,
+            config=ScheduledTaskProducerConfig.for_tests(
+                endpoint_config_revision=CONFIG_REVISION,
+            ),
+            generator=lambda _snapshot: generated.append(True) or "不应生成",
+            now=NOW,
+        ))
+
+    db_session.rollback()
+    assert generated == []
+    assert db_session.query(OutboundRun).count() == 0
+    assert db_session.query(OutboundGenerationAttempt).count() == 0
+    assert db_session.query(OutboundDeliveryOutbox).count() == 0
 
 
 @pytest.mark.parametrize(

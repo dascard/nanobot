@@ -33,6 +33,8 @@ def test_proactive_outreach_settings_are_registered_as_plain_boolean_switch():
         "proactive_outreach.max_check_interval_min": (1440, "int"),
         "proactive_outreach.max_silence_min": (2880, "int"),
         "proactive_outreach.ambiguous_hold_min": (120, "int"),
+        "proactive_outreach.repeat_topic_cooldown_min": (1440, "int"),
+        "proactive_outreach.allow_early_surge": (False, "bool"),
         "proactive_outreach.surge_min_prob": (0.1, "float"),
         "proactive_outreach.surge_max_prob": (0.6, "float"),
     }
@@ -54,6 +56,9 @@ def test_proactive_outreach_settings_are_registered_as_plain_boolean_switch():
     assert ambiguous_hold.env_name == "PROACTIVE_OUTREACH_AMBIGUOUS_HOLD_MIN"
     assert ambiguous_hold.min_value == 1
     assert ambiguous_hold.max_value == 10080
+    assert SETTING_DEFS["proactive_outreach.allow_early_surge"].env_name == (
+        "PROACTIVE_OUTREACH_ALLOW_EARLY_SURGE"
+    )
 
 
 def test_unreviewed_memory_automation_is_disabled_by_default():

@@ -80,6 +80,33 @@ def test_recent_raw_window_selects_latest_by_id_not_created_at(db_session):
     assert selected[0]["turn_id"] == late_id_old_created.id
 
 
+def test_raw_window_keeps_confirmed_outbound_as_leading_assistant(db_session):
+    from app.session_memory.windowing import select_latest_raw_window
+
+    ordinary = _turn(
+        db_session,
+        role="assistant",
+        content="没有用户锚点的普通 assistant",
+    )
+    delivered = _turn(
+        db_session,
+        role="assistant",
+        content="[主动外呼已发送] 已确认送达",
+        meta={"kind": "outbound_delivery_summary"},
+    )
+    db_session.commit()
+
+    selected, debug = select_latest_raw_window(
+        [ordinary, delivered],
+        chat_type="private",
+        max_turns=10,
+        max_tokens=10000,
+    )
+
+    assert [item["turn_id"] for item in selected] == [delivered.id]
+    assert debug["raw_window_turn_ids"] == [delivered.id]
+
+
 def test_pending_boundary_between_summary_cursor_and_raw_start(db_session):
     from app.session_memory.windowing import select_pending_for_summary
 

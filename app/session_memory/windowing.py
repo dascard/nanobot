@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -26,6 +26,7 @@ INTERNAL_KINDS = frozenset({
     "system_control",
     "empty_reply",
 })
+LEADING_ASSISTANT_CONTEXT_KINDS = frozenset({"outbound_delivery_summary"})
 
 USERNAME_MARKER_RE = re.compile(r"\[用户名\]\s*([^\r\n\[]+)")
 
@@ -72,6 +73,15 @@ def is_context_eligible_turn(turn: ConversationTurn) -> tuple[bool, str]:
         return False, "empty_content"
 
     return True, ""
+
+
+def is_allowed_leading_assistant(item: Mapping[str, Any]) -> bool:
+    """仅允许服务端确认投递事件作为上下文的起始 assistant。"""
+
+    if str(item.get("role") or "") != "assistant":
+        return False
+    meta = safe_meta(str(item.get("meta_json") or "{}"))
+    return str(meta.get("kind") or "") in LEADING_ASSISTANT_CONTEXT_KINDS
 
 
 def load_context_eligible_turns(
@@ -290,7 +300,11 @@ def select_latest_raw_window(
         total_tokens += int(item["token_cost"])
 
     selected = list(reversed(selected_desc))
-    while selected and selected[0]["role"] == "assistant":
+    while (
+        selected
+        and selected[0]["role"] == "assistant"
+        and not is_allowed_leading_assistant(selected[0])
+    ):
         selected.pop(0)
     total_tokens = sum(int(item.get("token_cost") or 0) for item in selected)
 
