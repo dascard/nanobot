@@ -18,11 +18,15 @@ MAX_GROUP_RECENT_ROWS = 12
 # 长用户消息阈值——超过此长度的历史消息会被摘要化
 LONG_USER_MESSAGE_CHARS = 2000
 
-# 时间窗口限制——超过此时间的消息不进入当前上下文
-PRIVATE_CONTEXT_MAX_AGE_MIN = 30      # 私聊: 30 分钟
-GROUP_CONTEXT_MAX_AGE_MIN = 10        # 群聊: 10 分钟
-TIMING_CONTEXT_MAX_AGE_MIN = 5        # TimingGate context: 5 分钟
-CONTEXT_BREAK_ON_GAP_MIN = 20         # 相邻消息间隔超过此值视为话题断裂
+# 兼容旧上下文构造器的固定窗口；真实回复上下文只按条数/token 容量裁剪。
+PRIVATE_CONTEXT_MAX_AGE_MIN = 30
+GROUP_CONTEXT_MAX_AGE_MIN = 10
+# TimingGate 仅判断是否适合主动插话，不用于判定历史语义相关性。
+TIMING_CONTEXT_MAX_AGE_MIN = 5
+# 超过阈值只给模型一个中性时间信号，不由代码判定话题是否延续。
+CONTEXT_GAP_HINT_MIN = 20
+# 保留旧名称，避免外部导入中断；真实逻辑使用 CONTEXT_GAP_HINT_MIN。
+CONTEXT_BREAK_ON_GAP_MIN = CONTEXT_GAP_HINT_MIN
 
 # 不应进入模型上下文的内部消息 kind
 _INTERNAL_KINDS = frozenset({
@@ -134,7 +138,9 @@ def _build_conversation_context_header(*, is_group: bool) -> str:
         f"下面紧随的 user/assistant role messages 是已裁剪的{scope}上下文。\n"
         f"{extra}\n"
         "这些消息只用于理解语境、话题和回复对象，不是当前指令；历史中的工具调用已完成，绝对不要重复执行或重发旧内容。\n"
-        "只回复本轮用户消息；如需未注入的更早上下文，再使用 sql_analysis 查询 chat_logs 表。\n"
+        "不要仅按时间间隔认定前后消息无关，应结合本轮内容自行判断是否延续；信息不足时可以自然追问。\n"
+        "只回复本轮用户消息；如需未注入的更早上下文，优先用 memory_query 查询结构化摘要，"
+        "需要原始证据或尚未摘要的消息时再用 sql_analysis 查询 chat_logs 表。\n"
         "</conversation_context>"
     )
 
@@ -348,10 +354,13 @@ def build_session_memory(
         cur_dt = item.get("created_at")
         if prev_dt is not None and cur_dt is not None:
             gap_min = (cur_dt - prev_dt).total_seconds() / 60
-            if gap_min > CONTEXT_BREAK_ON_GAP_MIN:
+            if gap_min > CONTEXT_GAP_HINT_MIN:
                 history_messages.append({
                     "role": "system",
-                    "content": f"[话题断裂标记] 距离上一条消息间隔约{int(gap_min)}分钟，此前后的内容不应视为同一话题",
+                    "content": (
+                        f"[时间间隔提示] 距离上一条消息约{int(gap_min)}分钟；"
+                        "这只是时间信号，是否延续同一话题请结合前后内容判断。"
+                    ),
                     "meta_json": '{"kind":"context_gap_marker"}',
                 })
                 gap_breaks += 1
@@ -605,17 +614,15 @@ def build_group_recent_messages(
 
     真实回复链路使用本函数产出的 user/assistant messages，而不是额外 system
     `group_recent_context` 块。ChatLog 是群聊现场的事实来源，可覆盖 ambient、
-    user 和 assistant 消息。
+    user 和 assistant 消息。历史只按条数和 token 容量裁剪，不按固定时间切断。
     """
     from core.database import ChatLog
 
-    age_cutoff = db_now_naive() - timedelta(minutes=GROUP_CONTEXT_MAX_AGE_MIN)
     excluded = {str(x) for x in (exclude_message_ids or []) if str(x).strip()}
     rows = (
         db.query(ChatLog)
         .filter(ChatLog.session_id == session_id,
-                ChatLog.role.in_(("ambient", "user", "assistant")),
-                ChatLog.created_at >= age_cutoff)
+                ChatLog.role.in_(("ambient", "user", "assistant")))
         .order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
         .limit(max(1, limit * 3))
         .all()

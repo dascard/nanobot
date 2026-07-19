@@ -169,6 +169,46 @@ def test_build_memory_keeps_old_private_turns_until_capacity_boundary(db_session
     assert "old message" in " ".join(contents)
     assert _debug["rolling_summary_injected"] is False
     assert "<conversation_context>" in header
+    assert "memory_query" in header
+    assert "不要仅按时间间隔" in header
+
+
+def test_build_memory_uses_neutral_gap_hint_instead_of_topic_break(db_session):
+    """较长时间间隔只能作为信号，不能由代码判定前后话题无关。"""
+    from api.routes import _build_session_memory
+
+    now = _local_now()
+    for role, content, created_at in [
+        ("user", "之前在讨论摘要容量", now - timedelta(hours=2)),
+        ("assistant", "需要按完整 JSON 合同计算", now - timedelta(hours=2, minutes=-1)),
+        ("user", "继续处理这个问题", now - timedelta(minutes=2)),
+    ]:
+        db_session.add(ConversationTurn(
+            user_id="gap-user",
+            session_id="private_gap-user",
+            role=role,
+            content=content,
+            created_at=created_at,
+        ))
+    db_session.commit()
+
+    _header, messages, debug = _build_session_memory(
+        db_session,
+        "private_gap-user",
+        user_id="gap-user",
+    )
+
+    hints = [
+        message["content"]
+        for message in messages
+        if '"kind":"context_gap_marker"' in message.get("meta_json", "")
+    ]
+    assert len(hints) == 1
+    assert "时间间隔" in hints[0]
+    assert "结合前后内容判断" in hints[0]
+    assert "话题断裂" not in hints[0]
+    assert "不应视为同一话题" not in hints[0]
+    assert debug["gap_breaks"] == 1
 
 
 def test_build_memory_injects_rolling_summary_for_trimmed_private_turns(db_session):
@@ -256,7 +296,7 @@ def test_build_group_memory_keeps_old_turns_until_capacity_boundary(db_session):
 
 
 def test_build_chat_context_group_uses_unified_chatlog_messages(db_session):
-    """群聊上下文应统一成 role messages，不再生成独立 group_recent_context 块。"""
+    """群聊上下文按容量保留旧消息，不再按 10 分钟硬切。"""
     from core.context_builder import build_chat_context
 
     now = _local_now()
@@ -268,7 +308,7 @@ def test_build_chat_context_group_uses_unified_chatlog_messages(db_session):
         content="[A]: 这个方案有点绕",
         message_id="m1",
         processed=1,
-        created_at=now - timedelta(minutes=3),
+        created_at=now - timedelta(hours=2),
     ))
     db_session.add(ChatLog(
         user_id="group_1",
@@ -278,7 +318,7 @@ def test_build_chat_context_group_uses_unified_chatlog_messages(db_session):
         content="可以先把入口收敛掉",
         message_id="m2",
         processed=1,
-        created_at=now - timedelta(minutes=2),
+        created_at=now - timedelta(hours=2) + timedelta(minutes=1),
     ))
     db_session.add(ChatLog(
         user_id="group_1",

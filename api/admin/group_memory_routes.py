@@ -170,6 +170,7 @@ def group_memory_injection_preview(
         recent_messages=[],
         max_items=body.max_items,
         max_chars=body.max_chars,
+        allow_model_calls=False,
     )
     return {
         "group_id": group_id,

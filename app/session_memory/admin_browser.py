@@ -456,7 +456,10 @@ WHERE
                 session_id = _canonical_session_id(row.session_id, row.user_id)
                 session_id = session_id if session_id in sessions else alias_to_session.get(str(row.session_id or ""), "")
                 item = sessions.get(session_id)
-                if item is None or row.status != "active" or item["active_summary_id"]:
+                if item is None or row.status != "active":
+                    continue
+                item["_active_summary_count"] = int(item.get("_active_summary_count") or 0) + 1
+                if item["active_summary_id"]:
                     continue
                 item["active_summary_id"] = row.id
                 item["active_summary_preview"] = _preview(row.summary_text)
@@ -478,6 +481,10 @@ WHERE
                 if item is None:
                     continue
                 meta = _safe_json(row.meta_json, {})
+                if _digest_status(meta) != "active":
+                    continue
+                logical_id = str(meta.get("source_id") or "").strip() or f"row:{int(row.id or 0)}"
+                item.setdefault("_active_digest_source_ids", set()).add(logical_id)
                 is_preview_digest = int(row.level or 0) == 1 or str(meta.get("summary_type") or "") == "preview_digest"
                 if item["latest_digest_id"] and not (is_preview_digest and not item.get("_latest_digest_is_preview")):
                     continue
@@ -490,6 +497,8 @@ WHERE
         page_items = []
         for item in sessions.values():
             item["session_aliases"] = sorted(item.get("session_aliases") or [])
+            item["summary_count"] = int(item.pop("_active_summary_count", 0) or 0)
+            item["digest_count"] = len(item.pop("_active_digest_source_ids", set()))
             item.pop("_latest_digest_is_preview", None)
             page_items.append(item)
         return {
@@ -531,6 +540,7 @@ WHERE
         date_end: str = "",
         level: int = -1,
         parent_id: int | None = None,
+        include_archived: bool = False,
     ) -> dict[str, Any]:
         limit = max(1, min(int(digest_limit_per_session or 50), 200))
         aliases = _session_aliases(session_id)
@@ -544,11 +554,31 @@ WHERE
             query = query.filter(MemoryDigest.level == level)
         if parent_id is not None:
             query = query.filter(MemoryDigest.parent_id == parent_id)
-        rows = query.order_by(MemoryDigest.id.desc()).limit(limit).all()
+        rows = query.order_by(MemoryDigest.id.desc()).all()
+        grouped: dict[str, list[MemoryDigest]] = {}
+        for row in rows:
+            meta = _safe_json(row.meta_json, {})
+            if not include_archived and _digest_status(meta) != "active":
+                continue
+            source_id = str(meta.get("source_id") or "").strip()
+            logical_id = source_id or f"row:{int(row.id or 0)}"
+            grouped.setdefault(logical_id, []).append(row)
+        logical_rows = sorted(
+            grouped.items(),
+            key=lambda entry: max(int(row.id or 0) for row in entry[1]),
+            reverse=True,
+        )[:limit]
         return {
             "session_id": _canonical_session_id(session_id),
             "session_aliases": aliases,
-            "items": [self._digest_to_dict(row, include_content=include_content) for row in rows],
+            "items": [
+                self._digest_group_to_dict(
+                    logical_id,
+                    group_rows,
+                    include_content=include_content,
+                )
+                for logical_id, group_rows in logical_rows
+            ],
             "digest_limit_per_session": limit,
         }
 
@@ -606,4 +636,64 @@ WHERE
         }
         if include_content:
             item["content"] = content
+        return item
+
+    @staticmethod
+    def _digest_layer_to_dict(
+        row: MemoryDigest,
+        *,
+        include_content: bool = False,
+    ) -> dict[str, Any]:
+        meta = _safe_json(row.meta_json, {})
+        content = _digest_content_text(row, meta)
+        item = {
+            "digest_id": row.id,
+            "level": int(row.level or 0),
+            "parent_id": row.parent_id,
+            "summary_type": str(meta.get("summary_type") or ""),
+            "preview": _preview(content),
+            "created_at": _iso(row.created_at),
+        }
+        card = meta.get("recall_card")
+        if isinstance(card, dict):
+            item["recall_card"] = card
+        if include_content:
+            item["content"] = content
+        return item
+
+    @classmethod
+    def _digest_group_to_dict(
+        cls,
+        logical_id: str,
+        rows: list[MemoryDigest],
+        *,
+        include_content: bool = False,
+    ) -> dict[str, Any]:
+        ordered = sorted(rows, key=lambda row: (int(row.level or 0), int(row.id or 0)))
+        level0 = next((row for row in ordered if int(row.level or 0) == 0), None)
+        level1 = next((row for row in ordered if int(row.level or 0) == 1), None)
+        representative = level1 or level0 or ordered[-1]
+        item = cls._digest_to_dict(representative, include_content=False)
+        meta_row = level0 or level1 or representative
+        meta = _safe_json(meta_row.meta_json, {})
+        item.update({
+            "source_id": str(meta.get("source_id") or "") or logical_id,
+            "preview": _preview(_digest_preview_text(representative, meta)),
+            "status": _digest_status(meta),
+            "layer_count": len(ordered),
+            "levels": sorted({int(row.level or 0) for row in ordered}),
+            "layers": [
+                cls._digest_layer_to_dict(row, include_content=include_content)
+                for row in ordered
+            ],
+            "raw_json": {"meta_json": meta},
+        })
+        if len(ordered) > 1:
+            item["summary_type"] = "logical_digest"
+        if include_content:
+            content_row = level0 or representative
+            item["content"] = _digest_content_text(
+                content_row,
+                _safe_json(content_row.meta_json, {}),
+            )
         return item

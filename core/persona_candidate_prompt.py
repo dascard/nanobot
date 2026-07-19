@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.context_builder import sanitize_prompt_text
+from core.moderation import is_no_learn_meta
 
 CANDIDATE_EXTRACTION_SYSTEM_PROMPT = """你是用户画像候选提取器。你的任务不是尽量多记，而是只提取可长期复用、能改善以后回复的用户画像候选。
 
@@ -60,8 +61,13 @@ CANDIDATE_EXTRACTION_SYSTEM_PROMPT = """你是用户画像候选提取器。你�
 
 
 def filter_user_messages(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """从日志列表中过滤出 role=user 的消息。"""
-    return [log for log in logs if str(log.get("role", "")).strip().lower() == "user"]
+    """过滤出允许学习的 role=user 消息。"""
+    return [
+        log
+        for log in logs
+        if str(log.get("role", "")).strip().lower() == "user"
+        and not is_no_learn_meta(log.get("meta_json"))
+    ]
 
 
 def format_candidate_logs(logs: list[dict[str, Any]]) -> str:

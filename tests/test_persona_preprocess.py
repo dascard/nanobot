@@ -97,6 +97,19 @@ class TestFilterUserMessages:
         logs = [{"role": "assistant", "content": "x"}] * 5
         assert filter_user_messages(logs) == []
 
+    def test_excludes_messages_marked_no_learn(self):
+        logs = [
+            {"id": 1, "role": "user", "content": "正常画像证据", "meta_json": "{}"},
+            {
+                "id": 2,
+                "role": "user",
+                "content": "禁止学习的敏感内容",
+                "meta_json": '{"moderation": {"no_learn": true}}',
+            },
+        ]
+
+        assert [row["id"] for row in filter_user_messages(logs)] == [1]
+
 
 class TestCosineSimilarity:
     def test_identical(self):
@@ -113,6 +126,89 @@ class TestCosineSimilarity:
         a = np.array([1.0, 0.0], dtype=np.float32)
         b = np.array([-1.0, 0.0], dtype=np.float32)
         assert cosine_similarity(a, b) == pytest.approx(-1.0)
+
+
+class TestContradictionDetection:
+    def test_nli_receives_a_real_text_pair_and_accepts_normalized_label(
+        self, state_machine, monkeypatch
+    ):
+        calls = []
+
+        def fake_nli(inputs):
+            calls.append(inputs)
+            return [{"label": "contradiction", "score": 0.95}]
+
+        monkeypatch.setattr("core.persona_preprocess._get_nli", lambda: fake_nli)
+
+        assert state_machine.detect_contradiction(
+            "用户不再使用 Python",
+            "用户长期使用 Python",
+        ) is True
+        assert calls == [{
+            "text": "用户长期使用 Python",
+            "text_pair": "用户不再使用 Python",
+        }]
+
+    def test_nli_unavailable_does_not_fall_back_to_cosine(
+        self, state_machine, monkeypatch
+    ):
+        monkeypatch.setattr("core.persona_preprocess._get_nli", lambda: None)
+        embed_called = False
+
+        def unexpected_embed(_text):
+            nonlocal embed_called
+            embed_called = True
+            return np.array([1.0], dtype=np.float32)
+
+        monkeypatch.setattr("core.persona_preprocess.embed_text", unexpected_embed)
+
+        assert state_machine.detect_contradiction("用户喜欢 Python", "用户喜欢 Rust") is False
+        assert embed_called is False
+
+    def test_single_similar_candidate_is_linked_only_when_nli_confirms_contradiction(
+        self, state_machine, db_session, monkeypatch
+    ):
+        vector = np.pad(np.array([1.0], dtype=np.float32), (0, 767))
+        monkeypatch.setattr("core.persona_preprocess.embed_text", lambda _text: vector)
+        monkeypatch.setattr(
+            "core.persona_preprocess._get_nli",
+            lambda: lambda _text: [{"label": "CONTRADICTION", "score": 0.95}],
+        )
+
+        state_machine.process_candidates([
+            {"text": "用户长期偏好 Python", "memory_type": "stable_preference"},
+        ])
+        stats = state_machine.process_candidates([
+            {"text": "用户长期不使用 Python", "memory_type": "stable_preference"},
+        ])
+
+        facts = db_session.query(PersonaFact).order_by(PersonaFact.id.asc()).all()
+        assert stats["conflicts"] == 1
+        assert json.loads(facts[0].contradicted_by) == [facts[1].id]
+        assert json.loads(facts[1].contradicted_by) == [facts[0].id]
+        assert facts[1].status == "review"
+        assert facts[1].inject_policy == "manual_only"
+
+    def test_single_similar_candidate_is_not_linked_when_nli_is_neutral(
+        self, state_machine, db_session, monkeypatch
+    ):
+        vector = np.pad(np.array([1.0], dtype=np.float32), (0, 767))
+        monkeypatch.setattr("core.persona_preprocess.embed_text", lambda _text: vector)
+        monkeypatch.setattr(
+            "core.persona_preprocess._get_nli",
+            lambda: lambda _text: [{"label": "NEUTRAL", "score": 0.99}],
+        )
+
+        state_machine.process_candidates([
+            {"text": "用户长期偏好 Python", "memory_type": "stable_preference"},
+        ])
+        stats = state_machine.process_candidates([
+            {"text": "用户也关注 Rust", "memory_type": "stable_preference"},
+        ])
+
+        facts = db_session.query(PersonaFact).order_by(PersonaFact.id.asc()).all()
+        assert stats["conflicts"] == 0
+        assert all(json.loads(fact.contradicted_by) == [] for fact in facts)
 
 
 class TestBlobRoundtrip:
@@ -391,6 +487,35 @@ class TestProcessCandidatesWithMockEmbedder:
         assert stats["reject_reasons"]["invalid_evidence_log_ids"] == 1
         assert db_session.query(PersonaFact).count() == 0
 
+    def test_rejects_evidence_ids_marked_no_learn(
+        self, state_machine, db_session, monkeypatch
+    ):
+        def fail_embed(_: str):
+            raise AssertionError("no_learn 证据不得进入 embedding 或画像")
+
+        monkeypatch.setattr("core.persona_preprocess.embed_text", fail_embed)
+        log = ChatLog(
+            user_id="test_user_01",
+            session_id="private_test_user_01",
+            role="user",
+            content="禁止学习的敏感内容",
+            meta_json='{"moderation": {"no_learn": true}}',
+        )
+        db_session.add(log)
+        db_session.commit()
+
+        stats = state_machine.process_candidates([{
+            "text": "用户长期偏好某敏感内容",
+            "memory_type": "stable_preference",
+            "should_store": True,
+            "evidence_log_ids": [log.id],
+        }])
+
+        assert stats["created"] == 0
+        assert stats["rejected"] == 1
+        assert stats["reject_reasons"]["invalid_evidence_log_ids"] == 1
+        assert db_session.query(PersonaFact).count() == 0
+
     def test_batch_duplicate_candidates_merge_into_one_fact(self, state_machine, db_session, monkeypatch):
         import numpy as np
 
@@ -442,6 +567,7 @@ class TestProcessCandidatesWithMockEmbedder:
             return base / np.linalg.norm(base)
 
         monkeypatch.setattr("core.persona_preprocess.embed_text", mock_embed)
+        monkeypatch.setattr("core.persona_preprocess._get_nli", lambda: None)
 
         c1 = [{"text": "用户喜欢简洁代码", "evidence": "ev1", "domain": "编程"}]
         state_machine.process_candidates(c1)

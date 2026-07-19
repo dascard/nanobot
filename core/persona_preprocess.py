@@ -24,6 +24,7 @@ warnings.filterwarnings("ignore", message=".*CUDA initialization.*")
 from sqlalchemy.orm import Session  # noqa: E402
 
 from core.database import ChatLog, PersonaFact  # noqa: E402
+from core.moderation import is_no_learn_meta  # noqa: E402
 from core.persona_candidate_prompt import (  # noqa: E402
     CANDIDATE_EXTRACTION_SYSTEM_PROMPT as CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
     build_candidate_extraction_prompt as build_candidate_extraction_prompt,
@@ -41,7 +42,6 @@ logger = logging.getLogger("nanobot.persona")
 
 # ── 常量 ──
 MATCH_THRESHOLD = 0.65          # cosine 相似度匹配阈值（BGE 相近语义 0.60-0.70，不同语义 0.34-0.59）
-CONTRADICTION_THRESHOLD = 0.25  # 低于此值视为潜在矛盾（语义反向）
 MAX_FACTS_PER_USER = 100        # 每人最多保留画像条数
 CANONICAL_MIN_LENGTH_RATIO = 0.7  # canonical 保留信息密度比
 
@@ -76,7 +76,7 @@ _embedder_lock = _threading.Lock()
 _nli_pipeline = None
 
 _EMBEDDER_MODEL = "BAAI/bge-base-zh-v1.5"
-_NLI_MODEL = "roberta-large-mnli"
+_NLI_MODEL = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
 
 
 def _get_embedder():
@@ -93,7 +93,7 @@ def _get_embedder():
 
 
 def _get_nli():
-    """懒加载 NLI 模型（用于矛盾检测）。加载失败返回 None，降级为 cosine 检测。"""
+    """懒加载 NLI 模型；加载失败时关闭自动矛盾判定。"""
     global _nli_pipeline
     if _nli_pipeline is None:
         try:
@@ -101,7 +101,7 @@ def _get_nli():
             logger.info(f"Loading NLI model: {_NLI_MODEL}")
             _nli_pipeline = pipeline("text-classification", model=_NLI_MODEL)
         except Exception as e:
-            logger.warning(f"NLI model unavailable, falling back to cosine contradiction: {e}")
+            logger.warning(f"NLI model unavailable, contradiction detection disabled: {e}")
             _nli_pipeline = False
     return _nli_pipeline if _nli_pipeline is not False else None
 
@@ -244,9 +244,9 @@ class PersonaStateMachine:
             )
             existing_facts.insert(0, new_fact)
             stats["created"] += 1
-            # 只有多个相似候选同时命中时才进入昂贵的 NLI 冲突复核；
-            # 单纯相似不再产生任何 contradicted_by 标记。
-            if len(matches) > 1:
+            # embedding 相似只负责筛选复核候选；即使仅命中一项，也由 NLI
+            # 明确确认后才建立 contradicted_by 关联。
+            if matches:
                 stats["conflicts"] += self._mark_confirmed_contradictions(
                     new_fact,
                     matches,
@@ -301,11 +301,15 @@ class PersonaStateMachine:
         if not ids:
             return [], True
         rows = (
-            self.db.query(ChatLog.id)
+            self.db.query(ChatLog.id, ChatLog.meta_json)
             .filter(ChatLog.id.in_(ids), ChatLog.user_id == self.user_id, ChatLog.role == "user")
             .all()
         )
-        valid = {int(row[0]) for row in rows}
+        valid = {
+            int(row[0])
+            for row in rows
+            if not is_no_learn_meta(row[1])
+        }
         ordered = list(dict.fromkeys(item for item in ids if item in valid))
         return ordered, len(valid.intersection(ids)) == len(set(ids))
 
@@ -698,25 +702,17 @@ class PersonaStateMachine:
     # ── 矛盾检测 ──
 
     def detect_contradiction(self, new_text: str, existing_text: str) -> bool:
-        """检测两段表述是否存在语义矛盾。优先使用 NLI 模型，降级为 cosine 判定。"""
+        """仅在 NLI 高置信度确认时判定两段表述存在语义矛盾。"""
         nli = _get_nli()
-        if nli is not None:
-            try:
-                result = nli(f"{existing_text} </s></s> {new_text}")
-                label = result[0]["label"]
-                score = result[0]["score"]
-                if label == "CONTRADICTION" and score > 0.8:
-                    return True
-                return False
-            except Exception as e:
-                logger.warning(f"NLI contradiction check failed: {e}")
-
+        if nli is None:
+            return False
         try:
-            v1 = embed_text(new_text)
-            v2 = embed_text(existing_text)
-            sim = cosine_similarity(v1, v2)
-            return sim < CONTRADICTION_THRESHOLD
-        except Exception:
+            result = nli({"text": existing_text, "text_pair": new_text})
+            label = str(result[0]["label"] or "").strip().upper()
+            score = float(result[0]["score"] or 0.0)
+            return label == "CONTRADICTION" and score > 0.8
+        except Exception as e:
+            logger.warning(f"NLI contradiction check failed, detection disabled: {e}")
             return False
 
 

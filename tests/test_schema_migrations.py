@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
@@ -103,10 +105,10 @@ def test_summary_model_safe_defaults_migration_is_exact_and_one_time():
         ))
 
     assert rows["model.route.session_summary.temperature"] == "0.1"
-    assert rows["model.route.session_summary.max_tokens"] == "1200"
+    assert rows["model.route.session_summary.max_tokens"] == "4096"
     assert rows["model.route.session_summary.enable_thinking"] == "false"
     assert rows["model.route.memory_digest.temperature"] == "0.1"
-    assert rows["model.route.memory_digest.max_tokens"] == "1800"
+    assert rows["model.route.memory_digest.max_tokens"] == "8192"
     assert rows["model.route.memory_digest.enable_thinking"] == "false"
     assert rows["model.route.reply.temperature"] == "0.7"
 
@@ -117,6 +119,108 @@ def test_summary_model_safe_defaults_migration_is_exact_and_one_time():
             "WHERE \"key\" = 'model.route.session_summary.temperature'"
         )).scalar_one()
     assert value == "0.2"
+
+
+def test_memory_governance_repair_cleans_stale_jobs_indexes_and_single_speaker_topics():
+    from core.schema_migrations import _memory_governance_repairs
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE memory_digest_jobs ("
+            "id INTEGER PRIMARY KEY, status TEXT, locked_by TEXT, lease_token TEXT, "
+            "lease_expires_at DATETIME, retry_count INTEGER, max_retry INTEGER, "
+            "next_retry_at DATETIME, error_type TEXT, error_summary TEXT, "
+            "meta_json TEXT, finished_at DATETIME, updated_at DATETIME)"
+        ))
+        conn.execute(
+            text(
+                "INSERT INTO memory_digest_jobs VALUES ("
+                "15, 'running', 'dead-worker', 'token', '2020-01-01 00:00:00', "
+                "1, 3, NULL, '', '', :meta_json, NULL, NULL)"
+            ),
+            {"meta_json": '{"batch_checkpoint":{"schema_version":1}}'},
+        )
+        conn.execute(text(
+            "CREATE TABLE rolling_session_summaries ("
+            "id INTEGER PRIMARY KEY, summary_kind TEXT)"
+        ))
+        conn.execute(text(
+            "INSERT INTO rolling_session_summaries VALUES "
+            "(7, 'deterministic_fallback'), (8, 'llm_episode')"
+        ))
+        conn.execute(text(
+            "CREATE TABLE semantic_index_items ("
+            "id INTEGER PRIMARY KEY, source_type TEXT, document_id TEXT, status TEXT, "
+            "meta_json TEXT, deleted_at DATETIME, updated_at DATETIME)"
+        ))
+        conn.execute(text(
+            "INSERT INTO semantic_index_items VALUES "
+            "(1, 'session_summary', '7', 'active', '{\"summary_kind\":\"deterministic_fallback\"}', NULL, NULL), "
+            "(2, 'session_summary', '8', 'active', '{\"summary_kind\":\"llm_episode\"}', NULL, NULL)"
+        ))
+        conn.execute(text("CREATE TABLE semantic_index_fts (title TEXT, text TEXT)"))
+        conn.execute(text(
+            "INSERT INTO semantic_index_fts(rowid, title, text) VALUES "
+            "(1, '旧兜底', '不应召回'), (2, 'LLM', '应保留')"
+        ))
+        conn.execute(text(
+            "CREATE TABLE chat_logs ("
+            "id INTEGER PRIMARY KEY, user_id TEXT, session_id TEXT, sender_name TEXT, "
+            "role TEXT, meta_json TEXT)"
+        ))
+        conn.execute(text(
+            "INSERT INTO chat_logs VALUES "
+            "(11, 'group_42', 'group_42', '同名成员', 'ambient', "
+            "'{\"sender\":{\"id\":\"speaker-a\",\"name\":\"同名成员\"}}'), "
+            "(12, 'group_42', 'group_42', '同名成员', 'ambient', "
+            "'{\"sender\":{\"id\":\"speaker-a\",\"name\":\"同名成员\"}}'), "
+            "(13, 'group_42', 'group_42', '同名成员', 'ambient', "
+            "'{\"sender\":{\"id\":\"speaker-a\",\"name\":\"同名成员\"}}'), "
+            "(14, 'group_42', 'group_42', '同名成员', 'ambient', "
+            "'{\"sender\":{\"id\":\"speaker-b\",\"name\":\"同名成员\"}}')"
+        ))
+        conn.execute(text(
+            "CREATE TABLE group_memories ("
+            "id INTEGER PRIMARY KEY, memory_type TEXT, status TEXT, source TEXT, "
+            "evidence_log_ids_json TEXT, inject_policy TEXT, meta_json TEXT, updated_at DATETIME)"
+        ))
+        conn.execute(text(
+            "INSERT INTO group_memories VALUES "
+            "(1, 'topic', 'active', 'group_analysis', '[11,12]', 'auto', '{}', NULL), "
+            "(2, 'topic', 'active', 'group_analysis', '[13,14]', 'auto', '{}', NULL)"
+        ))
+
+        _memory_governance_repairs(conn, engine, None)
+
+        job = conn.execute(text(
+            "SELECT status, error_type, next_retry_at, meta_json "
+            "FROM memory_digest_jobs WHERE id = 15"
+        )).one()
+        semantic_rows = conn.execute(text(
+            "SELECT id, status FROM semantic_index_items ORDER BY id"
+        )).all()
+        fts_ids = [row[0] for row in conn.execute(text(
+            "SELECT rowid FROM semantic_index_fts ORDER BY rowid"
+        )).all()]
+        group_rows = conn.execute(text(
+            "SELECT id, status, meta_json FROM group_memories ORDER BY id"
+        )).all()
+
+    assert job[0] == "failed"
+    assert job[1] == "lease_expired_recovered"
+    assert job[2] is not None
+    assert json.loads(job[3])["batch_checkpoint"]["schema_version"] == 1
+    assert semantic_rows == [(1, "deleted"), (2, "active")]
+    assert fts_ids == [2]
+    assert group_rows[0][1] == "review"
+    first_meta = json.loads(group_rows[0][2])
+    assert first_meta["evidence_speaker_count"] == 1
+    assert first_meta["evidence_speakers"] == ["speaker-a"]
+    assert group_rows[1][1] == "active"
+    second_meta = json.loads(group_rows[1][2])
+    assert second_meta["evidence_speaker_count"] == 2
+    assert second_meta["evidence_speakers"] == ["speaker-a", "speaker-b"]
 
 
 def test_memory_digest_jobs_migration_is_idempotent_and_enforces_source_key():

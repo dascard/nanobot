@@ -35,6 +35,21 @@ _PROMPT_INJECTION_RE = re.compile(
 _MAX_SOURCE_LINES = 80
 _MIN_LLM_QUALITY = 0.75
 _CARD_MAX_CHARS = 120
+_RECALL_CARD_LIMIT = 8
+_CARD_KEYWORD_LIMIT = 6
+_CARD_KEYWORD_MAX_CHARS = 32
+_PREVIEW_BRIEF_MAX_CHARS = 200
+_PREVIEW_LIST_LIMIT = 8
+_PREVIEW_ITEM_MAX_CHARS = 32
+_TOPIC_FLOW_MAX_CHARS = 600
+_IMPORTANT_DETAIL_LIMIT = 8
+_IMPORTANT_DETAIL_MAX_CHARS = 140
+_CONCLUSION_LIMIT = 6
+_CONCLUSION_MAX_CHARS = 120
+_OPEN_LOOP_LIMIT = 6
+_OPEN_LOOP_MAX_CHARS = 120
+_QUALITY_REASON_MAX_CHARS = 180
+_MEMORY_DIGEST_MAX_ESTIMATED_OUTPUT_TOKENS = 7200
 _CANONICAL_CARD_TYPES = {"decision", "fact", "todo", "preference", "module", "design_rule"}
 
 
@@ -133,6 +148,31 @@ class MemoryDigestOutputError(ValueError):
     """记忆摘要模型输出不满足 JSON 根合同。"""
 
 
+class MemoryDigestCapacityError(MemoryDigestOutputError):
+    """模型因输出容量截断响应；相同合同下原样重试没有意义。"""
+
+    def __init__(
+        self,
+        message: str = "memory_digest_output_capacity_exceeded",
+        *,
+        requested_models: Iterable[str] = (),
+        request_log_ids: Iterable[int] = (),
+    ) -> None:
+        super().__init__(message)
+        self.requested_models = tuple(
+            str(model or "").strip()
+            for model in requested_models
+            if str(model or "").strip()
+        )
+        self.request_log_ids = tuple(
+            int(log_id)
+            for log_id in request_log_ids
+            if isinstance(log_id, int)
+            and not isinstance(log_id, bool)
+            and log_id > 0
+        )
+
+
 @dataclass(frozen=True)
 class MemoryDigestLlmOutput:
     content: str
@@ -197,6 +237,17 @@ async def _call_heartbeat_async(
         await result
 
 
+async def _call_checkpoint_async(
+    checkpoint_callback: Callable[[dict[str, Any]], Any] | None,
+    checkpoint: dict[str, Any],
+) -> None:
+    if checkpoint_callback is None:
+        return
+    result = checkpoint_callback(checkpoint)
+    if inspect.isawaitable(result):
+        await result
+
+
 def _as_str(value: Any, *, max_chars: int = 500) -> str:
     text = str(value or "").strip()
     text = re.sub(r"\s+", " ", text)
@@ -218,7 +269,7 @@ def _as_str_list(value: Any, *, limit: int, item_chars: int) -> list[str]:
     return result
 
 
-def _as_int_list(value: Any, *, limit: int = 12) -> list[int]:
+def _as_int_list(value: Any, *, limit: int = 8) -> list[int]:
     if not isinstance(value, list):
         return []
     result: list[int] = []
@@ -346,7 +397,7 @@ async def default_llm_memory_digest_summarizer_async(
         messages=messages,
         temperature=float(route.get("temperature", 0.1)),
         manual_model=route.get("model", ""),
-        max_tokens=int(route.get("max_tokens", 1800)),
+        max_tokens=int(route.get("max_tokens", 8192)),
         llm_source="memory_digest",
         enable_thinking=route.get("enable_thinking", "false"),
     )
@@ -377,15 +428,24 @@ async def default_llm_memory_digest_summarizer_async(
             else None
         )
         observed_model = str(response.get("model") or "").strip()
+        requested_model = str(
+            response.get("_nanobot_requested_model")
+            or response.get("_nanobot_model_id")
+            or route.get("model")
+            or "unknown"
+        ).strip() or "unknown"
+        finish_reason = str(
+            response["choices"][0].get("finish_reason") or ""
+        ).strip().lower()
+        if finish_reason in {"length", "max_tokens"}:
+            raise MemoryDigestCapacityError(
+                requested_models=[requested_model],
+                request_log_ids=[request_log_id] if request_log_id else [],
+            )
         return MemoryDigestLlmOutput(
             content=str(response["choices"][0]["message"].get("content") or ""),
             model=observed_model or "unknown",
-            requested_model=str(
-                response.get("_nanobot_requested_model")
-                or response.get("_nanobot_model_id")
-                or route.get("model")
-                or "unknown"
-            ).strip() or "unknown",
+            requested_model=requested_model,
             request_log_id=request_log_id,
             actual_model_observed=bool(observed_model),
         )
@@ -408,6 +468,29 @@ def parse_llm_digest_response(raw: Any) -> dict[str, Any]:
     return _safe_json_loads(str(raw or ""))
 
 
+def _validate_llm_digest_output_budget(payload: dict[str, Any]) -> None:
+    """按紧凑 JSON 审计长期摘要整体容量，避免接受失控的大数组。"""
+
+    from app.session_memory.windowing import estimate_tokens
+
+    try:
+        compact = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise MemoryDigestOutputError(
+            "json_schema_invalid:non_serializable"
+        ) from exc
+    if estimate_tokens(compact) > _MEMORY_DIGEST_MAX_ESTIMATED_OUTPUT_TOKENS:
+        raise MemoryDigestCapacityError(
+            "memory_digest_output_contract_exceeded"
+        )
+
+
 def _normalize_llm_meta(
     payload: dict[str, Any],
     *,
@@ -426,9 +509,9 @@ def _normalize_llm_meta(
 
     cards: list[dict[str, Any]] = []
     raw_cards = payload.get("recall_cards") if isinstance(payload.get("recall_cards"), list) else []
-    for index, item in enumerate(raw_cards[:12], start=1):
+    for index, item in enumerate(raw_cards[:_RECALL_CARD_LIMIT], start=1):
         raw_card = item if isinstance(item, dict) else {"text": item}
-        text = _as_str(raw_card.get("text"), max_chars=180)
+        text = _as_str(raw_card.get("text"), max_chars=_CARD_MAX_CHARS)
         if not text:
             continue
         card_type = _as_str(raw_card.get("type"), max_chars=40)
@@ -438,14 +521,21 @@ def _normalize_llm_meta(
             "card_id": _as_str(raw_card.get("card_id"), max_chars=40) or f"card_{index}",
             "type": card_type,
             "text": text,
-            "keywords": _as_str_list(raw_card.get("keywords"), limit=8, item_chars=40),
+            "keywords": _as_str_list(
+                raw_card.get("keywords"),
+                limit=_CARD_KEYWORD_LIMIT,
+                item_chars=_CARD_KEYWORD_MAX_CHARS,
+            ),
             "importance": max(0.0, min(1.0, _as_float(raw_card.get("importance"), default=0.7))),
-            "evidence_log_ids": _as_int_list(raw_card.get("evidence_log_ids"), limit=12),
+            "evidence_log_ids": _as_int_list(raw_card.get("evidence_log_ids"), limit=8),
         })
 
     score = _as_float(quality.get("score"), default=0.0)
     issues = _as_str_list(quality.get("issues"), limit=10, item_chars=80)
-    reason = _as_str(quality.get("reason"), max_chars=220)
+    reason = _as_str(
+        quality.get("reason"),
+        max_chars=_QUALITY_REASON_MAX_CHARS,
+    )
     meta = {
         **fallback.meta,
         "schema_version": 2,
@@ -474,15 +564,41 @@ def _normalize_llm_meta(
         },
         "fallback_reason": None,
         "preview": {
-            "brief": _as_str(preview.get("brief"), max_chars=220),
-            "keywords": _as_str_list(preview.get("keywords"), limit=12, item_chars=40),
-            "participants": _as_str_list(preview.get("participants"), limit=12, item_chars=40),
+            "brief": _as_str(
+                preview.get("brief"),
+                max_chars=_PREVIEW_BRIEF_MAX_CHARS,
+            ),
+            "keywords": _as_str_list(
+                preview.get("keywords"),
+                limit=_PREVIEW_LIST_LIMIT,
+                item_chars=_PREVIEW_ITEM_MAX_CHARS,
+            ),
+            "participants": _as_str_list(
+                preview.get("participants"),
+                limit=_PREVIEW_LIST_LIMIT,
+                item_chars=_PREVIEW_ITEM_MAX_CHARS,
+            ),
         },
         "long_summary": {
-            "topic_flow": _as_str(long_summary.get("topic_flow"), max_chars=900),
-            "important_details": _as_str_list(long_summary.get("important_details"), limit=20, item_chars=220),
-            "conclusions": _as_str_list(long_summary.get("conclusions"), limit=12, item_chars=180),
-            "open_loops": _as_str_list(long_summary.get("open_loops"), limit=12, item_chars=180),
+            "topic_flow": _as_str(
+                long_summary.get("topic_flow"),
+                max_chars=_TOPIC_FLOW_MAX_CHARS,
+            ),
+            "important_details": _as_str_list(
+                long_summary.get("important_details"),
+                limit=_IMPORTANT_DETAIL_LIMIT,
+                item_chars=_IMPORTANT_DETAIL_MAX_CHARS,
+            ),
+            "conclusions": _as_str_list(
+                long_summary.get("conclusions"),
+                limit=_CONCLUSION_LIMIT,
+                item_chars=_CONCLUSION_MAX_CHARS,
+            ),
+            "open_loops": _as_str_list(
+                long_summary.get("open_loops"),
+                limit=_OPEN_LOOP_LIMIT,
+                item_chars=_OPEN_LOOP_MAX_CHARS,
+            ),
         },
         "recall_cards": cards,
         "quality": {
@@ -526,13 +642,13 @@ def _recall_card_audit_issues(
         for row in (source_rows or [])
         if str(row.get("log_id") or "").isdigit()
     }
-    source_text = "\n".join(
-        str(row.get("line") or "").strip()
-        for row in (source_rows or [])
-    )
-
     evidence_ids = normalized_card.get("evidence_log_ids") or []
-    if isinstance(evidence_ids, list) and evidence_ids and source_log_ids:
+    if not isinstance(evidence_ids, list) or not evidence_ids:
+        issues.append("recall_card_evidence_missing")
+    elif len(evidence_ids) > 8:
+        issues.append("recall_card_evidence_too_many")
+
+    if isinstance(evidence_ids, list) and evidence_ids and source_rows is not None:
         evidence_lines: list[str] = []
         evidence_valid = True
         for evidence_id in evidence_ids:
@@ -577,10 +693,6 @@ def _recall_card_audit_issues(
                 for evidence_id in evidence_ids
             ):
                 issues.append("preference_evidence_invalid_role")
-
-    if (not isinstance(evidence_ids, list) or not evidence_ids) and source_text:
-        if not _has_keyword_overlap(text, source_text):
-            issues.append("recall_card_not_grounded")
 
     if _is_generic_card_text(text):
         issues.append("recall_card_too_generic")
@@ -830,6 +942,77 @@ def _batch_context(
     )
 
 
+def _restore_batch_checkpoint(
+    context: _LlmDigestContext,
+    checkpoint: dict[str, Any] | None,
+) -> list[MemoryDigestBuildResult]:
+    """只恢复与当前完整来源和批次清单严格一致的连续检查点。"""
+
+    raw = checkpoint if isinstance(checkpoint, dict) else {}
+    if (
+        int(raw.get("schema_version") or 0) != 1
+        or str(raw.get("digest_source_id") or "")
+        != str(context.prompt_meta.get("source_id") or "")
+    ):
+        return []
+    entries = raw.get("completed_batches")
+    if not isinstance(entries, list) or len(entries) > len(context.batches):
+        return []
+
+    restored: list[MemoryDigestBuildResult] = []
+    for expected_index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            return []
+        batch = context.batches[expected_index]
+        meta = entry.get("meta")
+        if (
+            int(entry.get("batch_index", -1)) != expected_index
+            or str(entry.get("batch_source_id") or "")
+            != str(batch.prompt_meta.get("source_id") or "")
+            or not isinstance(meta, dict)
+            or str(meta.get("status") or "") != "active"
+            or str(meta.get("generator") or "") != "llm"
+            or str(meta.get("source_id") or "")
+            != str(batch.prompt_meta.get("source_id") or "")
+        ):
+            return []
+        audit_ok, _issues = audit_llm_digest_meta(
+            meta,
+            source_rows=batch.source_rows,
+        )
+        if not audit_ok:
+            return []
+        restored.append(MemoryDigestBuildResult(
+            status="active",
+            meta=dict(meta),
+            level_contents=render_digest_levels(meta),
+        ))
+    return restored
+
+
+def _build_batch_checkpoint(
+    context: _LlmDigestContext,
+    results: list[MemoryDigestBuildResult],
+) -> dict[str, Any]:
+    completed = []
+    for batch_index, result in enumerate(results):
+        if batch_index >= len(context.batches):
+            break
+        completed.append({
+            "batch_index": batch_index,
+            "batch_source_id": str(
+                context.batches[batch_index].prompt_meta.get("source_id") or ""
+            ),
+            "meta": dict(result.meta),
+        })
+    return {
+        "schema_version": 1,
+        "digest_source_id": str(context.prompt_meta.get("source_id") or ""),
+        "batch_count": len(context.batches),
+        "completed_batches": completed,
+    }
+
+
 def _unique_strings(values: Iterable[Any], *, limit: int, item_chars: int) -> list[str]:
     result: list[str] = []
     for value in values:
@@ -876,9 +1059,9 @@ def _merge_batch_results(
                     continue
                 seen_card_text.add(text_value)
                 merged_cards.append({**card, "card_id": f"card_{len(merged_cards) + 1}"})
-                if len(merged_cards) >= 12:
+                if len(merged_cards) >= _RECALL_CARD_LIMIT:
                     break
-            if len(merged_cards) >= 12:
+            if len(merged_cards) >= _RECALL_CARD_LIMIT:
                 break
 
         scores = [
@@ -912,38 +1095,38 @@ def _merge_batch_results(
             "preview": {
                 "brief": _as_str(
                     "；".join(str(item.get("brief") or "").strip() for item in previews),
-                    max_chars=220,
+                    max_chars=_PREVIEW_BRIEF_MAX_CHARS,
                 ),
                 "keywords": _unique_strings(
                     (value for item in previews for value in (item.get("keywords") or [])),
-                    limit=12,
-                    item_chars=40,
+                    limit=_PREVIEW_LIST_LIMIT,
+                    item_chars=_PREVIEW_ITEM_MAX_CHARS,
                 ),
                 "participants": _unique_strings(
                     (value for item in previews for value in (item.get("participants") or [])),
-                    limit=12,
-                    item_chars=40,
+                    limit=_PREVIEW_LIST_LIMIT,
+                    item_chars=_PREVIEW_ITEM_MAX_CHARS,
                 ),
             },
             "long_summary": {
                 "topic_flow": _as_str(
                     "\n".join(str(item.get("topic_flow") or "").strip() for item in long_summaries),
-                    max_chars=900,
+                    max_chars=_TOPIC_FLOW_MAX_CHARS,
                 ),
                 "important_details": _unique_strings(
                     (value for item in long_summaries for value in (item.get("important_details") or [])),
-                    limit=20,
-                    item_chars=220,
+                    limit=_IMPORTANT_DETAIL_LIMIT,
+                    item_chars=_IMPORTANT_DETAIL_MAX_CHARS,
                 ),
                 "conclusions": _unique_strings(
                     (value for item in long_summaries for value in (item.get("conclusions") or [])),
-                    limit=12,
-                    item_chars=180,
+                    limit=_CONCLUSION_LIMIT,
+                    item_chars=_CONCLUSION_MAX_CHARS,
                 ),
                 "open_loops": _unique_strings(
                     (value for item in long_summaries for value in (item.get("open_loops") or [])),
-                    limit=12,
-                    item_chars=180,
+                    limit=_OPEN_LOOP_LIMIT,
+                    item_chars=_OPEN_LOOP_MAX_CHARS,
                 ),
             },
             "recall_cards": merged_cards,
@@ -1039,6 +1222,7 @@ def _build_memory_digest_result_from_raw(
 ) -> MemoryDigestBuildResult:
     llm_model = raw.model if isinstance(raw, MemoryDigestLlmOutput) else "custom_summarizer"
     payload = parse_llm_digest_response(raw)
+    _validate_llm_digest_output_budget(payload)
     meta = _normalize_llm_meta(
         payload,
         fallback=context.fallback,
@@ -1082,32 +1266,46 @@ def _with_llm_output_trace(
     if not rows:
         return result
     models = _unique_strings(
-        (row.model for row in rows),
+        [
+            *(result.meta.get("llm_models") or []),
+            *(row.model for row in rows),
+        ],
         limit=32,
         item_chars=128,
     )
     requested_models = _unique_strings(
-        (row.requested_model for row in rows),
+        [
+            *(result.meta.get("llm_requested_models") or []),
+            *(row.requested_model for row in rows),
+        ],
         limit=32,
         item_chars=128,
     )
-    request_log_ids = list(dict.fromkeys(
-        int(row.request_log_id)
-        for row in rows
-        if isinstance(row.request_log_id, int)
-        and not isinstance(row.request_log_id, bool)
-        and row.request_log_id > 0
-    ))
+    request_log_ids = list(dict.fromkeys([
+        *(
+            int(log_id)
+            for log_id in (result.meta.get("llm_request_log_ids") or [])
+            if isinstance(log_id, int)
+            and not isinstance(log_id, bool)
+            and log_id > 0
+        ),
+        *(
+            int(row.request_log_id)
+            for row in rows
+            if isinstance(row.request_log_id, int)
+            and not isinstance(row.request_log_id, bool)
+            and row.request_log_id > 0
+        ),
+    ]))
     traced_meta = {
         **result.meta,
         "llm_model": models[-1] if models else "unknown",
         "llm_models": models,
         "llm_requested_models": requested_models,
         "llm_request_log_ids": request_log_ids,
-        "llm_actual_model_observed": all(
-            bool(row.actual_model_observed)
-            for row in rows
-        ),
+        "llm_actual_model_observed": bool(
+            result.meta.get("llm_actual_model_observed", True)
+        ) and all(bool(row.actual_model_observed) for row in rows),
     }
     return MemoryDigestBuildResult(
         status=result.status,
@@ -1186,6 +1384,20 @@ def build_memory_digest_with_llm(
     for batch in context.batches:
         try:
             raw = _call_summarizer(summarizer, batch.messages)
+        except MemoryDigestCapacityError as exc:
+            logger.warning(
+                "memory digest output capacity exceeded: session_id=%s date=%s",
+                session_id,
+                digest_date,
+            )
+            return _with_llm_failure_trace(_fallback_result(
+                context.fallback,
+                status="fallback",
+                error=str(exc),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+                failure_type="output_capacity_exceeded",
+            ), (), exc)
         except (
             ConnectionError,
             TimeoutError,
@@ -1214,6 +1426,15 @@ def build_memory_digest_with_llm(
                 digest_date=digest_date,
                 user_id=user_id,
             )
+        except MemoryDigestCapacityError as exc:
+            return _with_llm_failure_trace(_fallback_result(
+                context.fallback,
+                status="fallback",
+                error=str(exc),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+                failure_type="output_capacity_exceeded",
+            ), (), exc)
         except MemoryDigestOutputError as exc:
             logger.warning(
                 "memory digest llm fallback: session_id=%s date=%s error_type=%s",
@@ -1244,6 +1465,8 @@ async def build_memory_digest_with_llm_async(
     summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
     llm_enabled: bool = True,
     heartbeat: Callable[[], Any] | None = None,
+    resume_checkpoint: dict[str, Any] | None = None,
+    checkpoint_callback: Callable[[dict[str, Any]], Any] | None = None,
 ) -> MemoryDigestBuildResult:
     context, early_result = _prepare_llm_digest_context(
         user_id=user_id,
@@ -1256,15 +1479,32 @@ async def build_memory_digest_with_llm_async(
         return early_result
     assert context is not None
     summarizer = summarizer or default_llm_memory_digest_summarizer_async
-    results: list[MemoryDigestBuildResult] = []
+    results = _restore_batch_checkpoint(context, resume_checkpoint)
     traced_outputs: list[MemoryDigestLlmOutput] = []
-    for batch in context.batches:
+    for batch_index, batch in enumerate(
+        context.batches[len(results):],
+        start=len(results),
+    ):
         try:
             await _call_heartbeat_async(heartbeat)
             try:
                 raw = await _call_summarizer_async(summarizer, batch.messages)
             finally:
                 await _call_heartbeat_async(heartbeat)
+        except MemoryDigestCapacityError as exc:
+            logger.warning(
+                "memory digest output capacity exceeded: session_id=%s date=%s",
+                session_id,
+                digest_date,
+            )
+            return _with_llm_failure_trace(_fallback_result(
+                context.fallback,
+                status="fallback",
+                error=str(exc),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+                failure_type="output_capacity_exceeded",
+            ), traced_outputs, exc)
         except (ConnectionError, TimeoutError, MemoryDigestModelError) as exc:
             logger.warning(
                 "memory digest llm fallback: session_id=%s date=%s error_type=%s",
@@ -1290,6 +1530,15 @@ async def build_memory_digest_with_llm_async(
                 digest_date=digest_date,
                 user_id=user_id,
             )
+        except MemoryDigestCapacityError as exc:
+            return _with_llm_failure_trace(_fallback_result(
+                context.fallback,
+                status="fallback",
+                error=str(exc),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+                failure_type="output_capacity_exceeded",
+            ), traced_outputs, exc)
         except MemoryDigestOutputError as exc:
             logger.warning(
                 "memory digest llm fallback: session_id=%s date=%s error_type=%s",
@@ -1308,5 +1557,7 @@ async def build_memory_digest_with_llm_async(
         if result.status != "active":
             return _with_llm_output_trace(result, traced_outputs)
         results.append(result)
+        checkpoint = _build_batch_checkpoint(context, results)
+        await _call_checkpoint_async(checkpoint_callback, checkpoint)
     merged = _merge_batch_results(context, results)
     return _with_llm_output_trace(merged, traced_outputs)

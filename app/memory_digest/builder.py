@@ -309,6 +309,11 @@ class MemoryDigestBuilder:
         meta = _safe_meta(getattr(log, "meta_json", "") or "")
         if any(bool(meta.get(flag)) for flag in ("no_context", "internal", "no_learn")):
             return "meta_flag"
+        moderation = meta.get("moderation")
+        if isinstance(moderation, dict) and any(
+            bool(moderation.get(flag)) for flag in ("no_context", "no_learn")
+        ):
+            return "meta_flag"
 
         content = _message_body(
             str(getattr(log, "content", "") or "").strip(),

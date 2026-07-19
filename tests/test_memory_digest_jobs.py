@@ -331,6 +331,103 @@ def test_async_digest_failure_is_recorded_and_explicit_retry_reuses_job(
     assert {row.generation_job_id for row in digests} == {retried_job.id}
 
 
+def test_async_digest_retry_resumes_after_last_completed_batch(
+    db_session,
+    monkeypatch,
+):
+    import re
+
+    from app.memory_digest.llm_builder import MemoryDigestModelError
+    from core.database import MemoryDigestJob
+
+    daily_digest = _use_test_session_factory(monkeypatch)
+    logs = [
+        _log(content=f"批次{index}长期摘要检查点", log_id=index)
+        for index in range(1, 162)
+    ]
+    db_session.add_all(logs)
+    db_session.commit()
+    first_ids: list[int] = []
+    fail_last_batch = True
+
+    async def summarizer(messages):
+        nonlocal fail_last_batch
+        ids = [
+            int(item)
+            for item in re.findall(r"\[log_id=(\d+)\]", messages[-1]["content"])
+        ]
+        first_id = ids[0]
+        first_ids.append(first_id)
+        if first_id == 161 and fail_last_batch:
+            fail_last_batch = False
+            raise MemoryDigestModelError("controlled third batch failure")
+        return _success_payload(
+            [first_id],
+            f"批次{first_id}长期摘要检查点",
+        )
+
+    failed = run_async(
+        daily_digest.generate_daily_digest_for_date_report(
+            "2026-07-18",
+            session_id="digest-session",
+            llm_summarizer=summarizer,
+        )
+    )
+
+    db_session.expire_all()
+    job = db_session.query(MemoryDigestJob).one()
+    failed_meta = json.loads(job.meta_json)
+    assert failed["counts"]["failed"] == 1
+    assert first_ids == [1, 81, 161]
+    assert [
+        item["batch_index"]
+        for item in failed_meta["batch_checkpoint"]["completed_batches"]
+    ] == [0, 1]
+
+    retried = run_async(
+        daily_digest.generate_daily_digest_for_date_report(
+            "2026-07-18",
+            session_id="digest-session",
+            retry_failed=True,
+            llm_summarizer=summarizer,
+        )
+    )
+
+    assert retried["counts"]["created"] == 1
+    assert first_ids == [1, 81, 161, 161]
+
+
+def test_recover_expired_memory_digest_jobs_preserves_checkpoint(db_session):
+    from app.memory_digest.jobs import recover_expired_memory_digest_jobs
+    from core.database import MemoryDigestJob
+
+    now = datetime(2026, 7, 18, 12, 0, 0)  # noqa: DTZ001
+    job = MemoryDigestJob(
+        session_id="group_expired",
+        digest_date="2026-07-17",
+        status="running",
+        locked_by="dead-worker",
+        lease_token="expired-token",
+        lease_expires_at=now - timedelta(minutes=1),
+        retry_count=1,
+        max_retry=3,
+        meta_json=json.dumps({"batch_checkpoint": {"schema_version": 1}}, ensure_ascii=False),
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    recovered = recover_expired_memory_digest_jobs(db_session, now=now)
+
+    db_session.refresh(job)
+    assert recovered == 1
+    assert job.status == "failed"
+    assert job.error_type == "lease_expired_recovered"
+    assert job.next_retry_at == now
+    assert job.locked_by == ""
+    assert job.lease_token == ""
+    assert json.loads(job.meta_json)["batch_checkpoint"]["schema_version"] == 1
+
+
 def test_async_digest_concurrent_claim_calls_summarizer_once(db_session, monkeypatch):
     from core.database import MemoryDigestJob
 

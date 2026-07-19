@@ -812,7 +812,19 @@ class TestObservabilityAPI:
             assert row is not None
             assert row.group_profile_mode == "on"
 
-    def test_group_memory_injection_preview_returns_selected_and_skipped(self, client, auth_header):
+    def test_group_memory_injection_preview_returns_selected_and_skipped(
+        self, client, auth_header, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            "core.semantic.provider_factory.get_rag_runtime_config",
+            lambda _scope="": SimpleNamespace(
+                enabled=False,
+                reranker_enabled=False,
+                allow_degraded=True,
+            ),
+        )
         now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(ChatStreamConfig(chat_stream_id="qq:7788:group", group_profile_mode="on"))
@@ -854,6 +866,31 @@ class TestObservabilityAPI:
         assert data["group_memory_ids"] == [1]
         assert "<group_memory_context" in data["group_memory_context"]
         assert data["group_memory_skipped"][0]["reason"] == "manual_only"
+
+    def test_group_memory_injection_preview_forbids_model_calls(
+        self, client, auth_header, monkeypatch
+    ):
+        from app.group_memory.injection_service import GroupMemoryInjectionResult
+
+        calls = []
+
+        def fake_build_context(self, **kwargs):
+            calls.append(kwargs)
+            return GroupMemoryInjectionResult(debug={"group_profile_mode": "off"})
+
+        monkeypatch.setattr(
+            "app.group_memory.injection_service.GroupMemoryInjectionService.build_context",
+            fake_build_context,
+        )
+
+        data = _ok(client.post(
+            "/api/v1/admin/group-memories/7788/injection-preview",
+            json={"user_input": "只读预览"},
+            headers=auth_header,
+        ))
+
+        assert data["group_profile_mode"] == "off"
+        assert calls[0]["allow_model_calls"] is False
 
     def test_group_memory_update_item_changes_status_policy_and_content(self, client, auth_header):
         from core.group_memory import _cluster_key
@@ -1038,6 +1075,52 @@ class TestPersonaAdmin:
         assert captured["max_tokens"] == 1600
         assert captured["llm_source"] == "persona_extract_admin"
         assert captured["enable_thinking"] is False
+
+    def test_persona_extract_excludes_no_learn_logs(
+        self, client, auth_header, monkeypatch
+    ):
+        now = _local_now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(User(id="u-persona", name="画像用户"))
+            db.add_all([
+                ChatLog(
+                    user_id="u-persona",
+                    session_id="private_u-persona",
+                    role="user",
+                    content="以后回答先给结论",
+                    meta_json="{}",
+                    created_at=now,
+                ),
+                ChatLog(
+                    user_id="u-persona",
+                    session_id="private_u-persona",
+                    role="user",
+                    content="禁止学习的敏感画像内容",
+                    meta_json='{"moderation": {"no_learn": true}}',
+                    created_at=now,
+                ),
+            ])
+            db.commit()
+
+        async def fake_chat_completion(self, **kwargs):
+            prompt = kwargs["messages"][-1]["content"]
+            assert "以后回答先给结论" in prompt
+            assert "敏感画像内容" not in prompt
+            return {"choices": [{"message": {"content": '{"candidates": []}'}}]}
+
+        monkeypatch.setattr(
+            "clients.new_api_client.NewAPIClient.chat_completion",
+            fake_chat_completion,
+        )
+
+        data = _ok(client.post(
+            "/api/v1/admin/persona/users/u-persona/extract",
+            json={"window_hours": 168, "limit": 10},
+            headers=auth_header,
+        ))
+
+        assert data["raw_count"] == 1
+        assert data["candidate_count"] == 0
 
     def test_persona_update_fact_rejects_duplicate_content(self, client, auth_header):
         from core.persona_preprocess import content_hash

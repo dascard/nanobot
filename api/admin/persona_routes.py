@@ -18,6 +18,7 @@ from core.persona_preprocess import (
     PersonaStateMachine,
     build_candidate_extraction_prompt,
     content_hash,
+    filter_user_messages,
     format_candidate_logs,
 )
 from core.time_utils import db_now_naive
@@ -266,15 +267,28 @@ async def persona_extract_user(
     if not logs:
         return {"user_id": user_id, "raw_count": 0, "stats": {"created": 0, "merged": 0, "conflicts": 0, "rejected": 0}}
 
-    log_dicts = [
+    log_dicts = filter_user_messages([
         {
             "id": row.id,
             "role": row.role,
             "content": row.content,
             "created_at": row.created_at.isoformat() if row.created_at else "",
+            "meta_json": row.meta_json or "{}",
         }
         for row in logs
-    ]
+    ])
+    if not log_dicts:
+        return {
+            "user_id": user_id,
+            "raw_count": 0,
+            "candidate_count": 0,
+            "stats": {
+                "created": 0,
+                "merged": 0,
+                "conflicts": 0,
+                "rejected": 0,
+            },
+        }
     sm = PersonaStateMachine(db, user_id)
     facts_summary = sm.build_summary()
     logs_text = format_candidate_logs(log_dicts)
@@ -323,10 +337,10 @@ async def persona_extract_user(
     else:
         db.add(Persona(user_id=user_id, persona_json=persona_summary))
     db.commit()
-    audit_request(db, request, "extract_persona", "persona", user_id, {"stats": stats, "raw_count": len(logs)})
+    audit_request(db, request, "extract_persona", "persona", user_id, {"stats": stats, "raw_count": len(log_dicts)})
     return {
         "user_id": user_id,
-        "raw_count": len(logs),
+        "raw_count": len(log_dicts),
         "candidate_count": len(candidates),
         "stats": stats,
         "summary": persona_summary,

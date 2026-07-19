@@ -26,6 +26,8 @@ from app.memory_digest.jobs import (
     heartbeat_memory_digest_job,
     memory_digest_job_retryable,
     memory_digest_source_snapshot,
+    recover_expired_memory_digest_jobs,
+    save_memory_digest_batch_checkpoint,
     settle_memory_digest_job_without_rows,
 )
 from app.memory_digest.llm_builder import build_memory_digest_with_llm, build_memory_digest_with_llm_async
@@ -324,6 +326,8 @@ async def _build_memory_digest_result_async(
     use_llm: bool | None,
     llm_summarizer: Callable[[list[dict[str, str]]], Any] | None,
     heartbeat: Callable[[], Any] | None = None,
+    resume_checkpoint: dict[str, Any] | None = None,
+    checkpoint_callback: Callable[[dict[str, Any]], Any] | None = None,
 ):
     llm_enabled = MEMORY_DIGEST_LLM_ENABLED if use_llm is None else bool(use_llm)
     if not llm_enabled:
@@ -341,6 +345,8 @@ async def _build_memory_digest_result_async(
         summarizer=llm_summarizer,
         llm_enabled=True,
         heartbeat=heartbeat,
+        resume_checkpoint=resume_checkpoint,
+        checkpoint_callback=checkpoint_callback,
     )
 
 
@@ -610,6 +616,7 @@ def _memory_digest_failure_type(result: object) -> str:
     if structured in {
         "model_error",
         "output_invalid",
+        "output_capacity_exceeded",
         "quality_rejected",
         "generator_not_llm",
         "input_invalid",
@@ -845,6 +852,17 @@ async def _generate_memory_digest_session_report(
         finally:
             heartbeat_db.close()
 
+    def persist_checkpoint(checkpoint: dict[str, Any]) -> None:
+        checkpoint_db = SessionLocal()
+        try:
+            save_memory_digest_batch_checkpoint(
+                checkpoint_db,
+                claim,
+                checkpoint,
+            )
+        finally:
+            checkpoint_db.close()
+
     try:
         result = await _build_memory_digest_result_async(
             user_id=snapshot.user_id,
@@ -854,6 +872,8 @@ async def _generate_memory_digest_session_report(
             use_llm=use_llm,
             llm_summarizer=llm_summarizer,
             heartbeat=heartbeat,
+            resume_checkpoint=claim.checkpoint,
+            checkpoint_callback=persist_checkpoint,
         )
     except MemoryDigestJobLeaseLost:
         return _memory_digest_result_payload(
@@ -1029,6 +1049,17 @@ async def generate_daily_digest_for_date_report(
     except OverflowError as exc:
         raise ValueError("target_date is outside the supported date range") from exc
     target_date = normalized_target_date
+
+    maintenance_db = SessionLocal()
+    try:
+        recovered_jobs = recover_expired_memory_digest_jobs(maintenance_db)
+        if recovered_jobs:
+            logger.warning(
+                "Recovered %d expired MemoryDigest job(s)",
+                recovered_jobs,
+            )
+    finally:
+        maintenance_db.close()
 
     snapshot_db = SessionLocal()
     try:

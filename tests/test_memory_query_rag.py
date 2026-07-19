@@ -426,7 +426,7 @@ def test_memory_query_source_all_returns_digest_and_session_summary(db_session):
         session_id="s1",
         user_id="u1",
         status="active",
-        summary_kind="deterministic_fallback",
+        summary_kind="llm_episode",
         summary_text="KohakuVQ 端口预算来自会话摘要。",
         summary_json=json.dumps({"summary": "KohakuVQ 端口预算来自会话摘要。"}, ensure_ascii=False),
     )
@@ -435,7 +435,7 @@ def test_memory_query_source_all_returns_digest_and_session_summary(db_session):
         session_id="s2",
         user_id="u2",
         status="active",
-        summary_kind="deterministic_fallback",
+        summary_kind="llm_episode",
         summary_text="KohakuVQ 端口预算来自其他用户会话摘要。",
         summary_json=json.dumps({"summary": "KohakuVQ 端口预算来自其他用户会话摘要。"}, ensure_ascii=False),
     )
@@ -518,9 +518,7 @@ def test_memory_query_does_not_return_raw_chatlog(db_session):
     assert "安全摘要" in json.dumps(result, ensure_ascii=False)
 
 
-def test_fallback_summary_can_be_indexed_with_lower_prior(db_session):
-    from core.memory_rag import MemoryRagService
-
+def test_fallback_summary_is_not_semantically_indexed(db_session):
     row = RollingSessionSummary(
         id=201,
         session_id="s1",
@@ -531,17 +529,8 @@ def test_fallback_summary_can_be_indexed_with_lower_prior(db_session):
         summary_json=json.dumps({"summary": "部署失败时检查端口占用。"}, ensure_ascii=False),
     )
     chunks = chunks_from_session_summary(row)
-    _index_chunks(db_session, chunks)
 
-    service = MemoryRagService(
-        db_session,
-        embedding_provider=KeywordEmbeddingProvider(),
-        reranker_provider=FixedRerankerProvider(_reranker_scores(chunks, [0.8])),
-    )
-    result = service.query("部署失败", source="session_summary", limit=5)
-
-    assert result["items"][0]["summary_id"] == 201
-    assert result["items"][0]["source_prior"] < 0.5
+    assert chunks == []
 
 
 def test_memory_query_merges_multiple_cards_from_same_digest(db_session):

@@ -1874,6 +1874,7 @@ function SessionSummaryBrowser({ mode }) {
   const [operationLoading, setOperationLoading] = useState('')
   const [operationError, setOperationError] = useState('')
   const [includeContent, setIncludeContent] = useState(false)
+  const [includeArchived, setIncludeArchived] = useState(false)
   const [query, setQuery] = useState('')
   const isRecent = mode === 'recent'
 
@@ -1891,7 +1892,11 @@ function SessionSummaryBrowser({ mode }) {
       .catch(() => setSessions([]))
   }, [isRecent])
 
-  const loadDetail = useCallback((sessionId = selectedSession, full = includeContent) => {
+  const loadDetail = useCallback((
+    sessionId = selectedSession,
+    full = includeContent,
+    archived = includeArchived,
+  ) => {
     if (!sessionId) return
     setLoading(true)
     setOperationError('')
@@ -1899,8 +1904,8 @@ function SessionSummaryBrowser({ mode }) {
       ? `/session-memory/sessions/${encodeURIComponent(sessionId)}/summaries`
       : `/session-memory/sessions/${encodeURIComponent(sessionId)}/digests`
     const params = isRecent
-      ? { summary_limit_per_session: 50, include_content: full }
-      : { digest_limit_per_session: 80, include_content: full }
+      ? { summary_limit_per_session: 50, include_content: full, include_archived: archived }
+      : { digest_limit_per_session: 80, include_content: full, include_archived: archived }
     const detailRequest = api.get(endpoint, { params })
       .then(r => setItems(r.data.items || []))
       .catch(e => { setItems([]); setOperationError(formatApiError(e)) })
@@ -1911,7 +1916,7 @@ function SessionSummaryBrowser({ mode }) {
       : Promise.resolve(setJobs([]))
     Promise.allSettled([detailRequest, jobsRequest])
       .finally(() => setLoading(false))
-  }, [includeContent, isRecent, selectedSession])
+  }, [includeArchived, includeContent, isRecent, selectedSession])
 
   useEffect(() => { loadSessions() }, [loadSessions])
   useEffect(() => { loadDetail() }, [loadDetail])
@@ -2033,6 +2038,10 @@ function SessionSummaryBrowser({ mode }) {
                 className={`rounded-lg px-3 py-2 text-xs ${includeContent ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'}`}>
                 {includeContent ? '隐藏全文' : '展开全文'}
               </button>
+              <button onClick={() => setIncludeArchived(value => !value)}
+                className={`rounded-lg px-3 py-2 text-xs ${includeArchived ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'}`}>
+                {includeArchived ? '隐藏归档' : '显示归档'}
+              </button>
               <button onClick={() => loadDetail()} className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">刷新</button>
             </div>
           </div>
@@ -2067,14 +2076,15 @@ function SessionSummaryBrowser({ mode }) {
         {loading ? <Spinner /> : items.length === 0 ? (
           <div className="rounded-lg border border-slate-800 py-16 text-center text-sm text-slate-600">当前 session 没有摘要</div>
         ) : items.map(item => (
-          <Card key={isRecent ? item.summary_id : item.digest_id} className="p-4">
+          <Card key={isRecent ? item.summary_id : (item.source_id || item.digest_id)} className="p-4">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap gap-2">
-                <Badge tone={isRecent ? 'blue' : 'emerald'}>{isRecent ? `summary ${item.summary_id}` : `digest ${item.digest_id}`}</Badge>
-                {isRecent ? <Badge tone={item.summary_kind === 'deterministic_fallback' ? 'amber' : 'emerald'}>{item.summary_kind === 'deterministic_fallback' ? '代码兜底' : 'LLM 摘要'}</Badge> : <Badge>level {item.level}</Badge>}
+                <Badge tone={isRecent ? 'blue' : 'emerald'}>{isRecent ? `summary ${item.summary_id}` : `摘要 ${item.digest_id}`}</Badge>
+                {isRecent ? <Badge tone={item.summary_kind === 'deterministic_fallback' ? 'amber' : 'emerald'}>{item.summary_kind === 'deterministic_fallback' ? '代码兜底' : 'LLM 摘要'}</Badge> : <Badge>层级 {(item.levels || [item.level]).join('/')}</Badge>}
                 {isRecent && <Badge>{item.summary_kind}</Badge>}
                 {isRecent && <Badge tone={item.is_active ? 'emerald' : item.is_archived ? 'slate' : 'amber'}>{item.is_active ? 'active' : item.is_archived ? 'archived' : 'inactive'}</Badge>}
                 {!isRecent && <Badge>{item.status}</Badge>}
+                {!isRecent && <Badge>{item.layer_count || 1} 行合并</Badge>}
               </div>
               <div className="text-[11px] text-slate-500">{item.updated_at || item.created_at || '-'}</div>
             </div>
@@ -2127,6 +2137,26 @@ function SessionSummaryBrowser({ mode }) {
               <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">raw_json</summary>
               <JsonBlock value={item.raw_json} className="mt-2 max-h-64" />
             </details>
+            {!isRecent && Array.isArray(item.layers) && item.layers.length > 0 && (
+              <details className="mt-3" open>
+                <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-200">
+                  L0 / L1 / L2 子层级（{item.layers.length}）
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {item.layers.map(layer => (
+                    <div key={layer.digest_id} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                        <Badge>digest {layer.digest_id}</Badge>
+                        <Badge tone={layer.level === 2 ? 'blue' : layer.level === 1 ? 'emerald' : 'slate'}>L{layer.level}</Badge>
+                        <span>{layer.summary_type || '-'}</span>
+                        {layer.parent_id && <span>parent {layer.parent_id}</span>}
+                      </div>
+                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-300">{layer.content || layer.preview || '-'}</pre>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </Card>
         ))}
       </div>

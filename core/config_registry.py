@@ -677,8 +677,8 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
     "model.route.session_summary.max_tokens": SettingDef(
         key="model.route.session_summary.max_tokens", env_name="",
-        default=1200, value_type="int",
-        category="model", description="近期摘要最大输出 tokens", min_value=64, max_value=8000,
+        default=4096, value_type="int",
+        category="model", description="近期摘要最大输出 tokens", min_value=3000, max_value=12000,
     ),
     "model.route.memory_digest.provider": SettingDef(
         key="model.route.memory_digest.provider", env_name="",
@@ -697,8 +697,8 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
     "model.route.memory_digest.max_tokens": SettingDef(
         key="model.route.memory_digest.max_tokens", env_name="",
-        default=1800, value_type="int",
-        category="model", description="长期摘要最大输出 tokens", min_value=128, max_value=12000,
+        default=8192, value_type="int",
+        category="model", description="长期摘要最大输出 tokens", min_value=4096, max_value=20000,
     ),
     "new_api.timeout": SettingDef(
         key="new_api.timeout", env_name="NEW_API_TIMEOUT",

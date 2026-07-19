@@ -1,6 +1,6 @@
 ---
 name: 长期记忆摘要系统提示词
-version: 3
+version: 4
 kind: task
 tool_name: memory_digest
 description: memory_digests 长期摘要 LLM 的 system prompt。
@@ -54,35 +54,37 @@ Return JSON in this exact shape:
 {
   "preview": {
     "brief": "string, ≤200 chars, level 1 short preview for WebUI lists",
-    "keywords": ["string"],
-    "participants": ["string"]
+    "keywords": ["0-8 strings, each ≤32 chars"],
+    "participants": ["0-8 strings, each ≤32 chars"]
   },
   "long_summary": {
-    "topic_flow": "string, level 0 detailed digest for human review",
-    "important_details": ["string"],
-    "conclusions": ["string"],
-    "open_loops": ["string"]
+    "topic_flow": "string, ≤600 chars, level 0 detailed digest for human review",
+    "important_details": ["0-8 strings, each ≤140 chars"],
+    "conclusions": ["0-6 strings, each ≤120 chars"],
+    "open_loops": ["0-6 strings, each ≤120 chars"]
   },
   "recall_cards": [
     {
       "card_id": "card_1",
       "type": "decision|fact|todo|preference|module|design_rule",
       "text": "string, ≤120 chars, one atomic memory fact",
-      "keywords": ["string, searchable keywords"],
+      "keywords": ["2-6 searchable strings, each ≤32 chars"],
       "importance": 0.8,
       "evidence_log_ids": [1, 2]
     }
   ],
   "quality": {
     "score": 0.0,
-    "reason": "string"
+    "reason": "string, ≤180 chars"
   }
 }
 
 Card field rules:
+- recall_cards: 1-8 cards for one batch; use fewer cards when durable information is sparse.
 - card_id: unique within this digest, e.g. "card_1", "card_2".
 - type: one of decision, fact, todo, preference, module, design_rule.
 - text: ≤120 Chinese characters, one atomic fact per card, independently understandable.
 - keywords: 2-6 concrete search terms (Chinese or English).
 - importance: 0.0-1.0, subjective estimate of long-term retrieval value.
 - evidence_log_ids: 1-8 log_id integers from digest_source whose message text directly supports this exact card; never cite merely adjacent or same-window messages.
+- The complete compact JSON must stay within approximately 7000 estimated tokens. This is the output contract; the API max_tokens=8192 value is only a safety ceiling.

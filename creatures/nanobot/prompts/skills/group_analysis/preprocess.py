@@ -120,6 +120,27 @@ def _safe_meta(raw: Any) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _meta_flag(meta: dict, key: str) -> bool:
+    value = meta.get(key)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "是"}
+    return bool(value)
+
+
+def _memory_evidence_trusted(role: str, meta: dict) -> bool:
+    if role not in {"ambient", "user"}:
+        return False
+    if any(
+        _meta_flag(meta, key)
+        for key in ("is_bot", "sender_is_bot", "external_bot", "no_learn")
+    ):
+        return False
+    moderation = meta.get("moderation")
+    if isinstance(moderation, dict) and _meta_flag(moderation, "no_learn"):
+        return False
+    return True
+
+
 def _meta_blocks_analysis(meta: dict) -> bool:
     if meta.get("no_send") or meta.get("internal") or meta.get("control") or meta.get("no_context"):
         return True
@@ -254,6 +275,7 @@ def dedupe_group_logs(logs: list[Any]) -> list[Any]:
 def build_clean_messages(logs: list[Any]) -> list[dict]:
     messages = []
     for log in logs:
+        is_mapping = isinstance(log, dict)
         raw_content = (
             log.content if hasattr(log, "content")
             else log.get("content", "")
@@ -262,17 +284,54 @@ def build_clean_messages(logs: list[Any]) -> list[dict]:
         if not c:
             continue
         sender = (
-            getattr(log, "sender_name", None) or
-            getattr(log, "user_id", "") or "?"
+            (log.get("sender_name") if is_mapping else getattr(log, "sender_name", None))
+            or (log.get("user_id", "") if is_mapping else getattr(log, "user_id", ""))
+            or "?"
         )
         created_at = (
             log.created_at if hasattr(log, "created_at")
             else log.get("created_at")
         )
         hour = created_at.hour if created_at else 12
+        role = str(
+            log.get("role", "")
+            if is_mapping
+            else getattr(log, "role", "")
+        ).strip() or "unknown"
+        meta = _safe_meta(
+            log.get("meta_json", "")
+            if is_mapping
+            else getattr(log, "meta_json", "")
+        )
+        raw_user_id = str(
+            log.get("user_id", "") if is_mapping else getattr(log, "user_id", "")
+        ).strip()
+        session_id = str(
+            log.get("session_id", "") if is_mapping else getattr(log, "session_id", "")
+        ).strip()
+        sender_meta = meta.get("sender") if isinstance(meta.get("sender"), dict) else {}
+        trusted_sender_id = str(
+            sender_meta.get("id") or meta.get("sender_id") or ""
+        ).strip()
+        # 群聊历史曾把 chat_logs.user_id 写成 group_xxx；真实发送者 ID 位于
+        # meta.sender.id。缺少该字段时，仅在 user_id 明显不是会话 ID 时采用它，
+        # 最后才退回昵称，宁可少判共识也不把同一群号当成发言者。
+        speaker_id = trusted_sender_id
+        if not speaker_id and raw_user_id and raw_user_id != session_id:
+            speaker_id = raw_user_id
+        if not speaker_id:
+            speaker_id = str(sender or raw_user_id or "?")
+        is_bot = any(
+            _meta_flag(meta, key)
+            for key in ("is_bot", "sender_is_bot", "external_bot")
+        )
         messages.append({
             "log_id": getattr(log, "id", 0) if hasattr(log, "id") else log.get("id", 0),
             "user_id": str(sender),
+            "speaker_id": speaker_id,
+            "role": role,
+            "is_bot": is_bot,
+            "memory_evidence_trusted": _memory_evidence_trusted(role, meta),
             "content": c,
             "time": created_at.strftime("%H:%M") if created_at else "??:??",
             "hour": hour,
@@ -345,8 +404,14 @@ def _format_message_line(message: dict[str, Any]) -> str:
     content = re.sub(r"\s+", " ", str(message.get("content") or "")).strip()
     if len(content) > 500:
         content = content[:500] + "..."
+    role = str(message.get("role") or "unknown")
+    source = "external_bot" if message.get("is_bot") else (
+        "assistant" if role == "assistant" else "conversation"
+    )
     return (
         f"[log_id={message.get('log_id', 0)}]"
+        f"[role={role}]"
+        f"[source={source}]"
         f"[{message.get('time', '??:??')}] "
         f"[{message.get('user_id', '?')}]: {content}"
     )
@@ -449,6 +514,20 @@ def build_analysis_payload(
     )
 
     source_log_ids = [getattr(log, "id", 0) or 0 for log in logs if getattr(log, "id", 0)]
+    trusted_source_log_ids = [
+        int(message["log_id"])
+        for message in messages
+        if message.get("memory_evidence_trusted")
+        and str(message.get("log_id") or "").isdigit()
+        and int(message["log_id"]) > 0
+    ]
+    trusted_source_speakers = {
+        str(int(message["log_id"])): str(message.get("speaker_id") or "?")
+        for message in messages
+        if message.get("memory_evidence_trusted")
+        and str(message.get("log_id") or "").isdigit()
+        and int(message["log_id"]) > 0
+    }
 
     return {
         "messages": messages,
@@ -458,5 +537,7 @@ def build_analysis_payload(
         "style_msg_text": style_msg_text,
         "users_text": users_text,
         "source_log_ids": source_log_ids,
+        "trusted_source_log_ids": trusted_source_log_ids,
+        "trusted_source_speakers": trusted_source_speakers,
         "local_rag": local_rag,
     }

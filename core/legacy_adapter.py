@@ -240,6 +240,7 @@ class SQLiteMemory:
         Returns list of dicts with keys: id, user_id, role, content, sender_name, session_id, created_at
         """
         from config import EVOLUTION_THRESHOLD
+        from core.moderation import is_no_learn_meta
         db = self._get_session()
         try:
             logs = (
@@ -248,6 +249,10 @@ class SQLiteMemory:
                 .order_by(ChatLog.id.asc())
                 .all()
             )
+            logs = [
+                log for log in logs
+                if not is_no_learn_meta(getattr(log, "meta_json", ""))
+            ]
             if len(logs) < EVOLUTION_THRESHOLD:
                 return []
             # Detach: convert ORM objects to plain dicts before session closes
@@ -260,6 +265,7 @@ class SQLiteMemory:
                     "sender_name": log.sender_name,
                     "session_id": log.session_id,
                     "created_at": log.created_at,
+                    "meta_json": getattr(log, "meta_json", "") or "{}",
                 }
                 for log in logs
             ]

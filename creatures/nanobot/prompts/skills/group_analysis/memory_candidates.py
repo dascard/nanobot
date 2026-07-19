@@ -16,9 +16,18 @@ def extract_and_persist(group_id: str, analysis: dict, *,
     stats = {"new": 0, "updated": 0, "skipped": 0}
     meta = dict(source_meta or {})
     source_log_ids = meta.pop("source_log_ids", []) if meta else []
+    trusted_source_log_ids = meta.pop("trusted_source_log_ids", None) if meta else None
+    trusted_source_speakers = meta.pop("trusted_source_speakers", {}) if meta else {}
+    if not isinstance(trusted_source_speakers, dict):
+        trusted_source_speakers = {}
+    evidence_scope = (
+        trusted_source_log_ids
+        if isinstance(trusted_source_log_ids, list)
+        else source_log_ids
+    )
     allowed_evidence_ids = {
         int(item)
-        for item in source_log_ids
+        for item in evidence_scope
         if str(item).isdigit() and int(item) > 0
     }
     source = str(meta.get("source") or "group_analysis")
@@ -35,13 +44,21 @@ def extract_and_persist(group_id: str, analysis: dict, *,
             return []
         return ids
 
-    def _u(mtype, content, hint, evidence_ids):
+    def _u(mtype, content, hint, evidence_ids, candidate_meta):
         return upsert(group_id, mtype, content, confidence_hint=hint,
-                      meta=meta, evidence_log_ids=evidence_ids,
+                      meta=candidate_meta, evidence_log_ids=evidence_ids,
                       source=source)
 
     # topics → memory_type=topic
-    for t in analysis.get("topics", {}).get("topics", [])[:5]:
+    topics_branch = analysis.get("topics") if isinstance(analysis.get("topics"), dict) else {}
+    topic_candidates = topics_branch.get("topics") if isinstance(topics_branch.get("topics"), list) else []
+    topic_candidates = topic_candidates[:5]
+    generator = str(topics_branch.get("_generator") or "unknown").strip()
+    if generator != "llm":
+        stats["skipped"] += len(topic_candidates)
+        topic_candidates = []
+
+    for t in topic_candidates:
         topic = (t.get("topic") or "").strip()
         detail = (t.get("detail") or "").strip()
         if not topic:
@@ -50,8 +67,20 @@ def extract_and_persist(group_id: str, analysis: dict, *,
         if not evidence_ids:
             stats["skipped"] += 1
             continue
+        evidence_speakers = sorted({
+            str(trusted_source_speakers.get(str(evidence_id)) or "").strip()
+            for evidence_id in evidence_ids
+            if str(trusted_source_speakers.get(str(evidence_id)) or "").strip()
+        })
+        candidate_meta = {
+            **meta,
+            "generator": generator,
+            "consensus_gate": "multi_speaker",
+            "evidence_speakers": evidence_speakers,
+            "evidence_speaker_count": len(evidence_speakers),
+        }
         content = f"{topic}: {detail}" if detail else topic
-        stats[_u("topic", content, 0.65, evidence_ids)] += 1
+        stats[_u("topic", content, 0.65, evidence_ids, candidate_meta)] += 1
 
     # 质量锐评、金句和用户称号只属于日报展示，不能自动升级为长期事实。
     quality = analysis.get("quality", {})

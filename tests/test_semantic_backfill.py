@@ -500,18 +500,21 @@ def test_backfill_classifies_current_missing_stale_and_orphan(db_session):
     current = RollingSessionSummary(
         session_id="classification-current",
         status="active",
+        summary_kind="llm_episode",
         summary_text="当前摘要",
         summary_json=json.dumps({"summary": "当前摘要"}, ensure_ascii=False),
     )
     missing = RollingSessionSummary(
         session_id="classification-missing",
         status="active",
+        summary_kind="llm_episode",
         summary_text="缺失摘要",
         summary_json=json.dumps({"summary": "缺失摘要"}, ensure_ascii=False),
     )
     stale = RollingSessionSummary(
         session_id="classification-stale",
         status="active",
+        summary_kind="llm_episode",
         summary_text="新版摘要",
         summary_json=json.dumps({"summary": "新版摘要"}, ensure_ascii=False),
     )

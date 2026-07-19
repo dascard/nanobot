@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal, Sequence
 from uuid import uuid4
@@ -44,6 +44,15 @@ class MemoryDigestJobClaim:
     source_revision: str = ""
     retryable: bool = False
     error_type: str = ""
+    checkpoint: dict = field(default_factory=dict)
+
+
+def _safe_job_meta(raw: object) -> dict:
+    try:
+        value = json.loads(str(raw or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _stable_datetime(value: object) -> str:
@@ -108,6 +117,59 @@ def memory_digest_job_retryable(job: MemoryDigestJob) -> bool:
     """失败类型允许重试且仍有预算时才向调用方暴露 retryable。"""
 
     return job.next_retry_at is not None and _job_has_retry_budget(job)
+
+
+def recover_expired_memory_digest_jobs(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """回收所有已过租约的 running 作业，并保留批次检查点供显式重试。"""
+
+    recovered_at = to_db_naive(now) or db_now_naive()
+    candidates = (
+        db.query(MemoryDigestJob)
+        .filter(
+            MemoryDigestJob.status == "running",
+            or_(
+                MemoryDigestJob.lease_expires_at.is_(None),
+                MemoryDigestJob.lease_expires_at <= recovered_at,
+            ),
+        )
+        .all()
+    )
+    recovered = 0
+    try:
+        for job in candidates:
+            next_retry_at = recovered_at if _job_has_retry_budget(job) else None
+            result = db.execute(
+                update(MemoryDigestJob)
+                .where(
+                    MemoryDigestJob.id == int(job.id),
+                    MemoryDigestJob.status == "running",
+                    or_(
+                        MemoryDigestJob.lease_expires_at.is_(None),
+                        MemoryDigestJob.lease_expires_at <= recovered_at,
+                    ),
+                )
+                .values(
+                    status="failed",
+                    locked_by="",
+                    lease_token="",
+                    lease_expires_at=None,
+                    next_retry_at=next_retry_at,
+                    error_type="lease_expired_recovered",
+                    error_summary="memory_digest_failed:lease_expired_recovered",
+                    finished_at=recovered_at,
+                    updated_at=recovered_at,
+                )
+            )
+            recovered += int(result.rowcount or 0)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return recovered
 
 
 def _insert_job_if_missing(
@@ -193,6 +255,15 @@ def claim_memory_digest_job(
         )
     job_id = int(job.id)
     previous_status = str(job.status or "pending")
+    previous_source_revision = str(job.source_revision or "")
+    previous_meta = _safe_job_meta(job.meta_json)
+    resume_checkpoint = (
+        previous_meta.get("batch_checkpoint")
+        if previous_source_revision == snapshot.source_revision
+        and previous_status in {"failed", "running"}
+        and isinstance(previous_meta.get("batch_checkpoint"), dict)
+        else {}
+    )
     retry_budget_available = _job_has_retry_budget(job)
     failed_retryable = memory_digest_job_retryable(job)
     active_lease = (
@@ -318,7 +389,13 @@ def claim_memory_digest_job(
             result_semantic_job_id=None,
             error_type="",
             error_summary="",
-            meta_json="{}",
+            meta_json=json.dumps(
+                {"batch_checkpoint": resume_checkpoint}
+                if resume_checkpoint
+                else {},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
             finished_at=None,
             updated_at=claimed_at,
         )
@@ -332,6 +409,7 @@ def claim_memory_digest_job(
         job_id=job_id,
         lease_token=lease_token,
         source_revision=snapshot.source_revision,
+        checkpoint=dict(resume_checkpoint),
     )
 
 
@@ -391,6 +469,62 @@ def heartbeat_memory_digest_job(
     return lease_expires_at
 
 
+def save_memory_digest_batch_checkpoint(
+    db: Session,
+    claim: MemoryDigestJobClaim,
+    checkpoint: dict,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """在当前 fencing token 下持久化已审计完成的批次结果。"""
+
+    saved_at = to_db_naive(now) or db_now_naive()
+    row = (
+        db.query(MemoryDigestJob)
+        .filter(_active_lease_predicate(
+            job_id=claim.job_id,
+            lease_token=claim.lease_token,
+            now=saved_at,
+        ))
+        .filter(MemoryDigestJob.source_revision == claim.source_revision)
+        .one_or_none()
+    )
+    if row is None:
+        db.rollback()
+        raise MemoryDigestJobLeaseLost("memory_digest_job_lease_lost")
+    meta = _safe_job_meta(row.meta_json)
+    meta["batch_checkpoint"] = dict(checkpoint or {})
+    try:
+        result = db.execute(
+            update(MemoryDigestJob)
+            .where(_active_lease_predicate(
+                job_id=claim.job_id,
+                lease_token=claim.lease_token,
+                now=saved_at,
+            ))
+            .where(MemoryDigestJob.source_revision == claim.source_revision)
+            .values(
+                meta_json=json.dumps(
+                    meta,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                updated_at=saved_at,
+            )
+        )
+        if int(result.rowcount or 0) != 1:
+            raise MemoryDigestJobLeaseLost("memory_digest_job_lease_lost")
+        db.commit()
+    except MemoryDigestJobLeaseLost:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise MemoryDigestJobLeaseLost(
+            "memory_digest_job_checkpoint_failed"
+        ) from exc
+
+
 def finish_memory_digest_job(
     db: Session,
     claim: MemoryDigestJobClaim,
@@ -448,6 +582,23 @@ def settle_memory_digest_job_without_rows(
     """结算未写摘要的 skipped/failed 作业。"""
 
     finished_at = to_db_naive(now) or db_now_naive()
+    current = (
+        db.query(MemoryDigestJob)
+        .filter(_active_lease_predicate(
+            job_id=claim.job_id,
+            lease_token=claim.lease_token,
+            now=finished_at,
+        ))
+        .filter(MemoryDigestJob.source_revision == claim.source_revision)
+        .one_or_none()
+    )
+    if current is None:
+        db.rollback()
+        return None
+    settled_meta = {
+        **_safe_job_meta(current.meta_json),
+        **dict(meta or {}),
+    }
     result = db.execute(
         update(MemoryDigestJob)
         .where(_active_lease_predicate(
@@ -468,7 +619,11 @@ def settle_memory_digest_job_without_rows(
             result_semantic_job_id=None,
             error_type=str(error_type or "")[:64],
             error_summary=str(error_summary or "")[:500],
-            meta_json=json.dumps(meta or {}, ensure_ascii=False, sort_keys=True),
+            meta_json=json.dumps(
+                settled_meta,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
             finished_at=finished_at,
             updated_at=finished_at,
         )

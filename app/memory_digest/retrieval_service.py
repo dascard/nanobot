@@ -178,38 +178,77 @@ class MemoryDigestRetrievalService:
             base.filter(or_(MemoryDigest.content.like(f"%{key}%"), MemoryDigest.meta_json.like(f"%{key}%")))
             .order_by(MemoryDigest.id.desc())
         )
+        # limit 的单位是逻辑摘要，而不是 level-2 数据库行。先完成 source_id 折叠，
+        # 才能避免一份含多张卡片的摘要挤占全部召回名额。
+        grouped: dict[str, list[tuple[MemoryDigest, dict[str, Any]]]] = {}
+        for row in ordered.limit(_MAX_FILTER_SCAN).all():
+            meta = safe_digest_meta(row.meta_json)
+            if not _is_retrievable(meta, include_legacy=include_legacy):
+                continue
+            source_id = str(meta.get("source_id") or "").strip()
+            logical_id = source_id or f"row:{int(row.id or 0)}"
+            grouped.setdefault(logical_id, []).append((row, meta))
+
         results: list[dict[str, Any]] = []
-        offset = 0
-        batch_size = min(max(target_limit * _FILTER_FETCH_FACTOR, 50), 500)
-        while len(results) < target_limit and offset < _MAX_FILTER_SCAN:
-            rows = ordered.offset(offset).limit(batch_size).all()
-            if not rows:
-                break
-            for row in rows:
-                meta = safe_digest_meta(row.meta_json)
-                if not _is_retrievable(meta, include_legacy=include_legacy):
+        for logical_id, matches in list(grouped.items())[:target_limit]:
+            row, meta = matches[0]
+            logical_meta = dict(meta)
+            logical_cards: list[dict[str, Any]] = []
+            seen_cards: set[str] = set()
+            for _, match_meta in matches:
+                cards = match_meta.get("recall_cards")
+                if not isinstance(cards, list):
                     continue
-                chain = self.expand_chain(row, reveal_to_level=reveal_to_level)
-                expanded = [
-                    self.serialize(node, include_content=include_content)
-                    for node in sorted(chain, key=lambda item: item.level, reverse=True)
-                ]
-                results.append({
-                    "digest_id": row.id,
-                    "user_id": row.user_id,
-                    "session_id": row.session_id,
-                    "digest_date": row.digest_date,
-                    "confidence": calc_recall_confidence(key, row.content or "", meta),
-                    "source_range": {
-                        "start_log_id": row.source_start_log_id,
-                        "end_log_id": row.source_end_log_id,
-                    },
-                    "meta": meta,
-                    "revealed_chain": expanded,
-                })
-                if len(results) >= target_limit:
-                    break
-            offset += len(rows)
+                for card in cards:
+                    if not isinstance(card, dict):
+                        continue
+                    identity = str(card.get("card_id") or "").strip() or json.dumps(
+                        card,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    if identity in seen_cards:
+                        continue
+                    seen_cards.add(identity)
+                    logical_cards.append(card)
+            logical_meta["recall_cards"] = logical_cards
+            chain = self.expand_chain(row, reveal_to_level=reveal_to_level)
+            expanded = [
+                self.serialize(
+                    node,
+                    include_content=include_content,
+                    include_meta=False,
+                )
+                for node in sorted(chain, key=lambda item: item.level, reverse=True)
+            ]
+            start_ids = [
+                int(match.source_start_log_id)
+                for match, _ in matches
+                if match.source_start_log_id is not None
+            ]
+            end_ids = [
+                int(match.source_end_log_id)
+                for match, _ in matches
+                if match.source_end_log_id is not None
+            ]
+            results.append({
+                "digest_id": row.id,
+                "digest_source_id": str(meta.get("source_id") or "") or logical_id,
+                "matched_digest_row_ids": [int(match.id) for match, _ in matches],
+                "user_id": row.user_id,
+                "session_id": row.session_id,
+                "digest_date": row.digest_date,
+                "confidence": max(
+                    calc_recall_confidence(key, match.content or "", match_meta)
+                    for match, match_meta in matches
+                ),
+                "source_range": {
+                    "start_log_id": min(start_ids) if start_ids else None,
+                    "end_log_id": max(end_ids) if end_ids else None,
+                },
+                "meta": logical_meta,
+                "revealed_chain": expanded,
+            })
         return results
 
     def expand_digest(
@@ -236,7 +275,10 @@ class MemoryDigestRetrievalService:
             "long_summary": meta.get("long_summary") or {},
             "recall_cards": meta.get("recall_cards") or [],
             "quality": meta.get("quality") or {},
-            "chain": [self.serialize(node, include_content=include_detail) for node in chain],
+            "chain": [
+                self.serialize(node, include_content=include_detail, include_meta=False)
+                for node in chain
+            ],
         }
 
     def expand_by_source(
@@ -287,16 +329,30 @@ class MemoryDigestRetrievalService:
             safe_digest_meta(level1.meta_json) if level1 else safe_digest_meta(filtered[0].meta_json)
         )
         all_cards: list[dict[str, Any]] = []
+        seen_cards: set[str] = set()
         for r in level2_rows:
             m = safe_digest_meta(r.meta_json)
             cards = m.get("recall_cards") if isinstance(m.get("recall_cards"), list) else []
-            all_cards.extend(cards)
+            for card in cards:
+                if not isinstance(card, dict):
+                    continue
+                identity = str(card.get("card_id") or "").strip() or json.dumps(
+                    card,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                if identity in seen_cards:
+                    continue
+                seen_cards.add(identity)
+                all_cards.append(card)
+        if not all_cards and isinstance(best_meta.get("recall_cards"), list):
+            all_cards = [card for card in best_meta["recall_cards"] if isinstance(card, dict)]
 
         chain: list[dict[str, Any]] = []
         if level0:
-            chain.append(self.serialize(level0, include_content=include_detail))
+            chain.append(self.serialize(level0, include_content=include_detail, include_meta=False))
         if level1:
-            chain.append(self.serialize(level1, include_content=include_detail))
+            chain.append(self.serialize(level1, include_content=include_detail, include_meta=False))
 
         return {
             "digest_source_id": sid,
@@ -325,7 +381,12 @@ class MemoryDigestRetrievalService:
         return chain
 
     @staticmethod
-    def serialize(row: MemoryDigest, *, include_content: bool = False) -> dict[str, Any]:
+    def serialize(
+        row: MemoryDigest,
+        *,
+        include_content: bool = False,
+        include_meta: bool = True,
+    ) -> dict[str, Any]:
         meta = safe_digest_meta(row.meta_json)
         item = {
             "id": row.id,
@@ -336,10 +397,11 @@ class MemoryDigestRetrievalService:
             "parent_id": row.parent_id,
             "source_start_log_id": row.source_start_log_id,
             "source_end_log_id": row.source_end_log_id,
-            "meta": meta,
             "status": digest_status(meta),
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
+        if include_meta:
+            item["meta"] = meta
         if include_content:
             item["content"] = row.content
         return item

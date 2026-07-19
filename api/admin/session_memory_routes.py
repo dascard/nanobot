@@ -233,7 +233,7 @@ def list_session_memory_summaries(
     session_id: str,
     summary_limit_per_session: int = 20,
     include_content: bool = False,
-    include_archived: bool = True,
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
@@ -254,6 +254,7 @@ def list_session_memory_digests(
     date_end: str = "",
     level: int = -1,
     parent_id: int | None = None,
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
@@ -269,6 +270,7 @@ def list_session_memory_digests(
         date_end=date_end,
         level=level,
         parent_id=parent_id,
+        include_archived=include_archived,
     )
 
 

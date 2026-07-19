@@ -75,7 +75,7 @@ SESSION_SUMMARY_MAX_STATE_OBLIGATIONS = 8
 SESSION_SUMMARY_MAX_SUMMARY_CHARS = 400
 # Prompt 目标仍为 60 字；硬门禁保留 4 字格式容差，避免轻微越界导致整单重试。
 SESSION_SUMMARY_MAX_OBLIGATION_CHARS = 64
-SESSION_SUMMARY_MAX_ESTIMATED_OUTPUT_TOKENS = 1000
+SESSION_SUMMARY_MAX_ESTIMATED_OUTPUT_TOKENS = 3000
 
 _SESSION_SUMMARY_LIST_FIELDS = (
     "open_threads",
@@ -107,7 +107,7 @@ target_index 从 0 开始；合并多个 obligation 到同一目标时，每个 
 每个 available obligation 必须恰好处置一次，resolved 只能指向 resolved_items，legacy_summary 只能指向 summary；target 必须存在且非空。
 summary 不超过 400 字；open_threads、decisions、important_user_requests、artifacts 四个可继承数组合计最多 7 项，每项不超过 60 字，优先合并同类事项并把必要背景压缩进 summary。
 resolved_items、participants、keywords 也必须保持简洁。
-整份 JSON 必须简洁并同时控制在 1800 字符、约 1000 tokens 以内，quality.score 必须是 0 到 1 的有限数字。不要把 pending_fragments 当日志转写，不要保留 turn_id、时间戳、role 或 fragment 标签。
+整份紧凑 JSON 必须简洁并同时控制在 6000 字符、约 3000 tokens 以内，排版缩进和换行不计入预算；quality.score 必须是 0 到 1 的有限数字。不要把 pending_fragments 当日志转写，不要保留 turn_id、时间戳、role 或 fragment 标签。
 如果只能摘录，请改写为简洁要点。必须完整合并 previous_summary，不能只输出 pending_fragments 的摘要。"""
 
 SESSION_SUMMARY_FRAGMENT_MAX_CHARS = 1000
@@ -393,7 +393,7 @@ async def default_llm_summary_summarizer_async(
         messages=messages,
         temperature=float(route.get("temperature", 0.1)),
         manual_model=route.get("model", ""),
-        max_tokens=int(route.get("max_tokens", 1200)),
+        max_tokens=int(route.get("max_tokens", 4096)),
         llm_source="session_summary",
         enable_thinking=route.get("enable_thinking", "false"),
     )
@@ -653,7 +653,9 @@ def _build_bounded_summary_obligations(
             for obligation in obligations
         )
     ):
-        raise ValueError("summary_state_output_budget_exceeded")
+        raise NonRetryableSessionSummaryError(
+            "summary_state_output_budget_exceeded"
+        )
     return obligations
 
 
@@ -713,12 +715,16 @@ def _validate_summary_response_budget(
         len(serialized),
         len(raw_budget_text),
     ) > config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS:
-        raise ValueError("summary_state_output_budget_exceeded")
+        raise NonRetryableSessionSummaryError(
+            "summary_state_output_budget_exceeded"
+        )
     if max(
         estimate_tokens(serialized),
-        estimate_tokens(raw_text),
+        estimate_tokens(raw_budget_text),
     ) > SESSION_SUMMARY_MAX_ESTIMATED_OUTPUT_TOKENS:
-        raise ValueError("summary_state_output_token_budget_exceeded")
+        raise NonRetryableSessionSummaryError(
+            "summary_state_output_token_budget_exceeded"
+        )
 
 
 def _validate_previous_obligation_budget(

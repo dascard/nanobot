@@ -18,12 +18,12 @@ def test_cast_out_of_range_numeric_value_falls_back_to_default():
     max_tokens = SettingDef(
         key="model.route.session_summary.max_tokens",
         env_name="",
-        default=1200,
+        default=4096,
         value_type="int",
         category="model",
-        min_value=64,
+        min_value=3000,
         max_value=8000,
     )
 
     assert service._cast("3.0", temperature) == 0.1
-    assert service._cast("65535", max_tokens) == 1200
+    assert service._cast("65535", max_tokens) == 4096

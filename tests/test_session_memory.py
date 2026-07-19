@@ -416,8 +416,54 @@ def test_deterministic_summary_compacts_instead_of_appending_raw_text(db_session
     assert len(payload["summary"]) <= config.ROLLING_SUMMARY_MAX_CHARS
     assert ok is True
     assert issues == []
-    assert "需要滚动压缩的新增消息 18" in payload["summary"]
+    assert "需要滚动压缩的新增消息 18" not in payload["summary"]
+    assert "需要滚动压缩的新增消息 18" in payload["important_user_requests"][-1]
     assert "需要滚动压缩的新增消息 0" not in payload["summary"]
+    assert payload["quality"]["score"] < 0.5
+    assert payload["quality"]["issues"] == [
+        "deterministic_fallback",
+        "llm_summary_pending",
+    ]
+
+
+def test_deterministic_summary_reuses_only_previous_canonical_body(db_session):
+    from app.session_memory.summarizer import build_rolling_summary_payload, render_summary_text
+
+    previous = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        status="active",
+        summary_text=(
+            "此前正文\n\n"
+            "未解决/延续事项:\n- 已经渲染过的待办\n\n"
+            "重要用户请求:\n- 已经渲染过的请求"
+        ),
+        summary_json=json.dumps({
+            "summary": "此前正文",
+            "open_threads": ["已经渲染过的待办"],
+            "important_user_requests": ["已经渲染过的请求"],
+        }, ensure_ascii=False),
+        covered_until_turn_id=10,
+    )
+    db_session.add(previous)
+    pending = [
+        _turn(db_session, role="user", content="新增请求只应出现在结构化字段"),
+        _turn(db_session, role="assistant", content="新增结论只应出现在结构化字段"),
+    ]
+    db_session.commit()
+
+    payload = build_rolling_summary_payload(
+        previous_summary=previous,
+        pending_turns=pending,
+    )
+    rendered = render_summary_text(payload)
+
+    assert payload["summary"].count("此前正文") == 1
+    assert "已经渲染过的待办" not in payload["summary"]
+    assert "已经渲染过的请求" not in payload["summary"]
+    assert "新增请求只应出现在结构化字段" not in payload["summary"]
+    assert rendered.count("新增请求只应出现在结构化字段") == 2
+    assert rendered.count("新增结论只应出现在结构化字段") == 1
 
 
 def test_deterministic_summary_uses_clean_snippets_without_turn_metadata(db_session):
@@ -2352,7 +2398,7 @@ def test_summary_prompt_explains_disposition_semantics():
     assert "合并多个 obligation 到同一目标" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
     assert "四个可继承数组合计最多 7 项" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
     assert "summary 不超过 400 字" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
-    assert "约 1000 tokens 以内" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
+    assert "约 3000 tokens 以内" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
 
 
 def test_summary_state_obligation_budget_caps_next_batch_audit():
@@ -2429,18 +2475,18 @@ def test_summary_full_response_budget_includes_quality_and_inheritance():
         "artifacts": [],
         "participants": [],
         "keywords": [],
-        "quality": {"score": 0.9, "issues": ["警" * 1800]},
+        "quality": {"score": 0.9, "issues": ["警" * 4000]},
         "inheritance": [],
     }
 
     with pytest.raises(
         ValueError,
-        match="^summary_state_output_budget_exceeded$",
+        match="^summary_state_output_token_budget_exceeded$",
     ):
         _validate_summary_response_budget(payload)
 
 
-def test_summary_full_response_budget_ignores_json_formatting_whitespace():
+def test_summary_full_response_budget_ignores_json_formatting_whitespace(monkeypatch):
     from app.session_memory import config as summary_config
     from app.session_memory.llm_summarizer import (
         _validate_summary_response_budget,
@@ -2473,10 +2519,135 @@ def test_summary_full_response_budget_ignores_json_formatting_whitespace():
         separators=(",", ":"),
     )
     pretty = json.dumps(payload, ensure_ascii=False, indent=2)
-    assert len(compact) < summary_config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS
-    assert len(pretty) > summary_config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS
+    compact_budget = (len(compact) + len(pretty)) // 2
+    assert len(compact) < compact_budget < len(pretty)
+    monkeypatch.setattr(
+        summary_config,
+        "SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS",
+        compact_budget,
+    )
 
     _validate_summary_response_budget(payload, raw_content=pretty)
+
+
+def test_summary_character_capacity_error_is_non_retryable(monkeypatch):
+    from app.session_memory import config as summary_config
+    from app.session_memory.llm_summarizer import (
+        NonRetryableSessionSummaryError,
+        _validate_summary_response_budget,
+    )
+
+    payload = {
+        "summary": "确定性超限",
+        "open_threads": [],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": [],
+        "keywords": [],
+        "quality": {"score": 0.9, "issues": []},
+        "inheritance": [],
+    }
+    monkeypatch.setattr(summary_config, "SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS", 10)
+
+    with pytest.raises(
+        NonRetryableSessionSummaryError,
+        match="^summary_state_output_budget_exceeded$",
+    ):
+        _validate_summary_response_budget(payload)
+
+
+def test_summary_token_budget_uses_compact_json_instead_of_pretty_raw_text(
+    monkeypatch,
+):
+    from app.session_memory import llm_summarizer
+
+    payload = {
+        "summary": "摘" * 100,
+        "open_threads": [],
+        "decisions": ["决" * 61, "策" * 40],
+        "important_user_requests": ["求" * 12 for _ in range(5)],
+        "resolved_items": ["完" * 12 for _ in range(4)],
+        "artifacts": [],
+        "participants": ["用户", "助手"],
+        "keywords": ["关键词" for _ in range(8)],
+        "quality": {"score": 0.9, "issues": []},
+        "inheritance": [
+            {
+                "source_id": f"id{index:014d}",
+                "disposition": "updated",
+                "target_field": "important_user_requests",
+                "target_index": min(index, 4),
+            }
+            for index in range(7)
+        ],
+    }
+    compact = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    pretty = json.dumps(payload, ensure_ascii=False, indent=6)
+    assert llm_summarizer.estimate_tokens(compact) < 800
+    assert llm_summarizer.estimate_tokens(pretty) > 800
+
+    monkeypatch.setattr(
+        llm_summarizer,
+        "SESSION_SUMMARY_MAX_ESTIMATED_OUTPUT_TOKENS",
+        800,
+    )
+    monkeypatch.setattr(
+        llm_summarizer.config,
+        "SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS",
+        5000,
+    )
+
+    llm_summarizer._validate_summary_response_budget(
+        payload,
+        raw_content=pretty,
+    )
+
+
+def test_summary_output_contract_has_capacity_for_full_legal_json():
+    from app.session_memory import config as summary_config
+    from app.session_memory.llm_summarizer import (
+        SESSION_SUMMARY_MAX_ESTIMATED_OUTPUT_TOKENS,
+        _validate_summary_response_budget,
+    )
+
+    payload = {
+        "summary": "摘" * 400,
+        "open_threads": ["待" * 60, "跟" * 60],
+        "decisions": ["决" * 60, "策" * 60],
+        "important_user_requests": ["请" * 60, "求" * 60],
+        "resolved_items": ["完" * 60],
+        "artifacts": ["产" * 60],
+        "participants": [f"参与者{index}" for index in range(8)],
+        "keywords": [f"关键词{index}" for index in range(8)],
+        "quality": {"score": 0.9, "issues": []},
+        "inheritance": [
+            {
+                "source_id": f"obligation_{index:02d}",
+                "disposition": "updated",
+                "target_field": "important_user_requests",
+                "target_index": min(index, 1),
+            }
+            for index in range(8)
+        ],
+    }
+    compact = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert len(compact) > 1800
+    assert summary_config.SESSION_SUMMARY_LLM_MAX_OUTPUT_CHARS >= len(compact)
+    assert SESSION_SUMMARY_MAX_ESTIMATED_OUTPUT_TOKENS >= 3000
+
+    _validate_summary_response_budget(payload, raw_content=compact)
 
 
 def test_summary_full_response_budget_rejects_token_heavy_cjk_below_char_limit():
@@ -2492,7 +2663,7 @@ def test_summary_full_response_budget_rejects_token_heavy_cjk_below_char_limit()
         "important_user_requests": [],
         "resolved_items": [],
         "artifacts": [],
-        "participants": ["参与者" + "甲" * 37 for _ in range(26)],
+        "participants": ["参与者" + "甲" * 37 for _ in range(80)],
         "keywords": [],
         "quality": {"score": 0.9, "issues": []},
         "inheritance": [],
@@ -2512,7 +2683,7 @@ def test_summary_full_response_budget_rejects_token_heavy_cjk_below_char_limit()
         _validate_summary_response_budget(payload)
 
 
-def test_summary_full_response_budget_counts_raw_escaped_json():
+def test_summary_full_response_budget_normalizes_raw_escaped_json():
     from app.session_memory.llm_summarizer import (
         _validate_summary_response_budget,
         parse_llm_summary_response,
@@ -2525,11 +2696,7 @@ def test_summary_full_response_budget_counts_raw_escaped_json():
     }, ensure_ascii=True, indent=2)
     payload = parse_llm_summary_response(raw)
 
-    with pytest.raises(
-        ValueError,
-        match="^summary_state_output_budget_exceeded$",
-    ):
-        _validate_summary_response_budget(payload, raw_content=raw)
+    _validate_summary_response_budget(payload, raw_content=raw)
 
 
 @pytest.mark.parametrize(

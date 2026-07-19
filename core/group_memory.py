@@ -9,7 +9,8 @@ import logging
 
 from sqlalchemy import and_
 
-from core.database import GroupMemory, SessionLocal
+from core import database
+from core.database import GroupMemory
 from core.group_runtime.ids import normalize_group_session_id
 from core.time_utils import db_now_naive
 
@@ -58,12 +59,17 @@ def _default_status_and_policy(
     memory_type: str,
     confidence_hint: float,
     evidence_log_ids: list[int] | None,
+    *,
+    evidence_speaker_count: int = 0,
+    require_multi_speaker: bool = False,
 ) -> tuple[str, str]:
     if memory_type in MANUAL_REVIEW_TYPES:
         return "review", "manual_only"
     if memory_type == "preference" and confidence_hint >= 0.75 and len(evidence_log_ids or []) >= 2:
         return "active", "auto"
     if memory_type == "preference":
+        return "review", "auto"
+    if memory_type == "topic" and require_multi_speaker and evidence_speaker_count < 2:
         return "review", "auto"
     if confidence_hint >= 0.65 and len(_normalize_evidence_ids(evidence_log_ids)) >= 2:
         return "active", "auto"
@@ -86,8 +92,9 @@ def upsert(
 
     group_id = _norm_group(group_id)
     evidence_log_ids = _normalize_evidence_ids(evidence_log_ids)
+    incoming_meta = dict(meta or {})
 
-    db = SessionLocal()
+    db = database.SessionLocal()
     try:
         ch = _content_hash(content)
         existing = (
@@ -108,26 +115,48 @@ def upsert(
             existing.evidence_count = len(merged_ids)
             if len(merged_ids) > len(previous_ids):
                 existing.confidence = min(1.0, existing.confidence + confidence_hint * 0.1)
+            merged_meta = {**_safe_meta(existing.meta_json), **incoming_meta}
+            previous_speakers = _safe_meta(existing.meta_json).get("evidence_speakers")
+            incoming_speakers = incoming_meta.get("evidence_speakers")
+            speakers = sorted({
+                str(item).strip()
+                for values in (previous_speakers, incoming_speakers)
+                if isinstance(values, list)
+                for item in values
+                if str(item).strip()
+            })
+            if speakers or merged_meta.get("consensus_gate") == "multi_speaker":
+                merged_meta["evidence_speakers"] = speakers
+                merged_meta["evidence_speaker_count"] = len(speakers)
             next_status, next_policy = _default_status_and_policy(
                 memory_type,
                 existing.confidence,
                 merged_ids,
+                evidence_speaker_count=int(merged_meta.get("evidence_speaker_count") or 0),
+                require_multi_speaker=merged_meta.get("consensus_gate") == "multi_speaker",
             )
             existing.inject_policy = next_policy
-            if existing.status == "review" and next_status == "active":
+            if merged_meta.get("consensus_gate") == "multi_speaker" and next_status == "review":
+                existing.status = "review"
+            elif existing.status == "review" and next_status == "active":
                 existing.status = "active"
             elif existing.status == "archived" and existing.confidence >= CONFIDENCE_FLOOR:
                 existing.status = next_status
-            if meta:
-                existing.meta_json = json.dumps(
-                    {**_safe_meta(existing.meta_json), **meta}, ensure_ascii=False)
+            if merged_meta:
+                existing.meta_json = json.dumps(merged_meta, ensure_ascii=False)
             if source and source != existing.source:
                 existing.source = source
             db.commit()
             return "updated"
 
         ck = cluster_key or _cluster_key(content)
-        status, inject_policy = _default_status_and_policy(memory_type, confidence_hint, evidence_log_ids)
+        status, inject_policy = _default_status_and_policy(
+            memory_type,
+            confidence_hint,
+            evidence_log_ids,
+            evidence_speaker_count=int(incoming_meta.get("evidence_speaker_count") or 0),
+            require_multi_speaker=incoming_meta.get("consensus_gate") == "multi_speaker",
+        )
         now = db_now_naive()
         entry = GroupMemory(
             group_id=group_id, memory_type=memory_type,
@@ -139,7 +168,7 @@ def upsert(
             decay_score=1.0, source=source,
             status=status,
             inject_policy=inject_policy,
-            meta_json=json.dumps(meta or {}, ensure_ascii=False),
+            meta_json=json.dumps(incoming_meta, ensure_ascii=False),
         )
         db.add(entry)
         db.commit()
@@ -158,7 +187,7 @@ def query_active(
 ) -> list[dict]:
     """查询活跃记忆——用于注入 GroupProfile。"""
     group_id = _norm_group(group_id)
-    db = SessionLocal()
+    db = database.SessionLocal()
     try:
         q = db.query(GroupMemory).filter(and_(
             GroupMemory.group_id == group_id,
@@ -180,7 +209,7 @@ def query_active(
 def apply_decay(group_id: str):
     """对活跃记忆降 decay_score。<0.2 → archived。"""
     group_id = _norm_group(group_id)
-    db = SessionLocal()
+    db = database.SessionLocal()
     try:
         rows = (
             db.query(GroupMemory)
@@ -330,6 +359,12 @@ def should_inject(memory: dict) -> bool:
     ):
         return False
 
+    meta = _safe_meta(memory.get("meta_json", ""))
+    if (
+        meta.get("consensus_gate") == "multi_speaker"
+        and int(meta.get("evidence_speaker_count") or 0) < 2
+    ):
+        return False
     return memory.get("evidence_count", 0) >= 2
 
 

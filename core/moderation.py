@@ -120,7 +120,8 @@ def _safe_meta(meta_json: Any) -> dict:
         return meta_json
     if isinstance(meta_json, str):
         try:
-            return json.loads(meta_json)
+            value = json.loads(meta_json)
+            return value if isinstance(value, dict) else {}
         except (json.JSONDecodeError, TypeError):
             return {}
     return {}
@@ -128,9 +129,25 @@ def _safe_meta(meta_json: Any) -> dict:
 
 def is_no_learn_meta(meta_json: Any) -> bool:
     """检查 ChatLog.meta_json 是否标记为 no_learn。"""
-    return bool(_safe_meta(meta_json).get("moderation", {}).get("no_learn", False))
+    meta = _safe_meta(meta_json)
+    moderation = meta.get("moderation")
+    return bool(
+        meta.get("no_learn")
+        or (
+            isinstance(moderation, dict)
+            and moderation.get("no_learn", False)
+        )
+    )
 
 
 def is_no_context_meta(meta_json: Any) -> bool:
     """检查 ChatLog.meta_json 是否标记为 no_context。"""
-    return bool(_safe_meta(meta_json).get("moderation", {}).get("no_context", False))
+    meta = _safe_meta(meta_json)
+    moderation = meta.get("moderation")
+    return bool(
+        meta.get("no_context")
+        or (
+            isinstance(moderation, dict)
+            and moderation.get("no_context", False)
+        )
+    )

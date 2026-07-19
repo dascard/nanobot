@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from collections.abc import Sequence
 
@@ -87,38 +88,69 @@ def _compact_previous_and_pending(
     max_chars: int,
 ) -> str:
     previous = _truncate_text(_clean_summary_memory_text(previous_text), 600, suffix="\n...[旧摘要截断]")
-    user_lines = [
-        _format_turn_snippet(turn, max_chars=120)
-        for turn in pending_turns
-        if turn.role == "user"
-    ][-6:]
-    assistant_lines = [
-        _format_turn_snippet(turn, max_chars=120)
-        for turn in pending_turns
-        if turn.role == "assistant"
-    ][-4:]
-
-    parts: list[str] = ["代码兜底摘要：以下为自动压缩的对话要点，建议等待或手动生成 LLM 摘要提升质量。"]
+    user_count = sum(1 for turn in pending_turns if turn.role == "user")
+    assistant_count = sum(1 for turn in pending_turns if turn.role == "assistant")
+    parts: list[str] = [
+        "代码兜底摘要：仅继承上次摘要正文；本轮新增内容见结构化字段，"
+        "建议等待或手动生成 LLM 摘要提升质量。"
+    ]
     if previous:
         parts.append("此前已知:\n" + previous)
-    if user_lines:
-        parts.append("新增用户侧要点:\n" + "\n".join(f"- {line}" for line in user_lines if line))
-    if assistant_lines:
-        parts.append("新增助手侧结论:\n" + "\n".join(f"- {line}" for line in assistant_lines if line))
+    if pending_turns:
+        parts.append(
+            f"本轮新增 {len(pending_turns)} 条消息（用户 {user_count} 条、助手 {assistant_count} 条）。"
+        )
 
     summary = "\n\n".join(parts).strip()
     if len(summary) <= max_chars:
         return summary
 
-    # 如果仍超长，优先保留新增要点，进一步压缩旧摘要。
-    parts = ["代码兜底摘要：以下为自动压缩的对话要点，建议等待或手动生成 LLM 摘要提升质量。"]
+    parts = [
+        "代码兜底摘要：仅继承上次摘要正文；本轮新增内容见结构化字段，"
+        "建议等待或手动生成 LLM 摘要提升质量。"
+    ]
     if previous:
         parts.append("此前已知:\n" + _truncate_text(_clean_summary_memory_text(previous_text), 300, suffix="\n...[旧摘要截断]"))
-    if user_lines:
-        parts.append("新增用户侧要点:\n" + "\n".join(f"- {line}" for line in user_lines if line))
-    if assistant_lines:
-        parts.append("新增助手侧结论:\n" + "\n".join(f"- {line}" for line in assistant_lines if line))
+    if pending_turns:
+        parts.append(
+            f"本轮新增 {len(pending_turns)} 条消息（用户 {user_count} 条、助手 {assistant_count} 条）。"
+        )
     return _truncate_text("\n\n".join(parts).strip(), max_chars)
+
+
+def _previous_summary_payload(
+    previous_summary: RollingSessionSummary | None,
+) -> dict[str, Any]:
+    if previous_summary is None:
+        return {}
+    raw = str(getattr(previous_summary, "summary_json", "") or "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            if str(parsed.get("summary") or "").strip():
+                return parsed
+            legacy_text = str(getattr(previous_summary, "summary_text", "") or "").strip()
+            return {**parsed, "summary": legacy_text} if legacy_text else parsed
+    legacy_text = str(getattr(previous_summary, "summary_text", "") or "").strip()
+    return {"summary": legacy_text} if legacy_text else {}
+
+
+def _merge_text_items(*groups: Any, limit: int) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        if not isinstance(group, (list, tuple)):
+            continue
+        for item in group:
+            text = _clean_summary_memory_text(str(item or ""))
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            merged.append(text)
+    return merged[-limit:]
 
 
 def build_rolling_summary_payload(
@@ -126,7 +158,8 @@ def build_rolling_summary_payload(
     previous_summary: RollingSessionSummary | None,
     pending_turns: Sequence[ConversationTurn],
 ) -> dict[str, Any]:
-    previous_text = str(getattr(previous_summary, "summary_text", "") or "").strip()
+    previous_payload = _previous_summary_payload(previous_summary)
+    previous_text = str(previous_payload.get("summary") or "").strip()
     user_lines = [_format_turn_snippet(turn, max_chars=180) for turn in pending_turns if turn.role == "user"]
     assistant_lines = [
         _format_turn_snippet(turn, max_chars=180)
@@ -140,24 +173,40 @@ def build_rolling_summary_payload(
         max_chars=config.ROLLING_SUMMARY_MAX_CHARS,
     )
 
-    open_threads = []
-    if user_lines:
-        open_threads.append(user_lines[-1])
-    decisions = assistant_lines[-2:]
-    keywords = _extract_keywords(source_text)
+    current_open_threads = user_lines[-1:] if user_lines else []
+    open_threads = _merge_text_items(
+        previous_payload.get("open_threads"),
+        current_open_threads,
+        limit=6,
+    )
+    decisions = _merge_text_items(
+        previous_payload.get("decisions"),
+        assistant_lines[-2:],
+        limit=8,
+    )
+    important_user_requests = _merge_text_items(
+        previous_payload.get("important_user_requests"),
+        user_lines[-4:],
+        limit=8,
+    )
+    keywords = _merge_text_items(
+        previous_payload.get("keywords"),
+        _extract_keywords(source_text),
+        limit=8,
+    )
 
     return {
         "summary": summary,
         "open_threads": open_threads,
         "decisions": decisions,
-        "important_user_requests": user_lines[-4:],
-        "artifacts": [],
-        "warnings": [],
+        "important_user_requests": important_user_requests,
+        "artifacts": _merge_text_items(previous_payload.get("artifacts"), limit=8),
+        "warnings": _merge_text_items(previous_payload.get("warnings"), limit=8),
         "evidence_turn_ids": [int(turn.id) for turn in pending_turns if getattr(turn, "id", None)],
         "keywords": keywords,
         "quality": {
-            "score": 0.72 if pending_turns else 0.0,
-            "issues": [],
+            "score": 0.45 if pending_turns else 0.0,
+            "issues": ["deterministic_fallback", "llm_summary_pending"],
             "source_token_estimate": sum(estimate_tokens(turn.content or "") for turn in pending_turns),
         },
     }

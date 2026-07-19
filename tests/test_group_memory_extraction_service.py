@@ -40,7 +40,7 @@ async def test_extract_group_memories_reuses_group_analysis_pipeline(db_session,
         assert payload["source_log_ids"]
         source_ids = payload["source_log_ids"]
         return {
-            "topics": {"topics": [
+            "topics": {"_generator": "llm", "topics": [
                 {
                     "topic": "本地模型部署",
                     "detail": "群里在讨论压测、上下文窗口和部署文档",

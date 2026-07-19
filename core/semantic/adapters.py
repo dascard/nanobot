@@ -354,6 +354,8 @@ def chunks_from_memory_digest(rows: Any) -> list[SemanticChunk]:
 def chunks_from_session_summary(row: Any) -> list[SemanticChunk]:
     if str(getattr(row, "status", "") or "active") in {"archived", "failed", "audit_rejected"}:
         return []
+    if str(getattr(row, "summary_kind", "") or "").strip() == "deterministic_fallback":
+        return []
 
     data = _safe_json(getattr(row, "summary_json", ""), {})
     document_id = int(getattr(row, "id", 0) or 0)

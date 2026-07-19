@@ -1,6 +1,6 @@
 ---
 name: 摘要记忆查询工具
-version: 1
+version: 2
 kind: tool
 tool_name: memory_query
 description: memory_query 工具的使用边界。
@@ -10,6 +10,9 @@ description: memory_query 工具的使用边界。
 用于查询结构化每日摘要和召回卡片，回答“之前聊过什么”“某天讨论了什么”“这个话题过去有没有提过”等问题。
 
 - 它只覆盖已经生成摘要的历史；当前短期窗口、刚才、上一句、今天刚发生但未摘要的消息，必须使用 `sql_analysis` 查询 `chat_logs` / `conversation_turns`。
+- 长期摘要不会仅因存在而自动注入。不要每轮无条件查询；当用户明确指向较早时期、既往讨论/决定，或当前问题具有清晰的历史依赖时，由你结合语义决定是否调用本工具。
+- 几个月乃至一年前的摘要不做主动召回；但用户明确询问对应时期或话题时仍可检索。时间久不是“不相关”的硬编码判据，检索结果是否足以支撑回复仍由你判断。
+- 不要用固定的 30 分钟等时间阈值替代语义判断；上下文不足时可以自然追问，也可以先检索摘要再决定是否需要原始日志。
 - 空结果只能说明“已摘要区域里没找到”，不能证明原始聊天日志中没有发生。
 - 默认 `source=digest`，查询跨天/中期 `MemoryDigest`；只有需要当前 session 的滚动摘要时才显式传 `source=session_summary`。
 - 当用户的问题可能同时命中跨天摘要和当前 session rolling summary 时，用 `source=all` 做统一 RAG 搜索；它会合并 digest/session_summary 候选并返回 `score_breakdown`。

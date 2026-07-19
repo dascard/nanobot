@@ -100,6 +100,8 @@ async def extract_group_memories(
         "raw_count": batch.raw_count,
         "window_hours": resolved_window_hours or 0,
         "source_log_ids": payload.get("source_log_ids", []),
+        "trusted_source_log_ids": payload.get("trusted_source_log_ids", []),
+        "trusted_source_speakers": payload.get("trusted_source_speakers", {}),
         "extracted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     stats = extract_and_persist(group.group_id, analysis, source_meta=source_meta)
@@ -246,6 +248,7 @@ def _memory_row_to_dict(row) -> dict:
         "evidence_log_ids_json": row.evidence_log_ids_json,
         "memory_type": row.memory_type,
         "evidence_count": row.evidence_count,
+        "meta_json": row.meta_json,
     }
 
 

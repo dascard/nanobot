@@ -325,6 +325,45 @@ class TestSQLiteMemoryDetachedLogs:
         # Verify session was closed
         mock_db.close.assert_called_once()
 
+    def test_unprocessed_logs_excludes_no_learn_rows_before_threshold(self):
+        from types import SimpleNamespace
+
+        from core.legacy_adapter import SQLiteMemory
+
+        blocked = SimpleNamespace(
+            id=1,
+            user_id="user1",
+            role="user",
+            content="禁止学习",
+            sender_name="Alice",
+            session_id="sess1",
+            created_at="2026-07-17",
+            meta_json='{"moderation": {"no_learn": true}}',
+        )
+        allowed = SimpleNamespace(
+            id=2,
+            user_id="user1",
+            role="user",
+            content="允许学习",
+            sender_name="Alice",
+            session_id="sess1",
+            created_at="2026-07-17",
+            meta_json="{}",
+        )
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = [
+            blocked,
+            allowed,
+        ]
+        memory = SQLiteMemory()
+
+        with patch.object(memory, "_get_session", return_value=mock_db):
+            with patch("config.EVOLUTION_THRESHOLD", 1):
+                logs = memory.get_unprocessed_logs("user1")
+
+        assert [row["id"] for row in logs] == [2]
+        assert logs[0]["meta_json"] == "{}"
+
     def test_mark_logs_processed_rolls_back_when_commit_fails(self):
         """mark_logs_processed() 提交失败时必须 rollback，避免 session 残留半失败状态。"""
         from sqlalchemy.exc import SQLAlchemyError

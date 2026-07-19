@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from collections.abc import Callable
@@ -1698,6 +1699,74 @@ def _summary_model_safe_defaults(conn: Any, engine: Any, db_path: str | None) ->
         )
 
 
+def _summary_output_contract_defaults(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """把旧摘要输出上限迁移到能够容纳当前 JSON 合同的默认值。"""
+
+    if "system_settings" not in _table_names(conn):
+        return
+    columns = _columns(conn, "system_settings")
+    settings = (
+        (
+            "model.route.session_summary.max_tokens",
+            "4096",
+            {"1200", "65535"},
+        ),
+        (
+            "model.route.memory_digest.max_tokens",
+            "8192",
+            {"1800", "65535"},
+        ),
+    )
+    now = db_now_naive()
+    for key, value, legacy_values in settings:
+        row = conn.execute(
+            text('SELECT value FROM system_settings WHERE "key" = :key'),
+            {"key": key},
+        ).first()
+        if row is not None and str(row[0] or "").strip() not in legacy_values:
+            continue
+
+        params: dict[str, Any] = {"key": key, "value": value}
+        if "description" in columns:
+            params["description"] = "摘要 JSON 输出合同容量（2026-07-18 修复）"
+        if "updated_at" in columns:
+            params["updated_at"] = now
+        if row is not None:
+            assignments = ["value = :value"]
+            if "description" in columns:
+                assignments.append("description = :description")
+            if "updated_at" in columns:
+                assignments.append("updated_at = :updated_at")
+            conn.execute(
+                text(
+                    f'UPDATE system_settings SET {", ".join(assignments)} '
+                    'WHERE "key" = :key'
+                ),
+                params,
+            )
+            continue
+
+        insert_columns = ["key", "value"]
+        insert_values = [":key", ":value"]
+        if "description" in columns:
+            insert_columns.append("description")
+            insert_values.append(":description")
+        if "updated_at" in columns:
+            insert_columns.append("updated_at")
+            insert_values.append(":updated_at")
+        conn.execute(
+            text(
+                f'INSERT INTO system_settings ({", ".join(insert_columns)}) '
+                f'VALUES ({", ".join(insert_values)})'
+            ),
+            params,
+        )
+
+
 def _memory_digest_jobs(conn: Any, engine: Any, db_path: str | None) -> None:
     """创建 MemoryDigest 生成、租约和重试账本。"""
 
@@ -1792,6 +1861,208 @@ def _memory_cleanup_governance(conn: Any, engine: Any, db_path: str | None) -> N
     _create_indexes(conn, indexes)
 
 
+def _memory_governance_repairs(conn: Any, engine: Any, db_path: str | None) -> None:
+    """修复摘要审计发现的遗留运行态、孤儿索引和单发言者群记忆。"""
+
+    tables = _table_names(conn)
+    now = db_now_naive()
+
+    if "memory_digest_jobs" in tables:
+        columns = _columns(conn, "memory_digest_jobs")
+        required = {
+            "status", "locked_by", "lease_token", "lease_expires_at",
+            "retry_count", "max_retry", "next_retry_at", "error_type",
+            "error_summary", "finished_at", "updated_at",
+        }
+        if required <= columns:
+            conn.execute(
+                text(
+                    "UPDATE memory_digest_jobs SET "
+                    "status = 'failed', locked_by = '', lease_token = '', "
+                    "lease_expires_at = NULL, "
+                    "next_retry_at = CASE "
+                    "WHEN COALESCE(retry_count, 0) < COALESCE(max_retry, 0) "
+                    "THEN :now ELSE NULL END, "
+                    "error_type = 'lease_expired_recovered', "
+                    "error_summary = 'memory_digest_failed:lease_expired_recovered', "
+                    "finished_at = :now, updated_at = :now "
+                    "WHERE status = 'running' "
+                    "AND (lease_expires_at IS NULL OR lease_expires_at <= :now)"
+                ),
+                {"now": now},
+            )
+
+    fallback_item_ids: list[int] = []
+    if "semantic_index_items" in tables:
+        summary_kinds: dict[int, str] = {}
+        if (
+            "rolling_session_summaries" in tables
+            and {"id", "summary_kind"} <= _columns(conn, "rolling_session_summaries")
+        ):
+            summary_kinds = {
+                int(row[0]): str(row[1] or "")
+                for row in conn.execute(text(
+                    "SELECT id, summary_kind FROM rolling_session_summaries"
+                )).all()
+            }
+        item_columns = _columns(conn, "semantic_index_items")
+        if {"id", "source_type", "document_id", "status", "meta_json"} <= item_columns:
+            rows = conn.execute(text(
+                "SELECT id, document_id, meta_json FROM semantic_index_items "
+                "WHERE source_type = 'session_summary' AND status = 'active'"
+            )).all()
+            for item_id, document_id, raw_meta in rows:
+                try:
+                    meta = json.loads(str(raw_meta or "{}"))
+                except (TypeError, json.JSONDecodeError):
+                    meta = {}
+                try:
+                    summary_id = int(str(document_id or "0"))
+                except ValueError:
+                    summary_id = 0
+                if (
+                    str(meta.get("summary_kind") or "") == "deterministic_fallback"
+                    or summary_kinds.get(summary_id) == "deterministic_fallback"
+                ):
+                    fallback_item_ids.append(int(item_id))
+            for item_id in fallback_item_ids:
+                if "semantic_index_fts" in tables:
+                    conn.execute(
+                        text("DELETE FROM semantic_index_fts WHERE rowid = :item_id"),
+                        {"item_id": item_id},
+                    )
+                assignments = ["status = 'deleted'"]
+                if "deleted_at" in item_columns:
+                    assignments.append("deleted_at = :now")
+                if "updated_at" in item_columns:
+                    assignments.append("updated_at = :now")
+                conn.execute(
+                    text(
+                        f"UPDATE semantic_index_items SET {', '.join(assignments)} "
+                        "WHERE id = :item_id AND status = 'active'"
+                    ),
+                    {"item_id": item_id, "now": now},
+                )
+
+    group_required = {
+        "id", "memory_type", "status", "source", "evidence_log_ids_json",
+        "inject_policy", "meta_json", "updated_at",
+    }
+    chat_log_columns = _columns(conn, "chat_logs") if "chat_logs" in tables else set()
+    if (
+        "group_memories" not in tables
+        or "chat_logs" not in tables
+        or not group_required <= _columns(conn, "group_memories")
+        or not {"id", "user_id"} <= chat_log_columns
+    ):
+        return
+    memories = conn.execute(text(
+        "SELECT id, evidence_log_ids_json, meta_json FROM group_memories "
+        "WHERE memory_type = 'topic' AND status = 'active' "
+        "AND source IN ('group_analysis', 'manual_group_memory_extract')"
+    )).all()
+    for memory_id, raw_evidence, raw_meta in memories:
+        try:
+            evidence = json.loads(str(raw_evidence or "[]"))
+        except (TypeError, json.JSONDecodeError):
+            evidence = []
+        evidence_ids = sorted({
+            int(item)
+            for item in evidence
+            if str(item).isdigit() and int(item) > 0
+        })
+        speakers: list[str] = []
+        if evidence_ids:
+            placeholders = ",".join(f":evidence_{index}" for index in range(len(evidence_ids)))
+            params = {
+                f"evidence_{index}": evidence_id
+                for index, evidence_id in enumerate(evidence_ids)
+            }
+            selected_columns = ["user_id"] + [
+                column
+                for column in ("session_id", "sender_name", "role", "meta_json")
+                if column in chat_log_columns
+            ]
+            speaker_set: set[str] = set()
+            chat_rows = conn.execute(
+                text(
+                    f"SELECT {', '.join(selected_columns)} FROM chat_logs "
+                    f"WHERE id IN ({placeholders})"
+                ),
+                params,
+            ).mappings().all()
+            for chat_row in chat_rows:
+                role = str(chat_row.get("role") or "ambient").strip()
+                if role not in {"ambient", "user"}:
+                    continue
+                try:
+                    chat_meta = json.loads(str(chat_row.get("meta_json") or "{}"))
+                except (TypeError, json.JSONDecodeError):
+                    chat_meta = {}
+                if not isinstance(chat_meta, dict):
+                    chat_meta = {}
+                sender_meta = (
+                    chat_meta.get("sender")
+                    if isinstance(chat_meta.get("sender"), dict)
+                    else {}
+                )
+                moderation = (
+                    chat_meta.get("moderation")
+                    if isinstance(chat_meta.get("moderation"), dict)
+                    else {}
+                )
+                if (
+                    bool(sender_meta.get("is_bot"))
+                    or bool(chat_meta.get("is_bot"))
+                    or bool(chat_meta.get("sender_is_bot"))
+                    or bool(chat_meta.get("external_bot"))
+                    or bool(moderation.get("no_learn"))
+                ):
+                    continue
+                user_id = str(chat_row.get("user_id") or "").strip()
+                session_id = str(chat_row.get("session_id") or "").strip()
+                speaker = str(
+                    sender_meta.get("id") or chat_meta.get("sender_id") or ""
+                ).strip()
+                if not speaker and user_id and user_id != session_id:
+                    speaker = user_id
+                if not speaker:
+                    speaker = str(chat_row.get("sender_name") or user_id).strip()
+                if speaker:
+                    speaker_set.add(speaker)
+            speakers = sorted(speaker_set)
+        try:
+            meta = json.loads(str(raw_meta or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.update({
+            "generator": str(meta.get("generator") or "legacy_untracked"),
+            "consensus_gate": "multi_speaker",
+            "evidence_speakers": speakers,
+            "evidence_speaker_count": len(speakers),
+        })
+        if len(speakers) < 2:
+            issues = meta.get("governance_issues")
+            issues = list(issues) if isinstance(issues, list) else []
+            if "single_speaker_evidence" not in issues:
+                issues.append("single_speaker_evidence")
+            meta["governance_issues"] = issues
+        conn.execute(
+            text(
+                "UPDATE group_memories SET status = :status, inject_policy = 'auto', "
+                "meta_json = :meta_json, updated_at = :now WHERE id = :memory_id"
+            ),
+            {
+                "status": "active" if len(speakers) >= 2 else "review",
+                "meta_json": json.dumps(meta, ensure_ascii=False, sort_keys=True),
+                "now": now,
+                "memory_id": int(memory_id),
+            },
+        )
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -1857,6 +2128,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _summary_model_safe_defaults,
     ),
     (
+        "20260718_summary_output_contract_defaults",
+        "increase summary model output limits for JSON contracts",
+        _summary_output_contract_defaults,
+    ),
+    (
         "20260717_semantic_index_reconcile_v2",
         "semantic index reconcile lease and source revision",
         _semantic_index_reconcile_v2,
@@ -1870,6 +2146,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "20260718_memory_cleanup_governance",
         "memory cleanup archive state and execution ledger",
         _memory_cleanup_governance,
+    ),
+    (
+        "20260718_memory_governance_repairs",
+        "recover stale digest jobs and repair legacy memory governance",
+        _memory_governance_repairs,
     ),
 ]
 

@@ -259,7 +259,7 @@ def test_admin_session_memory_sessions_list_returns_session_summaries(client, db
     payload = response.json()
     item = payload["items"][0]
     assert item["session_id"] == "group_1"
-    assert item["summary_count"] == 2
+    assert item["summary_count"] == 1
     assert item["digest_count"] == 1
     assert item["active_summary_id"] == 2
     assert item["active_summary_preview"] == "活跃近期摘要，覆盖最新对话"
@@ -451,6 +451,126 @@ def test_admin_session_memory_digest_details_expose_generation_metadata(client, 
     assert item["fallback_reason"] is None
     assert item["recall_card_count"] == 3
     assert item["message_count"] == 18
+
+
+def test_admin_digest_details_group_layers_by_source_and_hide_archived_by_default(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    now = _db_time(2026, 5, 28, 12, 0, 0)
+    common = {
+        "schema_version": 2,
+        "status": "active",
+        "source_id": "logical-active",
+        "source_type": "date_session",
+        "source_range": "log_id 1-20",
+        "generator": "llm",
+        "preview": {"brief": "同一逻辑摘要的共享预览", "keywords": ["聚合"]},
+        "long_summary": {"topic_flow": "长期正文", "important_details": []},
+        "quality": {"score": 0.9, "issues": []},
+    }
+    db_session.add_all([
+        MemoryDigest(
+            id=100,
+            session_id="group_1",
+            user_id="group_1",
+            digest_date="2026-05-28",
+            level=0,
+            content="L0 长期正文",
+            meta_json=json.dumps({**common, "summary_type": "detailed_digest"}, ensure_ascii=False),
+            created_at=now,
+        ),
+        MemoryDigest(
+            id=101,
+            session_id="group_1",
+            user_id="group_1",
+            digest_date="2026-05-28",
+            level=1,
+            parent_id=100,
+            content="L1 摘要预览",
+            meta_json=json.dumps({**common, "summary_type": "preview_digest"}, ensure_ascii=False),
+            created_at=now,
+        ),
+        MemoryDigest(
+            id=102,
+            session_id="group_1",
+            user_id="group_1",
+            digest_date="2026-05-28",
+            level=2,
+            parent_id=101,
+            content="L2 第一张召回卡",
+            meta_json=json.dumps({
+                **common,
+                "summary_type": "recall_card",
+                "recall_cards": [{"card_id": "a", "text": "第一张召回卡"}],
+            }, ensure_ascii=False),
+            created_at=now,
+        ),
+        MemoryDigest(
+            id=103,
+            session_id="group_1",
+            user_id="group_1",
+            digest_date="2026-05-28",
+            level=2,
+            parent_id=101,
+            content="L2 第二张召回卡",
+            meta_json=json.dumps({
+                **common,
+                "summary_type": "recall_card",
+                "recall_cards": [{"card_id": "b", "text": "第二张召回卡"}],
+            }, ensure_ascii=False),
+            created_at=now,
+        ),
+        MemoryDigest(
+            id=104,
+            session_id="group_1",
+            user_id="group_1",
+            digest_date="2026-05-27",
+            level=1,
+            content="归档摘要",
+            meta_json=json.dumps({
+                **common,
+                "status": "archived",
+                "source_id": "logical-archived",
+                "summary_type": "preview_digest",
+            }, ensure_ascii=False),
+            created_at=now,
+        ),
+    ])
+    db_session.commit()
+
+    active_response = client.get(
+        "/api/v1/admin/session-memory/sessions/group_1/digests",
+        headers=_auth_header(),
+        params={"include_content": "true"},
+    )
+    all_response = client.get(
+        "/api/v1/admin/session-memory/sessions/group_1/digests",
+        headers=_auth_header(),
+        params={"include_archived": "true"},
+    )
+
+    assert active_response.status_code == 200, active_response.text
+    assert all_response.status_code == 200, all_response.text
+    active_items = active_response.json()["items"]
+    assert len(active_items) == 1
+    item = active_items[0]
+    assert item["source_id"] == "logical-active"
+    assert item["layer_count"] == 4
+    assert item["levels"] == [0, 1, 2]
+    assert [layer["preview"] for layer in item["layers"]] == [
+        "L0 长期正文",
+        "L1 摘要预览",
+        "L2 第一张召回卡",
+        "L2 第二张召回卡",
+    ]
+    assert all("raw_json" not in layer for layer in item["layers"])
+    assert {entry["source_id"] for entry in all_response.json()["items"]} == {
+        "logical-active",
+        "logical-archived",
+    }
 
 
 def test_admin_session_memory_sessions_prefer_level1_digest_preview_over_latest_card(client, db_session, monkeypatch):

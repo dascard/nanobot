@@ -1,6 +1,6 @@
 ---
 name: 长期记忆摘要输入提示词
-version: 3
+version: 4
 kind: task
 tool_name: memory_digest
 description: memory_digests 长期摘要 LLM 的 user prompt。
@@ -21,6 +21,8 @@ Generation requirements:
 - Generate exactly one "long_summary" for level 0.
 - Generate exactly one "preview" for level 1.
 - Generate multiple "recall_cards" for level 2.
+- Generate at most 8 recall cards; use fewer when the source has little durable information.
+- Keep topic_flow within 600 chars, important_details within 8 items, conclusions and open_loops within 6 items each, and the complete compact JSON within approximately 7000 estimated tokens.
 - The recall cards should be atomic, concrete, independently understandable, and useful for future RAG retrieval.
 - Do not produce one recall card per message.
 - Do not include temporary noise, raw tool outputs, stack traces, or irrelevant URLs.

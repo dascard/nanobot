@@ -143,6 +143,30 @@ def test_memory_digest_builder_skips_when_only_noise():
     assert result.level_contents[2] == ""
 
 
+@pytest.mark.parametrize("moderation_flag", ["no_learn", "no_context"])
+def test_memory_digest_builder_excludes_moderation_blocked_messages(moderation_flag):
+    from app.memory_digest.builder import MemoryDigestBuilder
+
+    blocked = _log(
+        id=1,
+        content="这条敏感内容不得进入长期摘要",
+        meta_json=json.dumps({"moderation": {moderation_flag: True}}),
+    )
+    allowed = _log(id=2, content="这条正常内容可以进入长期摘要")
+
+    result = MemoryDigestBuilder().build(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[blocked, allowed],
+    )
+
+    assert result.status == "active"
+    assert result.meta["source_stats"]["filtered_by_reason"]["meta_flag"] == 1
+    assert "敏感内容" not in result.level_contents[0]
+    assert "正常内容" in result.level_contents[0]
+
+
 def test_memory_digest_quality_requires_threshold_and_clean_issues():
     from app.memory_digest.quality import build_quality
 
@@ -561,6 +585,103 @@ def test_llm_digest_still_fails_when_all_recall_cards_are_rejected():
     assert result.meta["generator"] == "deterministic_fallback"
     assert "recall_card_evidence_not_grounded" in result.meta["fallback_reason"]
     assert "recall_cards_empty" in result.meta["fallback_reason"]
+@pytest.mark.parametrize("card_type", ["fact", "preference"])
+def test_llm_digest_rejects_recall_card_without_direct_evidence(card_type):
+    from app.memory_digest.llm_builder import audit_llm_digest_meta
+
+    meta = {
+        "status": "active",
+        "preview": {"brief": "Python 服务开发偏好"},
+        "long_summary": {"topic_flow": "用户说明了长期使用的开发技术。"},
+        "recall_cards": [{
+            "card_id": "card_1",
+            "type": card_type,
+            "text": "用户长期使用 Python 进行服务开发。",
+            "keywords": ["Python", "服务开发"],
+            "importance": 0.9,
+            "evidence_log_ids": [],
+        }],
+        "quality": {"score": 0.9, "issues": []},
+    }
+    source_rows = [{
+        "log_id": 1,
+        "role": "user",
+        "is_bot": False,
+        "line": "[log_id=1][role=user] 用户长期使用 Python 进行服务开发。",
+    }]
+
+    ok, issues = audit_llm_digest_meta(meta, source_rows=source_rows)
+
+    assert ok is False
+    assert "recall_card_evidence_missing" in issues
+
+
+def test_llm_digest_accepts_recall_card_with_one_to_eight_grounded_evidence_ids():
+    from app.memory_digest.llm_builder import audit_llm_digest_meta
+
+    evidence_ids = list(range(1, 9))
+    meta = {
+        "status": "active",
+        "preview": {"brief": "Python 服务开发偏好"},
+        "long_summary": {"topic_flow": "用户多次说明了长期使用的开发技术。"},
+        "recall_cards": [{
+            "card_id": "card_1",
+            "type": "preference",
+            "text": "用户长期使用 Python 进行服务开发。",
+            "keywords": ["Python", "服务开发"],
+            "importance": 0.9,
+            "evidence_log_ids": evidence_ids,
+        }],
+        "quality": {"score": 0.9, "issues": []},
+    }
+    source_rows = [
+        {
+            "log_id": log_id,
+            "role": "user",
+            "is_bot": False,
+            "line": f"[log_id={log_id}][role=user] 用户长期使用 Python 进行服务开发。",
+        }
+        for log_id in evidence_ids
+    ]
+
+    ok, issues = audit_llm_digest_meta(meta, source_rows=source_rows)
+
+    assert ok is True
+    assert issues == []
+
+
+def test_llm_digest_rejects_recall_card_with_more_than_eight_evidence_ids():
+    from app.memory_digest.llm_builder import audit_llm_digest_meta
+
+    evidence_ids = list(range(1, 10))
+    meta = {
+        "status": "active",
+        "preview": {"brief": "Python 服务开发事实"},
+        "long_summary": {"topic_flow": "用户多次说明了长期使用的开发技术。"},
+        "recall_cards": [{
+            "card_id": "card_1",
+            "type": "fact",
+            "text": "用户长期使用 Python 进行服务开发。",
+            "keywords": ["Python", "服务开发"],
+            "importance": 0.9,
+            "evidence_log_ids": evidence_ids,
+        }],
+        "quality": {"score": 0.9, "issues": []},
+    }
+    source_rows = [
+        {
+            "log_id": log_id,
+            "role": "user",
+            "is_bot": False,
+            "line": f"[log_id={log_id}][role=user] 用户长期使用 Python 进行服务开发。",
+        }
+        for log_id in evidence_ids
+    ]
+
+    ok, issues = audit_llm_digest_meta(meta, source_rows=source_rows)
+
+    assert ok is False
+    assert "recall_card_evidence_too_many" in issues
 
 
 def test_llm_digest_rejects_credentials_and_assistant_as_user_preference_evidence():
@@ -688,7 +809,7 @@ def test_default_memory_digest_summarizer_returns_resolved_model_name(monkeypatc
             "base_url": "http://example.invalid/v1",
             "temperature": 0.1,
             "model": "summary-model-v2",
-            "max_tokens": 1800,
+            "max_tokens": 8192,
             "enable_thinking": "false",
         },
     )
@@ -727,7 +848,7 @@ def test_default_memory_digest_summarizer_does_not_invent_actual_model(monkeypat
             "base_url": "http://example.invalid/v1",
             "temperature": 0.1,
             "model": "requested-summary-model",
-            "max_tokens": 1800,
+            "max_tokens": 8192,
             "enable_thinking": "false",
         },
     )
@@ -753,6 +874,103 @@ def test_default_memory_digest_summarizer_does_not_invent_actual_model(monkeypat
     assert result.actual_model_observed is False
     assert result.requested_model == "requested-summary-model"
     assert result.request_log_id == 654
+
+
+def test_default_memory_digest_summarizer_rejects_length_truncation(monkeypatch):
+    from app.memory_digest.llm_builder import (
+        MemoryDigestCapacityError,
+        default_llm_memory_digest_summarizer_async,
+    )
+
+    monkeypatch.setattr(
+        "clients.classifier_client.resolve_model_route",
+        lambda _key: {
+            "api_key": "test",
+            "base_url": "http://example.invalid/v1",
+            "temperature": 0.1,
+            "model": "summary-model-v2",
+            "max_tokens": 8192,
+            "enable_thinking": "false",
+        },
+    )
+
+    async def fake_chat_completion(self, **kwargs):
+        assert kwargs["max_tokens"] == 8192
+        return {
+            "choices": [{
+                "finish_reason": "length",
+                "message": {"content": '{"preview":{"brief":"被截断"}'},
+            }],
+            "model": "actual-summary-model",
+        }
+
+    monkeypatch.setattr(
+        "clients.new_api_client.NewAPIClient.chat_completion",
+        fake_chat_completion,
+    )
+
+    with pytest.raises(
+        MemoryDigestCapacityError,
+        match="^memory_digest_output_capacity_exceeded$",
+    ):
+        run_async(default_llm_memory_digest_summarizer_async([
+            {"role": "user", "content": "测试"},
+        ]))
+
+
+def test_memory_digest_capacity_error_is_non_retryable_failure():
+    from app.memory_digest.llm_builder import (
+        MemoryDigestCapacityError,
+        build_memory_digest_with_llm,
+    )
+
+    def truncated_summarizer(_messages):
+        raise MemoryDigestCapacityError(
+            "memory_digest_output_capacity_exceeded"
+        )
+
+    result = build_memory_digest_with_llm(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[_log(id=1, content="长期摘要输出被服务端截断")],
+        summarizer=truncated_summarizer,
+    )
+
+    assert result.status == "failed"
+    assert result.meta["failure_type"] == "output_capacity_exceeded"
+
+
+def test_memory_digest_full_declared_output_contract_fits_internal_budget():
+    from app.memory_digest import llm_builder
+
+    payload = {
+        "preview": {
+            "brief": "预" * 200,
+            "keywords": ["关" * 32 for _ in range(8)],
+            "participants": ["参" * 32 for _ in range(8)],
+        },
+        "long_summary": {
+            "topic_flow": "主" * 600,
+            "important_details": ["细" * 140 for _ in range(8)],
+            "conclusions": ["结" * 120 for _ in range(6)],
+            "open_loops": ["待" * 120 for _ in range(6)],
+        },
+        "recall_cards": [
+            {
+                "card_id": f"card_{index}",
+                "type": "design_rule",
+                "text": "卡" * 120,
+                "keywords": ["词" * 32 for _ in range(6)],
+                "importance": 0.8,
+                "evidence_log_ids": list(range(1, 9)),
+            }
+            for index in range(8)
+        ],
+        "quality": {"score": 0.9, "reason": "理" * 180},
+    }
+
+    llm_builder._validate_llm_digest_output_budget(payload)
 
 
 def test_memory_digest_source_id_covers_full_source_manifest():
@@ -835,7 +1053,7 @@ def test_llm_memory_digest_async_propagates_summarizer_programming_error(
         )
 
 
-def test_llm_memory_digest_builder_accepts_goal_string_json_shape_and_records_prompt_metadata():
+def test_llm_memory_digest_builder_accepts_summary_strings_and_records_prompt_metadata():
     from app.memory_digest.llm_builder import build_memory_digest_with_llm
 
     def fake_summarizer(_messages):
@@ -844,8 +1062,18 @@ def test_llm_memory_digest_builder_accepts_goal_string_json_shape_and_records_pr
                 "preview": "讨论确认长期摘要应从 ChatLog 按 date + session_id 生成。",
                 "long_summary": "本次讨论明确 memory_digests 是长期摘要层，ChatLog 是主要数据源，level 2 recall cards 是 RAG 主召回入口。",
                 "recall_cards": [
-                    "memory_digests 应从 ChatLog 按 date + session_id 聚合生成长期摘要。",
-                    "memory_digests 的 level 2 recall cards 应作为 RAG 主召回层。",
+                    {
+                        "type": "design_rule",
+                        "text": "memory_digests 应从 ChatLog 按 date + session_id 聚合生成长期摘要。",
+                        "keywords": ["memory_digests", "ChatLog", "session_id"],
+                        "evidence_log_ids": [1],
+                    },
+                    {
+                        "type": "design_rule",
+                        "text": "memory_digests 的 level 2 recall cards 应作为 RAG 主召回层。",
+                        "keywords": ["memory_digests", "recall cards", "RAG"],
+                        "evidence_log_ids": [2],
+                    },
                 ],
                 "quality": {"score": 0.9, "reason": "结构完整，召回卡片具体。"},
             },
@@ -1211,7 +1439,12 @@ def test_generate_daily_digest_async_uses_async_llm_summarizer(db_session, monke
                 "preview": "async daily digest 直接 await LLM summarizer。",
                 "long_summary": "异步 daily digest 入口用于默认 LLM 摘要路径，避免同步函数内部运行 awaitable。",
                 "recall_cards": [
-                    "async daily digest 入口负责运行 LLM memory digest summarizer。"
+                    {
+                        "type": "design_rule",
+                        "text": "async daily digest 入口负责运行 LLM memory digest summarizer。",
+                        "keywords": ["async daily digest", "summarizer"],
+                        "evidence_log_ids": [1],
+                    }
                 ],
                 "quality": {"score": 0.9, "reason": "边界清晰。"},
             },
@@ -1267,9 +1500,24 @@ def test_generate_daily_digest_writes_one_level0_one_level1_and_multiple_level2_
                 "preview": "讨论确认 memory_digests 的三级摘要结构。",
                 "long_summary": "本次讨论明确同一个 digest_source 应生成一条 level 0 详细摘要、一条 level 1 预览摘要和多条 level 2 原子召回卡片。",
                 "recall_cards": [
-                    "memory_digests 的 level 0 应是每个 digest_source 一条详细摘要。",
-                    "memory_digests 的 level 1 应是每个 digest_source 一条 WebUI 预览摘要。",
-                    "memory_digests 的 level 2 应是每个 digest_source 多条原子 recall cards。",
+                    {
+                        "type": "design_rule",
+                        "text": "memory_digests 的 level 0 应是每个 digest_source 一条详细摘要。",
+                        "keywords": ["digest_source", "level 0"],
+                        "evidence_log_ids": [1],
+                    },
+                    {
+                        "type": "design_rule",
+                        "text": "memory_digests 的 level 1 应是每个 digest_source 一条 WebUI 预览摘要。",
+                        "keywords": ["digest_source", "level 1"],
+                        "evidence_log_ids": [2],
+                    },
+                    {
+                        "type": "design_rule",
+                        "text": "memory_digests 的 level 2 应是每个 digest_source 多条原子 recall cards。",
+                        "keywords": ["digest_source", "level 2", "recall cards"],
+                        "evidence_log_ids": [3],
+                    },
                 ],
                 "quality": {"score": 0.93, "reason": "三级结构明确。"},
             },
@@ -1467,6 +1715,132 @@ def test_memory_digest_recall_filters_legacy_after_fetching_enough_rows(db_sessi
     )
 
     assert [row["digest_id"] for row in rows] == [active.id]
+
+
+def test_memory_digest_recall_folds_matching_rows_by_source_before_limit(db_session):
+    from app.memory_digest.retrieval_service import MemoryDigestRetrievalService
+
+    def add_card(digest_id: int, source_id: str, card_text: str) -> None:
+        meta = {
+            "schema_version": 2,
+            "status": "active",
+            "generator": "llm",
+            "llm_status": "success",
+            "source_id": source_id,
+            "preview": {"brief": f"{source_id} 预览"},
+            "long_summary": {"topic_flow": "只在长摘要中出现的折叠探针"},
+            "recall_cards": [{"card_id": str(digest_id), "text": card_text}],
+            "quality": {"score": 0.9, "issues": []},
+        }
+        db_session.add(MemoryDigest(
+            id=digest_id,
+            user_id="group_42",
+            session_id="group_42",
+            digest_date="2026-05-22",
+            level=2,
+            content=card_text,
+            meta_json=json.dumps(meta, ensure_ascii=False),
+            source_start_log_id=1,
+            source_end_log_id=20,
+        ))
+
+    add_card(201, "logical-a", "A 的第一张卡")
+    add_card(202, "logical-a", "A 的第二张卡")
+    add_card(203, "logical-b", "B 的第一张卡")
+    db_session.commit()
+
+    rows = MemoryDigestRetrievalService(db_session).recall(
+        keyword="折叠探针",
+        session_id="group_42",
+        limit=2,
+    )
+
+    assert len(rows) == 2
+    assert {row["digest_source_id"] for row in rows} == {"logical-a", "logical-b"}
+    logical_a = next(row for row in rows if row["digest_source_id"] == "logical-a")
+    assert logical_a["matched_digest_row_ids"] == [202, 201]
+    assert {
+        card["card_id"] for card in logical_a["meta"]["recall_cards"]
+    } == {"201", "202"}
+    assert all("meta" not in node for node in logical_a["revealed_chain"])
+
+
+def test_expand_by_source_deduplicates_shared_meta_and_keeps_compact_chain(db_session):
+    from app.memory_digest.retrieval_service import MemoryDigestRetrievalService
+
+    source_id = "logical-expand"
+    base_meta = {
+        "schema_version": 2,
+        "status": "active",
+        "generator": "llm",
+        "llm_status": "success",
+        "source_id": source_id,
+        "preview": {"brief": "展开预览"},
+        "long_summary": {"topic_flow": "展开详情"},
+        "recall_cards": [
+            {"card_id": "a", "text": "卡片 A"},
+            {"card_id": "b", "text": "卡片 B"},
+        ],
+        "quality": {"score": 0.9, "issues": []},
+    }
+    rows = [
+        MemoryDigest(
+            id=211,
+            user_id="group_42",
+            session_id="group_42",
+            digest_date="2026-05-22",
+            level=0,
+            content="L0",
+            meta_json=json.dumps({**base_meta, "summary_type": "detailed_digest"}, ensure_ascii=False),
+        ),
+        MemoryDigest(
+            id=212,
+            user_id="group_42",
+            session_id="group_42",
+            digest_date="2026-05-22",
+            level=1,
+            parent_id=211,
+            content="L1",
+            meta_json=json.dumps({**base_meta, "summary_type": "preview_digest"}, ensure_ascii=False),
+        ),
+        MemoryDigest(
+            id=213,
+            user_id="group_42",
+            session_id="group_42",
+            digest_date="2026-05-22",
+            level=2,
+            parent_id=212,
+            content="卡片 A",
+            meta_json=json.dumps({
+                **base_meta,
+                "summary_type": "recall_card",
+                "recall_cards": [{"card_id": "a", "text": "卡片 A"}],
+            }, ensure_ascii=False),
+        ),
+        MemoryDigest(
+            id=214,
+            user_id="group_42",
+            session_id="group_42",
+            digest_date="2026-05-22",
+            level=2,
+            parent_id=212,
+            content="卡片 B",
+            meta_json=json.dumps({
+                **base_meta,
+                "summary_type": "recall_card",
+                "recall_cards": [{"card_id": "b", "text": "卡片 B"}],
+            }, ensure_ascii=False),
+        ),
+    ]
+    db_session.add_all(rows)
+    db_session.commit()
+
+    item = MemoryDigestRetrievalService(db_session).expand_by_source(source_id=source_id)
+
+    assert item is not None
+    assert [card["card_id"] for card in item["recall_cards"]] == ["a", "b"]
+    assert all("meta" not in node for node in item["chain"])
+    assert "long_summary" not in json.dumps(item["chain"], ensure_ascii=False)
 
 
 def test_digest_status_respects_explicit_archived_for_legacy_meta():
