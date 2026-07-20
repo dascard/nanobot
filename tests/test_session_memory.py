@@ -3718,7 +3718,7 @@ def test_session_summary_worker_non_json_retries_without_replacing_fallback(db_s
     )
 
 
-def test_session_summary_worker_quality_gate_keeps_fallback(db_session):
+def test_session_summary_worker_accepts_low_self_score_when_audit_passes(db_session):
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import run_session_summary_worker_once
 
@@ -3759,10 +3759,85 @@ def test_session_summary_worker_quality_gate_keeps_fallback(db_session):
 
     db_session.refresh(job)
     db_session.refresh(fallback)
-    assert result["failed"] == 1
-    assert job.status == "failed"
-    assert "quality_score_below_threshold" in job.error
+    assert result["done"] == 1
+    assert job.status == "done"
+    assert job.error == ""
+    assert fallback.status == "archived"
+    summary = db_session.get(RollingSessionSummary, job.result_summary_id)
+    assert summary is not None
+    assert summary.quality_score == 0.4
+
+
+def test_session_summary_worker_accepts_normal_response_after_quality_rejection(
+    db_session,
+):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    turns = [_turn(db_session, content=f"质量重试用例 {i}") for i in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+        max_retry=2,
+    )
+
+    rejected = run_session_summary_worker_once(
+        db_session,
+        summarizer=lambda _messages: json.dumps({
+            "summary": "第一次响应仍有待确认项",
+            "quality": {"score": 0.9, "issues": ["证据待确认"]},
+        }, ensure_ascii=False),
+        owner="test-worker",
+    )
+
+    db_session.refresh(job)
+    db_session.refresh(fallback)
+    assert rejected["failed"] == 1
+    assert job.status == "pending"
+    assert job.retry_count == 1
+    assert "quality_issues_present" in job.error
     assert fallback.status == "active"
+    job.next_retry_at = _local_now() - timedelta(seconds=1)
+    db_session.commit()
+
+    accepted = run_session_summary_worker_once(
+        db_session,
+        summarizer=lambda _messages: json.dumps({
+            "summary": "第二次正常响应已完整覆盖来源",
+            "quality": {"score": 0.2, "issues": []},
+        }, ensure_ascii=False),
+        owner="test-worker",
+    )
+
+    db_session.refresh(job)
+    db_session.refresh(fallback)
+    summary = db_session.get(RollingSessionSummary, job.result_summary_id)
+    assert accepted["done"] == 1
+    assert job.status == "done"
+    assert job.error == ""
+    assert job.retry_count == 1
+    assert fallback.status == "archived"
+    assert summary is not None
+    assert summary.quality_score == 0.2
+    assert "第二次正常响应" in summary.summary_text
 
 
 def test_get_best_session_summary_prefers_fallback_when_it_covers_more_turns(db_session):

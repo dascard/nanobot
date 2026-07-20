@@ -1457,6 +1457,122 @@ def test_failed_digest_job_keeps_safe_model_and_request_log_audit(
     assert db_session.query(MemoryDigest).count() == 0
 
 
+def test_quality_rejected_job_keeps_model_score_and_audit_issues(
+    db_session,
+    monkeypatch,
+):
+    from app.memory_digest.llm_builder import MemoryDigestLlmOutput
+    from core.database import MemoryDigest, MemoryDigestJob
+
+    daily_digest = _use_test_session_factory(monkeypatch)
+    source = _log(content="质量门禁必须记录真实模型分数", log_id=1)
+    db_session.add(source)
+    db_session.commit()
+    payload = json.loads(_success_payload([1], source.content))
+    payload["preview"]["brief"] = "错误地包含 https://example.com"
+    payload["quality"]["score"] = 0.4
+
+    async def rejected_summarizer(_messages):
+        return MemoryDigestLlmOutput(
+            content=json.dumps(payload, ensure_ascii=False),
+            model="actual-summary-model",
+            requested_model="requested-summary-model",
+            request_log_id=654,
+            actual_model_observed=True,
+        )
+
+    report = run_async(
+        daily_digest.generate_daily_digest_for_date_report(
+            "2026-07-18",
+            session_id="digest-session",
+            llm_summarizer=rejected_summarizer,
+        )
+    )
+
+    db_session.expire_all()
+    job = db_session.query(MemoryDigestJob).one()
+    meta = json.loads(job.meta_json)
+    assert report["results"][0]["error_type"] == "quality_rejected"
+    assert job.status == "failed"
+    assert meta["quality_score"] == 0.4
+    assert meta["audit_issues"] == ["contains_url"]
+    assert meta["llm_request_log_ids"] == [654]
+    assert db_session.query(MemoryDigest).count() == 0
+
+
+def test_quality_rejected_digest_job_accepts_later_normal_retry(
+    db_session,
+    monkeypatch,
+):
+    from app.memory_digest.llm_builder import MemoryDigestLlmOutput
+    from core.database import MemoryDigest, MemoryDigestJob
+
+    daily_digest = _use_test_session_factory(monkeypatch)
+    source = _log(content="中间被拒绝后仍需采纳正常响应", log_id=1)
+    db_session.add(source)
+    db_session.commit()
+    rejected_payload = json.loads(_success_payload([1], source.content))
+    rejected_payload["preview"]["brief"] = "错误地包含 https://example.com"
+
+    async def rejected_summarizer(_messages):
+        return MemoryDigestLlmOutput(
+            content=json.dumps(rejected_payload, ensure_ascii=False),
+            model="actual-summary-model",
+            requested_model="requested-summary-model",
+            request_log_id=700,
+            actual_model_observed=True,
+        )
+
+    rejected = run_async(
+        daily_digest.generate_daily_digest_for_date_report(
+            "2026-07-18",
+            session_id="digest-session",
+            llm_summarizer=rejected_summarizer,
+        )
+    )
+
+    db_session.expire_all()
+    job = db_session.query(MemoryDigestJob).one()
+    assert rejected["results"][0]["error_type"] == "quality_rejected"
+    assert rejected["results"][0]["retryable"] is True
+    assert job.status == "failed"
+
+    accepted_payload = json.loads(_success_payload([1], source.content))
+    accepted_payload["quality"]["score"] = 0.2
+
+    async def accepted_summarizer(_messages):
+        return MemoryDigestLlmOutput(
+            content=json.dumps(accepted_payload, ensure_ascii=False),
+            model="actual-summary-model",
+            requested_model="requested-summary-model",
+            request_log_id=701,
+            actual_model_observed=True,
+        )
+
+    accepted = run_async(
+        daily_digest.generate_daily_digest_for_date_report(
+            "2026-07-18",
+            session_id="digest-session",
+            retry_failed=True,
+            llm_summarizer=accepted_summarizer,
+        )
+    )
+
+    db_session.expire_all()
+    retried_job = db_session.get(MemoryDigestJob, job.id)
+    meta = json.loads(retried_job.meta_json)
+    assert accepted["counts"]["created"] == 1
+    assert db_session.query(MemoryDigestJob).count() == 1
+    assert retried_job.status == "done"
+    assert retried_job.error_type == ""
+    assert retried_job.error_summary == ""
+    assert retried_job.attempt_count == 2
+    assert meta["quality_score"] == 0.2
+    assert meta["audit_issues"] == []
+    assert meta["llm_request_log_ids"] == [701]
+    assert db_session.query(MemoryDigest).count() >= 3
+
+
 def test_model_error_uses_structured_retryable_type_and_attempt_audit(
     db_session,
     monkeypatch,

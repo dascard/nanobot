@@ -107,7 +107,7 @@ target_index 从 0 开始；合并多个 obligation 到同一目标时，每个 
 每个 available obligation 必须恰好处置一次，resolved 只能指向 resolved_items，legacy_summary 只能指向 summary；target 必须存在且非空。
 summary 不超过 400 字；open_threads、decisions、important_user_requests、artifacts 四个可继承数组合计最多 7 项，每项不超过 60 字，优先合并同类事项并把必要背景压缩进 summary。
 resolved_items、participants、keywords 也必须保持简洁。
-整份紧凑 JSON 必须简洁并同时控制在 6000 字符、约 3000 tokens 以内，排版缩进和换行不计入预算；quality.score 必须是 0 到 1 的有限数字。不要把 pending_fragments 当日志转写，不要保留 turn_id、时间戳、role 或 fragment 标签。
+整份紧凑 JSON 必须简洁并同时控制在 6000 字符、约 3000 tokens 以内，排版缩进和换行不计入预算；quality.score 必须是 0 到 1 的有限数字，只衡量摘要的忠实度、完整性以及角色和状态归因是否准确；不得因为源对话是闲聊、信息稀疏或缺少长期价值而降低分数。不要把 pending_fragments 当日志转写，不要保留 turn_id、时间戳、role 或 fragment 标签。
 如果只能摘录，请改写为简洁要点。必须完整合并 previous_summary，不能只输出 pending_fragments 的摘要。"""
 
 SESSION_SUMMARY_FRAGMENT_MAX_CHARS = 1000
@@ -528,14 +528,8 @@ def audit_llm_session_summary(
         if not ok:
             issues.append(f"source_turn_not_eligible:{turn.id}:{reason}")
 
+    # 模型自评分保留为观测数据；晋升只由结构、来源和内容审计决定。
     quality = payload.get("quality") if isinstance(payload.get("quality"), dict) else {}
-    try:
-        score = float(quality.get("score") or 0.0)
-    except (TypeError, ValueError):
-        score = 0.0
-    if score < config.SESSION_SUMMARY_PROMOTE_MIN_SCORE:
-        issues.append("quality_score_below_threshold")
-
     quality_issues = quality.get("issues")
     quality_issues = quality_issues if isinstance(quality_issues, list) else []
     blocking_quality_issues = [

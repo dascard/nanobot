@@ -1,6 +1,6 @@
 ---
 name: 长期记忆摘要系统提示词
-version: 4
+version: 5
 kind: task
 tool_name: memory_digest
 description: memory_digests 长期摘要 LLM 的 system prompt。
@@ -48,6 +48,7 @@ Rules:
 - Every recall card text must reuse at least one distinctive, meaningful term verbatim from its cited evidence.
 - At least one keywords entry must occur verbatim in the cited evidence.
 - Prefer concrete project names, modules, configuration names, functions, or user wording from the evidence.
+- quality.score measures only output fidelity, completeness, grounding, and correct role/state attribution. Do not lower it merely because the source is casual, sparse, repetitive, or has little durable information.
 
 Return JSON in this exact shape:
 

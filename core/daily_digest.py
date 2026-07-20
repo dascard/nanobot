@@ -674,6 +674,19 @@ def _memory_digest_job_trace_meta(meta: object) -> dict[str, Any]:
     if not isinstance(meta, Mapping):
         return {"schema_version": 1}
     quality = meta.get("quality")
+    model_quality_score = meta.get("model_quality_score")
+    if not isinstance(model_quality_score, (int, float)) or isinstance(
+        model_quality_score,
+        bool,
+    ):
+        model_quality_score = None
+    if (
+        model_quality_score is None
+        and str(meta.get("generator") or "") == "llm"
+        and isinstance(quality, Mapping)
+    ):
+        model_quality_score = quality.get("score")
+    audit_issues = meta.get("audit_issues")
     return {
         "schema_version": 1,
         "llm_models": list(meta.get("llm_models") or []),
@@ -682,10 +695,11 @@ def _memory_digest_job_trace_meta(meta: object) -> dict[str, Any]:
         "llm_actual_model_observed": bool(
             meta.get("llm_actual_model_observed", False)
         ),
-        "quality_score": (
-            quality.get("score")
-            if isinstance(quality, Mapping)
-            else None
+        "quality_score": model_quality_score,
+        "audit_issues": (
+            [str(issue)[:128] for issue in audit_issues]
+            if isinstance(audit_issues, list)
+            else []
         ),
     }
 

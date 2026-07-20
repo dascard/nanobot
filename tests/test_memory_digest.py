@@ -1172,7 +1172,7 @@ def test_llm_memory_digest_builder_falls_back_for_invalid_json():
     assert "json_parse_failed" in result.meta["fallback_reason"]
 
 
-def test_llm_memory_digest_builder_falls_back_for_missing_fields_and_low_quality():
+def test_llm_memory_digest_builder_falls_back_for_missing_fields():
     from app.memory_digest.llm_builder import build_memory_digest_with_llm
 
     def fake_summarizer(_messages):
@@ -1190,7 +1190,7 @@ def test_llm_memory_digest_builder_falls_back_for_missing_fields_and_low_quality
         digest_date="2026-05-22",
         logs=[
             _log(id=1, content="长期摘要缺字段时不能写 LLM 结果"),
-            _log(id=2, sender_name="乙", content="低质量摘要也必须 fallback"),
+            _log(id=2, sender_name="乙", content="结构不完整的摘要必须 fallback"),
         ],
         summarizer=fake_summarizer,
     )
@@ -1198,7 +1198,58 @@ def test_llm_memory_digest_builder_falls_back_for_missing_fields_and_low_quality
     assert result.meta["generator"] == "deterministic_fallback"
     assert "topic_flow_empty" in result.meta["fallback_reason"]
     assert "recall_cards_empty" in result.meta["fallback_reason"]
-    assert "quality_score_below_threshold" in result.meta["fallback_reason"]
+
+
+def test_llm_memory_digest_builder_accepts_grounded_low_self_score():
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm
+
+    def fake_summarizer(_messages):
+        return json.dumps(
+            {
+                "preview": {
+                    "brief": "低价值闲聊仍需忠实摘要。",
+                    "keywords": ["低价值闲聊"],
+                    "participants": ["甲"],
+                },
+                "long_summary": {
+                    "topic_flow": "对话内容稀疏，但摘要忠实保留了原始信息。",
+                    "important_details": [],
+                    "conclusions": [],
+                    "open_loops": [],
+                },
+                "recall_cards": [
+                    {
+                        "card_id": "card_1",
+                        "type": "fact",
+                        "text": "低价值闲聊仍需忠实摘要",
+                        "keywords": ["低价值闲聊"],
+                        "importance": 0.2,
+                        "evidence_log_ids": [1],
+                    }
+                ],
+                "quality": {
+                    "score": 0.3,
+                    "reason": "源内容缺少长期价值",
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    result = build_memory_digest_with_llm(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[
+            _log(id=1, content="低价值闲聊仍需忠实摘要"),
+            _log(id=2, sender_name="乙", content="没有待办或长期决策"),
+        ],
+        summarizer=fake_summarizer,
+    )
+
+    assert result.status == "active"
+    assert result.meta["generator"] == "llm"
+    assert result.meta["quality"]["score"] == 0.3
+    assert result.meta["quality"]["should_inject_preview"] is False
 
 
 def test_llm_memory_digest_builder_falls_back_when_card_contains_log_path():

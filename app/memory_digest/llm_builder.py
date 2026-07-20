@@ -33,7 +33,6 @@ _PROMPT_INJECTION_RE = re.compile(
     re.IGNORECASE,
 )
 _MAX_SOURCE_LINES = 80
-_MIN_LLM_QUALITY = 0.75
 _CARD_MAX_CHARS = 120
 _RECALL_CARD_LIMIT = 8
 _CARD_KEYWORD_LIMIT = 6
@@ -756,13 +755,8 @@ def audit_llm_digest_meta(
     if not cards:
         issues.append("recall_cards_empty")
 
+    # 模型自评分仅作为预览注入和检索权重信号，不能单独否定确定性审计结果。
     quality = meta.get("quality") if isinstance(meta.get("quality"), dict) else {}
-    try:
-        score = float(quality.get("score") or 0.0)
-    except (TypeError, ValueError):
-        score = 0.0
-    if score < _MIN_LLM_QUALITY:
-        issues.append("quality_score_below_threshold")
     quality_issues = quality.get("issues") if isinstance(quality.get("issues"), list) else []
     if quality_issues:
         issues.append("quality_issues_present")
@@ -832,6 +826,31 @@ def _fallback_result(
         status=result_status or fallback.status,
         meta=meta,
         level_contents=level_contents,
+    )
+
+
+def _with_quality_audit_trace(
+    result: MemoryDigestBuildResult,
+    *,
+    audited_meta: dict[str, Any],
+    issues: Iterable[str],
+) -> MemoryDigestBuildResult:
+    """保留被拒绝的模型自评分和确定性审计项。"""
+
+    quality = (
+        audited_meta.get("quality")
+        if isinstance(audited_meta.get("quality"), dict)
+        else {}
+    )
+    meta = {
+        **result.meta,
+        "model_quality_score": quality.get("score"),
+        "audit_issues": list(dict.fromkeys(str(issue) for issue in issues)),
+    }
+    return MemoryDigestBuildResult(
+        status=result.status,
+        meta=meta,
+        level_contents=dict(result.level_contents),
     )
 
 
@@ -1197,13 +1216,17 @@ def _merge_batch_results(
 
     audit_ok, issues = audit_llm_digest_meta(meta, source_rows=context.source_rows)
     if not audit_ok:
-        return _fallback_result(
-            context.fallback,
-            status="fallback",
-            error=",".join(issues),
-            prompt_meta=context.prompt_meta,
-            result_status="failed",
-            failure_type="quality_rejected",
+        return _with_quality_audit_trace(
+            _fallback_result(
+                context.fallback,
+                status="fallback",
+                error=",".join(issues),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+                failure_type="quality_rejected",
+            ),
+            audited_meta=meta,
+            issues=issues,
         )
     return MemoryDigestBuildResult(
         status="active",
@@ -1239,13 +1262,17 @@ def _build_memory_digest_result_from_raw(
     audit_ok, issues = audit_llm_digest_meta(meta, source_rows=context.source_rows)
     if not audit_ok:
         issues = list(dict.fromkeys([*all_rejected_issues, *issues]))
-        result = _fallback_result(
-            context.fallback,
-            status="fallback",
-            error=",".join(issues),
-            prompt_meta=context.prompt_meta,
-            result_status="failed",
-            failure_type="quality_rejected",
+        result = _with_quality_audit_trace(
+            _fallback_result(
+                context.fallback,
+                status="fallback",
+                error=",".join(issues),
+                prompt_meta=context.prompt_meta,
+                result_status="failed",
+                failure_type="quality_rejected",
+            ),
+            audited_meta=meta,
+            issues=issues,
         )
     else:
         result = MemoryDigestBuildResult(

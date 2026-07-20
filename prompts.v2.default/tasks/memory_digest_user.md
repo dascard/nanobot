@@ -1,6 +1,6 @@
 ---
 name: 长期记忆摘要输入提示词
-version: 4
+version: 5
 kind: task
 tool_name: memory_digest
 description: memory_digests 长期摘要 LLM 的 user prompt。
@@ -36,6 +36,7 @@ Generation requirements:
 - Do not rely only on paraphrases or synonyms.
 - Use fewer recall cards if the source has little durable information.
 - Prefer preserving concrete identifiers such as project names, table names, module names, function names, and configuration names.
+- Set quality.score from output fidelity, completeness, grounding, and role/state attribution only; do not penalize casual, sparse, repetitive, or low-value source content.
 
 Cleaned digest_source:
 
