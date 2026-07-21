@@ -4,7 +4,7 @@ import inspect
 import json
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from tests.http_test_utils import open_test_client_without_lifespan
 
 
 _AGENT_STEP_ROUTE_SIGNATURES = (
@@ -104,7 +104,7 @@ def test_split_agent_step_routes_use_legacy_api_token_monkeypatch(monkeypatch):
 
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
 
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         ok = test_client.post(
             "/api/v1/chat-step",
             json=_invalid_step_request(),
@@ -179,7 +179,7 @@ def test_render_route_stays_public_and_deprecated(monkeypatch):
 
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
 
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         response = test_client.get("/api/v1/render?text=hello")
 
     assert response.status_code == 200
@@ -191,7 +191,7 @@ def test_chat_step_accept_header_triggers_sse_without_stream_flag(monkeypatch):
 
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
 
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         with test_client.stream(
             "POST",
             "/api/v1/chat-step",
@@ -216,7 +216,7 @@ def test_chat_step_stream_flag_triggers_sse_without_accept_header(monkeypatch):
 
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
 
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         with test_client.stream(
             "POST",
             "/api/v1/chat-step",

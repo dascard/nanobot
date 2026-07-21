@@ -18,6 +18,7 @@ from core.database import (
     User,
 )
 from tests.async_helpers import run_async
+from tests.sqlite_test_utils import install_base_schema
 
 
 def _session_factory(tmp_path, name):
@@ -32,7 +33,7 @@ def _session_factory(tmp_path, name):
         dbapi_connection.execute("PRAGMA busy_timeout=5000")
 
     factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     with factory() as setup:
         setup.add(OutboundDeliveryControl(
             source_type="proactive_outreach",

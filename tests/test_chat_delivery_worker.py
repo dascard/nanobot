@@ -8,6 +8,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from tests.sqlite_test_utils import install_base_schema
+
 
 def _key(message_id: str):
     from core.inbound_idempotency import InboundClaimKey
@@ -94,13 +96,11 @@ async def test_default_worker_publisher_preserves_legacy_transport_result(
 
 @pytest.fixture
 def worker_session_factory(tmp_path):
-    from core.database import Base
-
     engine = create_engine(
         f"sqlite:///{tmp_path / 'chat-delivery-worker.db'}",
         connect_args={"timeout": 5},
     )
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     try:
         yield factory

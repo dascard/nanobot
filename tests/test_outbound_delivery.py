@@ -45,6 +45,7 @@ from core.outbound_delivery import (
     start_generation_attempt,
     transition_delivery_control,
 )
+from tests.sqlite_test_utils import install_base_schema
 
 
 NOW = datetime(2026, 7, 14, 12, 0, 0)
@@ -362,7 +363,7 @@ def _file_session_factory(tmp_path, name: str):
         dbapi_connection.execute("PRAGMA journal_mode=WAL")
         dbapi_connection.execute("PRAGMA busy_timeout=5000")
 
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     return engine, sessionmaker(
         bind=engine,
         autoflush=False,

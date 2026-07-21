@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import BackgroundTasks
-from fastapi.testclient import TestClient
+from tests.http_test_utils import open_test_client_without_lifespan
 
 from core.database import ChatLog, ConversationTurn, User, get_db
 
@@ -74,7 +74,7 @@ def client_with_db(db_session):
     previous_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[get_db] = override_get_db
     try:
-        with TestClient(app) as client:
+        with open_test_client_without_lifespan(app) as client:
             yield client
     finally:
         app.dependency_overrides.clear()

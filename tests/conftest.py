@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -23,9 +23,10 @@ os.environ["NEW_API_KEY"] = "test-key-for-ci"  # Prevent KT init crash
 os.environ["NANOBOT_TESTING"] = "1"  # 测试环境跳过生产启动副作用
 os.environ.setdefault("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
 
-from core.database import Base, get_db  # noqa: E402
+from core.database import get_db  # noqa: E402
 from core import database  # noqa: E402
 from server import app  # noqa: E402
+from tests.sqlite_test_utils import restore_in_memory_base_schema  # noqa: E402
 
 # 创建测试专用的 engine 和 session（使用 StaticPool 允许多线程共享同一块 memoryDB）
 test_engine = create_engine(
@@ -35,10 +36,8 @@ test_engine = create_engine(
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
-
-def _drop_test_virtual_tables():
-    with test_engine.begin() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS semantic_index_fts"))
+# 首次也通过快照安装完整 Schema；之后每个用例恢复同一份干净快照。
+restore_in_memory_base_schema(test_engine)
 
 
 @pytest.fixture(autouse=True)
@@ -65,15 +64,13 @@ database.SessionLocal = TestingSessionLocal
 @pytest.fixture(scope="function")
 def db_session():
     """提供一个干净的内存数据库 session"""
-    _drop_test_virtual_tables()
-    Base.metadata.create_all(bind=test_engine)
+    restore_in_memory_base_schema(test_engine)
     session = TestingSessionLocal()
     try:
         yield session
     finally:
         session.close()
-        Base.metadata.drop_all(bind=test_engine)
-        _drop_test_virtual_tables()
+        restore_in_memory_base_schema(test_engine)
 
 @pytest.fixture(scope="function")
 def client(db_session):
@@ -88,9 +85,12 @@ def client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[routes.verify_token] = lambda: None
-    with TestClient(app) as test_client:
+    test_client = TestClient(app)
+    try:
         yield test_client
-    app.dependency_overrides.clear()
+    finally:
+        test_client.close()
+        app.dependency_overrides.clear()
 
 
 def pytest_addoption(parser):

@@ -9,7 +9,6 @@ from starlette.requests import Request
 
 from core.database import (
     AdminAuditLog,
-    Base,
     LLMApiRequestLog,
     OutboundDeliveryControl,
     ProactiveOutreachLog,
@@ -18,6 +17,7 @@ from core.database import (
 )
 from server import app
 from tests.async_helpers import run_async
+from tests.sqlite_test_utils import install_base_schema
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def proactive_client(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
 
     def override_get_db():
         db = TestingSessionLocal()

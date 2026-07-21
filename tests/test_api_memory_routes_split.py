@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from tests.http_test_utils import open_test_client_without_lifespan
 
 
 _MEMORY_ROUTE_SIGNATURES = (
@@ -91,7 +91,7 @@ def test_split_memory_routes_use_legacy_api_token_monkeypatch(db_session, monkey
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
     try:
-        with TestClient(app) as test_client:
+        with open_test_client_without_lifespan(app) as test_client:
             ok = test_client.get(
                 "/api/v1/memory/digests",
                 headers={"Authorization": "Bearer split-token"},

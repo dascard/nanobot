@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.sqlite_test_utils import install_base_schema
+
 
 def _request(
     *,
@@ -1785,7 +1787,7 @@ async def test_concurrent_canonical_group_ids_execute_timing_and_bridge_once(
             connect_args={"check_same_thread": False, "timeout": 1.0},
         )
         stack.callback(engine.dispose)
-        Base.metadata.create_all(bind=engine)
+        install_base_schema(engine)
         stack.callback(Base.metadata.drop_all, bind=engine)
         FileSessionLocal = sessionmaker(
             autocommit=False,
@@ -1947,7 +1949,7 @@ async def test_persisted_reply_recovers_after_claim_complete_failure_without_sec
     )
     with ExitStack() as stack:
         stack.callback(engine.dispose)
-        Base.metadata.create_all(engine)
+        install_base_schema(engine)
         stack.callback(Base.metadata.drop_all, bind=engine)
         Session = sessionmaker(
             bind=engine,

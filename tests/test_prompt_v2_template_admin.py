@@ -9,8 +9,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, get_db
+from core.database import get_db
 from server import app
+from tests.sqlite_test_utils import install_base_schema
 
 
 PROMPT_V2_DEFAULT_DIR = Path("prompts.v2.default")
@@ -74,7 +75,7 @@ def test_prompt_template_admin_exposes_canonical_and_v2_compat_routes(tmp_path, 
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
 
     def override_get_db():
         db = TestingSessionLocal()
@@ -119,7 +120,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
 
     def override_get_db():
         db = TestingSessionLocal()
@@ -321,7 +322,7 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
 
     def override_get_db():
         db = TestingSessionLocal()
@@ -641,7 +642,7 @@ def test_effective_preview_v2_passes_platform_to_tools_and_compiler(tmp_path, mo
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
 
     def override_get_db():
         db = TestingSessionLocal()
@@ -723,7 +724,7 @@ def test_effective_preview_v2_returns_400_for_invalid_contract(
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
 
     def override_get_db():
         db = TestingSessionLocal()
@@ -786,7 +787,7 @@ def test_prompt_v2_template_admin_crud_runtime_overrides(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
 
     def override_get_db():
         db = TestingSessionLocal()

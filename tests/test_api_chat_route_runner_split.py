@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+from tests.sqlite_test_utils import install_base_schema
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -1354,7 +1356,7 @@ async def test_stream_consumer_task_cancel_while_runner_pending_drains_and_real_
     from sqlalchemy.orm import sessionmaker
 
     from api import chat_route_runner
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
     from core.inbound_claim_lifecycle import InboundClaimOwner
     from core.inbound_idempotency import (
         ClaimDecisionKind,
@@ -1368,7 +1370,7 @@ async def test_stream_consumer_task_cancel_while_runner_pending_drains_and_real_
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     key = normalize_inbound_claim_key(
         "qq",

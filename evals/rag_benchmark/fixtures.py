@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from core.database import Base, GroupMemory, KnowledgeChunk, KnowledgeDocument, StickerMemory
@@ -536,6 +536,13 @@ def build_fixture_db(path: str | Path, *, preset: str = FIXTURE_PRESET) -> list[
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},
     )
+
+    @event.listens_for(engine, "connect")
+    def _configure_fixture_build(dbapi_connection, _connection_record):
+        # fixture 可随时重建，不为数十条建表 DDL 支付逐条磁盘同步成本。
+        dbapi_connection.execute("PRAGMA journal_mode=MEMORY")
+        dbapi_connection.execute("PRAGMA synchronous=OFF")
+
     try:
         Base.metadata.create_all(bind=engine)
         SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

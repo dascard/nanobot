@@ -4,7 +4,7 @@ import inspect
 from pathlib import Path
 
 from fastapi import BackgroundTasks
-from fastapi.testclient import TestClient
+from tests.http_test_utils import open_test_client_without_lifespan
 
 
 _EVOLUTION_ROUTE_SIGNATURES = (
@@ -76,7 +76,7 @@ def test_split_evolution_routes_use_legacy_api_token_monkeypatch(monkeypatch):
 
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
     monkeypatch.setattr(evolution_routes, "evolution_task", fake_evolution_task)
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         ok = test_client.post(
             "/api/v1/evolution/trigger",
             json={"user_id": "u1"},

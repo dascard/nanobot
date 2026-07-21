@@ -36,6 +36,7 @@ from core.outbound_delivery_service import (
 )
 from core.outbound_transport import DeliveryOutcome
 from tests.async_helpers import run_async
+from tests.sqlite_test_utils import install_base_schema
 
 
 NOW = datetime(2026, 7, 15, 12, 0, 0)
@@ -83,7 +84,7 @@ def _file_session_factory(tmp_path, name: str, *, mode: str = "outbox_active"):
         dbapi_connection.execute("PRAGMA busy_timeout=5000")
 
     factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     with factory() as setup:
         _seed_control(setup, mode=mode)
     return engine, factory
@@ -757,7 +758,7 @@ def test_concurrent_same_candidate_creates_one_run_and_one_outbox(
         dbapi_connection.execute("PRAGMA busy_timeout=5000")
 
     factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     with factory() as setup:
         _seed_control(setup)
 

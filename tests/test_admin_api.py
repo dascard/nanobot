@@ -8,8 +8,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, ChatLog, ChatStreamConfig, ConversationTurn, GroupMemory, PersonaFact, StickerMemory, User, get_db
+from core.database import ChatLog, ChatStreamConfig, ConversationTurn, GroupMemory, PersonaFact, StickerMemory, User, get_db
 from server import app
+from tests.sqlite_test_utils import install_base_schema
 
 
 @pytest.fixture
@@ -27,7 +28,7 @@ def client(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
 
     def override_get_db():
         db = TestingSessionLocal()

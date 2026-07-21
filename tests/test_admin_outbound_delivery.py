@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from core.database import (
     AdminAuditLog,
-    Base,
     OutboundDeliveryAttempt,
     OutboundDeliveryCircuit,
     OutboundDeliveryControl,
@@ -29,6 +28,7 @@ from core.outbound_delivery import (
     settle_delivery_attempt,
 )
 from server import app
+from tests.sqlite_test_utils import install_base_schema
 
 
 NOW = datetime(2026, 7, 15, 12, 0, 0)
@@ -80,7 +80,7 @@ def admin_outbound(tmp_path, monkeypatch):
         autocommit=False,
         expire_on_commit=False,
     )
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
 
     def override_get_db():
         db = testing_session()
@@ -96,7 +96,6 @@ def admin_outbound(tmp_path, monkeypatch):
     finally:
         client.close()
         app.dependency_overrides.clear()
-        Base.metadata.drop_all(bind=engine)
         engine.dispose()
 
 

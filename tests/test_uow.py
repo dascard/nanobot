@@ -3,7 +3,8 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, User
+from core.database import User
+from tests.sqlite_test_utils import install_base_schema
 
 
 def _session_factory(tmp_path):
@@ -11,7 +12,7 @@ def _session_factory(tmp_path):
         f"sqlite:///{tmp_path / 'uow.db'}",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

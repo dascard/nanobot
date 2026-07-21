@@ -4,7 +4,7 @@ import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
+from tests.http_test_utils import open_test_client_without_lifespan
 
 
 _MODEL_ROUTE_SIGNATURES = (
@@ -75,7 +75,7 @@ def test_split_model_routes_use_legacy_api_token_monkeypatch(monkeypatch):
     from server import app
 
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         ok = test_client.get(
             "/api/v1/models/list",
             headers={"Authorization": "Bearer split-token"},

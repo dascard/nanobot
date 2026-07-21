@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
+from tests.http_test_utils import open_test_client_without_lifespan
 
 
 _GROUP_MESSAGE_ROUTE_SIGNATURES = (
@@ -98,7 +98,7 @@ def test_split_group_message_route_uses_legacy_api_token_monkeypatch(monkeypatch
     )
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
 
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         ok = test_client.post(
             "/api/v1/group/message",
             json={"group_id": "123", "message": "hi"},

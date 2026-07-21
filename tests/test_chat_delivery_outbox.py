@@ -9,6 +9,8 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
+from tests.sqlite_test_utils import install_base_schema
+
 
 def _key(message_id: str = "delivery-message"):
     from core.inbound_idempotency import InboundClaimKey
@@ -134,13 +136,13 @@ def test_concurrent_workers_enqueue_once_and_only_one_claims_delivery(tmp_path):
         claim_due_chat_delivery,
         enqueue_chat_delivery,
     )
-    from core.database import Base, ChatDeliveryOutbox
+    from core.database import ChatDeliveryOutbox
 
     engine = create_engine(
         f"sqlite:///{tmp_path / 'chat-delivery-concurrency.db'}",
         connect_args={"timeout": 5},
     )
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     enqueue_barrier = threading.Barrier(2)
     claim_barrier = threading.Barrier(2)
@@ -449,7 +451,6 @@ def _outbox_table_sql(*, include_status_check: bool = True) -> str:
 
 def test_chat_delivery_outbox_migration_creates_and_accepts_orm_schema():
     from core.chat_delivery_outbox_schema import chat_delivery_outbox_table
-    from core.database import Base
 
     fresh_engine = create_engine("sqlite:///:memory:")
     orm_engine = create_engine("sqlite:///:memory:")
@@ -468,7 +469,7 @@ def test_chat_delivery_outbox_migration_creates_and_accepts_orm_schema():
             "ck_chat_delivery_outbox_status",
         }
 
-        Base.metadata.create_all(orm_engine)
+        install_base_schema(orm_engine)
         with orm_engine.begin() as conn:
             chat_delivery_outbox_table(conn, orm_engine, None)
     finally:

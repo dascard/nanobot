@@ -6,7 +6,8 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from core.database import AdminAuditLog, Base, GroupMemory, RagDebugRun, SemanticIndexItem
+from core.database import AdminAuditLog, GroupMemory, RagDebugRun, SemanticIndexItem
+from tests.sqlite_test_utils import install_base_schema
 
 
 def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
@@ -20,7 +21,7 @@ def _auth_header():
 
 def _file_db(path: Path):
     engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     with engine.begin() as conn:
         conn.execute(text(
             "CREATE VIRTUAL TABLE IF NOT EXISTS semantic_index_fts USING fts5("
@@ -359,7 +360,7 @@ def test_benchmark_missing_fts_returns_preflight_error_without_creating_table(cl
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     db_path = tmp_path / "missing_fts.db"
     engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     routes, manual, _generated, _reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
     (manual / "memory_case.json").write_text(json.dumps({
         "id": "memory_case",

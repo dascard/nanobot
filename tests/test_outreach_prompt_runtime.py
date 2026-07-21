@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -11,19 +13,28 @@ OUTREACH_TASK_KEYS = (
 )
 
 
+@pytest.fixture(scope="module")
+def outreach_runtime_dir(tmp_path_factory):
+    """整组模板断言共享一次完整 Prompt Runtime 初始化。"""
+
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    runtime_dir = tmp_path_factory.mktemp("outreach_prompt_runtime")
+    with patch.dict(
+        os.environ,
+        {"NANOBOT_PROMPT_RUNTIME_DIR": str(runtime_dir)},
+    ):
+        init_prompt_v2_runtime_dir()
+    return runtime_dir
+
+
 @pytest.mark.parametrize("task_key", OUTREACH_TASK_KEYS)
 def test_outreach_task_templates_exist_in_default_and_runtime(
     task_key,
-    tmp_path,
-    monkeypatch,
+    outreach_runtime_dir,
 ):
-    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
-
-    runtime_dir = tmp_path / "prompt_runtime"
-    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
-    init_prompt_v2_runtime_dir()
     default_path = Path("prompts.v2.default/tasks") / f"{task_key}.md"
-    runtime_path = runtime_dir / "tasks" / f"{task_key}.md"
+    runtime_path = outreach_runtime_dir / "tasks" / f"{task_key}.md"
 
     assert default_path.exists()
     assert runtime_path.exists()

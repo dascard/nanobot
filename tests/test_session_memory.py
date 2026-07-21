@@ -13,6 +13,7 @@ from core.database import (
     User,
 )
 from tests.async_helpers import run_async
+from tests.sqlite_test_utils import install_base_schema
 
 
 def _local_now() -> datetime:
@@ -616,7 +617,7 @@ def test_build_chat_context_rollup_survives_clean_transaction_release(tmp_path):
     from sqlalchemy.orm import sessionmaker
 
     from core.context_builder import build_chat_context
-    from core.database import Base, release_clean_session_transaction
+    from core.database import release_clean_session_transaction
     from core.semantic.schema import ensure_semantic_schema
 
     session_id = "private_rollup_commit_boundary"
@@ -624,7 +625,7 @@ def test_build_chat_context_rollup_survives_clean_transaction_release(tmp_path):
         f"sqlite:///{tmp_path / 'rollup-commit-boundary.db'}",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     ensure_semantic_schema(engine)
     SessionLocal = sessionmaker(
         autocommit=False,
@@ -727,7 +728,7 @@ def test_build_chat_context_rolls_back_when_semantic_enqueue_fails(
     from sqlalchemy.orm import sessionmaker
 
     from core.context_builder import build_chat_context
-    from core.database import Base, release_clean_session_transaction
+    from core.database import release_clean_session_transaction
     from core.semantic.schema import ensure_semantic_schema
 
     session_id = "private_rollup_enqueue_rollback"
@@ -735,7 +736,7 @@ def test_build_chat_context_rolls_back_when_semantic_enqueue_fails(
         f"sqlite:///{tmp_path / 'rollup-enqueue-rollback.db'}",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     ensure_semantic_schema(engine)
     SessionLocal = sessionmaker(
         autocommit=False,
@@ -1270,7 +1271,6 @@ def test_history_clear_fences_stale_inflight_rollup(tmp_path):
     from api.history_log_routes import mark_clear
     from app.session_memory.rolling_summary import maybe_rollup_session_summary
     from core.database import (
-        Base,
         OutboundDeliveryControl,
         configure_sqlite_connection,
     )
@@ -1289,7 +1289,7 @@ def test_history_clear_fences_stale_inflight_rollup(tmp_path):
             database_url=database_url,
         ),
     )
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     ensure_semantic_schema(engine)
     SessionLocal = sessionmaker(
         autocommit=False,
@@ -1377,7 +1377,6 @@ def test_rollup_write_fence_serializes_following_history_clear(
     from api.history_log_routes import mark_clear
     from app.session_memory import rolling_summary
     from core.database import (
-        Base,
         OutboundDeliveryControl,
         configure_sqlite_connection,
     )
@@ -1396,7 +1395,7 @@ def test_rollup_write_fence_serializes_following_history_clear(
             database_url=database_url,
         ),
     )
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     ensure_semantic_schema(engine)
     SessionLocal = sessionmaker(
         autocommit=False,

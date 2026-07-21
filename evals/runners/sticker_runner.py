@@ -26,14 +26,17 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
             from core.database import StickerMemory, get_db, Base
             from sqlalchemy import create_engine
             from sqlalchemy.orm import sessionmaker
+            from sqlalchemy.pool import StaticPool
 
             sticker_id = inp.get("sticker_id", 0)
             public_base_url = inp.get("public_base_url", "http://127.0.0.1:8000")
             os.environ["NANOBOT_PUBLIC_BASE_URL"] = public_base_url
 
-            db_path = os.path.join(tempfile.mkdtemp(), "sticker_eval.db")
-            tmp_dirs_created.append(os.path.dirname(db_path))
-            engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+            engine = create_engine(
+                "sqlite:///:memory:",
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+            )
             Base.metadata.create_all(bind=engine)
             Session = sessionmaker(bind=engine)
             db = Session()
@@ -64,6 +67,7 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
                     out.raw["send_source"] = "public_proxy"
             finally:
                 db.close()
+                engine.dispose()
 
         # sticker image endpoint
         elif inp.get("method") == "GET" and "/stickers/" in inp.get("path", ""):
@@ -71,11 +75,14 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
             from core.database import StickerMemory, Base, get_db
             from sqlalchemy import create_engine
             from sqlalchemy.orm import sessionmaker
+            from sqlalchemy.pool import StaticPool
 
             from server import app
-            db_path = os.path.join(tempfile.mkdtemp(), "sticker_eval2.db")
-            tmp_dirs_created.append(os.path.dirname(db_path))
-            engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+            engine = create_engine(
+                "sqlite:///:memory:",
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+            )
             Base.metadata.create_all(bind=engine)
             Session = sessionmaker(bind=engine)
 
@@ -138,6 +145,7 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
                 out.raw["served_sticker_id"] = duplicate_of_id or sticker_id
             finally:
                 app.dependency_overrides.clear()
+                engine.dispose()
 
         # duplicate canonical — 已在上面分支处理
         else:

@@ -3,7 +3,7 @@ import logging
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_test_utils import open_test_client_without_lifespan
 
 
 def test_server_import_has_no_startup_side_effects(monkeypatch):
@@ -249,7 +249,7 @@ async def test_startup_route_resolution_failure_is_nonfatal_and_redacted(
 def test_cors_default_allows_any_origin():
     import server
 
-    with TestClient(server.app) as client:
+    with open_test_client_without_lifespan(server.app) as client:
         response = client.options(
             "/api/v1/admin/me",
             headers={
@@ -271,7 +271,7 @@ def test_cors_origins_can_be_configured(monkeypatch):
     import server
 
     reloaded = importlib.reload(server)
-    with TestClient(reloaded.app) as client:
+    with open_test_client_without_lifespan(reloaded.app) as client:
         allowed = client.options(
             "/api/v1/admin/me",
             headers={

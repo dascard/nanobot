@@ -15,7 +15,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from core.database import (
-    Base,
     OutboundDeliveryAttempt,
     OutboundDeliveryCircuit,
     OutboundDeliveryControl,
@@ -40,6 +39,7 @@ from core.outbound_delivery_service import (
     deliver_outbound_once,
 )
 from core.outbound_transport import DeliveryOutcome
+from tests.sqlite_test_utils import install_base_schema
 from workers.outbound_delivery_worker import run_once_async
 
 
@@ -315,7 +315,7 @@ def outbound_factory(tmp_path):
         dbapi_connection.execute("PRAGMA journal_mode=WAL")
         dbapi_connection.execute("PRAGMA busy_timeout=5000")
 
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     factory = sessionmaker(
         bind=engine,
         autoflush=False,
@@ -324,7 +324,6 @@ def outbound_factory(tmp_path):
     try:
         yield factory
     finally:
-        Base.metadata.drop_all(engine)
         engine.dispose()
 
 

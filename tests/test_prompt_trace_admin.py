@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base
+from tests.sqlite_test_utils import install_base_schema
 
 
 def _local_now() -> datetime:
@@ -44,7 +44,7 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     monkeypatch.setattr(database, "SessionLocal", TestingSessionLocal)
 
     long_path = "/runtime/" + ("resolution-path-" * 500) + "main.md"
@@ -176,7 +176,7 @@ def test_tool_tracer_preserves_complete_bounded_web_search_evidence(tmp_path, mo
         connect_args={"check_same_thread": False},
     )
     testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     monkeypatch.setattr(database, "SessionLocal", testing_session)
 
     provider_result = WebSearchProviderResult(
@@ -225,7 +225,7 @@ def test_executor_records_tool_call_with_contextvars(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
+    install_base_schema(engine)
     monkeypatch.setattr(database, "SessionLocal", TestingSessionLocal)
 
     class EchoTool(BaseTool):

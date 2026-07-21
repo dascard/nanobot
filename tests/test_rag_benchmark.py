@@ -5,7 +5,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core.database import (
-    Base,
     GroupMemory,
     KnowledgeChunk,
     KnowledgeDocument,
@@ -13,11 +12,14 @@ from core.database import (
     SemanticIndexItem,
     StickerMemory,
 )
+from tests.sqlite_test_utils import install_base_schema
 
 
 def _session_for(path: Path):
+    needs_schema = not path.exists() or path.stat().st_size == 0
     engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(bind=engine)
+    if needs_schema:
+        install_base_schema(engine)
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)()
 
 

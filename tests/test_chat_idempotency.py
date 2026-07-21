@@ -13,16 +13,34 @@ from sqlalchemy import create_engine, event, insert, inspect, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import sessionmaker
 
+from tests.sqlite_test_utils import install_base_schema
+
 
 class FatalClaimLifecycleError(BaseException):
     pass
 
 
+def _use_fast_chat_timers(monkeypatch) -> None:
+    """身份重放集成测试不等待生产缓冲和心跳间隔。"""
+
+    from api import chat_sse_loop
+    from tests.test_api import _fast_private_reply
+
+    original = chat_sse_loop.iter_chat_stream_events
+    _fast_private_reply(monkeypatch)
+
+    async def fast_iter(*args, **kwargs):
+        kwargs["heartbeat_interval"] = 0.01
+        async for stream_event in original(*args, **kwargs):
+            yield stream_event
+
+    monkeypatch.setattr(chat_sse_loop, "iter_chat_stream_events", fast_iter)
+
+
 def _memory_session():
-    from core.database import Base
 
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     return engine, sessionmaker(bind=engine, expire_on_commit=False)()
 
 
@@ -262,10 +280,10 @@ def _assert_claim_migration_not_recorded(engine) -> None:
 
 
 def test_inbound_claim_orm_creates_named_identity_and_status_lease_indexes():
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
 
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
 
     assert InboundMessageClaim.__tablename__ == "inbound_message_claims"
     indexes = {item["name"]: item for item in inspect(engine).get_indexes("inbound_message_claims")}
@@ -331,10 +349,10 @@ def test_inbound_claim_orm_creates_named_identity_and_status_lease_indexes():
 
 
 def test_inbound_claim_orm_defaults_checks_and_raw_identity_uniqueness():
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
 
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     db = Session()
     db.add(InboundMessageClaim(
@@ -383,12 +401,11 @@ def test_inbound_claim_orm_defaults_checks_and_raw_identity_uniqueness():
 
 
 def test_inbound_claim_server_defaults_visible_to_new_raw_connection(tmp_path):
-    from core.database import Base
 
     db_path = tmp_path / "claim-server-defaults.db"
     writer_engine = create_engine(f"sqlite:///{db_path}")
     observer_engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(writer_engine)
+    install_base_schema(writer_engine)
 
     try:
         with writer_engine.begin() as conn:
@@ -1085,7 +1102,7 @@ def test_first_inbound_claim_is_acquired_and_commits_short_transaction():
 
 
 def test_claim_writes_do_not_emit_returning_and_all_transitions_work():
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
     from core.inbound_idempotency import (
         ClaimDecisionKind,
         acquire_inbound_claim,
@@ -1095,7 +1112,7 @@ def test_claim_writes_do_not_emit_returning_and_all_transitions_work():
     )
 
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     now = datetime(2026, 7, 10, 8, 0, 0)
 
@@ -1162,7 +1179,7 @@ def test_claim_commit_ambiguous_retry_changes_state_only_once(
     monkeypatch,
     operation_name,
 ):
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
     from core.inbound_idempotency import (
         ClaimDecisionKind,
         acquire_inbound_claim,
@@ -1179,7 +1196,7 @@ def test_claim_commit_ambiguous_retry_changes_state_only_once(
         connect_args={"check_same_thread": False, "timeout": 0.05},
     )
     try:
-        Base.metadata.create_all(engine)
+        install_base_schema(engine)
         Session = sessionmaker(bind=engine, expire_on_commit=False)
         now = datetime(2026, 7, 10, 8, 0, 0)
         key = _key(f"commit-ambiguous-{operation_name}")
@@ -1263,7 +1280,7 @@ def test_claim_retry_stops_when_precommit_locked_rollback_fails(
     monkeypatch,
     operation_name,
 ):
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
     from core.inbound_idempotency import acquire_inbound_claim, complete_inbound_claim
 
     monkeypatch.setenv("SQLITE_LOCK_RETRY_ATTEMPTS", "4")
@@ -1277,7 +1294,7 @@ def test_claim_retry_stops_when_precommit_locked_rollback_fails(
     key = _key(f"rollback-failure-{operation_name}")
 
     try:
-        Base.metadata.create_all(engine)
+        install_base_schema(engine)
         Session = sessionmaker(bind=engine, expire_on_commit=False)
         with Session() as db:
             handle = None
@@ -1521,7 +1538,7 @@ def test_owner_fencing_blocks_stale_worker_after_takeover_and_new_owner_complete
 
 
 def test_file_sqlite_stale_owner_fencing_across_three_connections(tmp_path):
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
     from core.inbound_idempotency import (
         acquire_inbound_claim,
         complete_inbound_claim,
@@ -1534,7 +1551,7 @@ def test_file_sqlite_stale_owner_fencing_across_three_connections(tmp_path):
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False, "timeout": 0.05},
     )
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(expire_on_commit=False)
     connection_a = engine.connect()
     connection_b = engine.connect()
@@ -1991,7 +2008,7 @@ def test_aware_and_naive_times_are_stored_as_utc_naive():
 
 
 def test_all_db_operations_reject_dirty_session_without_committing_business_objects():
-    from core.database import Base, User
+    from core.database import User
     from core.inbound_idempotency import (
         DirtyClaimSessionError,
         acquire_inbound_claim,
@@ -2001,7 +2018,7 @@ def test_all_db_operations_reject_dirty_session_without_committing_business_obje
     )
 
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     db = Session()
 
@@ -2067,7 +2084,7 @@ def test_claim_rejects_flushed_or_core_dml_transaction_before_any_sql(
     tmp_path,
     write_mode,
 ):
-    from core.database import Base, User
+    from core.database import User
     from core.inbound_idempotency import DirtyClaimSessionError, acquire_inbound_claim
 
     db_path = tmp_path / f"dirty-{write_mode}.db"
@@ -2076,7 +2093,7 @@ def test_claim_rejects_flushed_or_core_dml_transaction_before_any_sql(
         connect_args={"check_same_thread": False},
     )
     try:
-        Base.metadata.create_all(engine)
+        install_base_schema(engine)
         Session = sessionmaker(bind=engine, expire_on_commit=False)
         with Session() as writer:
             user_id = f"pending-{write_mode}"
@@ -2119,7 +2136,7 @@ def test_keyboard_interrupt_after_claim_dml_rolls_back_and_releases_file_lock(
     tmp_path,
     monkeypatch,
 ):
-    from core.database import Base, User
+    from core.database import User
     from core.inbound_idempotency import acquire_inbound_claim
 
     db_path = tmp_path / "claim-keyboard-interrupt.db"
@@ -2131,7 +2148,7 @@ def test_keyboard_interrupt_after_claim_dml_rolls_back_and_releases_file_lock(
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False, "timeout": 0.05},
     )
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     db = Session()
     claim_dml: list[str] = []
@@ -2392,7 +2409,7 @@ def _run_two_claimers(engine, Session, key, now):
 
 
 def test_two_file_sqlite_sessions_first_claim_exactly_once(tmp_path, monkeypatch):
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
     from core.inbound_idempotency import ClaimDecisionKind
 
     monkeypatch.setenv("SQLITE_LOCK_RETRY_ATTEMPTS", "6")
@@ -2402,7 +2419,7 @@ def test_two_file_sqlite_sessions_first_claim_exactly_once(tmp_path, monkeypatch
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False, "timeout": 0.05},
     )
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     try:
         decisions, dbapi_identities, synchronized_threads = _run_two_claimers(
@@ -2433,7 +2450,7 @@ def test_two_file_sqlite_sessions_failed_claim_is_reacquired_exactly_once(
     tmp_path,
     monkeypatch,
 ):
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
     from core.inbound_idempotency import ClaimDecisionKind, acquire_inbound_claim, fail_inbound_claim
 
     monkeypatch.setenv("SQLITE_LOCK_RETRY_ATTEMPTS", "6")
@@ -2443,7 +2460,7 @@ def test_two_file_sqlite_sessions_failed_claim_is_reacquired_exactly_once(
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False, "timeout": 0.05},
     )
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     now = datetime(2026, 7, 10, 8, 0, 0)
     try:
@@ -3523,7 +3540,7 @@ async def test_claim_owner_ambiguous_complete_then_failed_fencing_preserves_comp
     monkeypatch,
 ):
     import core.inbound_claim_lifecycle as lifecycle
-    from core.database import Base, InboundMessageClaim
+    from core.database import InboundMessageClaim
     from core.inbound_claim_lifecycle import (
         InboundClaimOwner,
         InboundClaimOwnershipLostError,
@@ -3535,7 +3552,7 @@ async def test_claim_owner_ambiguous_complete_then_failed_fencing_preserves_comp
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     response = _response()
     complete_error = RuntimeError("commit acknowledged late")
@@ -4321,7 +4338,6 @@ async def test_proxy_chat_stream_renews_during_prebridge_then_pauses_until_cold_
     from sqlalchemy.orm import sessionmaker
 
     from api import chat_pre_bridge_route_result, routes
-    from core.database import Base
     from core.inbound_claim_lifecycle import InboundClaimOwner as RealInboundClaimOwner
     from core.inbound_idempotency import (
         ClaimDecisionKind,
@@ -4334,7 +4350,7 @@ async def test_proxy_chat_stream_renews_during_prebridge_then_pauses_until_cold_
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(engine)
+    install_base_schema(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     lease_seconds = 0.15
     prebridge_started = asyncio.Event()
@@ -4789,6 +4805,7 @@ def test_proxy_chat_real_stream_owner_replays_to_nonstream_with_current_identity
 
     bridge = AsyncMock()
     bridge.handle_message = AsyncMock(return_value="流式 owner 原始回复")
+    _use_fast_chat_timers(monkeypatch)
     monkeypatch.setattr(routes, "get_bridge", lambda: bridge)
     monkeypatch.setattr(routes, "_schedule_image_precache", lambda *_args, **_kwargs: None)
     base_payload = {
@@ -4860,6 +4877,7 @@ def test_proxy_chat_real_nonstream_owner_replays_to_stream_as_single_current_don
 
     bridge = AsyncMock()
     bridge.handle_message = AsyncMock(return_value="非流式 owner 原始回复")
+    _use_fast_chat_timers(monkeypatch)
     monkeypatch.setattr(routes, "get_bridge", lambda: bridge)
     monkeypatch.setattr(routes, "_schedule_image_precache", lambda *_args, **_kwargs: None)
     base_payload = {

@@ -4,7 +4,7 @@ import inspect
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_test_utils import open_test_client_without_lifespan
 
 from core.database import User
 
@@ -88,7 +88,7 @@ def test_split_group_utility_routes_use_legacy_api_token_monkeypatch(monkeypatch
 
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
 
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         ok = test_client.post(
             "/api/v1/update_group_name",
             json={"group_id": "123", "group_name": "群工具测试"},

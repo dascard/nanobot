@@ -10,9 +10,10 @@ from datetime import datetime as RealDateTime
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.exc import OperationalError
+
+from tests.http_test_utils import open_test_client_without_lifespan
 
 
 def _create_database(path: Path) -> None:
@@ -353,7 +354,7 @@ def test_admin_backup_returns_snapshot_and_removes_temporary_file(
     monkeypatch.setattr(admin_routes, "NANOBOT_ADMIN_TOKEN", "test-token")
     monkeypatch.setattr(admin_routes, "create_sqlite_snapshot", tracking_snapshot)
 
-    with TestClient(app) as client:
+    with open_test_client_without_lifespan(app) as client:
         response = client.get(
             "/api/v1/admin/db/backup",
             headers={"Authorization": "Bearer test-token"},
@@ -388,7 +389,7 @@ def test_admin_backup_rejects_non_file_sqlite_database_urls(
         lambda *_args, **_kwargs: pytest.fail("不应尝试创建快照"),
     )
 
-    with TestClient(app) as client:
+    with open_test_client_without_lifespan(app) as client:
         response = client.get(
             "/api/v1/admin/db/backup",
             headers={"Authorization": "Bearer test-token"},
@@ -410,7 +411,7 @@ def test_admin_backup_returns_404_for_missing_source(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: pytest.fail("不应尝试创建快照"),
     )
 
-    with TestClient(app) as client:
+    with open_test_client_without_lifespan(app) as client:
         response = client.get(
             "/api/v1/admin/db/backup",
             headers={"Authorization": "Bearer test-token"},
@@ -441,7 +442,7 @@ def test_admin_backup_snapshot_failure_returns_generic_500_without_raw_fallback(
     monkeypatch.setattr(admin_routes, "create_sqlite_snapshot", fail_snapshot)
 
     with caplog.at_level("ERROR", logger="nanobot.admin"):
-        with TestClient(app) as client:
+        with open_test_client_without_lifespan(app) as client:
             response = client.get(
                 "/api/v1/admin/db/backup",
                 headers={"Authorization": "Bearer test-token"},
@@ -478,7 +479,7 @@ def test_admin_backup_cleans_snapshot_when_response_construction_fails(
     monkeypatch.setattr(admin_routes, "create_sqlite_snapshot", fake_snapshot)
     monkeypatch.setattr(admin_routes, "FileResponse", fail_response)
 
-    with TestClient(app) as client:
+    with open_test_client_without_lifespan(app) as client:
         response = client.get(
             "/api/v1/admin/db/backup",
             headers={"Authorization": "Bearer test-token"},

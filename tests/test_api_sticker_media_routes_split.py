@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from tests.http_test_utils import open_test_client_without_lifespan
 
 
 _STICKER_MEDIA_ROUTE_SIGNATURES = (
@@ -89,7 +89,7 @@ def test_split_sticker_media_routes_use_legacy_api_token_monkeypatch(monkeypatch
 
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
 
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         ok = test_client.get(
             "/api/v1/stickers/search?query=hi",
             headers={"Authorization": "Bearer split-token"},
@@ -164,7 +164,7 @@ def test_public_sticker_image_keeps_env_token_boundary(monkeypatch):
 
     monkeypatch.setenv("NANOBOT_STICKER_IMAGE_TOKEN", "image-token")
 
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         wrong = test_client.get("/api/v1/stickers/999999/image?token=wrong")
         ok_missing = test_client.get("/api/v1/stickers/999999/image?token=image-token")
 
@@ -177,7 +177,7 @@ def test_public_generated_image_keeps_env_token_boundary(monkeypatch):
 
     monkeypatch.setenv("NANOBOT_GENERATED_IMAGE_TOKEN", "image-token")
 
-    with TestClient(app) as test_client:
+    with open_test_client_without_lifespan(app) as test_client:
         wrong = test_client.get("/api/v1/generated-images/not-present/image?token=wrong")
         ok_missing = test_client.get(
             "/api/v1/generated-images/not-present/image?token=image-token"
