@@ -78,26 +78,34 @@ tools:
     type: package
     module: nanobot_kt.tools.reply
     class: NoReplyTool
-  # KT built-in file tools — sandboxed to ./workspace (PathBoundaryGuard mode=block)
-  - name: read
-    type: builtin
-  - name: write
-    type: builtin
-  - name: edit
-    type: builtin
-  - name: grep
-    type: builtin
-  - name: glob
-    type: builtin
-  - name: bash
-    type: builtin
-
-# ── Sub-Agents ──
-subagents:
-  - name: memory_read
-    type: builtin
-  - name: memory_write
-    type: builtin
+  - name: sandbox_exec
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: SandboxExecTool
+  - name: workspace_list
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: WorkspaceListTool
+  - name: workspace_read
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: WorkspaceReadTool
+  - name: workspace_search
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: WorkspaceSearchTool
+  - name: workspace_write
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: WorkspaceWriteTool
+  - name: asset_import
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: AssetImportTool
+  - name: asset_publish
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: AssetPublishTool
 
 # ── Output ──
 output:

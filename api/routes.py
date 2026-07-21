@@ -125,6 +125,7 @@ from api.agent_step_routes import (
     run_agent_step as run_agent_step,
     run_agent_step_stream as run_agent_step_stream,
 )
+from api.asset_routes import router as asset_router
 from api.group_message_routes import (
     GroupMessageRequest as GroupMessageRequest,
     OneBotMessageSegmentPayload as OneBotMessageSegmentPayload,
@@ -1051,6 +1052,7 @@ router.include_router(memory_router)
 router.include_router(model_router)
 router.include_router(task_router)
 router.include_router(sticker_media_router)
+router.include_router(asset_router)
 
 @router.get("/health")
 def health_check():

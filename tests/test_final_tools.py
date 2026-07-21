@@ -279,14 +279,14 @@ def test_runtime_tool_prompt_disambiguates_sql_and_memory():
     from core.runtime_tool_service import build_runtime_tool_prompt
 
     prompt = build_runtime_tool_prompt(
-        enabled={"reply": True, "no_reply": True, "sql_analysis": True, "memory_read": True},
+        enabled={"reply": True, "no_reply": True, "sql_analysis": True, "memory_query": True},
         disabled={},
         chat_type="private",
     )
 
     assert "聊天记录" in prompt
     assert "sql_analysis" in prompt
-    assert "memory_read 只用于长期记忆" in prompt
+    assert "memory_query 只查询已生成的结构化摘要" in prompt
     assert "chat_logs/conversation_turns" in prompt
 
 
@@ -298,7 +298,7 @@ def test_superuser_private_tool_defaults_are_more_open():
 
     assert private_enabled["group_analysis"] is False
     assert superuser_enabled["group_analysis"] is True
-    assert superuser_enabled["bash"] is True
+    assert superuser_enabled["bash"] is False
 
 
 def test_effective_tool_schema_preview_uses_real_descriptions():

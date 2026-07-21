@@ -2063,6 +2063,113 @@ def _memory_governance_repairs(conn: Any, engine: Any, db_path: str | None) -> N
         )
 
 
+def _sandbox_storage_tables(conn: Any, engine: Any, db_path: str | None) -> None:
+    """创建 owner-only Workspace、Asset 授权和 Sandbox 运行账本。"""
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS workspaces ("
+        "id VARCHAR(36) PRIMARY KEY, "
+        "platform VARCHAR(32) NOT NULL, "
+        "owner_type VARCHAR(16) NOT NULL, "
+        "owner_id VARCHAR(255) NOT NULL, "
+        "name VARCHAR(64) NOT NULL DEFAULT 'default', "
+        "status VARCHAR(16) NOT NULL DEFAULT 'active', "
+        "quota_bytes INTEGER NOT NULL, "
+        "used_bytes INTEGER NOT NULL DEFAULT 0, "
+        "last_accessed_at DATETIME, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT ck_workspace_owner_type "
+        "CHECK (owner_type IN ('user', 'group', 'project')), "
+        "CONSTRAINT ck_workspace_status "
+        "CHECK (status IN ('active', 'disabled', 'archived')), "
+        "CONSTRAINT ck_workspace_quota_positive CHECK (quota_bytes > 0), "
+        "CONSTRAINT ck_workspace_used_nonnegative CHECK (used_bytes >= 0), "
+        "CONSTRAINT uq_workspace_owner_name "
+        "UNIQUE (platform, owner_type, owner_id, name)"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS assets ("
+        "sha256 VARCHAR(64) PRIMARY KEY, "
+        "size_bytes INTEGER NOT NULL, "
+        "media_type VARCHAR(255) NOT NULL DEFAULT 'application/octet-stream', "
+        "storage_key VARCHAR(255) NOT NULL UNIQUE, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT ck_asset_size_nonnegative CHECK (size_bytes >= 0)"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS workspace_assets ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "workspace_id VARCHAR(36) NOT NULL, "
+        "asset_sha256 VARCHAR(64) NOT NULL, "
+        "logical_name VARCHAR(512) NOT NULL, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT fk_workspace_asset_workspace "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE, "
+        "CONSTRAINT fk_workspace_asset_asset "
+        "FOREIGN KEY (asset_sha256) REFERENCES assets(sha256) ON DELETE RESTRICT, "
+        "CONSTRAINT uq_workspace_asset_logical_name "
+        "UNIQUE (workspace_id, logical_name), "
+        "CONSTRAINT uq_workspace_asset_link "
+        "UNIQUE (workspace_id, asset_sha256, logical_name)"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS sandbox_runs ("
+        "run_id VARCHAR(64) PRIMARY KEY, "
+        "request_id VARCHAR(64) NOT NULL UNIQUE, "
+        "workspace_id VARCHAR(36) NOT NULL, "
+        "trace_id VARCHAR(64) NOT NULL DEFAULT '', "
+        "agent_run_id VARCHAR(64) NOT NULL DEFAULT '', "
+        "tool_call_id VARCHAR(64) NOT NULL DEFAULT '', "
+        "image_digest VARCHAR(255) NOT NULL, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
+        "exit_code INTEGER, "
+        "termination_reason VARCHAR(64) NOT NULL DEFAULT '', "
+        "cpu_time_ms INTEGER NOT NULL DEFAULT 0, "
+        "peak_memory_bytes INTEGER NOT NULL DEFAULT 0, "
+        "stdout_bytes INTEGER NOT NULL DEFAULT 0, "
+        "stderr_bytes INTEGER NOT NULL DEFAULT 0, "
+        "stdout_truncated BOOLEAN NOT NULL DEFAULT 0, "
+        "stderr_truncated BOOLEAN NOT NULL DEFAULT 0, "
+        "started_at DATETIME, "
+        "finished_at DATETIME, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT fk_sandbox_run_workspace "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT, "
+        "CONSTRAINT ck_sandbox_run_status "
+        "CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')), "
+        "CONSTRAINT ck_sandbox_run_cpu_nonnegative CHECK (cpu_time_ms >= 0), "
+        "CONSTRAINT ck_sandbox_run_memory_nonnegative CHECK (peak_memory_bytes >= 0), "
+        "CONSTRAINT ck_sandbox_run_output_nonnegative "
+        "CHECK (stdout_bytes >= 0 AND stderr_bytes >= 0)"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS ix_workspace_owner "
+        "ON workspaces(platform, owner_type, owner_id)",
+        "CREATE INDEX IF NOT EXISTS ix_workspace_assets_workspace_id "
+        "ON workspace_assets(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_workspace_asset_sha256 "
+        "ON workspace_assets(asset_sha256)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_sandbox_runs_request_id "
+        "ON sandbox_runs(request_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_runs_trace_id "
+        "ON sandbox_runs(trace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_runs_agent_run_id "
+        "ON sandbox_runs(agent_run_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_runs_tool_call_id "
+        "ON sandbox_runs(tool_call_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_run_workspace_created "
+        "ON sandbox_runs(workspace_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_run_status_created "
+        "ON sandbox_runs(status, created_at)",
+    ])
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -2151,6 +2258,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "20260718_memory_governance_repairs",
         "recover stale digest jobs and repair legacy memory governance",
         _memory_governance_repairs,
+    ),
+    (
+        "20260720_sandbox_storage_tables",
+        "sandbox workspace asset and run tables",
+        _sandbox_storage_tables,
     ),
 ]
 

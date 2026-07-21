@@ -1,0 +1,5 @@
+# sandboxd 宿主服务的最小依赖；不得安装 Nanobot 业务模型依赖。
+docker==7.1.0
+fastapi==0.139.2
+pydantic==2.13.4
+uvicorn==0.51.0

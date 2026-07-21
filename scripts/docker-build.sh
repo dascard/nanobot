@@ -8,7 +8,8 @@ Usage:
   scripts/docker-build.sh --build-only [docker compose build args...]
 
 默认行为：构建镜像后执行 docker compose up -d --force-recreate，确保运行中的容器使用新镜像。
-只想构建镜像时传 --build-only。
+只想构建镜像时传 --build-only。部署并通过健康检查后，脚本仅保留当前镜像和最近一个
+已验证回滚镜像；不会执行任何全局 prune。
 EOF
 }
 
@@ -31,7 +32,9 @@ export GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown
 export GIT_FULL_COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 export GIT_COMMIT_DATE="$(git log -1 --format=%ci --date=iso-strict 2>/dev/null || true)"
 
-status_file="$(mktemp)"
+build_tmp_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/nanobot-build"
+mkdir -p "${build_tmp_dir}"
+status_file="$(mktemp "${build_tmp_dir}/git-status.XXXXXX")"
 trap 'rm -f "${status_file}"' EXIT
 
 if git status --porcelain --untracked-files=no >"${status_file}" 2>/dev/null; then
@@ -43,6 +46,11 @@ if git status --porcelain --untracked-files=no >"${status_file}" 2>/dev/null; th
 else
   export GIT_DIRTY=null
 fi
+
+runtime_image="nanobot-runtime:latest"
+rollback_image="nanobot-runtime:rollback"
+previous_image_id="$(docker image inspect "${runtime_image}" --format '{{.Id}}' 2>/dev/null || true)"
+previous_rollback_id="$(docker image inspect "${rollback_image}" --format '{{.Id}}' 2>/dev/null || true)"
 
 docker compose build "$@"
 
@@ -74,3 +82,32 @@ if [ "${#services[@]}" -eq 0 ]; then
 fi
 
 docker compose up -d --force-recreate "${services[@]}"
+
+health_url="${NANOBOT_DEPLOY_HEALTH_URL:-http://127.0.0.1:8000/api/v1/health}"
+health_timeout_seconds="${NANOBOT_DEPLOY_HEALTH_TIMEOUT_SECONDS:-90}"
+health_deadline=$((SECONDS + health_timeout_seconds))
+until curl --fail --silent --show-error --max-time 5 "${health_url}" >/dev/null; do
+  if (( SECONDS >= health_deadline )); then
+    echo "部署健康检查超时：${health_url}" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
+current_image_id="$(docker image inspect "${runtime_image}" --format '{{.Id}}')"
+if [[ -n "${previous_image_id}" && "${previous_image_id}" != "${current_image_id}" ]]; then
+  docker image tag "${previous_image_id}" "${rollback_image}"
+fi
+
+if [[ -n "${previous_rollback_id}" \
+  && "${previous_rollback_id}" != "${previous_image_id}" \
+  && "${previous_rollback_id}" != "${current_image_id}" ]]; then
+  if [[ -z "$(docker ps -aq --filter "ancestor=${previous_rollback_id}")" ]]; then
+    docker image rm "${previous_rollback_id}" >/dev/null 2>&1 || \
+      echo "旧回滚镜像仍被引用，已保留：${previous_rollback_id}" >&2
+  else
+    echo "旧回滚镜像仍被容器使用，已保留：${previous_rollback_id}" >&2
+  fi
+fi
+
+echo "部署健康检查通过。当前镜像：${current_image_id}；回滚镜像：${previous_image_id:-无}"

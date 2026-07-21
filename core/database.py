@@ -1613,6 +1613,210 @@ class ToolCall(Base):
     finished_at = Column(DateTime, nullable=True)
 
 
+class Workspace(Base):
+    """Sandbox 长期工作区元数据；真实宿主路径不写入数据库。"""
+
+    __tablename__ = "workspaces"
+    __table_args__ = (
+        CheckConstraint(
+            "owner_type IN ('user', 'group', 'project')",
+            name="ck_workspace_owner_type",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'disabled', 'archived')",
+            name="ck_workspace_status",
+        ),
+        CheckConstraint(
+            "quota_bytes > 0",
+            name="ck_workspace_quota_positive",
+        ),
+        CheckConstraint(
+            "used_bytes >= 0",
+            name="ck_workspace_used_nonnegative",
+        ),
+        UniqueConstraint(
+            "platform",
+            "owner_type",
+            "owner_id",
+            "name",
+            name="uq_workspace_owner_name",
+        ),
+        Index(
+            "ix_workspace_owner",
+            "platform",
+            "owner_type",
+            "owner_id",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    platform = Column(String(32), nullable=False)
+    owner_type = Column(String(16), nullable=False)
+    owner_id = Column(String(255), nullable=False)
+    name = Column(String(64), nullable=False, default="default")
+    status = Column(
+        String(16),
+        nullable=False,
+        default="active",
+        server_default=text("'active'"),
+    )
+    quota_bytes = Column(Integer, nullable=False)
+    used_bytes = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    last_accessed_at = Column(DateTime, nullable=True)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class Asset(Base):
+    """全局内容寻址的不可变资产元数据。"""
+
+    __tablename__ = "assets"
+    __table_args__ = (
+        CheckConstraint("size_bytes >= 0", name="ck_asset_size_nonnegative"),
+    )
+
+    sha256 = Column(String(64), primary_key=True)
+    size_bytes = Column(Integer, nullable=False)
+    media_type = Column(String(255), nullable=False, default="application/octet-stream")
+    storage_key = Column(String(255), nullable=False, unique=True)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class WorkspaceAsset(Base):
+    """Workspace 对物理 Asset 的授权链接。"""
+
+    __tablename__ = "workspace_assets"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "logical_name",
+            name="uq_workspace_asset_logical_name",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "asset_sha256",
+            "logical_name",
+            name="uq_workspace_asset_link",
+        ),
+        Index("ix_workspace_asset_sha256", "asset_sha256"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workspace_id = Column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    asset_sha256 = Column(
+        String(64),
+        ForeignKey("assets.sha256", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    logical_name = Column(String(512), nullable=False)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class SandboxRun(Base):
+    """一次性 Sandbox 容器的运行账本。"""
+
+    __tablename__ = "sandbox_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_sandbox_run_status",
+        ),
+        CheckConstraint("cpu_time_ms >= 0", name="ck_sandbox_run_cpu_nonnegative"),
+        CheckConstraint(
+            "peak_memory_bytes >= 0",
+            name="ck_sandbox_run_memory_nonnegative",
+        ),
+        CheckConstraint(
+            "stdout_bytes >= 0 AND stderr_bytes >= 0",
+            name="ck_sandbox_run_output_nonnegative",
+        ),
+        Index("ix_sandbox_run_workspace_created", "workspace_id", "created_at"),
+        Index("ix_sandbox_run_status_created", "status", "created_at"),
+    )
+
+    run_id = Column(String(64), primary_key=True)
+    request_id = Column(String(64), nullable=False, unique=True, index=True)
+    workspace_id = Column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    trace_id = Column(String(64), nullable=False, default="", index=True)
+    agent_run_id = Column(String(64), nullable=False, default="", index=True)
+    tool_call_id = Column(String(64), nullable=False, default="", index=True)
+    image_digest = Column(String(255), nullable=False)
+    status = Column(
+        String(16),
+        nullable=False,
+        default="pending",
+        server_default=text("'pending'"),
+    )
+    exit_code = Column(Integer, nullable=True)
+    termination_reason = Column(String(64), nullable=False, default="")
+    cpu_time_ms = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    peak_memory_bytes = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    stdout_bytes = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    stderr_bytes = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    stdout_truncated = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("0"),
+    )
+    stderr_truncated = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("0"),
+    )
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
 class PromptRenderLog(Base):
     """PromptManager 渲染记录——默认不存完整 prompt，只存预览。"""
     __tablename__ = "prompt_render_logs"

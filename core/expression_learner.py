@@ -27,6 +27,8 @@ BAD_LEARN_TERMS: set[str] = {
     "tool_error", "reply", "no_reply", "RuntimeTool", "AvailableFunctions",
     "memory_read", "memory_write", "sql_analysis", "group_analysis",
     "python_sandbox", "image_summary", "sticker_search", "ai_daily",
+    "sandbox_exec", "workspace_list", "workspace_read", "workspace_search",
+    "workspace_write", "asset_import", "asset_publish",
     "news_daily", "Traceback", "Exception", "HTTPError",
     "request_json", "response_json", "skill", "subagent",
     "AgentRun", "PromptRender", "conversation",

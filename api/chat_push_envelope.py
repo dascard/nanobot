@@ -63,6 +63,8 @@ def build_chat_push_envelope(
 
 
 def expand_chat_transport_answer(answer: str) -> str:
+    from core.asset_transport import expand_asset_download_refs_in_content
     from core.generated_images import expand_generated_image_refs_in_content
 
-    return expand_generated_image_refs_in_content(answer, allow_base64=False)
+    expanded = expand_generated_image_refs_in_content(answer, allow_base64=False)
+    return expand_asset_download_refs_in_content(expanded)

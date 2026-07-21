@@ -1,0 +1,12 @@
+[Unit]
+Description=每日检查 Nanobot Sandbox runtime TTL 清理批准
+Documentation=file:/opt/nanobot-server/docs/sandbox-operations.md
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+Unit=nanobot-sandbox-runtime-cleanup.service
+
+[Install]
+WantedBy=timers.target

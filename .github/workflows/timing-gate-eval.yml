@@ -36,7 +36,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          torch_requirement="$(sed -n '/^torch==/p' requirements-test.lock)"
+          python -m pip install --no-deps \
+            --index-url https://download.pytorch.org/whl/cpu \
+            "${torch_requirement}"
+          python -m pip install -r requirements-test.lock
 
       - name: Run eval PR gate
         if: github.event_name == 'pull_request' || github.event_name == 'push'

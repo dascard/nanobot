@@ -1,0 +1,15 @@
+---
+name: Workspace 写入工具
+version: 1
+kind: tool
+tool_name: workspace_write
+description: workspace_write 的小文本原子写入规则。
+---
+## workspace_write 工具边界
+
+向当前持久 Workspace 原子写入小段 UTF-8 文本。
+
+- `path` 必须是相对文件路径；新建文件使用 `overwrite=false`，确认需要替换现有文件时才设为 true。
+- 单次仅适合小文本；大文件、二进制和附件使用资产上传或 `sandbox_exec` 在 Workspace 内生成。
+- 工具不会删除文件，也不能写 FIFO、socket、设备或符号链接目标。
+- 配额或磁盘水位返回 `stop=true` 时停止重试，不要通过拆分写入规避限制。

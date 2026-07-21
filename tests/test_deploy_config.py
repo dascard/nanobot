@@ -186,7 +186,8 @@ def _render_compose_with_env(tmp_path, values: dict[str, str]) -> dict:
 def test_runtime_image_uses_python_311():
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
 
-    assert "FROM python:3.11-slim-bullseye" in dockerfile
+    assert "ARG PYTHON_IMAGE=python:3.11.13-slim-bookworm" in dockerfile
+    assert "FROM ${PYTHON_IMAGE} AS runtime" in dockerfile
     assert "FROM python:3.10" not in dockerfile
 
 
@@ -251,8 +252,11 @@ def test_compose_workers_use_explicit_minimal_environment_allowlists():
             "NANOBOT_PUSH_TOKEN",
             "QQBOT_PUSH_URL",
             "QQBOT_PUSH_TIMEOUT",
-            "NANOBOT_QQ_PUSH_CONFIG_REVISION",
-            "NANOBOT_OUTBOUND_BATCH_SIZE",
+                "NANOBOT_QQ_PUSH_CONFIG_REVISION",
+                "NANOBOT_PUBLIC_BASE_URL",
+                "NANOBOT_ASSET_TOKEN_SECRET",
+                "NANOBOT_ASSET_TOKEN_TTL_SECONDS",
+                "NANOBOT_OUTBOUND_BATCH_SIZE",
             "NANOBOT_OUTBOUND_LEASE_SECONDS",
             "NANOBOT_OUTBOUND_POLL_INTERVAL",
         },
@@ -399,13 +403,32 @@ def test_super_user_ids_use_one_canonical_environment_variable():
 
 
 def test_test_dependencies_declare_strict_asyncio_mode():
-    requirements = Path("requirements.txt").read_text(encoding="utf-8")
+    production_requirements = Path("requirements.txt").read_text(encoding="utf-8")
+    test_requirements = Path("requirements-test.txt").read_text(encoding="utf-8")
     pytest_path = Path("pytest.ini")
 
-    assert re.search(r"^pytest-asyncio(?:[<>=!~].*)?$", requirements, re.MULTILINE)
+    assert not re.search(
+        r"^pytest(?:-[a-z0-9-]+)?(?:[<>=!~].*)?$",
+        production_requirements,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"^pytest-asyncio(?:[<>=!~].*)?$", test_requirements, re.MULTILINE
+    )
     assert pytest_path.is_file()
     pytest_config = pytest_path.read_text(encoding="utf-8")
     assert re.search(r"^asyncio_mode\s*=\s*strict$", pytest_config, re.MULTILINE)
+
+
+def test_production_lock_uses_cpu_only_torch():
+    lock = Path("requirements-prod.lock").read_text(encoding="utf-8")
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert re.search(r"^torch==[^+\s]+$", lock, re.MULTILINE)
+    assert "https://download.pytorch.org/whl/cpu" in lock
+    assert "pip install --no-deps" in dockerfile
+    assert "--index-url https://download.pytorch.org/whl/cpu" in dockerfile
+    assert not re.search(r"^nvidia-[^=]+==", lock, re.MULTILINE)
 
 
 def test_env_example_matches_current_runtime_configuration_contract():

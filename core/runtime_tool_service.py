@@ -5,7 +5,7 @@ import logging
 from datetime import timedelta
 
 from core.time_utils import db_now_naive
-from core.tool_registry import TOOL_METADATA, get_tool_def
+from core.tool_registry import SANDBOX_TOOL_NAMES, TOOL_METADATA, get_tool_def
 
 logger = logging.getLogger("nanobot.runtime_tools")
 
@@ -129,6 +129,85 @@ def resolve_lightweight_default(tool_name: str, db=None) -> bool:
     return tool_name in _load_lightweight_set(db=db)
 
 
+def _sandbox_setting_enabled(key: str, *, db=None, default: bool = False) -> bool:
+    """读取 Sandbox 安全开关；请求级数据库会话优先于全局缓存。"""
+
+    if db is not None:
+        try:
+            from core.database import SystemSetting
+
+            row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+            if row is not None and row.value is not None:
+                return str(row.value).strip().lower() in {"1", "true", "yes", "on"}
+        except Exception:
+            pass
+    try:
+        from core.settings_service import settings
+
+        return settings.get_bool(key, default)
+    except Exception:
+        return bool(default)
+
+
+def _has_user_sandbox_allowlist(db, *, user_id: str, tool_name: str) -> bool:
+    """首期只把显式 user 级开启视为普通用户 allowlist。"""
+
+    if db is None or not user_id:
+        return False
+    try:
+        from core.database import ToolOverride
+
+        row = db.query(ToolOverride).filter(
+            ToolOverride.tool_name == tool_name,
+            ToolOverride.scope_type == "user",
+            ToolOverride.scope_id == user_id,
+            ToolOverride.enabled == 1,
+        ).first()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _apply_sandbox_policy(
+    enabled: dict[str, bool],
+    disabled: dict[str, str],
+    *,
+    chat_type: str,
+    user_id: str,
+    db=None,
+) -> None:
+    """最终 Sandbox 门禁，任何默认值或 ToolOverride 都不能绕过总开关。"""
+
+    sandbox_enabled = _sandbox_setting_enabled("sandbox.enabled", db=db)
+    exec_enabled = _sandbox_setting_enabled("sandbox.exec_enabled", db=db)
+    group_enabled = _sandbox_setting_enabled("sandbox.group_enabled", db=db)
+
+    for tool_name in SANDBOX_TOOL_NAMES:
+        if not sandbox_enabled:
+            enabled[tool_name] = False
+            disabled[tool_name] = "Sandbox 总开关未启用"
+            continue
+        if tool_name == "sandbox_exec" and not exec_enabled:
+            enabled[tool_name] = False
+            disabled[tool_name] = "Sandbox 执行能力未启用"
+            continue
+        if chat_type == "group" and not group_enabled:
+            enabled[tool_name] = False
+            disabled[tool_name] = "群聊 Workspace 未启用"
+            continue
+        authorized_identity = (
+            chat_type == "private_superuser"
+            or _has_user_sandbox_allowlist(
+                db,
+                user_id=user_id,
+                tool_name=tool_name,
+            )
+        )
+        if not authorized_identity:
+            enabled[tool_name] = False
+            disabled[tool_name] = "仅限私聊超级用户或显式用户 allowlist"
+
+
 def resolve_effective_tools(
     chat_type: str = "group",
     group_id: str = "",
@@ -145,6 +224,7 @@ def resolve_effective_tools(
     3. 运行时预设 (none/lightweight/full)
     4. ToolOverride 表 (scope_type=chat_type/platform/group/user)，显式覆盖可放开轻量预设
     5. force_enabled / force_disabled / force_disabled_group 硬约束最终兜底
+    6. Sandbox 总开关、执行开关、群聊开关与首期身份 allowlist 最终门禁
 
     返回 (enabled: {tool_name: bool}, disabled_reasons: {tool_name: reason})
     """
@@ -242,6 +322,14 @@ def resolve_effective_tools(
             enabled[name] = False
             disabled[name] = "系统安全硬禁用"
 
+    _apply_sandbox_policy(
+        enabled,
+        disabled,
+        chat_type=chat_type,
+        user_id=user_id,
+        db=db,
+    )
+
     return enabled, disabled
 
 
@@ -266,7 +354,8 @@ def build_runtime_tool_prompt(
     if enabled.get("sql_analysis"):
         lines.append(
             "工具边界：查聊天记录、上一句、刚才说过什么、会话日志或数据库统计时使用 "
-            "sql_analysis；memory_read 只用于长期记忆，不用于检索 chat_logs/conversation_turns。"
+            "sql_analysis；memory_query 只查询已生成的结构化摘要，不用于检索未摘要的 "
+            "chat_logs/conversation_turns。"
         )
 
     lines.append("规则：不要声称调用未出现在 tools schema 中的工具，也不要声称调用已禁用工具。")

@@ -54,6 +54,13 @@ _LEGACY_ALIASES: dict[str, str] = {
     "persona_update": "tools/persona_update/usage",
     "schedule_task": "tools/schedule_task/usage",
     "sticker_search": "tools/sticker_search/usage",
+    "sandbox_exec": "tools/sandbox_exec/usage",
+    "workspace_list": "tools/workspace_list/usage",
+    "workspace_read": "tools/workspace_read/usage",
+    "workspace_search": "tools/workspace_search/usage",
+    "workspace_write": "tools/workspace_write/usage",
+    "asset_import": "tools/asset_import/usage",
+    "asset_publish": "tools/asset_publish/usage",
     "classifier_legacy": "tasks/classifier_legacy",
     "private_decision": "tasks/private_decision",
     "timing_gate": "tasks/timing_gate",
@@ -118,6 +125,13 @@ _TOOL_USAGE_TEMPLATE_KEYS: dict[str, str] = {
         "group_analysis",
         "persona_update",
         "schedule_task",
+        "sandbox_exec",
+        "workspace_list",
+        "workspace_read",
+        "workspace_search",
+        "workspace_write",
+        "asset_import",
+        "asset_publish",
     )
 }
 
@@ -192,10 +206,7 @@ def _active_runtime_template_keys(
 def init_prompt_v2_runtime_dir() -> dict[str, Any]:
     source_dir = default_template_dir()
     runtime_dir = ensure_directory_without_symlinks(runtime_template_dir())
-    from core.prompt_v2.template_baseline import (
-        TemplateBaselineError,
-        default_template_state_dir,
-    )
+    from core.prompt_v2.template_baseline import default_template_state_dir
     from core.prompt_v2.template_migration import TemplateMigrationService
 
     migration_service = TemplateMigrationService(
@@ -204,6 +215,45 @@ def init_prompt_v2_runtime_dir() -> dict[str, Any]:
         state_dir=default_template_state_dir(runtime_dir),
     )
     template_recovery = migration_service.recover()
+    active_template_keys = _active_runtime_template_keys()
+    _raise_for_invalid_active_templates(
+        [
+            migration_service.store.audit(template_key).to_dict()
+            for template_key in sorted(active_template_keys)
+        ],
+        active_template_keys=active_template_keys,
+        ignore_journal_state=True,
+        check_missing_sources=False,
+    )
+
+    from core.prompt_v2.flow_storage import flow_write_lock
+
+    with flow_write_lock(runtime_dir / "chat" / "flow.json"):
+        return _init_prompt_v2_runtime_dir_locked(
+            source_dir=source_dir,
+            runtime_dir=runtime_dir,
+            template_recovery=template_recovery,
+        )
+
+
+def _init_prompt_v2_runtime_dir_locked(
+    *,
+    source_dir: Path,
+    runtime_dir: Path,
+    template_recovery: dict[str, Any],
+) -> dict[str, Any]:
+    """在 flow 写锁内完成恢复、首次安装与最终审计。"""
+    from core.prompt_v2.template_baseline import default_template_state_dir
+    from core.prompt_v2.template_migration import TemplateMigrationService
+
+    migration_service = TemplateMigrationService(
+        default_dir=source_dir,
+        runtime_dir=runtime_dir,
+        state_dir=default_template_state_dir(runtime_dir),
+    )
+    locked_recovery = migration_service.recover()
+    if locked_recovery.get("status") != "clean":
+        template_recovery = locked_recovery
     baseline_store = migration_service.store
     active_template_keys = _active_runtime_template_keys()
     copied: list[str] = []
@@ -238,23 +288,10 @@ def init_prompt_v2_runtime_dir() -> dict[str, Any]:
         baseline_store.audit(template_key).to_dict()
         for template_key in sorted(audit_keys)
     ]
-    invalid_templates = [
-        item["template_key"]
-        for item in template_audit
-        if item["template_key"] in active_template_keys
-        and (
-            item["drift_status"] == "invalid"
-            or (
-                item["default_sha256"] is None
-                and item["runtime_sha256"] is None
-            )
-        )
-    ]
-    if invalid_templates:
-        raise TemplateBaselineError(
-            "Prompt Runtime 模板基线 invalid: "
-            + ", ".join(invalid_templates)
-        )
+    _raise_for_invalid_active_templates(
+        template_audit,
+        active_template_keys=active_template_keys,
+    )
 
     return {
         "source_dir": str(source_dir),
@@ -268,6 +305,39 @@ def init_prompt_v2_runtime_dir() -> dict[str, Any]:
         "flow_migrated": flow_result["flow_migrated"],
         "flow_backup_path": flow_result["flow_backup_path"],
     }
+
+
+def _raise_for_invalid_active_templates(
+    template_audit: list[dict[str, Any]],
+    *,
+    active_template_keys: set[str],
+    ignore_journal_state: bool = False,
+    check_missing_sources: bool = True,
+) -> None:
+    from core.prompt_v2.template_baseline import TemplateBaselineError
+
+    invalid_templates = [
+        item["template_key"]
+        for item in template_audit
+        if item["template_key"] in active_template_keys
+        and not (
+            ignore_journal_state
+            and item.get("invalid_component") == "journal_state"
+        )
+        and (
+            item["drift_status"] == "invalid"
+            or (
+                check_missing_sources
+                and item["default_sha256"] is None
+                and item["runtime_sha256"] is None
+            )
+        )
+    ]
+    if invalid_templates:
+        raise TemplateBaselineError(
+            "Prompt Runtime 模板基线 invalid: "
+            + ", ".join(invalid_templates)
+        )
 
 
 def _normalize(raw_key: str) -> str:

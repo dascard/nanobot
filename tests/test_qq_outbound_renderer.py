@@ -88,6 +88,36 @@ def test_render_direct_cq_code_as_legacy_content():
     assert result.message == "[CQ:image,file=https://example.test/already.png]"
 
 
+def test_render_rejects_model_supplied_cq_file_code():
+    result = render_qq_outbound_envelope(
+        {
+            "reply": "[CQ:file,file=/srv/nanobot/private.txt]",
+            "messages": [],
+        }
+    )
+
+    assert result.message == "（文件消息已拒绝，请使用资产下载链接）"
+    assert "/srv/nanobot" not in result.message
+
+
+def test_render_expands_signed_asset_reply_token_at_outbound_boundary(monkeypatch):
+    monkeypatch.setattr(
+        "core.qq_outbound_renderer.expand_asset_download_refs_in_content",
+        lambda content: content.replace(
+            "[asset_download:signed.token]",
+            "https://nanobot.test/api/v1/assets/hash/download?token=redacted",
+        ),
+    )
+
+    result = render_qq_outbound_envelope(
+        {"reply": "文件：[asset_download:signed.token]", "messages": []}
+    )
+
+    assert result.message == (
+        "文件：https://nanobot.test/api/v1/assets/hash/download?token=redacted"
+    )
+
+
 def test_render_generated_image_token_uses_public_url(monkeypatch):
     monkeypatch.setattr(
         "core.qq_outbound_renderer.public_generated_image_url",

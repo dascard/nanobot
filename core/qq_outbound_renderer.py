@@ -8,10 +8,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.generated_images import public_generated_image_url
+from core.asset_transport import expand_asset_download_refs_in_content
 from core.message_envelope import sanitize_reply_meta
 from core.sticker_memory import expand_sticker_refs_in_content
 
 _GENERATED_IMAGE_RE = re.compile(r"\[generated_image:([A-Za-z0-9_.:-]+)\]")
+_UNTRUSTED_CQ_FILE_RE = re.compile(r"\[CQ:file,[^\]]*\]", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -89,6 +91,11 @@ def _render_text(text: str, *, warnings: list[str]) -> str:
     expanded = _GENERATED_IMAGE_RE.sub(
         lambda match: _render_generated_image_token(match.group(1), warnings=warnings),
         text,
+    )
+    expanded = expand_asset_download_refs_in_content(expanded)
+    expanded = _UNTRUSTED_CQ_FILE_RE.sub(
+        "（文件消息已拒绝，请使用资产下载链接）",
+        expanded,
     )
     return expand_sticker_refs_in_content(expanded)
 

@@ -1,0 +1,49 @@
+[Unit]
+Description=Nanobot 宿主 Sandbox Docker 控制面
+Documentation=file:/opt/nanobot-server/docs/sandbox-operations.md
+Requires=docker.service
+After=docker.service local-fs.target
+ConditionPathExists=/var/run/docker.sock
+
+[Service]
+Type=simple
+User=root
+Group=nanobot-sandboxd
+WorkingDirectory=/opt/nanobot-server
+EnvironmentFile=/etc/nanobot/sandboxd.env
+ExecStartPre=/usr/bin/test -S /var/run/docker.sock
+ExecStart=/opt/nanobot-sandboxd/venv/bin/python -m sandboxd.app
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+KillMode=mixed
+UMask=0117
+
+RuntimeDirectory=nanobot-sandboxd
+RuntimeDirectoryMode=0750
+ReadWritePaths=/srv/nanobot /run/nanobot-sandboxd
+ReadOnlyPaths=/opt/nanobot-server /etc/nanobot/sandboxd.token /var/run/docker.sock
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+PrivateMounts=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+AmbientCapabilities=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+
+[Install]
+WantedBy=multi-user.target

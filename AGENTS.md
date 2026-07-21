@@ -66,6 +66,47 @@
 - **中文优先**：bot 使用者是中文用户，所有 prompt 和回复用中文
 - **提示词同步**：修改 `enriched_query` 组装逻辑、历史注入方式、conversation 结构、工具输出契约或 prompt runtime 输入时，**必须检查 canonical Prompt Runtime 模板是否仍然准确**，重点包括 `prompts.v2.default/chat/*`、`prompts.v2.default/tasks/*`、`prompts.v2.default/tools/*/usage.md`、`core/prompt_v2/variables.py` 和 `core/prompt_v2/template_registry.py`。如果模板引用的变量、标记或行为描述已过时，必须在同一 PR 中更新默认模板与必要的 `data/prompts_v2/` 运行时模板。
 
+## Docker 与模型沙箱约定
+
+### 技术边界
+
+- **稳定组件优先**：模型执行环境直接基于稳定版 Docker Engine 和 runc。除非用户另行批准并完成独立评估，不引入 OpenSandbox、OpenShell、E2B 等平台作为运行时依赖；OpenClaw、Hermes 仅作为设计参考。
+- **职责分离**：KT / Nanobot 继续负责 Agent Loop、会话、工具和 Prompt；独立的轻量 `sandboxd` 负责受控调用 Docker Engine。固定服务可由 Docker Compose 管理，按工作区动态创建的 Sandbox 容器必须通过 `sandboxd` / Docker Engine API 管理。
+- **Docker Socket 隔离**：只有 `sandboxd` 可以访问 `/var/run/docker.sock`。禁止把 Docker Socket 挂载到 Nanobot Server 或任意 Sandbox 容器；`docker` 组权限按宿主机 root 权限对待。
+- **工具语义分离**：现有 `python_sandbox` 是数据库分析工具，不是通用代码执行沙箱。真正的执行能力使用独立的 `sandbox_exec`，并配套 `workspace_*`、`asset_import`、`asset_publish` 等工具；新增或修改这些工具时必须同步检查 canonical Prompt Runtime 模板。
+- **服务端决定 Docker 参数**：模型只能提交工作区内命令和受限参数，不能指定宿主路径、镜像、Docker 参数、volume、network mode、capability、device 或 namespace。镜像和挂载均由服务端根据 `workspace_id` 与固定策略生成。
+
+### 工作区与资产
+
+- **生命周期分离**：容器只负责执行，宿主机工作区才是长期事实源。停止、删除或重建容器不得删除工作区；删除工作区或资产必须是独立、显式且经过权限校验的操作。
+- **存储位置**：生产长期数据放在仓库和应用容器之外，目标目录为 `/srv/nanobot/workspaces/`、`/srv/nanobot/assets/`、`/srv/nanobot/runtime/`。只有确认底层文件系统容量、备份和配额方案后才能启用；禁止把长期数据放进容器可写层、仓库内 `./workspace`、`/app/workspace` 或 WSL `/mnt/d`。
+- **作用域隔离**：工作区必须绑定明确的用户、群组或项目 owner，并保存 ACL、配额和状态。禁止不同 owner 共享全局可写工作区；模型只能看到 `/workspace` 等容器内虚拟路径，不能看到或构造宿主真实路径。
+- **挂载权限**：对应工作区可读写挂载到 `/workspace`；运行时缓存可挂载到 `/runtime`；已授权输入资产只读挂载到 `/inputs`。全局资产库不得以可写方式暴露给 Sandbox，生成结果必须先写工作区，再通过 `asset_publish` 发布为不可变资产。
+- **构建上下文隔离**：工作区、资产、运行时缓存、密钥和数据库必须加入 `.dockerignore`，不得被 `COPY . .` 写入镜像。新增任何持久目录时必须同步检查 `.dockerignore`。
+
+### Sandbox 安全基线
+
+- **专用镜像**：Sandbox 使用独立的 `nanobot-sandbox-*` 镜像，禁止复用包含服务端源码和业务依赖的 `nanobot-runtime`。镜像必须固定版本和 digest，不使用浮动的 `latest` 作为运行契约。
+- **最小权限**：容器必须使用非 root 用户、只读根文件系统、`cap-drop=ALL`、`no-new-privileges`、Docker 默认或更严格的 seccomp，以及启用的 AppArmor 配置。禁止 privileged、额外 capability、宿主设备、Docker Socket、宿主凭据目录及任意 bind mount。
+- **默认断网**：首期统一使用 `network=none`。网页访问、下载和外部 API 调用通过 Nanobot 现有受控工具完成，再将结果作为只读资产导入；未经单独威胁建模和用户批准，不为模型代码开放公网或内网。
+- **资源上限**：每个执行容器必须设置 CPU、内存、PID、tmpfs、磁盘/工作区配额、单次执行时间和输出大小上限。超时必须终止整个进程树；资源参数由服务端集中配置，模型不得提高上限。
+- **临时与持久状态**：`/tmp` 使用有限大小的 tmpfs；Python venv、npm cache 等可重建状态放在 `/runtime`；操作系统依赖通过预构建镜像提供，不允许模型以 root 身份执行 `apt install`。
+
+### 镜像构建与保留
+
+- **稳定分层**：第三方大依赖必须先于经常变化的 `vendor/` 和业务代码安装。KT 更新不得触发 torch、transformers 等完整依赖层重建；本地 vendor 应单独构建或单独安装。
+- **依赖可复现**：生产依赖与测试依赖分离并锁定版本；基础镜像固定版本或 digest。PyTorch 必须与实际 CPU/GPU 运行方式匹配，禁止在无 GPU 使用需求时打入无用 CUDA 运行库。
+- **最小构建上下文**：生产镜像只复制运行所需文件；不得把测试、文档、Agent 配置、工作区或生成资产无条件复制进镜像。现有 `nanobot-runtime:latest` 属于待迁移的兼容行为，不得复制到新 Sandbox 镜像设计。
+- **有限回滚**：默认只保留当前已部署镜像和最近 1 个已验证回滚镜像；如需更多回滚版本，必须明确保留数量和容量预算。同一 IMAGE ID 的多个 tag 不重复占用层空间，但旧 IMAGE ID 不得无限累计。
+- **缓存保留**：BuildKit 缓存使用时间或容量上限控制，优先保留最近成功构建所需缓存。清理缓存只影响后续构建速度，仍须先查看 `docker system df -v` / `docker buildx du`，不得把无界缓存留到系统盘耗尽。
+
+### 运维与验证
+
+- **部署前检查**：构建、部署或启用 Sandbox 前检查 `df -h`、`df -i`、`docker system df` 和数据目录所在文件系统。长期资产必须配置总配额、owner 配额和磁盘水位保护；空间不足时拒绝新的资产写入和 Sandbox 执行，不能侵占系统保留空间。
+- **定向清理**：未经用户明确授权，禁止执行 `docker system prune`、`docker image prune -a`、`docker volume prune`、`docker compose down -v` 等破坏性命令。获得授权后也必须先列出容器、镜像、缓存和 volume，再按明确的名称或 IMAGE ID 定向清理；运行容器和持久 volume 默认不可删除。
+- **健康检查后淘汰**：新镜像部署并通过健康检查和直接相关测试后，才能淘汰超出保留数量的旧镜像。创建 rollback tag 的部署入口必须同时承担保留策略，不能只创建、不回收。
+- **真实隔离验证**：不能仅凭 Docker 配置声明 Sandbox 安全。实现后必须实际验证非 root、只读根文件系统、无网络、无 Docker Socket、资源限制、超时终止、工作区跨容器重建持久化，以及不同 owner 之间无法互读文件。
+
 ## 禁止行为（反复犯错的教训）
 
 ### 1. 未验证就声称完成

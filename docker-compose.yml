@@ -17,10 +17,15 @@ services:
     environment:
       NANOBOT_PUSH_TOKEN: ""
       NANOBOT_SESSION_SUMMARY_WORKER_MODE: external
+      NANOBOT_SANDBOXD_SOCKET: /run/nanobot-sandboxd/sandboxd.sock
+      NANOBOT_SANDBOXD_TOKEN_FILE: /run/nanobot-sandboxd/client.token
+    group_add:
+      - "${NANOBOT_SANDBOXD_GID:-10001}"
     volumes:
       - ./data:/app/data
       - ./sentinel:/app/sentinel
       - ./models:/app/models
+      - /run/nanobot-sandboxd:/run/nanobot-sandboxd:ro
     restart: unless-stopped
 
   session-summary-worker:
@@ -60,6 +65,9 @@ services:
       QQBOT_PUSH_URL: ${QQBOT_PUSH_URL:-http://172.17.0.1:8082/nanobot/push}
       QQBOT_PUSH_TIMEOUT: ${QQBOT_PUSH_TIMEOUT:-180}
       NANOBOT_QQ_PUSH_CONFIG_REVISION: ${NANOBOT_QQ_PUSH_CONFIG_REVISION:-1}
+      NANOBOT_PUBLIC_BASE_URL: ${NANOBOT_PUBLIC_BASE_URL:-}
+      NANOBOT_ASSET_TOKEN_SECRET: ${NANOBOT_ASSET_TOKEN_SECRET:-}
+      NANOBOT_ASSET_TOKEN_TTL_SECONDS: ${NANOBOT_ASSET_TOKEN_TTL_SECONDS:-300}
       NANOBOT_OUTBOUND_BATCH_SIZE: ${NANOBOT_OUTBOUND_BATCH_SIZE:-20}
       NANOBOT_OUTBOUND_LEASE_SECONDS: ${NANOBOT_OUTBOUND_LEASE_SECONDS:-240}
       NANOBOT_OUTBOUND_POLL_INTERVAL: ${NANOBOT_OUTBOUND_POLL_INTERVAL:-1}

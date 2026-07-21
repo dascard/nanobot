@@ -15,6 +15,29 @@ class ToolDef:
     force_enabled: bool = False           # 不可禁用（reply/no_reply）
     force_disabled: bool = False          # 全局硬禁用（任何默认或覆盖都不能开启）
     force_disabled_group: bool = False    # 群聊强制禁用（bash/write/edit）
+    supports_background: bool = True      # 是否向模型暴露 run_in_background
+
+
+SANDBOX_TOOL_NAMES = frozenset({
+    "sandbox_exec",
+    "workspace_list",
+    "workspace_read",
+    "workspace_search",
+    "workspace_write",
+    "asset_import",
+    "asset_publish",
+})
+
+LEGACY_FILE_TOOL_NAMES = frozenset({
+    "bash",
+    "read",
+    "write",
+    "edit",
+    "grep",
+    "glob",
+    "memory_read",
+    "memory_write",
+})
 
 
 TOOL_METADATA: dict[str, ToolDef] = {
@@ -109,47 +132,99 @@ TOOL_METADATA: dict[str, ToolDef] = {
     ),
     "memory_read": ToolDef(
         name="memory_read", label="记忆读取 (subagent)", category="system", risk_level="low",
-        private_default=True, group_default=True,
-        description="读取长期记忆/上下文，不用于查询 chat_logs 或 conversation_turns。注意：此工具为 subagent，运行时禁用支持有限。",
+        private_default=False, group_default=False,
+        description="旧 KT 记忆子代理的路径隔离不足，已安全禁用；结构化摘要查询使用 memory_query。",
+        force_disabled=True,
     ),
     "memory_write": ToolDef(
         name="memory_write", label="记忆写入 (subagent)", category="system", risk_level="low",
-        private_default=True, group_default=True,
-        description="写入长期记忆/上下文。注意：此工具为 subagent，运行时禁用支持有限。",
+        private_default=False, group_default=False,
+        description="旧 KT 记忆子代理可写通用宿主工作目录，路径隔离不足，已安全禁用。",
+        force_disabled=True,
+    ),
+
+    # ── 持久 Workspace 与一次性 Sandbox ──
+    "sandbox_exec": ToolDef(
+        name="sandbox_exec", label="Sandbox 执行", category="file", risk_level="high",
+        private_default=False, group_default=False,
+        description="在固定镜像的一次性断网容器中执行命令，只能访问当前 Workspace 和已授权输入资产。",
+        supports_background=False,
+    ),
+    "workspace_list": ToolDef(
+        name="workspace_list", label="工作区列表", category="file", risk_level="low",
+        private_default=False, group_default=False,
+        description="分页列出当前持久 Workspace 的相对路径和文件元数据。",
+        supports_background=False,
+    ),
+    "workspace_read": ToolDef(
+        name="workspace_read", label="工作区读取", category="file", risk_level="low",
+        private_default=False, group_default=False,
+        description="有界读取当前持久 Workspace 的文本文件；二进制文件只返回元数据。",
+        supports_background=False,
+    ),
+    "workspace_search": ToolDef(
+        name="workspace_search", label="工作区搜索", category="file", risk_level="low",
+        private_default=False, group_default=False,
+        description="在当前持久 Workspace 中执行有界字面量搜索。",
+        supports_background=False,
+    ),
+    "workspace_write": ToolDef(
+        name="workspace_write", label="工作区写入", category="file", risk_level="medium",
+        private_default=False, group_default=False,
+        description="向当前持久 Workspace 原子写入小文本文件。",
+        supports_background=False,
+    ),
+    "asset_import": ToolDef(
+        name="asset_import", label="资产导入", category="file", risk_level="medium",
+        private_default=False, group_default=False,
+        description="把当前附件引用或已经授权的不可变资产链接到当前 Workspace。",
+        supports_background=False,
+    ),
+    "asset_publish": ToolDef(
+        name="asset_publish", label="资产发布", category="file", risk_level="medium",
+        private_default=False, group_default=False,
+        description="把当前 Workspace 中的普通文件发布为不可变资产并返回短引用。",
+        supports_background=False,
     ),
 
     # ── 文件操作 ──
     "read": ToolDef(
         name="read", label="读取文件", category="file", risk_level="low",
         private_default=True, group_default=False,
-        description="读取工作区文件内容。",
+        description="旧 KT 宿主文件读取入口，已由 workspace_read 替代。",
+        force_disabled=True,
     ),
     "write": ToolDef(
         name="write", label="写入文件", category="file", risk_level="medium",
         private_default=True, group_default=False,
-        description="写入工作区文件。",
+        description="旧 KT 宿主文件写入入口，已由 workspace_write 替代。",
+        force_disabled=True,
         force_disabled_group=True,
     ),
     "edit": ToolDef(
         name="edit", label="编辑文件", category="file", risk_level="medium",
         private_default=True, group_default=False,
-        description="编辑工作区文件。",
+        description="旧 KT 宿主文件编辑入口，已安全禁用。",
+        force_disabled=True,
         force_disabled_group=True,
     ),
     "grep": ToolDef(
         name="grep", label="文件搜索", category="file", risk_level="low",
         private_default=True, group_default=False,
-        description="在工作区文件中搜索内容。",
+        description="旧 KT 宿主文件搜索入口，已由 workspace_search 替代。",
+        force_disabled=True,
     ),
     "glob": ToolDef(
         name="glob", label="文件查找", category="file", risk_level="low",
         private_default=True, group_default=False,
-        description="按模式查找工作区文件。",
+        description="旧 KT 宿主文件查找入口，已由 workspace_list 替代。",
+        force_disabled=True,
     ),
     "bash": ToolDef(
         name="bash", label="命令行", category="file", risk_level="high",
         private_default=True, group_default=False,
-        description="执行Shell命令。高风险工具。",
+        description="旧 KT 宿主命令执行入口，已由 sandbox_exec 替代。",
+        force_disabled=True,
         force_disabled_group=True,
     ),
 }

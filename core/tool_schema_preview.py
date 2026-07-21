@@ -331,6 +331,110 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "required": ["task"],
         },
     },
+    "sandbox_exec": {
+        "description": "在固定镜像的一次性断网容器中执行命令，只能访问当前 Workspace 和已授权输入资产。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 16384,
+                    "description": "在容器内部通过 /bin/sh -lc 执行的命令。",
+                },
+                "cwd": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "可选的 Workspace 相对工作目录。",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 120,
+                    "description": "可选超时；只能申请不高于服务端上限的值。",
+                },
+            },
+            "required": ["command"],
+        },
+    },
+    "workspace_list": {
+        "description": "分页列出当前持久 Workspace 中的文件和目录元数据。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "path": {"type": "string", "maxLength": 4096, "description": "Workspace 相对目录；空字符串表示根目录。"},
+                "cursor": {"type": "string", "maxLength": 64, "description": "上一页返回的分页游标。"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
+            },
+            "required": [],
+        },
+    },
+    "workspace_read": {
+        "description": "有界读取当前持久 Workspace 中的文本文件；二进制文件只返回元数据。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Workspace 相对文件路径。"},
+                "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "按字节计的起始偏移。"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 262144, "default": 65536, "description": "本次最多读取的字节数。"},
+            },
+            "required": ["path"],
+        },
+    },
+    "workspace_search": {
+        "description": "在当前持久 Workspace 中执行有界字面量搜索，不接受任意正则。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "query": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "要查找的字面量文本。"},
+                "path": {"type": "string", "maxLength": 4096, "description": "可选 Workspace 相对目录。"},
+                "glob": {"type": "string", "maxLength": 512, "description": "可选的简单文件名 glob。"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+            },
+            "required": ["query"],
+        },
+    },
+    "workspace_write": {
+        "description": "向当前持久 Workspace 原子写入小文本；大文件必须走资产上传。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Workspace 相对文件路径。"},
+                "content": {"type": "string", "maxLength": 262144, "description": "UTF-8 小文本内容。"},
+                "overwrite": {"type": "boolean", "default": False, "description": "文件已存在时是否允许原子覆盖。"},
+            },
+            "required": ["path", "content", "overwrite"],
+        },
+    },
+    "asset_import": {
+        "description": "把当前附件引用或已经授权的 asset://sha256/... 链接到当前 Workspace。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "source_ref": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "当前附件引用或已经授权的资产引用。"},
+                "logical_name": {"type": "string", "minLength": 1, "maxLength": 512, "description": "可选的 Workspace 内逻辑文件名。"},
+            },
+            "required": ["source_ref"],
+        },
+    },
+    "asset_publish": {
+        "description": "把当前 Workspace 中的普通文件发布为不可变资产。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Workspace 相对普通文件路径。"},
+                "media_type": {"type": "string", "maxLength": 255, "default": "application/octet-stream", "description": "可选媒体类型。"},
+            },
+            "required": ["path"],
+        },
+    },
 }
 
 
@@ -401,11 +505,18 @@ def _background_schema() -> dict[str, str]:
     }
 
 
-def _with_background_option(parameters: dict[str, Any]) -> dict[str, Any]:
+def _with_background_option(tool_name: str, parameters: dict[str, Any]) -> dict[str, Any]:
     params = copy.deepcopy(parameters or {"type": "object", "properties": {}})
     if not isinstance(params.get("properties"), dict):
         params["properties"] = {}
-    params["properties"]["run_in_background"] = _background_schema()
+    td = get_tool_def(tool_name)
+    if td is None or td.supports_background:
+        params["properties"]["run_in_background"] = _background_schema()
+    else:
+        params["properties"].pop("run_in_background", None)
+        required = params.get("required")
+        if isinstance(required, list):
+            params["required"] = [item for item in required if item != "run_in_background"]
     return params
 
 
@@ -418,7 +529,7 @@ def _static_tool_schema(name: str) -> dict[str, Any] | None:
         "function": {
             "name": name,
             "description": str(spec.get("description") or ""),
-            "parameters": _with_background_option(spec.get("parameters") or {}),
+            "parameters": _with_background_option(name, spec.get("parameters") or {}),
         },
         "source": "static",
     }
@@ -433,7 +544,7 @@ def _builtin_tool_schema(name: str) -> dict[str, Any] | None:
         "function": {
             "name": name,
             "description": td.description if td else f"KT built-in tool: {name}",
-            "parameters": _with_background_option(KT_BUILTIN_SCHEMAS[name]),
+            "parameters": _with_background_option(name, KT_BUILTIN_SCHEMAS[name]),
         },
         "source": "kt_builtin",
     }
@@ -446,7 +557,7 @@ def _metadata_fallback_schema(name: str) -> dict[str, Any]:
         "function": {
             "name": name,
             "description": td.description if td else f"Tool: {name}",
-            "parameters": _with_background_option({
+            "parameters": _with_background_option(name, {
                 "type": "object",
                 "properties": {
                     "content": {
@@ -580,6 +691,16 @@ def build_tool_schema(name: str, *, db=None, include_template_overlay: bool = Tr
             schema = overlay_tool_schema_description(schema)
     except Exception:
         pass
+    function = schema.get("function") if isinstance(schema, dict) else None
+    parameters = function.get("parameters") if isinstance(function, dict) else None
+    td = get_tool_def(tool_name)
+    if isinstance(parameters, dict) and td is not None and not td.supports_background:
+        properties = parameters.get("properties")
+        if isinstance(properties, dict):
+            properties.pop("run_in_background", None)
+        required = parameters.get("required")
+        if isinstance(required, list):
+            parameters["required"] = [item for item in required if item != "run_in_background"]
     return _add_tool_metadata(schema, tool_name)
 
 

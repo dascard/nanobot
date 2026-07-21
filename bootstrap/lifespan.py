@@ -50,6 +50,21 @@ def init_legacy_memory() -> None:
     _init_legacy_memory()
 
 
+def validate_sandbox_asset_token_config() -> None:
+    """Sandbox 启用时在启动阶段校验资产 Token 密钥。"""
+
+    from core import database
+    from core.asset_tokens import signer_from_settings
+    from core.sandbox.tool_service import resolve_sandbox_setting
+
+    db = database.SessionLocal()
+    try:
+        if bool(resolve_sandbox_setting(db, "sandbox.enabled", False)):
+            signer_from_settings(db)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: Any):
     logger = logging.getLogger("nanobot")
@@ -60,6 +75,7 @@ async def lifespan(app: Any):
     logger.info("Starting Nanobot Server Gateway...")
     init_db()
     logger.info("Database initialized.")
+    validate_sandbox_asset_token_config()
     run_provider_migration()
     init_prompt_runtimes(logger)
     scheduler_handles = start_schedulers(testing=testing, logger=logger)

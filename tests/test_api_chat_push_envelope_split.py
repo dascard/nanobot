@@ -114,6 +114,25 @@ def test_expand_chat_transport_answer_disables_base64(monkeypatch):
     assert calls == [("原始 [generated_image:1]", False)]
 
 
+def test_expand_chat_transport_answer_expands_asset_only_at_final_boundary(
+    monkeypatch,
+):
+    from api import chat_push_envelope
+
+    monkeypatch.setattr(
+        "core.generated_images.expand_generated_image_refs_in_content",
+        lambda content, *, allow_base64: content,
+    )
+    monkeypatch.setattr(
+        "core.asset_transport.expand_asset_download_refs_in_content",
+        lambda content: content.replace("[asset_download:signed.token]", "https://download.test/file"),
+    )
+
+    assert chat_push_envelope.expand_chat_transport_answer(
+        "文件：[asset_download:signed.token]"
+    ) == "文件：https://download.test/file"
+
+
 def test_parent_chat_push_envelope_wrappers_remain_in_routes():
     assert routes._expand_chat_transport_answer.__module__ == "api.routes"
     assert routes._build_chat_push_envelope.__module__ == "api.routes"

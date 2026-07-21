@@ -24,6 +24,15 @@ MAX_WEB_SEARCH_PREVIEW_CHARS = 40000
 MAX_LLM_REQUEST_JSON_CHARS = 256_000
 MAX_LLM_RESPONSE_JSON_CHARS = 64_000
 MAX_LLM_FAILURE_SUMMARY_CHARS = 4_000
+SANDBOX_TRACE_TOOL_NAMES = frozenset({
+    "sandbox_exec",
+    "workspace_list",
+    "workspace_read",
+    "workspace_search",
+    "workspace_write",
+    "asset_import",
+    "asset_publish",
+})
 
 
 @dataclass
@@ -91,6 +100,255 @@ def _preview(value: Any, *, max_chars: int = MAX_PREVIEW_CHARS) -> str:
     if len(text) > max_chars:
         return text[:max_chars] + "...[truncated]"
     return text
+
+
+def _text_audit(value: Any) -> dict[str, Any]:
+    text = str(value or "")
+    encoded = text.encode("utf-8", errors="replace")
+    return {
+        "bytes": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _safe_sandbox_path(value: Any, *, allow_empty: bool = False) -> str:
+    try:
+        from core.sandbox.paths import validate_relative_path
+
+        components = validate_relative_path(str(value or ""), allow_empty=allow_empty)
+        return "/".join(components)
+    except Exception:
+        return "[INVALID_PATH]"
+
+
+def _safe_sandbox_ref(value: Any) -> str | dict[str, Any]:
+    ref = str(value or "")
+    if ref.startswith("asset://sha256/"):
+        digest = ref.removeprefix("asset://sha256/")
+        if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest):
+            return ref
+    if ref.startswith("workspace://current/"):
+        path = _safe_sandbox_path(ref.removeprefix("workspace://current/"))
+        if path != "[INVALID_PATH]":
+            return f"workspace://current/{path}"
+    return {"ref_omitted": True, **_text_audit(ref)}
+
+
+def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
+    """Sandbox 工具参数进入持久 Trace 前仅保留安全元数据。"""
+
+    name = str(tool_name or "")
+    if name not in SANDBOX_TRACE_TOOL_NAMES:
+        return args
+    if not isinstance(args, Mapping):
+        return {"args_omitted": True, "args_type": type(args).__name__}
+    unknown_count = len(set(str(key) for key in args) - {
+        "command", "cwd", "timeout_seconds", "path", "cursor", "limit",
+        "offset", "query", "glob", "content", "overwrite", "source_ref",
+        "logical_name", "media_type",
+    })
+    result: dict[str, Any] = {}
+    if unknown_count:
+        result["rejected_field_count"] = unknown_count
+    if name == "sandbox_exec":
+        command = str(args.get("command") or "")
+        result.update({
+            "command_omitted": True,
+            "command_lines": command.count("\n") + (1 if command else 0),
+            **{f"command_{key}": value for key, value in _text_audit(command).items()},
+            "cwd": _safe_sandbox_path(args.get("cwd"), allow_empty=True),
+        })
+        if args.get("timeout_seconds") is not None:
+            result["timeout_seconds"] = args.get("timeout_seconds")
+        return result
+    if name == "workspace_write":
+        content = str(args.get("content") or "")
+        return {
+            **result,
+            "path": _safe_sandbox_path(args.get("path")),
+            "overwrite": bool(args.get("overwrite", False)),
+            "content_omitted": True,
+            **{f"content_{key}": value for key, value in _text_audit(content).items()},
+        }
+    if name == "workspace_search":
+        query = str(args.get("query") or "")
+        return {
+            **result,
+            "path": _safe_sandbox_path(args.get("path"), allow_empty=True),
+            "glob_omitted": bool(args.get("glob")),
+            **{f"glob_{key}": value for key, value in _text_audit(args.get("glob")).items()},
+            "query_omitted": True,
+            **{f"query_{key}": value for key, value in _text_audit(query).items()},
+            "limit": args.get("limit"),
+        }
+    if name in {"workspace_list", "workspace_read", "asset_publish"}:
+        result["path"] = _safe_sandbox_path(
+            args.get("path"),
+            allow_empty=name == "workspace_list",
+        )
+        for key in ("cursor", "limit", "offset", "media_type"):
+            if args.get(key) is not None:
+                result[key] = args.get(key)
+        return result
+    if name == "asset_import":
+        result["source_ref"] = _safe_sandbox_ref(args.get("source_ref"))
+        if args.get("logical_name") is not None:
+            result["logical_name"] = _safe_sandbox_path(args.get("logical_name"))
+        return result
+    return {"args_omitted": True}
+
+
+def _sandbox_artifacts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    artifacts: list[dict[str, Any]] = []
+    for item in value[:100]:
+        if not isinstance(item, Mapping):
+            continue
+        safe: dict[str, Any] = {
+            "type": str(item.get("type") or "")[:64],
+            "ref": _safe_sandbox_ref(item.get("ref")),
+        }
+        if item.get("path") is not None:
+            safe["path"] = _safe_sandbox_path(item.get("path"))
+        if item.get("logical_name") is not None:
+            safe["logical_name"] = _safe_sandbox_path(item.get("logical_name"))
+        if item.get("size_bytes") is not None:
+            safe["size_bytes"] = item.get("size_bytes")
+        artifacts.append(safe)
+    return artifacts
+
+
+def _sandbox_result_data(tool_name: str, data: Any) -> dict[str, Any]:
+    if not isinstance(data, Mapping):
+        return {}
+    if tool_name == "sandbox_exec":
+        safe = {
+            key: data.get(key)
+            for key in (
+                "run_id", "exit_code", "termination_reason", "oom_killed",
+                "cpu_time_ms", "peak_memory_bytes", "stdout_bytes",
+                "stderr_bytes", "stdout_truncated", "stderr_truncated",
+                "workspace_used_bytes",
+            )
+            if key in data
+        }
+        for stream_name in ("stdout", "stderr"):
+            audit = _text_audit(data.get(stream_name))
+            safe[f"{stream_name}_omitted"] = True
+            safe[f"{stream_name}_sha256"] = audit["sha256"]
+            safe.setdefault(f"{stream_name}_bytes", audit["bytes"])
+        return safe
+    if tool_name == "workspace_read":
+        safe = {
+            key: data.get(key)
+            for key in ("offset", "returned_bytes", "size_bytes", "eof", "binary")
+            if key in data
+        }
+        safe["path"] = _safe_sandbox_path(data.get("path"))
+        content_audit = _text_audit(data.get("content"))
+        safe.update({
+            "content_omitted": True,
+            "content_bytes": content_audit["bytes"],
+            "content_sha256": content_audit["sha256"],
+        })
+        return safe
+    if tool_name == "workspace_search":
+        matches = data.get("matches") if isinstance(data.get("matches"), list) else []
+        safe_matches = []
+        texts = []
+        for item in matches[:200]:
+            if not isinstance(item, Mapping):
+                continue
+            safe_matches.append({
+                "path": _safe_sandbox_path(item.get("path")),
+                "line": item.get("line"),
+                "text_omitted": True,
+            })
+            texts.append(str(item.get("text") or ""))
+        text_audit = _text_audit("\n".join(texts))
+        return {
+            "matches": safe_matches,
+            "match_count": len(matches),
+            "matched_text_bytes": text_audit["bytes"],
+            "matched_text_sha256": text_audit["sha256"],
+            "scanned_files": data.get("scanned_files"),
+            "truncated": data.get("truncated"),
+        }
+    if tool_name == "workspace_list":
+        entries = data.get("entries") if isinstance(data.get("entries"), list) else []
+        return {
+            "entries": [
+                {
+                    "path": _safe_sandbox_path(item.get("path")),
+                    "type": item.get("type"),
+                    "size_bytes": item.get("size_bytes"),
+                    "modified_at_ns": item.get("modified_at_ns"),
+                }
+                for item in entries[:200]
+                if isinstance(item, Mapping)
+            ],
+            "next_cursor": data.get("next_cursor"),
+            "total_visible": data.get("total_visible"),
+        }
+    if tool_name == "workspace_write":
+        return {
+            "path": _safe_sandbox_path(data.get("path")),
+            **{
+                key: data.get(key)
+                for key in ("size_bytes", "previous_size_bytes", "used_bytes")
+                if key in data
+            },
+        }
+    if tool_name in {"asset_import", "asset_publish"}:
+        return {
+            key: (
+                _safe_sandbox_ref(value)
+                if key == "ref"
+                else _safe_sandbox_path(value)
+                if key == "logical_name"
+                else value
+            )
+            for key, value in data.items()
+            if key in {"ref", "logical_name", "size_bytes", "media_type"}
+        }
+    return {}
+
+
+def sanitize_tool_trace_result(tool_name: str, result: Any) -> Any:
+    """Sandbox 结果正文和进程输出不得进入 ToolCall.result_preview。"""
+
+    name = str(tool_name or "")
+    if name not in SANDBOX_TRACE_TOOL_NAMES:
+        return result
+    parsed = result
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except (TypeError, ValueError):
+            return {"result_omitted": True, **_text_audit(result)}
+    if not isinstance(parsed, Mapping):
+        return {"result_omitted": True, **_text_audit(parsed)}
+    error = parsed.get("error") if isinstance(parsed.get("error"), Mapping) else None
+    safe: dict[str, Any] = {
+        "status": str(parsed.get("status") or "")[:32],
+        "summary": str(parsed.get("summary") or "")[:500],
+        "artifacts": _sandbox_artifacts(parsed.get("artifacts")),
+        "data": _sandbox_result_data(name, parsed.get("data")),
+    }
+    if error is not None:
+        safe["error"] = {
+            key: error.get(key)
+            for key in ("code", "retryable", "stop")
+            if key in error
+        }
+    return safe
+
+
+def sanitize_tool_trace_error(tool_name: str, error: Any) -> str:
+    if str(tool_name or "") not in SANDBOX_TRACE_TOOL_NAMES or not error:
+        return str(error or "")
+    return _json_dumps({"error_omitted": True, **_text_audit(error)})
 
 
 def _prompt_preview(content: str, *, max_chars: int = 1000) -> str:
@@ -355,7 +613,9 @@ class ToolTracer:
                         trace_id=str(trace_id or "")[:64],
                         run_id=str(run_id or "")[:80],
                         tool_name=str(tool_name or "")[:128],
-                        args_json=_json_dumps(args),
+                        args_json=_json_dumps(
+                            sanitize_tool_trace_args(tool_name, args),
+                        ),
                         status="running",
                         started_at=db_now_naive(),
                     ))
@@ -396,8 +656,14 @@ class ToolTracer:
                         if row.tool_name == "web_search"
                         else MAX_PREVIEW_CHARS
                     )
-                    row.result_preview = _preview(result, max_chars=preview_limit)
-                    row.error = _preview(error, max_chars=1000)
+                    row.result_preview = _preview(
+                        sanitize_tool_trace_result(row.tool_name, result),
+                        max_chars=preview_limit,
+                    )
+                    row.error = _preview(
+                        sanitize_tool_trace_error(row.tool_name, error),
+                        max_chars=1000,
+                    )
                     if latency_ms is not None:
                         row.latency_ms = int(latency_ms)
                     row.finished_at = to_db_naive(finished_at) or db_now_naive()

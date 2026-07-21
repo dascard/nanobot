@@ -173,7 +173,7 @@ def test_tool_plan_exposes_memory_query_by_default_and_can_disable(db_session):
     plan = build_tool_plan(chat_type="private", runtime_preset="full", db=db_session)
     assert "memory_query" in plan.sent_tool_names
     assert any(schema["function"]["name"] == "memory_query" for schema in plan.sent_tool_schemas)
-    assert "memory_query" not in plan.runtime_tool_prompt
+    assert "memory_query：" not in plan.runtime_tool_prompt
 
     db_session.add(ToolOverride(
         tool_name="memory_query",
@@ -216,7 +216,7 @@ def test_superuser_tool_plan_follows_request_preset_instead_of_identity(db_sessi
     )
 
     assert task_preset == "full"
-    assert {"bash", "edit", "write"} <= task_plan.sent_tool_names
+    assert not {"bash", "edit", "write"} & task_plan.sent_tool_names
 
     _, daily_preset, _ = _infer_effort("给我今日的 AI 日报", is_superuser=True)
     daily_plan = build_tool_plan(
@@ -336,7 +336,7 @@ def test_platform_override_cannot_bypass_none_or_hard_constraints(db_session):
     assert enabled_group["reply"] is True
     assert "reply" not in disabled_group
     assert enabled_group["write"] is False
-    assert disabled_group["write"] == "群聊强制禁用"
+    assert disabled_group["write"] == "系统安全硬禁用"
 
 
 def test_build_tool_plan_and_final_tools_pass_platform(db_session):

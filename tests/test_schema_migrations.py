@@ -55,6 +55,12 @@ def test_schema_migrations_records_applied_versions():
     assert "total_final_action_count" in reply_contract_columns
     assert "rolling_session_summaries" in inspector.get_table_names()
     assert "web_search_provider_usage" in inspector.get_table_names()
+    assert {
+        "workspaces",
+        "assets",
+        "workspace_assets",
+        "sandbox_runs",
+    } <= set(inspector.get_table_names())
     rss_columns = [col["name"] for col in inspector.get_columns("rolling_session_summaries")]
     assert "covered_until_turn_id" in rss_columns
     assert "raw_window_start_turn_id" in rss_columns
@@ -65,6 +71,26 @@ def test_schema_migrations_records_applied_versions():
     usage_columns = [col["name"] for col in inspector.get_columns("web_search_provider_usage")]
     assert "total_calls" in usage_columns
     assert "last_error_code" in usage_columns
+    workspace_indexes = {
+        row["name"]
+        for row in inspector.get_indexes("workspaces")
+    }
+    assert "ix_workspace_owner" in workspace_indexes
+    sandbox_run_columns = {
+        column["name"]
+        for column in inspector.get_columns("sandbox_runs")
+    }
+    assert {
+        "request_id",
+        "trace_id",
+        "agent_run_id",
+        "tool_call_id",
+        "image_digest",
+        "termination_reason",
+        "peak_memory_bytes",
+        "stdout_bytes",
+        "stderr_bytes",
+    } <= sandbox_run_columns
 
     with engine.connect() as conn:
         rows = conn.execute(text("SELECT version FROM schema_migrations ORDER BY version")).fetchall()

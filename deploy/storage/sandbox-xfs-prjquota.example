@@ -1,0 +1,19 @@
+# 示例仅供运维变更单使用，不可直接复制后执行。
+# 1. <DATA_UUID> 必须是新建、已备份且专用于 /srv/nanobot 的独立数据盘。
+# 2. 首次格式化、UUID 核对和 fstab 修改必须在单独维护窗口完成。
+# 3. 不得把当前根分区或 Docker Root 设备填入这里。
+
+# /etc/fstab 示例：
+UUID=<DATA_UUID> /srv/nanobot xfs defaults,nodev,nosuid,prjquota 0 2
+
+# 挂载后只读验收：
+findmnt -T /srv/nanobot -o TARGET,SOURCE,FSTYPE,OPTIONS
+scripts/check-sandbox-data-disk.sh /srv/nanobot
+
+# 每个 Workspace 使用唯一 project ID；实际命令由受控脚本生成并二次确认：
+scripts/assign-sandbox-project-quota.sh \
+  --workspace-id <workspace_uuid> \
+  --project-id <唯一整数> \
+  --quota-bytes 2147483648 \
+  --quiesced \
+  --apply

@@ -430,8 +430,13 @@ class NanobotBridge:
             meta_tools = set(TOOL_METADATA) | set(FRAMEWORK_TOOL_METADATA)
             # subagent 不在 KT registry._tools 中，跳过
             missing_meta = kt_tools - meta_tools
-            missing_kt = {t for t in meta_tools - kt_tools
-                          if t not in {"memory_read", "memory_write"}}
+            missing_kt = {
+                t for t in meta_tools - kt_tools
+                if not (
+                    (TOOL_METADATA.get(t) and TOOL_METADATA[t].force_disabled)
+                    or (FRAMEWORK_TOOL_METADATA.get(t) and FRAMEWORK_TOOL_METADATA[t].force_disabled)
+                )
+            }
             if missing_meta:
                 logger.warning("[ToolRegistry] KT tools missing metadata: %s", sorted(missing_meta))
             if missing_kt:

@@ -48,6 +48,12 @@ def install_executor_tracing(executor: Any) -> None:
 
     async def traced_run_tool(job_id: str, tool: Any, args: dict[str, Any], is_direct: bool = False):
         tool_call_id, started = begin_tool_trace(getattr(tool, "tool_name", ""), args)
+        from core.tracing_context import (
+            reset_tool_trace_context,
+            set_tool_trace_context,
+        )
+
+        tool_trace_token = set_tool_trace_context(tool_call_id)
 
         try:
             result = await original_run_tool(job_id, tool, args, is_direct)
@@ -55,21 +61,23 @@ def install_executor_tracing(executor: Any) -> None:
             if tool_call_id:
                 finish_tool_trace(tool_call_id, started, status="error", result="", error=str(e))
             raise
-
-        if tool_call_id:
-            status = "success"
-            error = getattr(result, "error", "") or ""
-            exit_code = getattr(result, "exit_code", 0)
-            if error or exit_code not in (0, None):
-                status = "error"
-            finish_tool_trace(
-                tool_call_id,
-                started,
-                status=status,
-                result=getattr(result, "output", ""),
-                error=error,
-            )
-        return result
+        else:
+            if tool_call_id:
+                status = "success"
+                error = getattr(result, "error", "") or ""
+                exit_code = getattr(result, "exit_code", 0)
+                if error or exit_code not in (0, None):
+                    status = "error"
+                finish_tool_trace(
+                    tool_call_id,
+                    started,
+                    status=status,
+                    result=getattr(result, "output", ""),
+                    error=error,
+                )
+            return result
+        finally:
+            reset_tool_trace_context(tool_trace_token)
 
     executor._run_tool = traced_run_tool
     executor._nanobot_trace_installed = True

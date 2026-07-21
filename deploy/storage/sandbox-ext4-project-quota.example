@@ -1,0 +1,22 @@
+# 示例仅供运维变更单使用，不可直接复制后执行。
+# ext4 必须在格式化时启用 project 文件系统特性，并以 prjquota 挂载。
+# 对已有文件系统启用特性、重挂载或运行 fsck 属于独立高风险窗口，本仓库脚本不会代办。
+
+# 新独立数据盘的 mkfs 设计参数示例（不是可直接运行的命令）：
+# mkfs.ext4 -O project <经过双人核对的新数据设备>
+
+# /etc/fstab 示例：
+UUID=<DATA_UUID> /srv/nanobot ext4 defaults,nodev,nosuid,prjquota 0 2
+
+# 挂载后只读验收：
+findmnt -T /srv/nanobot -o TARGET,SOURCE,FSTYPE,OPTIONS
+tune2fs -l <数据设备> | grep '^Filesystem features:'
+scripts/check-sandbox-data-disk.sh /srv/nanobot
+
+# assign 脚本会使用 chattr project ID/+P 和 setquota -P，且要求维护窗口：
+scripts/assign-sandbox-project-quota.sh \
+  --workspace-id <workspace_uuid> \
+  --project-id <唯一整数> \
+  --quota-bytes 2147483648 \
+  --quiesced \
+  --apply

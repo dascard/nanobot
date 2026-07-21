@@ -1,0 +1,46 @@
+[Unit]
+Description=Nanobot Sandbox runtime TTL 清理
+Documentation=file:/opt/nanobot-server/docs/sandbox-operations.md
+After=docker.service local-fs.target
+Requires=docker.service
+ConditionPathExists=/run/nanobot-sandboxd/runtime-cleanup-approved
+ConditionPathIsMountPoint=/srv/nanobot
+
+[Service]
+Type=oneshot
+User=root
+Group=nanobot-sandboxd
+WorkingDirectory=/opt/nanobot-server
+Environment=NANOBOT_SANDBOX_DATA_ROOT=/srv/nanobot
+Environment=NANOBOT_SANDBOX_RUNTIME_TTL_HOURS=168
+Environment=NANOBOT_SANDBOX_RUNTIME_MAX_BYTES=10737418240
+EnvironmentFile=-/etc/nanobot/sandboxd.env
+
+# 先消费一次性维护批准；失败时不会在下一次定时触发中擅自重试。
+ExecStartPre=/usr/bin/rm -f /run/nanobot-sandboxd/runtime-cleanup-approved
+ExecStart=/opt/nanobot-server/scripts/cleanup-sandbox-runtime.sh --data-root ${NANOBOT_SANDBOX_DATA_ROOT} --ttl-hours ${NANOBOT_SANDBOX_RUNTIME_TTL_HOURS} --max-bytes ${NANOBOT_SANDBOX_RUNTIME_MAX_BYTES} --quiesced --apply
+
+UMask=0077
+ReadWritePaths=/srv/nanobot/runtime /run/lock /run/nanobot-sandboxd
+ReadOnlyPaths=/opt/nanobot-server /var/run/docker.sock
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+PrivateMounts=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_FOWNER
+AmbientCapabilities=CAP_DAC_OVERRIDE CAP_FOWNER
