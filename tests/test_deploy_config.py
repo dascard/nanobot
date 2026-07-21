@@ -218,6 +218,41 @@ def test_worker_services_reuse_server_image_without_duplicate_builds():
     assert "build:" not in outbound_worker
 
 
+def test_nanobot_services_have_bounded_json_file_logs(tmp_path):
+    rendered = _render_compose_with_env(tmp_path, {})
+
+    for service_name in (
+        "nanobot-server",
+        "session-summary-worker",
+        "semantic-index-worker",
+        "outbound-delivery-worker",
+    ):
+        logging = rendered["services"][service_name]["logging"]
+        assert logging == {
+            "driver": "json-file",
+            "options": {"max-file": "3", "max-size": "20m"},
+        }
+
+
+def test_docker_daemon_example_bounds_build_cache_and_default_logs():
+    config = json.loads(
+        Path("deploy/docker/daemon.json.example").read_text(encoding="utf-8")
+    )
+
+    assert config["log-driver"] == "json-file"
+    assert config["log-opts"] == {"max-size": "20m", "max-file": "3"}
+    policies = config["builder"]["gc"]["policy"]
+    assert config["builder"]["gc"]["enabled"] is True
+    assert policies == [
+        {
+            "reservedSpace": "5GB",
+            "maxUsedSpace": "20GB",
+            "minFreeSpace": "60GB",
+            "all": True,
+        }
+    ]
+
+
 def test_compose_workers_use_explicit_minimal_environment_allowlists():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     summary_worker = _service_block(compose, "session-summary-worker")

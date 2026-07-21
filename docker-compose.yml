@@ -1,3 +1,9 @@
+x-nanobot-logging: &nanobot-logging
+  driver: json-file
+  options:
+    max-size: "${NANOBOT_DOCKER_LOG_MAX_SIZE:-20m}"
+    max-file: "${NANOBOT_DOCKER_LOG_MAX_FILES:-3}"
+
 services:
   nanobot-server:
     image: nanobot-runtime:latest
@@ -26,6 +32,7 @@ services:
       - ./sentinel:/app/sentinel
       - ./models:/app/models
       - /run/nanobot-sandboxd:/run/nanobot-sandboxd:ro
+    logging: *nanobot-logging
     restart: unless-stopped
 
   session-summary-worker:
@@ -51,6 +58,7 @@ services:
       - ./models:/app/models
     depends_on:
       - nanobot-server
+    logging: *nanobot-logging
     restart: unless-stopped
 
   outbound-delivery-worker:
@@ -76,6 +84,7 @@ services:
     depends_on:
       - nanobot-server
     stop_grace_period: 5m
+    logging: *nanobot-logging
     restart: unless-stopped
 
   semantic-index-worker:
@@ -94,4 +103,5 @@ services:
       - ./models:/app/models
     depends_on:
       - nanobot-server
+    logging: *nanobot-logging
     restart: unless-stopped
