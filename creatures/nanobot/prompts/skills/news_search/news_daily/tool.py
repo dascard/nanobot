@@ -232,6 +232,90 @@ def _render_no_new_digest(query: str, mode: str, skipped_seen: int) -> str:
     })
 
 
+def _render_no_candidates_digest(
+    query: str,
+    mode: str,
+    freshness: str,
+) -> str:
+    from ..render import render_html
+
+    window_labels = {
+        "today": "今天截至当前",
+        "latest": "最近 72 小时",
+        "week": "最近 7 天",
+        "custom": "指定日期",
+    }
+    window_label = window_labels.get(freshness, "指定时间窗口")
+    return render_html({
+        "title": "AI 日报暂无近期内容",
+        "subtitle": query[:30],
+        "verdict": f"已检查{window_label}的资讯，当前没有符合时间条件的可推送条目。",
+        "generated_at": db_now_naive().strftime("%Y-%m-%d %H:%M"),
+        "mode": mode,
+        "top_story": None,
+        "highlights": [],
+        "details": [],
+        "watchlist": [],
+        "missing_info": ["时间窗口内无候选资讯"],
+        "closing": "可稍后重试；日报与早报会自动扩展到最近 72 小时检索。",
+        "sources": [],
+    })
+
+
+def _latest_fallback_request(request: AiDailyRequest) -> AiDailyRequest | None:
+    if request.freshness != "today":
+        return None
+    if not runtime_cache._is_daily_digest_query(request.query):
+        return None
+    return parse_ai_daily_request(
+        {
+            "query": request.query,
+            "max_results": request.max_results,
+            "freshness": "latest",
+            "no_cache": request.no_cache,
+            "refresh": request.refresh,
+        },
+        now=request.reference_time,
+    )
+
+
+def _rank_candidates(items: list[Any], request: AiDailyRequest) -> list[Any]:
+    candidates = filter_for_ai_daily_request(items, request)
+    candidates = dedup_items(candidates)
+    return rank_items(candidates, now=request.reference_time_naive)
+
+
+def _filter_unseen_candidates(
+    items: list[Any],
+    *,
+    query: str,
+) -> tuple[list[Any], dict[str, Any]]:
+    try:
+        from core.ai_daily_ingest import best_effort_filter_new_ai_daily_items
+
+        return best_effort_filter_new_ai_daily_items(items, query=query)
+    except Exception as exc:
+        logger.warning("[daily] history dedup unavailable: %s", exc)
+        return list(items), {
+            "input": len(items),
+            "kept": len(items),
+            "skipped_seen": 0,
+            "warnings": ["ai_daily_history_dedup_unavailable"],
+        }
+
+
+def _prepare_candidates(
+    normalized_items: list[Any],
+    request: AiDailyRequest,
+) -> tuple[list[Any], int, dict[str, Any]]:
+    ranked = _rank_candidates(normalized_items, request)
+    unseen, history_dedup = _filter_unseen_candidates(
+        ranked,
+        query=request.query,
+    )
+    return unseen, len(ranked), history_dedup
+
+
 def run_news_search_auto(request: AiDailyRequest) -> str:
     """对外唯一入口：quality → daily fallback → fallback_digest。"""
     # 1. quality (LLM)
@@ -265,7 +349,6 @@ def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
     t0 = _time.time()
     query = request.query
     limit = request.max_results
-    reference_now = request.reference_time_naive
 
     providers = _get_providers(mode)
     items = collect_sources(
@@ -275,21 +358,47 @@ def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
     )
     logger.info("[daily] collect: %d items in %.1fs", len(items), _time.time() - t0)
 
-    items = normalize_items(items)
-    items = filter_for_ai_daily_request(items, request)
-    items = dedup_items(items)
-    items = rank_items(items, now=reference_now)
-    try:
-        from core.ai_daily_ingest import best_effort_filter_new_ai_daily_items
+    normalized_items = normalize_items(items)
+    effective_request = request
+    items, candidate_count, history_dedup = _prepare_candidates(
+        normalized_items,
+        effective_request,
+    )
 
-        items, history_dedup = best_effort_filter_new_ai_daily_items(items, query=query)
-        skipped_seen = int(history_dedup.get("skipped_seen") or 0)
-        if skipped_seen:
-            logger.info("[daily] history dedup skipped=%d kept=%d", skipped_seen, len(items))
-        if not items:
-            return _render_no_new_digest(query, mode, skipped_seen)
-    except Exception as e:
-        logger.warning("[daily] history dedup unavailable: %s", e)
+    fallback_request = _latest_fallback_request(request)
+    if not items and fallback_request is not None:
+        today_candidate_count = candidate_count
+        today_skipped_seen = int(history_dedup.get("skipped_seen") or 0)
+        effective_request = fallback_request
+        items, candidate_count, history_dedup = _prepare_candidates(
+            normalized_items,
+            effective_request,
+        )
+        logger.info(
+            "[daily] today→latest fallback: today_candidates=%d "
+            "today_skipped_seen=%d latest_candidates=%d latest_unseen=%d",
+            today_candidate_count,
+            today_skipped_seen,
+            candidate_count,
+            len(items),
+        )
+
+    skipped_seen = int(history_dedup.get("skipped_seen") or 0)
+    logger.info(
+        "[daily] window=%s candidates=%d unseen=%d skipped_seen=%d",
+        effective_request.freshness,
+        candidate_count,
+        len(items),
+        skipped_seen,
+    )
+    if not items:
+        if candidate_count == 0:
+            return _render_no_candidates_digest(
+                query,
+                mode,
+                effective_request.freshness,
+            )
+        return _render_no_new_digest(query, mode, skipped_seen)
     items = items[:limit]
 
     if mode == "daily":
@@ -298,12 +407,12 @@ def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
         from .pipeline.cluster import cluster_articles
         from .pipeline.diversify import score_clusters, select_diverse_clusters, build_daily_report
 
-        now = reference_now
+        now = effective_request.reference_time_naive
         articles = normalize_articles(items)
         articles = filter_fresh_articles(
             articles,
             now,
-            max_age_hours=request.max_age_hours,
+            max_age_hours=effective_request.max_age_hours,
         )
         clusters = cluster_articles(articles)
         clusters = score_clusters(clusters, now)
@@ -311,7 +420,7 @@ def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
             select_diverse_clusters(
                 clusters,
                 now,
-                max_age_hours=request.max_age_hours,
+                max_age_hours=effective_request.max_age_hours,
                 limit=request.max_results,
             )
             if clusters
@@ -320,7 +429,7 @@ def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
         report = build_daily_report(
             clusters,
             now,
-            max_age_hours=request.max_age_hours,
+            max_age_hours=effective_request.max_age_hours,
             limit=request.max_results,
         )
         digest = _report_to_digest(report, articles)

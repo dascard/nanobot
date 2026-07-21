@@ -259,3 +259,123 @@ def test_news_daily_pipeline_filters_seen_items_before_digest(monkeypatch):
 
     assert "<html" in html
     assert captured["urls"] == ["https://example.com/new"]
+
+
+def test_news_daily_today_digest_falls_back_to_latest_unseen_items(monkeypatch):
+    from datetime import datetime
+
+    from core.tool_contracts.ai_daily import parse_ai_daily_request
+    from creatures.nanobot.prompts.skills.news_search.news_daily import tool as daily_tool
+    from creatures.nanobot.prompts.skills.news_search.news_daily.schema import NewsItem
+
+    seen_today = NewsItem(
+        title="今天已推送新闻",
+        url="https://example.com/seen",
+        published_at="2026-07-20T01:00:00+08:00",
+    )
+    unseen_yesterday = NewsItem(
+        title="昨日下午新新闻",
+        url="https://example.com/unseen",
+        published_at="2026-07-19T12:00:00+08:00",
+    )
+    captured = {}
+
+    monkeypatch.setattr(daily_tool, "_get_providers", lambda mode: [])
+    monkeypatch.setattr(
+        daily_tool,
+        "collect_sources",
+        lambda providers, limit_per_source=8, timeout=10: [
+            seen_today,
+            unseen_yesterday,
+        ],
+    )
+    monkeypatch.setattr(daily_tool, "dedup_items", lambda items: items)
+    monkeypatch.setattr(daily_tool, "rank_items", lambda items, now=None: items)
+    monkeypatch.setattr(
+        "core.ai_daily_ingest.best_effort_filter_new_ai_daily_items",
+        lambda items, query="": (
+            [item for item in items if item.url.endswith("/unseen")],
+            {
+                "input": len(items),
+                "kept": sum(item.url.endswith("/unseen") for item in items),
+                "skipped_seen": sum(item.url.endswith("/seen") for item in items),
+                "warnings": [],
+            },
+        ),
+    )
+
+    def fake_digest(items, query="", mode="fast"):
+        captured["urls"] = [item.url for item in items]
+        return {
+            "title": "AI 日报",
+            "subtitle": "",
+            "verdict": "ok",
+            "generated_at": "2026-07-20 08:00",
+            "mode": mode,
+            "highlights": [{"label": "新", "text": "新新闻", "source_ids": []}],
+            "sources": [],
+        }
+
+    monkeypatch.setattr(daily_tool, "build_digest_deterministic", fake_digest)
+    request = parse_ai_daily_request(
+        {"query": "今日 AI 日报", "freshness": "today"},
+        now=datetime.fromisoformat("2026-07-20T08:00:00+08:00"),
+    )
+
+    html = daily_tool.run_pipeline(request, mode="fast")
+
+    assert "<html" in html
+    assert captured["urls"] == ["https://example.com/unseen"]
+
+
+def test_news_daily_empty_window_is_not_reported_as_zero_history_dedup(monkeypatch):
+    from datetime import datetime
+
+    from core.tool_contracts.ai_daily import parse_ai_daily_request
+    from creatures.nanobot.prompts.skills.news_search.news_daily import tool as daily_tool
+
+    monkeypatch.setattr(daily_tool, "_get_providers", lambda mode: [])
+    monkeypatch.setattr(
+        daily_tool,
+        "collect_sources",
+        lambda providers, limit_per_source=8, timeout=10: [],
+    )
+    request = parse_ai_daily_request(
+        {"query": "今日 AI 日报", "freshness": "today"},
+        now=datetime.fromisoformat("2026-07-20T08:00:00+08:00"),
+    )
+
+    html = daily_tool.run_pipeline(request, mode="fast")
+
+    assert "AI 日报暂无近期内容" in html
+    assert "最近 72 小时" in html
+    assert "已过滤此前推送过的 0 条资讯" not in html
+
+
+def test_news_daily_plain_today_query_keeps_strict_today_window(monkeypatch):
+    from datetime import datetime
+
+    from core.tool_contracts.ai_daily import parse_ai_daily_request
+    from creatures.nanobot.prompts.skills.news_search.news_daily import tool as daily_tool
+    from creatures.nanobot.prompts.skills.news_search.news_daily.schema import NewsItem
+
+    yesterday = NewsItem(
+        title="昨日新闻",
+        url="https://example.com/yesterday",
+        published_at="2026-07-19T12:00:00+08:00",
+    )
+    monkeypatch.setattr(daily_tool, "_get_providers", lambda mode: [])
+    monkeypatch.setattr(
+        daily_tool,
+        "collect_sources",
+        lambda providers, limit_per_source=8, timeout=10: [yesterday],
+    )
+    request = parse_ai_daily_request(
+        {"query": "今天的人工智能新闻", "freshness": "today"},
+        now=datetime.fromisoformat("2026-07-20T08:00:00+08:00"),
+    )
+
+    html = daily_tool.run_pipeline(request, mode="fast")
+
+    assert "已检查今天截至当前的资讯" in html
+    assert "昨日新闻" not in html
