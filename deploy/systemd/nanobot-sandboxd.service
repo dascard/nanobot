@@ -3,7 +3,9 @@ Description=Nanobot 宿主 Sandbox Docker 控制面
 Documentation=file:/opt/nanobot-server/docs/sandbox-operations.md
 Requires=docker.service
 After=docker.service local-fs.target
+RequiresMountsFor=/srv/nanobot
 ConditionPathExists=/var/run/docker.sock
+ConditionPathIsMountPoint=/srv/nanobot
 
 [Service]
 Type=simple
@@ -12,6 +14,7 @@ Group=nanobot-sandboxd
 WorkingDirectory=/opt/nanobot-server
 EnvironmentFile=/etc/nanobot/sandboxd.env
 ExecStartPre=/usr/bin/test -S /var/run/docker.sock
+ExecStartPre=/usr/bin/mountpoint -q /srv/nanobot
 ExecStart=/opt/nanobot-sandboxd/venv/bin/python -m sandboxd.app
 Restart=on-failure
 RestartSec=3s
