@@ -373,6 +373,9 @@ def test_dockerignore_excludes_runtime_model_directories():
 
     assert "models/" in ignored
     assert "sentinel/" in ignored
+    assert "**/.git/" in ignored
+    assert "*.egg-info/" in ignored
+    assert "vendor/KohakuTerrarium/build/" in ignored
 
 
 def test_new_api_timeout_defaults_to_300_seconds():

@@ -27,6 +27,7 @@ webui/data/
 # 测试、文档和仅供开发使用的项目
 tests/
 vendor/KohakuTerrarium/tests/
+vendor/KohakuTerrarium/build/
 docs/
 design-system/
 cc2codex/
