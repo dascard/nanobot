@@ -1,21 +1,48 @@
 diff --git a/src/kohakuterrarium/core/controller.py b/src/kohakuterrarium/core/controller.py
-index b04a3072..735d5707 100644
 --- a/src/kohakuterrarium/core/controller.py
 +++ b/src/kohakuterrarium/core/controller.py
-@@ -840,0 +841 @@ class Controller:
+@@ -833,12 +833,13 @@ class Controller:
+         user_content, combined_text = self._build_turn_context(events)
 +        user_stream = any(bool((e.context or {}).get("stream")) for e in events)
-@@ -842 +843 @@ class Controller:
+         # Skip user append: native-mode tool round-trips, and pure regen.
+         skip_empty = (self._is_native_mode and not combined_text.strip()) or any(
+             e.type == "user_input"
+             and e.context.get("rerun")
+             and not e.context.get("edited")
+             for e in events
+         )
+         if not skip_empty:
 -            self.conversation.append("user", user_content)
 +            self.conversation.append("user", user_content, stream=user_stream)
+-
++
+         messages = self.conversation.to_messages()
 diff --git a/src/kohakuterrarium/llm/message.py b/src/kohakuterrarium/llm/message.py
-index d28c4c39..aff73ffd 100644
 --- a/src/kohakuterrarium/llm/message.py
 +++ b/src/kohakuterrarium/llm/message.py
-@@ -195,0 +196 @@ class Message:
+@@ -190,11 +190,12 @@ class Message:
+     Attributes:
+         role: Message role (system, user, assistant, tool)
+         content: Message content - either str or list of ContentPart for multimodal
+         name: Optional name for the message sender
+         tool_call_id: For tool messages, the ID of the tool call this responds to
+         tool_calls: Native tool call records (assistant role)
 +        stream: Internal flag marking whether this message came from a streaming request
-@@ -207,0 +209 @@ class Message:
+         metadata: Optional metadata (NOT sent to API, for internal use)
+         extra_fields: Non-standard top-level fields captured from the provider
+             (e.g. ``reasoning_content``, ``reasoning_details``). Spread back
+             into the outgoing wire format so stateful-chain reasoning models
+             see their own prior state on the next turn.
+@@ -203,7 +204,8 @@ class Message:
+     role: Role
+     content: str | list[ContentPart]
+     name: str | None = None
+     tool_call_id: str | None = None
+     tool_calls: list[dict[str, Any]] | None = None
 +    stream: bool = False
-@@ -252 +254,6 @@ class Message:
+     metadata: dict[str, Any] = field(default_factory=dict)
+     extra_fields: dict[str, Any] = field(default_factory=dict)
+@@ -252,4 +254,9 @@ class Message:
 -        extras = {k: v for k, v in data.items() if k not in _STANDARD_MESSAGE_KEYS}
 +        stream = bool(data.get("stream", False))
 +        extras = {
@@ -23,5 +50,16 @@ index d28c4c39..aff73ffd 100644
 +            for k, v in data.items()
 +            if k not in _STANDARD_MESSAGE_KEYS and k != "stream"
 +        }
-@@ -262,0 +270 @@ class Message:
+         # Drop internal-only keys that callers (e.g. persistence layer)
+         # pass through dict shape — those don't belong on the wire.
+         extras.pop("metadata", None)
+@@ -257,8 +264,9 @@ class Message:
+         return cls(
+             role=data["role"],
+             content=content,
+             name=data.get("name"),
+             tool_call_id=data.get("tool_call_id"),
+             tool_calls=data.get("tool_calls"),
 +            stream=stream,
+             extra_fields=extras,
+         )

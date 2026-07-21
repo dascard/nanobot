@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 from evals.schema import EvalCase, SuiteReport
@@ -502,6 +503,31 @@ def test_eval_workflow_keeps_kohaku_patch_available():
     assert "src/kohakuterrarium/core/controller.py" in patch_text
     assert "src/kohakuterrarium/llm/message.py" in patch_text
     assert "git -C \"$KT_DIR\" apply --check \"$PATCH_FILE\"" in script_text
+
+
+def test_eval_kohaku_patch_matches_pinned_submodule():
+    patch = Path("patches/kohakuterrarium/stream-message-flag.patch").resolve()
+    kt_dir = Path("vendor/KohakuTerrarium")
+    controller = kt_dir / "src/kohakuterrarium/core/controller.py"
+    message = kt_dir / "src/kohakuterrarium/llm/message.py"
+
+    controller_text = controller.read_text(encoding="utf-8")
+    message_text = message.read_text(encoding="utf-8")
+    if (
+        'conversation.append("user", user_content, stream=user_stream)'
+        in controller_text
+        and "stream=stream" in message_text
+    ):
+        return
+
+    result = subprocess.run(
+        ["git", "-C", str(kt_dir), "apply", "--check", str(patch)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_eval_workflow_uploads_periodic_manifest():
