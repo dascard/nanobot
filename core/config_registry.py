@@ -892,10 +892,10 @@ SETTING_DEFS: dict[str, SettingDef] = {
 }
 
 _OUTREACH_ROUTE_DEFAULTS = {
-    "timing_proactive": {"timeout": 30, "temperature": 0.0, "max_tokens": 512},
-    "outreach_extract": {"timeout": 30, "temperature": 0.0, "max_tokens": 512},
-    "outreach_judge": {"timeout": 45, "temperature": 0.0, "max_tokens": 768},
-    "outreach_generate": {"timeout": 60, "temperature": 0.7, "max_tokens": 1024},
+    "timing_proactive": {"timeout": 30, "temperature": 0.0, "max_tokens": 65536},
+    "outreach_extract": {"timeout": 30, "temperature": 0.0, "max_tokens": 65536},
+    "outreach_judge": {"timeout": 45, "temperature": 0.0, "max_tokens": 65536},
+    "outreach_generate": {"timeout": 60, "temperature": 0.7, "max_tokens": 65536},
 }
 
 for _route_key, _route_defaults in _OUTREACH_ROUTE_DEFAULTS.items():
@@ -945,7 +945,7 @@ for _route_key, _route_defaults in _OUTREACH_ROUTE_DEFAULTS.items():
                 category="model",
                 description=f"{_route_key} {_field}",
                 min_value=0 if _field == "temperature" else (3 if _field == "timeout" else 5),
-                max_value=2 if _field == "temperature" else (300 if _field == "timeout" else 8192),
+                max_value=2 if _field == "temperature" else (300 if _field == "timeout" else 65536),
             ),
         )
     SETTING_DEFS.setdefault(
@@ -953,7 +953,7 @@ for _route_key, _route_defaults in _OUTREACH_ROUTE_DEFAULTS.items():
         SettingDef(
             key=f"model.route.{_route_key}.enable_thinking",
             env_name="",
-            default="false",
+            default="true",
             value_type="str",
             category="model",
             description=f"{_route_key} thinking 模式: auto/true/false",

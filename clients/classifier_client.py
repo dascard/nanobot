@@ -189,7 +189,7 @@ def _resolve_classifier_route(route_key: str) -> dict:
     enable_thinking_key = f"{prefix}.enable_thinking"
     enable_thinking = _get_setting_value(enable_thinking_key, "")
     if route_key in _OUTREACH_ROUTE_KEYS:
-        base["enable_thinking"] = normalize_enable_thinking(enable_thinking or "false")
+        base["enable_thinking"] = normalize_enable_thinking(enable_thinking or "true")
     elif _setting_is_explicit(enable_thinking_key, enable_thinking):
         base["enable_thinking"] = normalize_enable_thinking(enable_thinking)
 

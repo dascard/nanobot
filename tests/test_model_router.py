@@ -225,10 +225,10 @@ class TestClassifierRouteProviderResolution:
         assert route["base_url"] == "http://newapi:9000/v1"
         assert route["api_key"] == "newapi-key"
         assert route["model"] == "reply-route-model"
-        assert route["max_tokens"] == 512
+        assert route["max_tokens"] == 65536
         assert route["temperature"] == 0.0
         assert route["timeout"] == 30
-        assert route["enable_thinking"] == "false"
+        assert route["enable_thinking"] == "true"
         assert route["inherited_from"] == "reply"
         assert route["source"] == "inherited_from_reply"
 
@@ -252,7 +252,7 @@ class TestClassifierRouteProviderResolution:
 
         assert route["provider_id"] == "newapi"
         assert route["model"] == "legacy-main-reply-model"
-        assert route["max_tokens"] == 512
+        assert route["max_tokens"] == 65536
 
     def test_route_enable_thinking_inherits_and_overrides(self, monkeypatch):
         from clients.classifier_client import resolve_model_route
