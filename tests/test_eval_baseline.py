@@ -467,6 +467,7 @@ def test_eval_pr_gate_workflow_runs_unified_script():
     assert "actions/setup-python@v6" in text
     assert "submodules: recursive" in text
     assert "scripts/apply_kohaku_patches.sh" in text
+    assert "pip install --no-deps ./vendor/KohakuTerrarium" in text
     assert "scripts/run_eval_pr_gate.sh" in text
 
 
