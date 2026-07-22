@@ -90,6 +90,7 @@ Nanobot Sandbox 生产管理脚本
 子命令：
   configure             保存设备、备份目标和镜像版本等非敏感参数
   update-release        更新已发布的精确提交与镜像版本
+  promote-release       将已验收候选提交的来源提升为 origin/master
   status                只读显示主机、控制面、镜像和阶段状态
   prepare-host          安装依赖、准备数据盘、目录和 AppArmor
   build-image           构建固定版本 Sandbox 镜像
@@ -114,6 +115,7 @@ configure 参数：
   --accept-local-same-disk-risk
                              明确接受同盘备份仅用于逻辑回滚、不提供硬盘灾备
   [--release <40 位提交>]
+  [--release-ref <远端引用>]
   [--version <镜像版本>]
   [--sandboxd-gid 10001]
 
@@ -123,10 +125,16 @@ prepare-host 参数：
                              仅在构建前原地补足既有空 XFS 镜像的实际分配空间
 
 update-release 参数：
-  --release <40 位提交>      必须等于干净 checkout 且已发布到 origin/master
+  --release <40 位提交>      必须等于干净 checkout
+  [--release-ref <远端引用>] origin/master，或显式候选引用
+                             origin/release-candidates/<名称>
   [--version <镜像版本>]
   [--reuse-built-image]     镜像输入未变化时复用已构建镜像
   [--rerun-smoke]           配合复用镜像归档旧 Smoke 凭据并强制重新验证
+
+promote-release 参数：
+  不接受参数。仅在 runtime-deployed 完成且相同提交已进入 origin/master 后，
+  将发布来源从候选引用更新为 origin/master，不改变 RELEASE 或阶段凭据。
 
 smoke 参数：
   --retry                    删除并重建本脚本固定命名的失败 Smoke worktree
@@ -233,6 +241,29 @@ assert_no_advanced_stages() {
   done
 }
 
+validate_release_ref() {
+  local release_ref="$1"
+  case "${release_ref}" in
+    origin/master|origin/release-candidates/*)
+      ;;
+    *)
+      die "RELEASE_REF 只允许 origin/master 或 origin/release-candidates/<名称>"
+      ;;
+  esac
+  repo_git check-ref-format "refs/remotes/${release_ref}" >/dev/null 2>&1 \
+    || die "RELEASE_REF 不是有效的远端跟踪分支：${release_ref}"
+}
+
+assert_release_published() {
+  local release="$1"
+  local release_ref="$2"
+  validate_release_ref "${release_ref}"
+  repo_git rev-parse --verify --quiet "${release_ref}^{commit}" >/dev/null \
+    || die "发布来源不存在或不是提交：${release_ref}"
+  repo_git merge-base --is-ancestor "${release}" "${release_ref}" \
+    || die "RELEASE=${release} 尚未发布到 ${release_ref}"
+}
+
 validate_release() {
   [[ "${RELEASE}" =~ ^[0-9a-f]{40}$ ]] || die "RELEASE 必须是 40 位小写提交哈希"
 }
@@ -249,6 +280,7 @@ assert_release_checkout_current() {
     || die "生产 checkout HEAD 与配置 RELEASE 不一致"
   [[ -z "$(repo_git status --porcelain)" ]] \
     || die "生产 checkout 不干净，拒绝执行生产阶段"
+  assert_release_published "${RELEASE}" "${RELEASE_REF}"
 }
 
 validate_config_values() {
@@ -306,6 +338,7 @@ validate_config_values() {
   (( SYSTEM_MIN_FREE_BYTES >= 60 * 1024 * 1024 * 1024 )) \
     || die "根文件系统最低保留空间不得低于 60 GiB"
   validate_release
+  validate_release_ref "${RELEASE_REF}"
 }
 
 load_config() {
@@ -315,6 +348,8 @@ load_config() {
   [[ "$(stat -c '%u:%a' "${CONFIG_FILE}")" == "0:600" ]] \
     || die "${CONFIG_FILE} 必须由 root 拥有且权限为 0600"
 
+  # 旧配置没有 RELEASE_REF；先清除调用环境中的同名变量，避免环境覆盖默认来源。
+  unset RELEASE_REF
   # 配置由本脚本以 root:0600 和 printf %q 写入，可安全加载。
   # shellcheck disable=SC1090
   source "${CONFIG_FILE}"
@@ -327,6 +362,7 @@ load_config() {
   BACKUP_RISK_MARKER="${BACKUP_RISK_MARKER:-none}"
   BACKUP_MAX_BYTES="${BACKUP_MAX_BYTES:-${BACKUP_MAX_BYTES_FIXED}}"
   SYSTEM_MIN_FREE_BYTES="${SYSTEM_MIN_FREE_BYTES:-64424509440}"
+  RELEASE_REF="${RELEASE_REF:-origin/master}"
   : "${BACKUP_MOUNT:?}"
   : "${RELEASE:?}"
   : "${VERSION:?}"
@@ -356,6 +392,7 @@ write_config() {
     printf 'BACKUP_RISK_MARKER=%q\n' "${BACKUP_RISK_MARKER}"
     printf 'BACKUP_MAX_BYTES=%q\n' "${BACKUP_MAX_BYTES}"
     printf 'RELEASE=%q\n' "${RELEASE}"
+    printf 'RELEASE_REF=%q\n' "${RELEASE_REF}"
     printf 'VERSION=%q\n' "${VERSION}"
     printf 'SANDBOXD_GID=%q\n' "${SANDBOXD_GID}"
     printf 'WORKSPACE_QUOTA_BYTES=%q\n' "${WORKSPACE_QUOTA_BYTES}"
@@ -380,6 +417,7 @@ configure_command() {
   local backup_mount=""
   local accept_local_same_disk_risk=false
   local release
+  local release_ref="origin/master"
   local version=""
   local sandboxd_gid="10001"
 
@@ -420,6 +458,11 @@ configure_command() {
       --release)
         [[ $# -ge 2 ]] || die "--release 缺少参数"
         release="$2"
+        shift 2
+        ;;
+      --release-ref)
+        [[ $# -ge 2 ]] || die "--release-ref 缺少参数"
+        release_ref="$2"
         shift 2
         ;;
       --version)
@@ -494,6 +537,7 @@ configure_command() {
   esac
   BACKUP_MOUNT="$(realpath -e "${backup_mount}")"
   RELEASE="${release}"
+  RELEASE_REF="${release_ref}"
   VERSION="${version:-${release:0:7}-$(date +%Y%m%d)}"
   SANDBOXD_GID="${sandboxd_gid}"
   WORKSPACE_QUOTA_BYTES=2147483648
@@ -512,8 +556,7 @@ configure_command() {
   repo_git ls-files --error-unmatch scripts/manage-sandbox-production.sh \
     >/dev/null 2>&1 \
     || die "本管理脚本尚未纳入 RELEASE"
-  repo_git merge-base --is-ancestor "${RELEASE}" origin/master \
-    || die "configure 要求 RELEASE 已发布且属于 origin/master 历史"
+  assert_release_published "${RELEASE}" "${RELEASE_REF}"
   [[ ! -e "${CONFIG_FILE}" ]] \
     || die "配置已存在：${CONFIG_FILE}；为防止阶段凭据错配，脚本拒绝直接覆盖"
   write_config
@@ -534,6 +577,7 @@ configure_command() {
     "$((SYSTEM_MIN_FREE_BYTES / 1024 / 1024 / 1024))"
   printf 'BACKUP_RISK_MARKER=%s\n' "${BACKUP_RISK_MARKER}"
   printf 'RELEASE=%s\n' "${RELEASE}"
+  printf 'RELEASE_REF=%s\n' "${RELEASE_REF}"
   printf 'VERSION=%s\n' "${VERSION}"
   printf '下一步：sudo %s prepare-host --initialize-storage\n' "$0"
 }
@@ -545,6 +589,7 @@ update_release_command() {
   local previous_release="${RELEASE}"
   local previous_version="${VERSION}"
   local new_release=""
+  local new_release_ref="${RELEASE_REF}"
   local new_version=""
   local reuse_built_image=false
   local rerun_smoke=false
@@ -558,6 +603,11 @@ update_release_command() {
       --release)
         [[ $# -ge 2 ]] || die "--release 缺少参数"
         new_release="$2"
+        shift 2
+        ;;
+      --release-ref)
+        [[ $# -ge 2 ]] || die "--release-ref 缺少参数"
+        new_release_ref="$2"
         shift 2
         ;;
       --version)
@@ -591,8 +641,7 @@ update_release_command() {
     || die "update-release 要求新 RELEASE 等于当前 HEAD"
   [[ -z "$(repo_git status --porcelain)" ]] \
     || die "生产 checkout 不干净；请先完成审查、测试、提交和推送"
-  repo_git merge-base --is-ancestor "${new_release}" origin/master \
-    || die "update-release 要求新 RELEASE 已发布且属于 origin/master 历史"
+  assert_release_published "${new_release}" "${new_release_ref}"
   if [[ "${rerun_smoke}" == "true" \
       && "${reuse_built_image}" != "true" ]]; then
     die "--rerun-smoke 只能与 --reuse-built-image 同时使用"
@@ -634,6 +683,7 @@ update_release_command() {
   fi
 
   RELEASE="${new_release}"
+  RELEASE_REF="${new_release_ref}"
   if [[ "${reuse_built_image}" == "true" ]]; then
     VERSION="${previous_version}"
   else
@@ -654,8 +704,36 @@ update_release_command() {
   printf 'PREVIOUS_RELEASE=%s\n' "${previous_release}"
   printf 'PREVIOUS_VERSION=%s\n' "${previous_version}"
   printf 'RELEASE=%s\n' "${RELEASE}"
+  printf 'RELEASE_REF=%s\n' "${RELEASE_REF}"
   printf 'VERSION=%s\n' "${VERSION}"
   printf '下一步：重新运行 sudo %s prepare-host；若状态报告稀疏，只能增加 --repair-loopback-allocation\n' "$0"
+}
+
+promote_release_command() {
+  require_no_extra_args "$@"
+  require_root
+  load_config
+  require_stage runtime-deployed
+  assert_release_checkout_current
+  assert_runtime_current
+
+  if [[ "${RELEASE_REF}" == "origin/master" ]]; then
+    log "RELEASE 已由 origin/master 固定，无需重复提升"
+    return 0
+  fi
+  [[ "${RELEASE_REF}" == origin/release-candidates/* ]] \
+    || die "当前发布来源不是受控候选引用：${RELEASE_REF}"
+  assert_release_published "${RELEASE}" origin/master
+
+  local previous_release_ref="${RELEASE_REF}"
+  RELEASE_REF="origin/master"
+  validate_config_values
+  write_config
+
+  log "已将相同 RELEASE 的发布来源提升为 origin/master；阶段凭据保持不变"
+  printf 'RELEASE=%s\n' "${RELEASE}"
+  printf 'PREVIOUS_RELEASE_REF=%s\n' "${previous_release_ref}"
+  printf 'RELEASE_REF=%s\n' "${RELEASE_REF}"
 }
 
 assert_data_device_not_root_chain() {
@@ -1625,21 +1703,67 @@ install_release_tree() {
     chmod 0644 "${partial_dir}/.nanobot-release"
     mv -- "${partial_dir}" "${RELEASE_DIR}"
   fi
+  [[ -d "${RELEASE_DIR}" && ! -L "${RELEASE_DIR}" ]] \
+    || die "发布树不是受管普通目录：${RELEASE_DIR}"
   [[ -f "${RELEASE_DIR}/.nanobot-release" \
+      && ! -L "${RELEASE_DIR}/.nanobot-release" \
       && "$(cat "${RELEASE_DIR}/.nanobot-release")" == "${RELEASE}" ]] \
     || die "发布树缺少正确的版本标记：${RELEASE_DIR}"
   [[ -f "${RELEASE_DIR}/sandboxd/app.py" \
-      && -f "${RELEASE_DIR}/requirements-sandboxd.lock" ]] \
+      && ! -L "${RELEASE_DIR}/sandboxd/app.py" \
+      && -f "${RELEASE_DIR}/requirements-sandboxd.lock" \
+      && ! -L "${RELEASE_DIR}/requirements-sandboxd.lock" ]] \
     || die "发布树内容不完整：${RELEASE_DIR}"
 
+  if [[ -e "${SERVER_RELEASE_LINK}" \
+      && ! -L "${SERVER_RELEASE_LINK}" ]]; then
+    die "${SERVER_RELEASE_LINK} 已存在且不是预期符号链接"
+  fi
+}
+
+activate_release_tree() {
+  local releases_root
+  local current_target=""
+  local current_release=""
+  local link_parent
+  local temporary_dir
+
+  releases_root="$(dirname "${RELEASE_DIR}")"
   if [[ -L "${SERVER_RELEASE_LINK}" ]]; then
-    [[ "$(readlink -f "${SERVER_RELEASE_LINK}")" == "${RELEASE_DIR}" ]] \
-      || die "${SERVER_RELEASE_LINK} 指向其他发布版本"
+    current_target="$(readlink -f -- "${SERVER_RELEASE_LINK}" 2>/dev/null)" \
+      || die "${SERVER_RELEASE_LINK} 是无法解析的符号链接"
+    [[ -n "${current_target}" ]] \
+      || die "${SERVER_RELEASE_LINK} 是无法解析的符号链接"
+    if [[ "${current_target}" == "${RELEASE_DIR}" ]]; then
+      return 0
+    fi
+
+    current_release="${current_target#${releases_root}/}"
+    [[ "${current_release}" =~ ^[0-9a-f]{40}$ \
+        && "${current_target}" == "${releases_root}/${current_release}" ]] \
+      || die "${SERVER_RELEASE_LINK} 当前目标不属于受管发布目录"
+    [[ -d "${current_target}" && ! -L "${current_target}" ]] \
+      || die "当前发布目录不存在或是符号链接：${current_target}"
+    [[ -f "${current_target}/.nanobot-release" \
+        && ! -L "${current_target}/.nanobot-release" \
+        && "$(cat "${current_target}/.nanobot-release")" == "${current_release}" ]] \
+      || die "当前发布目录版本标记无效：${current_target}"
+    repo_git cat-file -e "${current_release}^{commit}" 2>/dev/null \
+      || die "当前发布提交不在生产仓库中：${current_release}"
+    repo_git merge-base --is-ancestor "${current_release}" "${RELEASE}" \
+      || die "控制面发布树只允许快进切换"
   elif [[ -e "${SERVER_RELEASE_LINK}" ]]; then
     die "${SERVER_RELEASE_LINK} 已存在且不是预期符号链接"
-  else
-    ln -s "${RELEASE_DIR}" "${SERVER_RELEASE_LINK}"
   fi
+
+  link_parent="$(dirname "${SERVER_RELEASE_LINK}")"
+  temporary_dir="$(mktemp -d "${link_parent}/.nanobot-server-link.XXXXXX")"
+  ln -s -- "${RELEASE_DIR}" "${temporary_dir}/nanobot-server"
+  mv -Tf -- "${temporary_dir}/nanobot-server" "${SERVER_RELEASE_LINK}"
+  rmdir -- "${temporary_dir}"
+  [[ -L "${SERVER_RELEASE_LINK}" \
+      && "$(readlink -f -- "${SERVER_RELEASE_LINK}")" == "${RELEASE_DIR}" ]] \
+    || die "控制面发布树原子切换后校验失败"
 }
 
 install_sandboxd_python() {
@@ -1673,7 +1797,7 @@ install_sandboxd_python() {
     -u all_proxy -u ALL_PROXY \
     "${SANDBOXD_VENV}/bin/python" -m pip install \
     --require-hashes \
-    -r "${SERVER_RELEASE_LINK}/requirements-sandboxd.lock"
+    -r "${RELEASE_DIR}/requirements-sandboxd.lock"
   "${SANDBOXD_VENV}/bin/python" -c \
     'import sys; assert sys.version_info[:2] == (3, 11)'
 }
@@ -1813,18 +1937,18 @@ install_control_plane_command() {
   install_sandboxd_credentials_and_env
 
   install -m 0644 \
-    "${SERVER_RELEASE_LINK}/deploy/systemd/nanobot-sandboxd.tmpfiles.conf" \
+    "${RELEASE_DIR}/deploy/systemd/nanobot-sandboxd.tmpfiles.conf" \
     /etc/tmpfiles.d/nanobot-sandboxd.conf
   systemd-tmpfiles --create /etc/tmpfiles.d/nanobot-sandboxd.conf
 
   install -m 0644 \
-    "${SERVER_RELEASE_LINK}/deploy/systemd/nanobot-sandboxd.service" \
+    "${RELEASE_DIR}/deploy/systemd/nanobot-sandboxd.service" \
     /etc/systemd/system/nanobot-sandboxd.service
   install -m 0644 \
-    "${SERVER_RELEASE_LINK}/deploy/systemd/nanobot-sandbox-runtime-cleanup.service" \
+    "${RELEASE_DIR}/deploy/systemd/nanobot-sandbox-runtime-cleanup.service" \
     /etc/systemd/system/nanobot-sandbox-runtime-cleanup.service
   install -m 0644 \
-    "${SERVER_RELEASE_LINK}/deploy/systemd/nanobot-sandbox-runtime-cleanup.timer" \
+    "${RELEASE_DIR}/deploy/systemd/nanobot-sandbox-runtime-cleanup.timer" \
     /etc/systemd/system/nanobot-sandbox-runtime-cleanup.timer
 
   systemd-analyze verify \
@@ -1839,6 +1963,8 @@ install_control_plane_command() {
     --format '{{.Names}}' | grep -q .; then
     die "仍有活动 Sandbox 容器，拒绝重启 sandboxd"
   fi
+  log "原子切换 sandboxd 只读发布树"
+  activate_release_tree
   systemctl enable nanobot-sandboxd.service
   systemctl restart nanobot-sandboxd.service
   systemctl is-active --quiet nanobot-sandboxd.service \
@@ -2227,6 +2353,7 @@ status_command() {
     load_config
     printf '安装配置：已配置\n'
     printf 'RELEASE：%s\n' "${RELEASE}"
+    printf '发布来源：%s\n' "${RELEASE_REF}"
     printf 'VERSION：%s\n' "${VERSION}"
     printf '存储模式：%s\n' "${STORAGE_MODE}"
     if [[ "${STORAGE_MODE}" == "loopback" ]]; then
@@ -2342,6 +2469,9 @@ main() {
       ;;
     update-release)
       update_release_command "$@"
+      ;;
+    promote-release)
+      promote_release_command "$@"
       ;;
     status)
       status_command "$@"

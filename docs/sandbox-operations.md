@@ -140,9 +140,38 @@ sudo scripts/manage-sandbox-production.sh install-control-plane
 Smoke 证据与当前固定镜像一致，再将阶段凭据改名归档；不会删除原始证据目录，
 也不会把旧 Smoke 结果沿用到新 RELEASE。
 
-RELEASE 始终由完整提交哈希固定。`origin/master` 后续前进时，脚本只验证目标
-提交已经发布且仍属于该分支历史，不要求目标等于远端最新 tip，也不会把 RELEASE
-静默替换成新提交。生产 checkout 仍必须精确位于目标提交且保持干净。
+RELEASE 始终由完整提交哈希固定。默认发布来源为 `origin/master`；为了避免把宿主
+验收期间发现的问题逐次写入主分支，也可以显式使用
+`origin/release-candidates/<名称>`。其他本地分支、tag 和任意远端分支都会被拒绝。
+候选提交必须已经推送到该远端候选引用，生产 checkout 必须精确位于候选提交且
+保持干净：
+
+~~~bash
+sudo scripts/manage-sandbox-production.sh update-release \
+  --release <候选提交的完整哈希> \
+  --release-ref origin/release-candidates/sandbox-control-plane \
+  --reuse-built-image \
+  --rerun-smoke
+~~~
+
+同一候选哈希完成 Smoke、控制面、Runtime 部署和部署后验收前，不进入
+`master`。验收通过后必须将该提交原样 fast-forward 到 `master`，不能 squash、
+amend 或重新生成提交；否则提交哈希变化，原阶段证据失效。确认远端
+`origin/master` 已包含完全相同的 RELEASE 后，执行：
+
+~~~bash
+sudo scripts/manage-sandbox-production.sh promote-release
+~~~
+
+该命令要求 `runtime-deployed` 已完成，只更新配置中的发布来源，不修改 RELEASE、
+VERSION、镜像或任何阶段凭据。`origin/master` 或候选引用后续前进时，脚本只验证
+固定 RELEASE 仍属于对应引用历史，不要求 RELEASE 等于远端最新 tip，也不会静默
+替换提交。每个生产阶段都会重新验证发布来源，`status` 会显示当前来源。
+
+`install-control-plane` 先从目标发布目录安装锁定依赖和 systemd 文件；确认没有
+活动 Sandbox 容器后，才把 `/opt/nanobot-server` 原子切换到目标 RELEASE 并重启
+sandboxd。旧发布目录继续保留用于回滚。当前链接若不属于受管发布目录、版本标记
+无效，或不是目标 RELEASE 的祖先，脚本都会失败关闭，不会覆盖该链接。
 
 宿主硬上限只能在全部基础设施门禁通过后，由 root 修改 Nanobot Runtime 环境：
 
