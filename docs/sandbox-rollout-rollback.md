@@ -21,7 +21,7 @@ user_id、private_superuser 和通用 ToolOverride 均不能授予 Sandbox 能�
 - 全量 pytest 为 0 failures；
 - WebUI lint 和生产 build 通过；
 - 真实 Docker 隔离矩阵全部通过，而不是被跳过；
-- 独立数据盘、project quota、总容量和磁盘水位门禁通过；
+- 受控 XFS/ext4 数据文件系统、project quota、总容量和磁盘水位门禁通过；单盘方案必须有 `single_disk_logical_rollback_only` 风险标记；
 - Docker builtin seccomp 与精确 nanobot-sandbox AppArmor profile 生效；
 - Nanobot Server、Worker 和 Sandbox 容器均看不到 Docker Socket；
 - 固定镜像 digest/IMAGE ID allowlist 已核对；

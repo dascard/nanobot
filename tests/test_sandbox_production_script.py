@@ -39,3 +39,33 @@ def test_production_script_no_longer_contains_owner_or_tsv_write_logic():
     assert "apply_tool_override" not in source
     assert "--owner-id)" not in source
     assert "--project-id)" not in source
+
+
+def test_production_script_requires_explicit_local_same_disk_risk_marker():
+    syntax = subprocess.run(
+        ["bash", "-n", str(SCRIPT)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    help_result = subprocess.run(
+        [str(SCRIPT), "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert syntax.returncode == 0, syntax.stderr
+    assert help_result.returncode == 0, help_result.stderr
+    assert "--backup-mode <模式>" in help_result.stdout
+    assert "local_same_disk" in help_result.stdout
+    assert "--accept-local-same-disk-risk" in help_result.stdout
+    assert (
+        'LOCAL_SAME_DISK_RISK_MARKER="single_disk_logical_rollback_only"'
+        in source
+    )
+    assert 'BACKUP_MAX_BYTES_FIXED="17179869184"' in source
+    assert "根文件系统最低保留空间不得低于 60 GiB" in source

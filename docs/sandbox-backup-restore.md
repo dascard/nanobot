@@ -35,21 +35,41 @@
 4. 等待 running 管理 operation 结束；记录 pending/retry_wait 项。
 5. 停止当前 Compose 项目的固定服务，避免聊天、上传和 Worker 继续写库。
 6. 停止 sandboxd；保留 /srv/nanobot 和数据库，不运行任何 prune。
-7. 在独立备份挂载点执行：
+7. 按已配置的备份模式执行。默认 `independent` 使用独立挂载点：
 
 ~~~bash
 scripts/sandbox-coordinated-backup.sh \
   --database /opt/nanobot-server/nanobot.db \
   --data-root /srv/nanobot \
   --destination /mnt/nanobot-backup \
+  --backup-mode independent \
+  --max-bytes 17179869184 \
+  --system-min-free-bytes 64424509440 \
   --quiesced \
   --apply
 ~~~
 
-脚本使用 SQLite backup API 创建数据库副本，分别归档 workspaces/assets，并生成 manifest.sha256。目标必须位于不同于数据盘的独立挂载点；已有同名目录不会覆盖。失败时保留 .partial 供人工核查，不自动递归删除。
+明确接受单盘故障风险时，可使用 `local_same_disk`。该模式只允许固定路径的 16 GiB 预分配 XFS loopback，目标必须位于根文件系统且不得位于生产仓库、Sandbox 数据根或 loopback 镜像目录：
+
+~~~bash
+scripts/sandbox-coordinated-backup.sh \
+  --database /opt/nanobot-server/nanobot.db \
+  --data-root /srv/nanobot \
+  --destination /var/backups/nanobot-sandbox \
+  --backup-mode local_same_disk \
+  --risk-marker single_disk_logical_rollback_only \
+  --max-bytes 17179869184 \
+  --system-min-free-bytes 64424509440 \
+  --quiesced \
+  --apply
+~~~
+
+`local_same_disk` 备份仅用于数据库与文件系统的逻辑回滚，不承担物理硬盘损坏、整机丢失或根文件系统损坏后的灾难恢复。风险标记、16 GiB 单次容量上限和 60 GiB 根分区最低可用空间都会写入备份 manifest；缺少任一门禁时脚本失败关闭。
+
+脚本使用 SQLite backup API 创建数据库副本，分别归档 workspaces/assets，并生成 manifest.sha256。`independent` 目标仍必须位于不同于数据盘的独立挂载点；已有同名目录不会覆盖。失败时保留 .partial 供人工核查，不自动递归删除。
 
 8. 执行 sha256sum -c manifest.sha256。
-9. 记录备份目录、源/目标设备、数据库 schema migration 版本、最大 project ID、Workspace/Asset/grant 数量和时间。
+9. 记录备份目录、模式、风险标记、源/目标设备、容量与水位、数据库 schema migration 版本、最大 project ID、Workspace/Asset/grant 数量和时间。
 10. 重启服务后仍保持三道开关关闭，完成健康检查再按灰度流程恢复。
 
 ## 3. 恢复前验证

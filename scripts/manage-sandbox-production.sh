@@ -30,6 +30,8 @@ readonly DATA_ROOT="/srv/nanobot"
 readonly LOOPBACK_STORAGE_DIR="/var/lib/nanobot-sandbox-storage"
 readonly LOOPBACK_IMAGE="${LOOPBACK_STORAGE_DIR}/data.xfs"
 readonly XFS_LABEL="nanobot-sbx"
+readonly LOCAL_SAME_DISK_RISK_MARKER="single_disk_logical_rollback_only"
+readonly BACKUP_MAX_BYTES_FIXED="17179869184"
 # 旧 /etc/nanobot/sandbox-projects.tsv 仅可由显式迁移工具读取；本脚本不再写入。
 
 readonly -a FIXED_SERVICES=(
@@ -86,7 +88,7 @@ Nanobot Sandbox 生产管理脚本
   7. 在 Web「Sandbox 管理」页按 canonical session 配置授权与配额
 
 子命令：
-  configure             保存设备、备份挂载点和镜像版本等非敏感参数
+  configure             保存设备、备份目标和镜像版本等非敏感参数
   status                只读显示主机、控制面、镜像和阶段状态
   prepare-host          安装依赖、准备数据盘、目录和 AppArmor
   build-image           构建固定版本 Sandbox 镜像
@@ -106,7 +108,10 @@ configure 参数：
   --storage-mode <模式>      block 或 loopback
   --data-device <设备>       block 模式的独立空白分区或 LV，例如 /dev/sdb1
   --loopback-size-gib <整数> loopback 模式容量，16..32，默认 16
-  --backup-mount <目录>      独立备份文件系统挂载点
+  --backup-mode <模式>       independent 或 local_same_disk
+  --backup-mount <目录>      备份目标目录
+  --accept-local-same-disk-risk
+                             明确接受同盘备份仅用于逻辑回滚、不提供硬盘灾备
   [--release <40 位提交>]
   [--version <镜像版本>]
   [--sandboxd-gid 10001]
@@ -125,6 +130,7 @@ runtime-cleanup 参数：
   - 不给 Nanobot Server、Worker 或 Sandbox 容器挂载 Docker Socket。
   - 不自动打开群聊 Sandbox。
   - block 模式拒绝根盘；loopback 模式只格式化固定容量的镜像文件。
+  - local_same_disk 仅允许 16 GiB loopback，并保留 60 GiB 根分区水位。
   - 存储初始化、执行能力和 TTL 删除均为独立显式阶段。
   - Docker/runc Sandbox 不是 VM 级隔离。
 EOF
@@ -241,6 +247,24 @@ validate_config_values() {
   esac
   [[ "${BACKUP_MOUNT}" == /* ]] \
     || die "BACKUP_MOUNT 必须是绝对路径：${BACKUP_MOUNT}"
+  case "${BACKUP_MODE}" in
+    independent)
+      [[ "${BACKUP_RISK_MARKER}" == "none" ]] \
+        || die "independent 模式不得携带同盘风险标记"
+      ;;
+    local_same_disk)
+      [[ "${STORAGE_MODE}" == "loopback" \
+          && "${DATA_IMAGE_SIZE_BYTES}" == "17179869184" ]] \
+        || die "local_same_disk 仅允许 16 GiB loopback"
+      [[ "${BACKUP_RISK_MARKER}" == "${LOCAL_SAME_DISK_RISK_MARKER}" ]] \
+        || die "local_same_disk 缺少固定风险确认标记"
+      ;;
+    *)
+      die "BACKUP_MODE 必须是 independent 或 local_same_disk"
+      ;;
+  esac
+  [[ "${BACKUP_MAX_BYTES}" == "${BACKUP_MAX_BYTES_FIXED}" ]] \
+    || die "单次协调备份容量上限必须固定为 16 GiB"
   [[ "${VERSION}" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ && "${VERSION}" != "latest" ]] \
     || die "VERSION 无效或使用了 latest"
   [[ "${SANDBOXD_GID}" =~ ^[0-9]+$ ]] \
@@ -269,6 +293,9 @@ load_config() {
   DATA_DEVICE="${DATA_DEVICE:-}"
   DATA_IMAGE="${DATA_IMAGE:-}"
   DATA_IMAGE_SIZE_BYTES="${DATA_IMAGE_SIZE_BYTES:-0}"
+  BACKUP_MODE="${BACKUP_MODE:-independent}"
+  BACKUP_RISK_MARKER="${BACKUP_RISK_MARKER:-none}"
+  BACKUP_MAX_BYTES="${BACKUP_MAX_BYTES:-${BACKUP_MAX_BYTES_FIXED}}"
   SYSTEM_MIN_FREE_BYTES="${SYSTEM_MIN_FREE_BYTES:-64424509440}"
   : "${BACKUP_MOUNT:?}"
   : "${RELEASE:?}"
@@ -294,7 +321,10 @@ write_config() {
     printf 'DATA_DEVICE=%q\n' "${DATA_DEVICE}"
     printf 'DATA_IMAGE=%q\n' "${DATA_IMAGE}"
     printf 'DATA_IMAGE_SIZE_BYTES=%q\n' "${DATA_IMAGE_SIZE_BYTES}"
+    printf 'BACKUP_MODE=%q\n' "${BACKUP_MODE}"
     printf 'BACKUP_MOUNT=%q\n' "${BACKUP_MOUNT}"
+    printf 'BACKUP_RISK_MARKER=%q\n' "${BACKUP_RISK_MARKER}"
+    printf 'BACKUP_MAX_BYTES=%q\n' "${BACKUP_MAX_BYTES}"
     printf 'RELEASE=%q\n' "${RELEASE}"
     printf 'VERSION=%q\n' "${VERSION}"
     printf 'SANDBOXD_GID=%q\n' "${SANDBOXD_GID}"
@@ -316,7 +346,9 @@ configure_command() {
   local storage_mode="block"
   local data_device=""
   local loopback_size_gib="16"
+  local backup_mode="independent"
   local backup_mount=""
+  local accept_local_same_disk_risk=false
   local release
   local version=""
   local sandboxd_gid="10001"
@@ -346,6 +378,15 @@ configure_command() {
         backup_mount="$2"
         shift 2
         ;;
+      --backup-mode)
+        [[ $# -ge 2 ]] || die "--backup-mode 缺少参数"
+        backup_mode="$2"
+        shift 2
+        ;;
+      --accept-local-same-disk-risk)
+        accept_local_same_disk_risk=true
+        shift
+        ;;
       --release)
         [[ $# -ge 2 ]] || die "--release 缺少参数"
         release="$2"
@@ -373,7 +414,25 @@ configure_command() {
 
   [[ -n "${backup_mount}" ]] || die "必须提供 --backup-mount"
   [[ -d "${backup_mount}" ]] || die "备份目录不存在：${backup_mount}"
-  mountpoint -q "${backup_mount}" || die "备份目录本身必须是独立挂载点"
+  [[ ! -L "${backup_mount}" ]] || die "备份目录不得是符号链接"
+
+  BACKUP_MODE="${backup_mode}"
+  case "${BACKUP_MODE}" in
+    independent)
+      [[ "${accept_local_same_disk_risk}" == "false" ]] \
+        || die "--accept-local-same-disk-risk 仅用于 local_same_disk"
+      BACKUP_RISK_MARKER="none"
+      ;;
+    local_same_disk)
+      [[ "${accept_local_same_disk_risk}" == "true" ]] \
+        || die "local_same_disk 必须显式传入 --accept-local-same-disk-risk"
+      BACKUP_RISK_MARKER="${LOCAL_SAME_DISK_RISK_MARKER}"
+      ;;
+    *)
+      die "--backup-mode 必须是 independent 或 local_same_disk"
+      ;;
+  esac
+  BACKUP_MAX_BYTES="${BACKUP_MAX_BYTES_FIXED}"
 
   STORAGE_MODE="${storage_mode}"
   case "${STORAGE_MODE}" in
@@ -414,9 +473,7 @@ configure_command() {
   SYSTEM_MIN_FREE_BYTES=64424509440
 
   validate_config_values
-  if [[ "${STORAGE_MODE}" == "loopback" ]]; then
-    assert_backup_mount_independent_from_root
-  fi
+  assert_backup_target_policy
   validate_release_in_repo
   [[ "$(repo_git rev-parse HEAD)" == "${RELEASE}" ]] \
     || die "configure 要求 RELEASE 等于当前 HEAD"
@@ -441,6 +498,11 @@ configure_command() {
     printf 'DATA_IMAGE_SIZE_GIB=%s\n' "$((DATA_IMAGE_SIZE_BYTES / 1024 / 1024 / 1024))"
   fi
   printf 'BACKUP_MOUNT=%s\n' "${BACKUP_MOUNT}"
+  printf 'BACKUP_MODE=%s\n' "${BACKUP_MODE}"
+  printf 'BACKUP_MAX_GIB=%s\n' "$((BACKUP_MAX_BYTES / 1024 / 1024 / 1024))"
+  printf 'SYSTEM_MIN_FREE_GIB=%s\n' \
+    "$((SYSTEM_MIN_FREE_BYTES / 1024 / 1024 / 1024))"
+  printf 'BACKUP_RISK_MARKER=%s\n' "${BACKUP_RISK_MARKER}"
   printf 'RELEASE=%s\n' "${RELEASE}"
   printf 'VERSION=%s\n' "${VERSION}"
   printf '下一步：sudo %s prepare-host --initialize-storage\n' "$0"
@@ -499,6 +561,47 @@ assert_backup_mount_independent_from_root() {
       die "loopback 模式的备份与根文件系统位于同一物理磁盘"
     fi
   fi
+}
+
+assert_local_same_disk_backup_target() {
+  local root_major_minor
+  local backup_major_minor
+
+  [[ -d "${BACKUP_MOUNT}" && ! -L "${BACKUP_MOUNT}" ]] \
+    || die "local_same_disk 备份目标必须是非符号链接目录"
+  root_major_minor="$(findmnt -n -T / -o MAJ:MIN)"
+  backup_major_minor="$(findmnt -n -T "${BACKUP_MOUNT}" -o MAJ:MIN)"
+  [[ -n "${root_major_minor}" && "${backup_major_minor}" == "${root_major_minor}" ]] \
+    || die "local_same_disk 备份目标必须位于根文件系统"
+  case "${BACKUP_MOUNT}" in
+    /)
+      die "备份目标不得直接使用根目录"
+      ;;
+    "${DATA_ROOT}"|"${DATA_ROOT}"/*)
+      die "备份目标不得位于 Sandbox 数据根目录"
+      ;;
+    "${LOOPBACK_STORAGE_DIR}"|"${LOOPBACK_STORAGE_DIR}"/*)
+      die "备份目标不得位于 loopback 镜像目录"
+      ;;
+    "${REPO_ROOT}"|"${REPO_ROOT}"/*)
+      die "备份目标不得位于生产仓库"
+      ;;
+  esac
+}
+
+assert_backup_target_policy() {
+  case "${BACKUP_MODE}" in
+    independent)
+      mountpoint -q "${BACKUP_MOUNT}" \
+        || die "independent 备份目标必须是独立挂载点：${BACKUP_MOUNT}"
+      if [[ "${STORAGE_MODE}" == "loopback" ]]; then
+        assert_backup_mount_independent_from_root
+      fi
+      ;;
+    local_same_disk)
+      assert_local_same_disk_backup_target
+      ;;
+  esac
 }
 
 ensure_data_mountpoint_empty() {
@@ -832,6 +935,7 @@ prepare_host_command() {
   require_root
   load_config
   validate_release_in_repo
+  assert_backup_target_policy
 
   local allow_format=false
   shift
@@ -1390,31 +1494,29 @@ restart_fixed_containers() {
 }
 
 coordinated_backup() {
-  mountpoint -q "${BACKUP_MOUNT}" \
-    || die "BACKUP_MOUNT 不是独立挂载点：${BACKUP_MOUNT}"
-  if [[ "${STORAGE_MODE}" == "loopback" ]]; then
-    assert_backup_mount_independent_from_root
-  fi
+  assert_backup_target_policy
   [[ -f "${REPO_ROOT}/data/nanobot.db" && ! -L "${REPO_ROOT}/data/nanobot.db" ]] \
     || die "当前协调备份仅支持现有 SQLite 文件"
   local data_source
   local backup_source
   local data_disks=""
   local backup_disks=""
-  data_source="$(findmnt -n -o SOURCE "${DATA_ROOT}")"
-  backup_source="$(findmnt -n -o SOURCE "${BACKUP_MOUNT}")"
-  [[ "${data_source}" != "${backup_source}" ]] \
-    || die "备份目标与 Sandbox 数据盘使用相同来源"
-  if [[ -b "$(readlink -f "${data_source}")" \
-      && -b "$(readlink -f "${backup_source}")" ]]; then
-    data_disks="$(lsblk -s -n -o PATH,TYPE "${data_source}" \
-      | awk '$2 == "disk" {print $1}' | sort -u)"
-    backup_disks="$(lsblk -s -n -o PATH,TYPE "${backup_source}" \
-      | awk '$2 == "disk" {print $1}' | sort -u)"
-    if [[ -n "${data_disks}" && -n "${backup_disks}" ]] \
-      && comm -12 <(printf '%s\n' "${data_disks}") \
-        <(printf '%s\n' "${backup_disks}") | grep -q .; then
-      die "备份目标与 Sandbox 数据盘位于同一物理磁盘"
+  if [[ "${BACKUP_MODE}" == "independent" ]]; then
+    data_source="$(findmnt -n -o SOURCE "${DATA_ROOT}")"
+    backup_source="$(findmnt -n -o SOURCE "${BACKUP_MOUNT}")"
+    [[ "${data_source}" != "${backup_source}" ]] \
+      || die "备份目标与 Sandbox 数据盘使用相同来源"
+    if [[ -b "$(readlink -f "${data_source}")" \
+        && -b "$(readlink -f "${backup_source}")" ]]; then
+      data_disks="$(lsblk -s -n -o PATH,TYPE "${data_source}" \
+        | awk '$2 == "disk" {print $1}' | sort -u)"
+      backup_disks="$(lsblk -s -n -o PATH,TYPE "${backup_source}" \
+        | awk '$2 == "disk" {print $1}' | sort -u)"
+      if [[ -n "${data_disks}" && -n "${backup_disks}" ]] \
+        && comm -12 <(printf '%s\n' "${data_disks}") \
+          <(printf '%s\n' "${backup_disks}") | grep -q .; then
+        die "备份目标与 Sandbox 数据盘位于同一物理磁盘"
+      fi
     fi
   fi
 
@@ -1424,6 +1526,10 @@ coordinated_backup() {
     --database "${REPO_ROOT}/data/nanobot.db" \
     --destination "${BACKUP_MOUNT}" \
     --data-root "${DATA_ROOT}" \
+    --backup-mode "${BACKUP_MODE}" \
+    --risk-marker "${BACKUP_RISK_MARKER}" \
+    --max-bytes "${BACKUP_MAX_BYTES}" \
+    --system-min-free-bytes "${SYSTEM_MIN_FREE_BYTES}" \
     --quiesced \
     --apply; then
     warn "协调备份失败，正在恢复原固定容器"
@@ -1685,6 +1791,13 @@ status_command() {
       printf 'XFS 镜像：%s GiB（固定路径）\n' \
         "$((DATA_IMAGE_SIZE_BYTES / 1024 / 1024 / 1024))"
     fi
+    printf '备份模式：%s\n' "${BACKUP_MODE}"
+    printf '备份目标：%s\n' "${BACKUP_MOUNT}"
+    printf '单次备份上限：%s GiB\n' \
+      "$((BACKUP_MAX_BYTES / 1024 / 1024 / 1024))"
+    printf '根分区最低保留：%s GiB\n' \
+      "$((SYSTEM_MIN_FREE_BYTES / 1024 / 1024 / 1024))"
+    printf '备份风险标记：%s\n' "${BACKUP_RISK_MARKER}"
   else
     printf '安装配置：未配置\n'
   fi

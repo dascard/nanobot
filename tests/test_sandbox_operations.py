@@ -122,3 +122,70 @@ def test_backup_and_rollback_docs_preserve_persistent_data():
     assert "明确不备份" in backup
     assert "删除 `/srv/nanobot`" in rollback
     assert "全局 Docker prune" in rollback
+
+
+def test_local_same_disk_backup_rejects_missing_risk_marker(tmp_path):
+    database = tmp_path / "nanobot.db"
+    destination = tmp_path / "backups"
+    database.write_bytes(b"not-yet-opened")
+    destination.mkdir()
+
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts" / "sandbox-coordinated-backup.sh"),
+            "--database",
+            str(database),
+            "--destination",
+            str(destination),
+            "--backup-mode",
+            "local_same_disk",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "缺少固定风险确认标记" in result.stderr
+
+
+def test_backup_rejects_capacity_limit_above_16_gib(tmp_path):
+    database = tmp_path / "nanobot.db"
+    destination = tmp_path / "backups"
+    database.write_bytes(b"not-yet-opened")
+    destination.mkdir()
+
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts" / "sandbox-coordinated-backup.sh"),
+            "--database",
+            str(database),
+            "--destination",
+            str(destination),
+            "--max-bytes",
+            "17179869185",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "容量上限必须位于 1..16 GiB" in result.stderr
+
+
+def test_backup_docs_mark_same_disk_as_logical_rollback_only():
+    backup = (REPO_ROOT / "docs/sandbox-backup-restore.md").read_text(
+        encoding="utf-8",
+    )
+    operations = (REPO_ROOT / "docs/sandbox-operations.md").read_text(
+        encoding="utf-8",
+    )
+
+    assert "single_disk_logical_rollback_only" in backup
+    assert "仅用于数据库与文件系统的逻辑回滚" in backup
+    assert "不承担物理硬盘损坏" in backup
+    assert "--accept-local-same-disk-risk" in operations
+    assert "60 GiB" in operations

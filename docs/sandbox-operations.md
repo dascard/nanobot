@@ -24,7 +24,7 @@ project quota 的唯一事实源是 workspace_quota_bindings。project ID 由数
 
 以下条件全部满足前，必须同时保持宿主硬上限、sandbox.enabled 和 sandbox.exec_enabled 关闭：
 
-1. /srv/nanobot 是独立 XFS/ext4 挂载点，并启用 project quota。
+1. /srv/nanobot 是独立 XFS/ext4 文件系统挂载点，并启用 project quota；允许使用受控的 16 GiB 预分配 XFS loopback。
 2. Workspace、Asset Store、runtime 的容量预算、备份和磁盘水位已配置。
 3. Docker SecurityOptions 包含 builtin seccomp 和 AppArmor。
 4. nanobot-sandbox AppArmor profile 已精确加载；profile 缺失时必须失败关闭。
@@ -51,6 +51,20 @@ sudo scripts/manage-sandbox-production.sh deploy
 
 deploy 完成后所有 Sandbox 开关仍应关闭。provision-owner、enable-workspace、enable-assets、enable-exec 和 disable-owner 是兼容拒绝入口，不会执行旧 ToolOverride 或 TSV 操作。
 
+接受单盘故障风险时，配置必须显式写出同盘模式和风险确认；不能通过省略参数或调用普通 Compose 绕过：
+
+~~~bash
+sudo scripts/manage-sandbox-production.sh configure \
+  --storage-mode loopback \
+  --loopback-size-gib 16 \
+  --backup-mode local_same_disk \
+  --backup-mount /var/backups/nanobot-sandbox \
+  --accept-local-same-disk-risk \
+  --release <已发布的精确提交>
+~~~
+
+该模式固定单次协调备份上限为 16 GiB，并在备份前后强制保留至少 60 GiB 根分区可用空间。同盘备份仅用于逻辑回滚，不提供硬盘灾备；这些约束不放宽真实 Docker Smoke、AppArmor、seccomp、断网、权限或配额门禁。
+
 宿主硬上限只能在全部基础设施门禁通过后，由 root 修改 Nanobot Runtime 环境：
 
 ~~~text
@@ -61,7 +75,7 @@ NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED=true
 
 ## 4. 数据盘与目录
 
-先按变更单准备独立数据盘，再执行只读门禁：
+按变更单准备独立块设备文件系统，或经明确风险确认准备 16 GiB XFS loopback，再执行只读门禁：
 
 ~~~bash
 scripts/check-sandbox-data-disk.sh /srv/nanobot
@@ -81,7 +95,7 @@ systemd-tmpfiles --create /etc/tmpfiles.d/nanobot-sandboxd.conf
 namei -l /srv/nanobot/workspaces /srv/nanobot/assets /srv/nanobot/runtime
 ~~~
 
-不得在当前根文件系统、仓库目录、容器 writable layer 或 WSL /mnt/d 中保存生产 Workspace/Asset。
+Workspace/Asset 必须位于单独挂载到 `/srv/nanobot` 的受控文件系统，不得直接写入根文件系统目录、仓库目录、容器 writable layer 或 WSL `/mnt/d`。`local_same_disk` 只表示 loopback backing file 与逻辑备份可位于根盘，不表示取消 `/srv/nanobot` 的独立文件系统、project quota 或水位门禁。
 
 ## 5. sandboxd 管理接口与权限
 
