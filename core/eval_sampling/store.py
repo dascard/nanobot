@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from core.database import AdminAuditLog, EvalCandidate, EvalRun, EvalRunResult
+from core.runtime_paths import RUNTIME_PATHS
 from evals.expected_contract import validate_expected_contract
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+# 兼容测试和旧调用方保留名称；它现在表示运行数据根，不再表示源码仓库根。
+REPO_ROOT = RUNTIME_PATHS.data_dir
 
 RUNNABLE_EVAL_SUITES = frozenset({
     "sticker",

@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from app.session_memory import config
 from app.session_memory.summarizer import build_rolling_summary_payload, render_summary_text
 from app.session_memory.windowing import estimate_tokens, should_rollup
-from core.database import ConversationTurn, RollingSessionSummary, User
+from core.db.models.chat import ConversationTurn, User
+from core.db.models.session_memory import RollingSessionSummary
 from core.time_utils import db_now_naive, to_db_naive
 
 

@@ -1,5 +1,8 @@
+import asyncio
 import os
+from collections.abc import Callable
 from datetime import datetime
+from typing import TypeVar
 
 from sqlalchemy import (
     Boolean,
@@ -20,19 +23,37 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session as OrmSession
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql.dml import Delete, Insert, Update
 from sqlalchemy.sql.elements import TextClause
 
 from config import DATABASE_URL
-from core.outbound_delivery_schema import (
-    OUTBOUND_CIRCUIT_CHECKS,
-    OUTBOUND_CONTROL_CHECKS,
-    OUTBOUND_DELIVERY_ATTEMPT_CHECKS,
-    OUTBOUND_GENERATION_ATTEMPT_CHECKS,
-    OUTBOUND_OUTBOX_CHECKS,
-    OUTBOUND_RUN_CHECKS,
-    SCHEDULED_TASK_ERROR_SUMMARY_CHECK,
+from core.db.base import Base
+# 兼容历史 ``from core.database import Model``；新代码应直接依赖子域模型。
+from core.db.models import (  # noqa: F401
+    ChatLog,
+    ChatDeliveryOutbox,
+    ConversationTurn,
+    InboundMessageClaim,
+    MemoryDigest,
+    MemoryDigestJob,
+    OutboundDeliveryAttempt,
+    OutboundDeliveryCircuit,
+    OutboundDeliveryControl,
+    OutboundDeliveryOutbox,
+    OutboundGenerationAttempt,
+    OutboundRun,
+    Persona,
+    PersonaBehavior,
+    PersonaFact,
+    ProactiveOutreachLease,
+    ProactiveOutreachLog,
+    SensitiveData,
+    RollingSessionSummary,
+    SessionSummaryJob,
+    ScheduledTask,
+    SystemPrompt,
+    User,
 )
 
 # 使用绝对路径确保在 Docker 挂载时路径不飘移
@@ -50,9 +71,9 @@ def _is_sqlite_database_url(database_url: str) -> bool:
 
 def _sqlite_busy_timeout_ms() -> int:
     try:
-        return max(1000, int(float(os.environ.get("SQLITE_BUSY_TIMEOUT_MS", "1000"))))
+        return max(1000, int(float(os.environ.get("SQLITE_BUSY_TIMEOUT_MS", "5000"))))
     except (TypeError, ValueError):
-        return 1000
+        return 5000
 
 
 def sqlite_connect_args_for_url(database_url: str) -> dict:
@@ -258,8 +279,64 @@ def _set_sqlite_pragmas(dbapi_connection, connection_record):
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-Base = declarative_base()
+_PhaseResultT = TypeVar("_PhaseResultT")
 
+
+def session_factory_from_session(
+    session: OrmSession,
+) -> Callable[[], OrmSession]:
+    """基于请求 Session 的绑定创建 fresh Session 工厂。
+
+    异步入口不能把同一个同步 SQLAlchemy Session 传到工作线程，也不能退回
+    隐藏的全局 ``SessionLocal``，否则 FastAPI 注入的数据库绑定会被绕过。
+    """
+
+    if not isinstance(session, OrmSession):
+        raise TypeError("session 必须是 SQLAlchemy Session")
+    bind = session.get_bind()
+    if bind is None:
+        raise RuntimeError("请求 Session 缺少数据库绑定")
+    return sessionmaker(
+        bind=bind,
+        autocommit=False,
+        autoflush=session.autoflush,
+        expire_on_commit=session.expire_on_commit,
+    )
+
+
+def run_session_phase(
+    operation: Callable[[OrmSession], _PhaseResultT],
+    *,
+    session_factory: Callable[[], OrmSession] | None = None,
+) -> _PhaseResultT:
+    """在同一线程内创建、使用并关闭一个短生命周期 Session。"""
+
+    factory = session_factory or SessionLocal
+    db = factory()
+    try:
+        return operation(db)
+    except BaseException:
+        try:
+            db.rollback()
+        except BaseException:
+            pass
+        raise
+    finally:
+        db.close()
+
+
+async def run_session_phase_async(
+    operation: Callable[[OrmSession], _PhaseResultT],
+    *,
+    session_factory: Callable[[], OrmSession] | None = None,
+) -> _PhaseResultT:
+    """把完整同步数据库阶段移出事件循环，且不跨线程传递 Session。"""
+
+    return await asyncio.to_thread(
+        run_session_phase,
+        operation,
+        session_factory=session_factory,
+    )
 
 def sqlite_path_from_database_url(database_url: str) -> str | None:
     """从 SQLite DATABASE_URL 解析真实文件路径；非文件型 SQLite 返回 None。"""
@@ -273,947 +350,6 @@ def sqlite_path_from_database_url(database_url: str) -> str | None:
     if not database or database == ":memory:":
         return None
     return os.path.abspath(database)
-
-
-class User(Base):
-    """用户/群聊统一实体。
-
-    id 支持三种格式:
-      - "0000000000"     QQ 用户（提交日志或私聊时自动注册）
-      - "group_1027790249" 群聊（ambient log 首次收到时自动注册）
-      - 不再创建 "private_xxx" 格式（proxy_chat 只注册 user_id）
-
-    name 由消息入口自动刷新:
-      - 群名: submit_ambient_log 从 session_name 更新
-      - 用户名: proxy_chat 从 sender_name 更新
-    """
-    __tablename__ = "users"
-    id = Column(String, primary_key=True, index=True)
-    name = Column(String, default="")           # 群名或用户名（由消息入口自动刷新）
-    history_clear_at = Column(DateTime, nullable=True)  # 清除标记
-    created_at = Column(DateTime, default=datetime.now)
-
-
-class Persona(Base):
-    __tablename__ = "personas"
-    user_id = Column(String, primary_key=True, index=True)
-    persona_json = Column(Text, default="{}")
-    status = Column(
-        String,
-        index=True,
-        nullable=False,
-        default="active",
-        server_default=text("'active'"),
-    )
-    archive_meta_json = Column(
-        Text,
-        nullable=False,
-        default="{}",
-        server_default=text("'{}'"),
-    )
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
-class SystemPrompt(Base):
-    __tablename__ = "system_prompts"
-    user_id = Column(String, primary_key=True, index=True)
-    prompt_text = Column(Text, default="")
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
-class ChatLog(Base):
-    __tablename__ = "chat_logs"
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(String, index=True)  # 物理发件人 ID (QQ号)
-    session_id = Column(String, index=True)  # 场景 ID (群号/私聊号)
-    sender_name = Column(String, nullable=True)  # 发件人昵称/名片
-    session_name = Column(String, nullable=True)  # 场景名 (群名/私聊对象名)
-    role = Column(String)  # 'user', 'model', or 'ambient'
-    content = Column(Text)
-    processed = Column(
-        Integer, default=0
-    )  # 0: unprocessed, 1: processed by evolution task
-    created_at = Column(DateTime, default=datetime.now)
-    message_id = Column(String, nullable=True)          # QQ 原始消息 ID（去重用）
-    source_message_ids_json = Column(Text, default="[]")  # 合并消息源 ID 列表
-    meta_json = Column(Text, default="{}")               # 通用元信息
-
-
-class ConversationTurn(Base):
-    """对话上下文专用表——仅存 user/assistant 消息，不含工具噪声和 ambient 消息。
-    与 ChatLog 分离：ChatLog 是原始存档（进化素材），本表是精简上下文（历史注入）。
-    """
-
-    __tablename__ = "conversation_turns"
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(String, index=True)
-    session_id = Column(String, index=True)
-    role = Column(String)  # 'user' | 'assistant'（tool 结果已合并到 assistant）
-    content = Column(Text)
-    created_at = Column(DateTime, default=datetime.now)
-    source_message_ids_json = Column(Text, default="[]")  # 合并消息的源 ID 列表
-    meta_json = Column(Text, default="{}")
-
-
-class InboundMessageClaim(Base):
-    """入站消息幂等 claim。"""
-
-    __tablename__ = "inbound_message_claims"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('processing', 'completed', 'failed')",
-            name="ck_inbound_message_claim_status",
-        ),
-        CheckConstraint(
-            "attempt_count >= 1",
-            name="ck_inbound_message_claim_attempt_count",
-        ),
-        Index(
-            "uq_inbound_message_claim_identity",
-            "platform",
-            "chat_type",
-            "session_id",
-            "message_id",
-            unique=True,
-        ),
-        Index(
-            "ix_inbound_message_claim_status_lease",
-            "status",
-            "lease_expires_at",
-        ),
-        {"sqlite_autoincrement": True},
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    platform = Column(String(32), nullable=False)
-    chat_type = Column(String(16), nullable=False)
-    session_id = Column(String(255), nullable=False)
-    message_id = Column(String(255), nullable=False)
-    status = Column(
-        String(16),
-        nullable=False,
-        default="processing",
-        server_default=text("'processing'"),
-    )
-    owner_token = Column(String(64), nullable=False)
-    lease_expires_at = Column(DateTime, nullable=True)
-    response_json = Column(Text, nullable=False, default="", server_default=text("''"))
-    error_summary = Column(Text, nullable=False, default="", server_default=text("''"))
-    attempt_count = Column(Integer, nullable=False, default=1, server_default=text("1"))
-    created_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
-    updated_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
-    completed_at = Column(DateTime, nullable=True)
-
-
-class ChatDeliveryOutbox(Base):
-    """私聊断连后的持久投递任务。"""
-
-    __tablename__ = "chat_delivery_outbox"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('pending', 'sending', 'ambiguous', 'delivered', 'failed')",
-            name="ck_chat_delivery_outbox_status",
-        ),
-        CheckConstraint(
-            "attempt_count >= 0",
-            name="ck_chat_delivery_outbox_attempt_count",
-        ),
-        Index(
-            "uq_chat_delivery_outbox_delivery_key",
-            "delivery_key",
-            unique=True,
-        ),
-        Index(
-            "uq_chat_delivery_outbox_claim_identity",
-            "platform",
-            "chat_type",
-            "session_id",
-            "message_id",
-            unique=True,
-        ),
-        Index(
-            "ix_chat_delivery_outbox_due",
-            "status",
-            "next_attempt_at",
-        ),
-        Index(
-            "ix_chat_delivery_outbox_status_lease",
-            "status",
-            "lease_expires_at",
-        ),
-        {"sqlite_autoincrement": True},
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    delivery_key = Column(String(64), nullable=False)
-    platform = Column(String(32), nullable=False)
-    chat_type = Column(String(16), nullable=False)
-    session_id = Column(String(255), nullable=False)
-    message_id = Column(String(255), nullable=False)
-    target_type = Column(String(16), nullable=False)
-    target_id = Column(String(255), nullable=False)
-    envelope_json = Column(
-        Text,
-        nullable=False,
-        default="{}",
-        server_default=text("'{}'"),
-    )
-    status = Column(
-        String(16),
-        nullable=False,
-        default="pending",
-        server_default=text("'pending'"),
-    )
-    owner_token = Column(
-        String(64),
-        nullable=False,
-        default="",
-        server_default=text("''"),
-    )
-    lease_expires_at = Column(DateTime, nullable=True)
-    attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    next_attempt_at = Column(DateTime, nullable=True)
-    last_error = Column(Text, nullable=False, default="", server_default=text("''"))
-    created_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
-    updated_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
-    delivered_at = Column(DateTime, nullable=True)
-
-
-class ProactiveOutreachLease(Base):
-    """主动外呼按用户串行评估的短期租约。"""
-
-    __tablename__ = "proactive_outreach_leases"
-    __table_args__ = (
-        Index(
-            "ix_proactive_outreach_lease_expires_at",
-            "lease_expires_at",
-        ),
-    )
-
-    user_id = Column(String(255), primary_key=True)
-    owner_token = Column(String(64), nullable=False)
-    lease_expires_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
-    updated_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
-
-
-class RollingSessionSummary(Base):
-    """当前 session 的滚动上下文摘要。
-
-    只覆盖已被 recent raw ConversationTurn window 挤出的旧上下文，不承载
-    daily digest、persona 或 group memory 语义。
-    """
-
-    __tablename__ = "rolling_session_summaries"
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    session_id = Column(String, index=True, nullable=False)
-    user_id = Column(String, index=True, default="")
-    chat_type = Column(String, index=True, default="private")
-
-    status = Column(String, index=True, default="active")
-    summary_kind = Column(String, index=True, default="deterministic_fallback")
-    summary_text = Column(Text, default="")
-    summary_json = Column(Text, default="{}")
-
-    covered_from_turn_id = Column(Integer, default=0)
-    covered_until_turn_id = Column(Integer, index=True, default=0)
-    source_turn_ids_json = Column(Text, default="[]")
-    source_turn_count = Column(Integer, default=0)
-    source_token_estimate = Column(Integer, default=0)
-    source_char_count = Column(Integer, default=0)
-
-    raw_window_start_turn_id = Column(Integer, default=0)
-    quality_score = Column(Float, default=0.0)
-    issues_json = Column(Text, default="[]")
-
-    model = Column(String, default="")
-    prompt_sha256 = Column(String, default="")
-    llm_status = Column(String, index=True, default="")
-    llm_model = Column(String, default="")
-    llm_request_log_id = Column(Integer, nullable=True)
-    llm_error = Column(Text, default="")
-    retry_count = Column(Integer, default=0)
-    next_retry_at = Column(DateTime, nullable=True)
-    supersedes_summary_id = Column(Integer, nullable=True)
-    stable_hash = Column(String, index=True, default="")
-    meta_json = Column(Text, default="{}")
-
-    created_at = Column(DateTime, default=datetime.now, index=True)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
-class SessionSummaryJob(Base):
-    """异步 LLM session summary 生成任务。
-
-    主请求只创建 pending job；后台 worker 后续消费并生成高质量 llm summary。
-    """
-
-    __tablename__ = "session_summary_jobs"
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    session_id = Column(String, index=True, nullable=False)
-    user_id = Column(String, index=True, default="")
-    chat_type = Column(String, index=True, default="private")
-
-    covered_from_turn_id = Column(Integer, index=True, default=0)
-    covered_until_turn_id = Column(Integer, index=True, default=0)
-    source_turn_ids_json = Column(Text, default="[]")
-
-    previous_summary_id = Column(Integer, nullable=True)
-    fallback_summary_id = Column(Integer, nullable=True)
-    result_summary_id = Column(Integer, nullable=True)
-
-    status = Column(String, index=True, default="pending")
-    retry_count = Column(Integer, default=0)
-    max_retry = Column(Integer, default=3)
-    next_retry_at = Column(DateTime, nullable=True)
-    locked_by = Column(String, default="")
-    locked_at = Column(DateTime, nullable=True)
-    error = Column(Text, default="")
-    stable_hash = Column(String, index=True, default="")
-    meta_json = Column(Text, default="{}")
-
-    created_at = Column(DateTime, default=datetime.now, index=True)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
-class MemoryDigest(Base):
-    __tablename__ = "memory_digests"
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(String, index=True)
-    session_id = Column(String, index=True)
-    digest_date = Column(String, index=True)  # YYYY-MM-DD
-    level = Column(Integer, default=0, index=True)  # 0=rich, 1=summary, 2=compact
-    parent_id = Column(Integer, nullable=True)
-    content = Column(Text)
-    meta_json = Column(Text, default="{}")
-    source_start_log_id = Column(Integer, nullable=True)
-    source_end_log_id = Column(Integer, nullable=True)
-    generation_job_id = Column(Integer, nullable=True, index=True)
-    created_at = Column(DateTime, default=datetime.now)
-
-
-class MemoryDigestJob(Base):
-    """单个 session/date 的 MemoryDigest 生成与重试账本。"""
-
-    __tablename__ = "memory_digest_jobs"
-    __table_args__ = (
-        UniqueConstraint(
-            "session_id",
-            "digest_date",
-            name="uq_memory_digest_job_source",
-        ),
-        Index(
-            "idx_memory_digest_job_claim",
-            "status",
-            "lease_expires_at",
-            "id",
-        ),
-        Index(
-            "idx_memory_digest_job_retry",
-            "status",
-            "next_retry_at",
-            "id",
-        ),
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String, nullable=False)
-    digest_date = Column(String, nullable=False)
-    user_id = Column(String, nullable=False, default="", server_default=text("''"))
-
-    source_start_log_id = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    source_end_log_id = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    source_log_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    source_revision = Column(String(64), nullable=False, default="", server_default=text("''"))
-
-    status = Column(String(24), nullable=False, default="pending", server_default=text("'pending'"))
-    locked_by = Column(String(128), nullable=False, default="", server_default=text("''"))
-    lease_token = Column(String(64), nullable=False, default="", server_default=text("''"))
-    lease_expires_at = Column(DateTime, nullable=True)
-
-    attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    retry_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    max_retry = Column(Integer, nullable=False, default=3, server_default=text("3"))
-    next_retry_at = Column(DateTime, nullable=True)
-
-    result_digest_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    result_source_id = Column(String(128), nullable=False, default="", server_default=text("''"))
-    result_root_digest_id = Column(Integer, nullable=True)
-    result_semantic_job_id = Column(Integer, nullable=True)
-    error_type = Column(String(64), nullable=False, default="", server_default=text("''"))
-    error_summary = Column(Text, nullable=False, default="", server_default=text("''"))
-    meta_json = Column(Text, nullable=False, default="{}", server_default=text("'{}'"))
-    finished_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
-    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
-
-
-class ScheduledTask(Base):
-    __tablename__ = "scheduled_tasks"
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    name = Column(String, index=True)  # 任务名
-    cron_expr = Column(String)  # cron: "0 9 * * *" (分 时 日 月 周)
-    target_type = Column(String, default="private")  # private | group
-    target_id = Column(String)  # QQ号 或 群号
-    prompt_template = Column(Text)  # 传给 LLM 的提示模板
-    enabled = Column(Integer, default=1)
-    last_run_at = Column(DateTime, nullable=True)
-    last_attempt_at = Column(DateTime, nullable=True)
-    last_success_at = Column(DateTime, nullable=True)
-    delivery_status = Column(
-        String(48),
-        nullable=False,
-        default="legacy_unknown",
-        server_default=text("'legacy_unknown'"),
-    )
-    last_error_summary = Column(
-        Text,
-        CheckConstraint(
-            SCHEDULED_TASK_ERROR_SUMMARY_CHECK[1],
-            name=SCHEDULED_TASK_ERROR_SUMMARY_CHECK[0],
-        ),
-        nullable=False,
-        default="",
-        server_default=text("''"),
-    )
-    last_run_id = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
-
-    __table_args__ = (
-        Index("ix_scheduled_tasks_last_run_id", "last_run_id"),
-    )
-
-
-class ProactiveOutreachLog(Base):
-    """主动情感外呼记录，用于幂等投递和调度审计。"""
-
-    __tablename__ = "proactive_outreach_log"
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(String, index=True)
-    idempotency_key = Column(String, unique=True, index=True)
-    grounding_json = Column(Text, default="{}")
-    judge_should = Column(Boolean, default=False)
-    judge_reason = Column(Text, default="")
-    next_check_at = Column(DateTime, nullable=True)
-    next_intent = Column(Text, default="")
-    message = Column(Text, default="")
-    status = Column(String, index=True, default="pending")
-    forced = Column(Boolean, default=False)
-    outbound_run_id = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=datetime.now, index=True)
-
-    __table_args__ = (
-        Index(
-            "ix_proactive_outreach_log_outbound_run_id",
-            "outbound_run_id",
-        ),
-    )
-
-
-def _outbound_checks(items):
-    return tuple(CheckConstraint(expression, name=name) for name, expression in items)
-
-
-class OutboundRun(Base):
-    """一次确定 occurrence 的生成与投递运行。"""
-
-    __tablename__ = "outbound_runs"
-    __table_args__ = (
-        *_outbound_checks(OUTBOUND_RUN_CHECKS),
-        Index(
-            "uq_outbound_run_occurrence",
-            "source_type",
-            "source_id",
-            "occurrence_key",
-            unique=True,
-        ),
-        Index(
-            "ix_outbound_run_source",
-            "source_type",
-            "source_id",
-            "status",
-        ),
-        Index(
-            "ix_outbound_run_claim_lease",
-            "status",
-            "claim_expires_at",
-        ),
-        {"sqlite_autoincrement": True},
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    source_type = Column(String(32), nullable=False)
-    source_id = Column(String(255), nullable=False)
-    occurrence_key = Column(String(255), nullable=False)
-    source_revision = Column(String(128), nullable=False)
-    source_snapshot_json = Column(Text, nullable=False)
-    source_snapshot_sha256 = Column(String(64), nullable=False)
-    delivery_contract_json = Column(Text, nullable=False)
-    delivery_contract_sha256 = Column(String(64), nullable=False)
-    writer_owner = Column(String(128), nullable=False)
-    writer_token = Column(String(64), nullable=False)
-    writer_protocol_version = Column(Integer, nullable=False)
-    task_kind = Column(String(64), nullable=False)
-    scheduled_for = Column(DateTime, nullable=True)
-    trigger_type = Column(String(32), nullable=False)
-    status = Column(
-        String(48),
-        nullable=False,
-        default="claimed",
-        server_default=text("'claimed'"),
-    )
-    claim_owner = Column(String(128), nullable=True)
-    claim_token = Column(String(64), nullable=True)
-    claim_expires_at = Column(DateTime, nullable=True)
-    attempted_at = Column(DateTime, nullable=True)
-    generated_at = Column(DateTime, nullable=True)
-    succeeded_at = Column(DateTime, nullable=True)
-    failure_type = Column(
-        String(64),
-        nullable=False,
-        default="",
-        server_default=text("''"),
-    )
-    failure_summary = Column(
-        Text,
-        nullable=False,
-        default="",
-        server_default=text("''"),
-    )
-    active_outbox_id = Column(Integer, nullable=True)
-    has_ambiguous_ancestor = Column(
-        Boolean,
-        nullable=False,
-        default=False,
-        server_default=text("0"),
-    )
-    delivery_mode = Column(String(24), nullable=False)
-    cutover_epoch = Column(Integer, nullable=False)
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-
-
-class OutboundGenerationAttempt(Base):
-    """一次不可变的正文生成模型调用记录。"""
-
-    __tablename__ = "outbound_generation_attempts"
-    __table_args__ = (
-        *_outbound_checks(OUTBOUND_GENERATION_ATTEMPT_CHECKS),
-        Index(
-            "uq_outbound_generation_attempt",
-            "run_id",
-            "attempt_no",
-            unique=True,
-        ),
-        {"sqlite_autoincrement": True},
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    run_id = Column(Integer, ForeignKey("outbound_runs.id"), nullable=False)
-    attempt_no = Column(Integer, nullable=False)
-    owner = Column(String(128), nullable=False)
-    fencing_token = Column(String(64), nullable=False)
-    status = Column(
-        String(32),
-        nullable=False,
-        default="started",
-        server_default=text("'started'"),
-    )
-    started_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    completed_at = Column(DateTime, nullable=True)
-    model_trace_id = Column(
-        String(128), nullable=False, default="", server_default=text("''")
-    )
-    content_sha256 = Column(
-        String(64), nullable=False, default="", server_default=text("''")
-    )
-    error_type = Column(
-        String(64), nullable=False, default="", server_default=text("''")
-    )
-    error_summary = Column(
-        Text, nullable=False, default="", server_default=text("''")
-    )
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-
-
-class OutboundDeliveryOutbox(Base):
-    """不可变 payload 与目标快照的通用主动投递队列。"""
-
-    __tablename__ = "outbound_delivery_outbox"
-    __table_args__ = (
-        *_outbound_checks(OUTBOUND_OUTBOX_CHECKS),
-        Index(
-            "uq_outbound_delivery_idempotency_key",
-            "idempotency_key",
-            unique=True,
-        ),
-        Index(
-            "uq_outbound_delivery_replay_leaf",
-            "run_id",
-            "destination_fingerprint",
-            "replay_sequence",
-            unique=True,
-        ),
-        Index(
-            "ix_outbound_delivery_due",
-            "status",
-            "next_attempt_at",
-        ),
-        Index(
-            "ix_outbound_delivery_lease",
-            "status",
-            "lease_expires_at",
-        ),
-        Index(
-            "ix_outbound_delivery_run_status",
-            "run_id",
-            "status",
-        ),
-        Index(
-            "ix_outbound_delivery_replay_parent",
-            "replay_of_outbox_id",
-        ),
-        {"sqlite_autoincrement": True},
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    run_id = Column(Integer, ForeignKey("outbound_runs.id"), nullable=False)
-    idempotency_key = Column(String(255), nullable=False)
-    destination_snapshot_json = Column(Text, nullable=False)
-    destination_fingerprint = Column(String(64), nullable=False)
-    target_type = Column(String(16), nullable=False)
-    endpoint_key = Column(String(64), nullable=False)
-    payload_json = Column(Text, nullable=False)
-    payload_sha256 = Column(String(64), nullable=False)
-    status = Column(
-        String(24),
-        nullable=False,
-        default="pending",
-        server_default=text("'pending'"),
-    )
-    lease_owner = Column(String(128), nullable=True)
-    lease_token = Column(String(64), nullable=True)
-    lease_expires_at = Column(DateTime, nullable=True)
-    next_attempt_at = Column(DateTime, nullable=True)
-    allocated_attempt_count = Column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
-    request_started_count = Column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
-    max_attempts = Column(Integer, nullable=False)
-    retry_deadline_at = Column(DateTime, nullable=False)
-    last_error_type = Column(
-        String(64), nullable=False, default="", server_default=text("''")
-    )
-    last_error_summary = Column(
-        Text, nullable=False, default="", server_default=text("''")
-    )
-    delivered_at = Column(DateTime, nullable=True)
-    cancelled_at = Column(DateTime, nullable=True)
-    cancel_reason_type = Column(String(64), nullable=True)
-    replay_of_outbox_id = Column(
-        Integer,
-        ForeignKey("outbound_delivery_outbox.id"),
-        nullable=True,
-    )
-    replay_sequence = Column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
-    replay_request_sha256 = Column(
-        String(64), nullable=False, default="", server_default=text("''")
-    )
-    cutover_epoch = Column(Integer, nullable=False)
-    endpoint_config_revision = Column(String(128), nullable=False)
-    payload_contract_fingerprint = Column(String(64), nullable=False)
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-
-
-class OutboundDeliveryAttempt(Base):
-    """一次实际 HTTP 投递尝试的不可变审计记录。"""
-
-    __tablename__ = "outbound_delivery_attempts"
-    __table_args__ = (
-        *_outbound_checks(OUTBOUND_DELIVERY_ATTEMPT_CHECKS),
-        Index(
-            "uq_outbound_delivery_attempt",
-            "outbox_id",
-            "attempt_no",
-            unique=True,
-        ),
-        Index(
-            "ix_outbound_delivery_attempt_status_started",
-            "status",
-            "started_at",
-        ),
-        {"sqlite_autoincrement": True},
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    outbox_id = Column(
-        Integer,
-        ForeignKey("outbound_delivery_outbox.id"),
-        nullable=False,
-    )
-    attempt_no = Column(Integer, nullable=False)
-    worker_owner = Column(String(128), nullable=False)
-    lease_token = Column(String(64), nullable=False)
-    status = Column(
-        String(32),
-        nullable=False,
-        default="started",
-        server_default=text("'started'"),
-    )
-    transport_phase = Column(
-        String(32),
-        nullable=False,
-        default="allocated",
-        server_default=text("'allocated'"),
-    )
-    request_started = Column(
-        Boolean,
-        nullable=False,
-        default=False,
-        server_default=text("0"),
-    )
-    endpoint_config_revision = Column(String(128), nullable=False)
-    http_status = Column(Integer, nullable=True)
-    result_category = Column(
-        String(64), nullable=False, default="", server_default=text("''")
-    )
-    error_type = Column(
-        String(64), nullable=False, default="", server_default=text("''")
-    )
-    safe_summary = Column(
-        Text, nullable=False, default="", server_default=text("''")
-    )
-    duration_ms = Column(Integer, nullable=True)
-    settlement_retry_at = Column(DateTime, nullable=True)
-    settlement_circuit_scope_type = Column(String(32), nullable=True)
-    settlement_request_sha256 = Column(
-        String(64), nullable=False, default="", server_default=text("''")
-    )
-    started_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    request_started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-
-
-class OutboundDeliveryCircuit(Base):
-    """跨进程、按配置 revision 隔离的稳定失败熔断状态。"""
-
-    __tablename__ = "outbound_delivery_circuits"
-    __table_args__ = (
-        *_outbound_checks(OUTBOUND_CIRCUIT_CHECKS),
-        Index(
-            "uq_outbound_delivery_circuit_scope",
-            "scope_type",
-            "scope_fingerprint",
-            "config_revision",
-            unique=True,
-        ),
-        Index("ix_outbound_delivery_circuit_status", "status"),
-        {"sqlite_autoincrement": True},
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    scope_type = Column(String(32), nullable=False)
-    scope_fingerprint = Column(String(64), nullable=False)
-    config_revision = Column(String(128), nullable=False)
-    status = Column(
-        String(16),
-        nullable=False,
-        default="closed",
-        server_default=text("'closed'"),
-    )
-    reason_type = Column(
-        String(64), nullable=False, default="", server_default=text("''")
-    )
-    opened_at = Column(DateTime, nullable=True)
-    opened_by_attempt_id = Column(
-        Integer,
-        ForeignKey("outbound_delivery_attempts.id"),
-        nullable=True,
-    )
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-
-
-class OutboundDeliveryControl(Base):
-    """每个 producer source 的持久 cutover 控制行。"""
-
-    __tablename__ = "outbound_delivery_controls"
-    __table_args__ = (
-        *_outbound_checks(OUTBOUND_CONTROL_CHECKS),
-        Index(
-            "ix_outbound_delivery_control_mode_effective",
-            "mode",
-            "effective_from",
-        ),
-    )
-
-    source_type = Column(String(32), primary_key=True, nullable=False)
-    mode = Column(
-        String(24),
-        nullable=False,
-        default="legacy_direct",
-        server_default=text("'legacy_direct'"),
-    )
-    cutover_epoch = Column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
-    effective_from = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    protocol_version = Column(
-        Integer, nullable=False, default=1, server_default=text("1")
-    )
-    writer_version = Column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
-    writer_owner = Column(String(128), nullable=True)
-    writer_token = Column(String(64), nullable=True)
-    writer_lease_expires_at = Column(DateTime, nullable=True)
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-
-
-class SensitiveData(Base):
-    """Qwen 判定为「否」的原始消息，单独存档，不混入 chat_logs。"""
-
-    __tablename__ = "sensitive_data"
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(String, index=True)
-    session_id = Column(String)
-    content = Column(Text)  # 原始敏感内容
-    guardrail_status = Column(String, default="silent")
-    sender_name = Column(String, default="")
-    session_name = Column(String, default="")
-    created_at = Column(DateTime, default=datetime.now)
-
-
-class PersonaFact(Base):
-    """用户画像事实——LLM 提取候选后，Python 状态机去重/聚类/计数/衰减。
-    一个 cluster = 一个语义等价簇，cluster 内共享 cluster_id。
-
-    注意: source_log_ids 是旧字段，历史数据可能存储 evidence 文本，不能作为日志外键。
-    新链路只写 evidence_log_ids_json，并由其去重数量计算 evidence_count。
-    """
-
-    __tablename__ = "persona_facts"
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(String, index=True, nullable=False)
-    domain_primary = Column(String, default="general")
-    content = Column(Text, nullable=False)  # canonical form（簇内标准表达）
-    embedding = Column(LargeBinary, nullable=True)  # 本条自身的 embedding 向量
-    cluster_centroid = Column(LargeBinary, nullable=True)  # 簇内均值向量（稳定锚点）
-    cluster_id = Column(Integer, index=True, nullable=True)
-    evidence_count = Column(Integer, default=1)
-    source_log_ids = Column(Text, default="[]")  # 旧字段；历史内容不可信，新链路不再写入
-    evidence_log_ids_json = Column(Text, default="[]")  # 真实 ChatLog.id 列表；旧 source_log_ids 不可信
-    first_seen = Column(DateTime, nullable=True)
-    last_seen = Column(DateTime, nullable=True)
-    confidence = Column(String, default="可能")  # 确认/可能/待确认/归档
-    fact_type = Column(String, default="preference")  # preference | behavior | trait
-    memory_type = Column(String, default="stable_preference")  # stable_preference/interaction_style/...
-    status = Column(String, default="review")  # review/active/disabled/archived/rejected
-    inject_policy = Column(String, default="manual_only")  # auto/manual_only/never
-    content_hash = Column(String, default="")
-    disabled_reason = Column(Text, default="")
-    rejected_reason = Column(Text, default="")
-    candidate_meta_json = Column(Text, default="{}")
-    last_injected_at = Column(DateTime, nullable=True)
-    injected_count = Column(Integer, default=0)
-    derived_from = Column(Text, default="[]")  # JSON array of behavior IDs
-    contradicted_by = Column(Text, default="[]")  # JSON array of conflicting fact IDs
-    created_at = Column(DateTime, default=datetime.now)
-
-
-class PersonaBehavior(Base):
-    """用户行为模式——可观察的重复行为，不一定是偏好。
-
-    注意: 当前階段預留（v1 仅用了 PersonaFact），该表由 create_all 自动创建但无数据写入。
-    未来将在状态机中区分 preference/behavior 写入不同表。
-    """
-
-    __tablename__ = "persona_behaviors"
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(String, index=True, nullable=False)
-    domain_primary = Column(String, default="general")
-    pattern = Column(Text, nullable=False)
-    embedding = Column(LargeBinary, nullable=True)
-    frequency = Column(Integer, default=1)
-    source_log_ids = Column(Text, default="[]")
-    last_observed = Column(DateTime, nullable=True)
-    confidence = Column(String, default="可能")
-    status = Column(
-        String,
-        index=True,
-        nullable=False,
-        default="active",
-        server_default=text("'active'"),
-    )
-    archive_meta_json = Column(
-        Text,
-        nullable=False,
-        default="{}",
-        server_default=text("'{}'"),
-    )
-    created_at = Column(DateTime, default=datetime.now)
 
 
 class GroupMemory(Base):

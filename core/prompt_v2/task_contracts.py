@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import asdict, dataclass
+from types import MappingProxyType
 from typing import Any, Literal
 
 from core.prompt_v2.template_registry import resolve_template_key
@@ -25,6 +26,7 @@ TaskRenderApi = Literal[
     "paired_messages",
     "code_fallback_only",
 ]
+TaskTemplateSource = Literal["runtime", "default", "code_fallback"]
 
 
 class TaskContractError(ValueError):
@@ -42,6 +44,8 @@ class TaskCallValueError(TaskContractError):
 @dataclass(frozen=True)
 class TaskContract:
     task_key: str
+    owner_module: str
+    domain: str
     required_variables: frozenset[str]
     required_call_values: frozenset[str]
     non_empty_call_values: frozenset[str]
@@ -49,6 +53,8 @@ class TaskContract:
     render_mode: TaskRenderMode
     output_contract_id: str
     output_schema: dict[str, Any]
+    source_precedence: tuple[TaskTemplateSource, ...]
+    editable: bool
     template_failure_policy: str
     output_failure_policy: str
 
@@ -58,6 +64,7 @@ class TaskContract:
         data["required_call_values"] = sorted(self.required_call_values)
         data["non_empty_call_values"] = sorted(self.non_empty_call_values)
         data["payload_variables"] = sorted(self.payload_variables)
+        data["source_precedence"] = list(self.source_precedence)
         return data
 
 
@@ -69,9 +76,42 @@ class TaskInvocationSpec:
     output_parser_owner: str
 
 
+class TaskContractRegistry:
+    """构造后即冻结的后台任务合同注册表。"""
+
+    def __init__(self, contracts: tuple[TaskContract, ...]) -> None:
+        registered: dict[str, TaskContract] = {}
+        for contract in contracts:
+            if contract.task_key in registered:
+                raise TaskContractError(
+                    f"task contract 重复登记: {contract.task_key}"
+                )
+            registered[contract.task_key] = contract
+        self._contracts = MappingProxyType(registered)
+
+    @property
+    def frozen(self) -> bool:
+        return True
+
+    def get(self, task_key: str) -> TaskContract | None:
+        contract = self._contracts.get(resolve_template_key(task_key))
+        return copy.deepcopy(contract) if contract is not None else None
+
+    def keys(self) -> tuple[str, ...]:
+        return tuple(sorted(self._contracts))
+
+    def snapshot(self) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            self._contracts[key].to_dict()
+            for key in sorted(self._contracts)
+        )
+
+
 def _contract(
     task_key: str,
     *,
+    owner_module: str,
+    domain: str,
     required: tuple[str, ...] = (),
     required_call: tuple[str, ...] | None = None,
     non_empty: tuple[str, ...] = (),
@@ -89,8 +129,22 @@ def _contract(
     if not non_empty_call_values <= required_call_values:
         missing = ", ".join(sorted(non_empty_call_values - required_call_values))
         raise ValueError(f"non_empty_call_values 必须同时是 required_call_values: {missing}")
+    owner = str(owner_module or "").strip()
+    task_domain = str(domain or "").strip()
+    if not owner or not task_domain:
+        raise ValueError(f"task {task_key} 必须声明 owner_module 和 domain")
+    editable = render_mode != "code_fallback_only"
+    source_precedence: tuple[TaskTemplateSource, ...]
+    if render_mode == "code_fallback_only":
+        source_precedence = ("code_fallback",)
+    elif template_failure_policy == "runtime_default_fail_closed":
+        source_precedence = ("runtime", "default")
+    else:
+        source_precedence = ("runtime", "default", "code_fallback")
     return TaskContract(
         task_key=resolve_template_key(task_key),
+        owner_module=owner,
+        domain=task_domain,
         required_variables=frozenset(required),
         required_call_values=required_call_values,
         non_empty_call_values=non_empty_call_values,
@@ -98,16 +152,18 @@ def _contract(
         render_mode=render_mode,
         output_contract_id=output_contract_id,
         output_schema=copy.deepcopy(output_schema or {}),
+        source_precedence=source_precedence,
+        editable=editable,
         template_failure_policy=template_failure_policy,
         output_failure_policy=output_failure_policy,
     )
 
 
-_TASK_CONTRACTS = {
-    contract.task_key: contract
-    for contract in (
+_TASK_CONTRACT_REGISTRY = TaskContractRegistry((
         _contract(
             "tasks/classifier_legacy",
+            owner_module="clients.classifier_client",
+            domain="model_routing",
             required=("system_prompt", "message"),
             non_empty=("system_prompt", "message"),
             payload=("message",),
@@ -116,11 +172,19 @@ _TASK_CONTRACTS = {
         ),
         _contract(
             "tasks/private_decision",
-            render_mode="code_fallback_only",
+            owner_module="clients.classifier_client",
+            domain="chat_routing",
+            required=("message",),
+            non_empty=("message",),
+            payload=("message",),
+            render_mode="system_with_user_ref",
             output_contract_id="private_decision_v1",
+            template_failure_policy="runtime_default_fail_closed",
         ),
         _contract(
             "tasks/timing_gate",
+            owner_module="core.private_timing",
+            domain="reply_timing",
             required=("pending_text",),
             non_empty=("pending_text",),
             payload=("pending_text",),
@@ -129,34 +193,90 @@ _TASK_CONTRACTS = {
             output_failure_policy="retry_once_then_no_reply",
         ),
         _contract(
+            "tasks/timing_proactive",
+            owner_module="core.private_timing",
+            domain="reply_timing",
+            required=("pending_text",),
+            non_empty=("pending_text",),
+            payload=("pending_text",),
+            render_mode="system_with_user_ref",
+            output_contract_id="timing_proactive_v1",
+            template_failure_policy="runtime_default_fail_closed",
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "should_speak": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["should_speak", "reason"],
+                "additionalProperties": False,
+            },
+        ),
+        _contract(
             "tasks/memory_extract",
+            owner_module="core.persona_preprocess",
+            domain="persona",
             required=("conversation", "existing_memory"),
             non_empty=("conversation",),
             payload=("conversation", "existing_memory"),
             render_mode="user_prompt",
             output_contract_id="memory_candidates_v1",
+            template_failure_policy="runtime_default_fail_closed",
             output_failure_policy="retry_once_keep_unprocessed",
         ),
         _contract(
+            "tasks/persona_candidate_system",
+            owner_module="core.persona_preprocess",
+            domain="persona",
+            render_mode="user_prompt",
+            output_contract_id="memory_candidates_v1",
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="retry_once_keep_unprocessed",
+        ),
+        _contract(
+            "tasks/model_scout_system",
+            owner_module="core.legacy_adapter.ModelScoutAgent",
+            domain="model_provider",
+            render_mode="user_prompt",
+            output_contract_id="model_catalog_candidates_v1",
+            output_schema={
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["id"],
+                },
+            },
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="drop_invalid_keep_catalog",
+        ),
+        _contract(
             "tasks/reply_contract_retry",
+            owner_module="nanobot_kt.reply_contract",
+            domain="reply_contract",
             render_mode="code_fallback_only",
             output_contract_id="verified_final_action_v1",
         ),
         _contract(
             "tasks/outreach_extract",
+            owner_module="core.proactive",
+            domain="proactive_outreach",
             required_call=("message",),
             non_empty=("message",),
             payload=("message",),
             render_mode="system_with_user_ref",
             output_contract_id="outreach_threads_v1",
+            template_failure_policy="runtime_default_fail_closed",
         ),
         _contract(
             "tasks/outreach_judge",
+            owner_module="core.proactive",
+            domain="proactive_outreach",
             required_call=("message",),
             non_empty=("message",),
             payload=("message",),
             render_mode="system_with_user_ref",
             output_contract_id="outreach_judge_v1",
+            template_failure_policy="runtime_default_fail_closed",
             output_schema={
                 "type": "object",
                 "properties": {
@@ -190,14 +310,19 @@ _TASK_CONTRACTS = {
         ),
         _contract(
             "tasks/outreach_generate",
+            owner_module="core.proactive",
+            domain="proactive_outreach",
             required_call=("message",),
             non_empty=("message",),
             payload=("message",),
             render_mode="system_with_user_ref",
             output_contract_id="outreach_message_v1",
+            template_failure_policy="runtime_default_fail_closed",
         ),
         _contract(
             "tasks/proactive_research",
+            owner_module="core.proactive_research",
+            domain="proactive_outreach",
             required=("pending_text",),
             non_empty=("pending_text",),
             payload=("pending_text",),
@@ -207,12 +332,16 @@ _TASK_CONTRACTS = {
         ),
         _contract(
             "tasks/memory_digest_system",
+            owner_module="app.memory_digest",
+            domain="memory_digest",
             render_mode="paired_messages",
             output_contract_id="memory_digest_v2",
             template_failure_policy="runtime_default_fail_closed",
         ),
         _contract(
             "tasks/memory_digest_user",
+            owner_module="app.memory_digest",
+            domain="memory_digest",
             required=(
                 "date",
                 "session_id",
@@ -233,8 +362,25 @@ _TASK_CONTRACTS = {
             output_contract_id="memory_digest_v2",
             template_failure_policy="runtime_default_fail_closed",
         ),
-    )
-}
+        _contract(
+            "tasks/session_summary_system",
+            owner_module="app.session_memory",
+            domain="session_memory",
+            render_mode="user_prompt",
+            output_contract_id="session_summary_v1",
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="retry_then_preserve_pending",
+        ),
+        _contract(
+            "tasks/session_summary_output",
+            owner_module="app.session_memory",
+            domain="session_memory",
+            render_mode="user_prompt",
+            output_contract_id="session_summary_v1",
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="retry_then_preserve_pending",
+        ),
+))
 
 
 _TASK_INVOCATION_SPECS: tuple[TaskInvocationSpec, ...] = (
@@ -247,7 +393,7 @@ _TASK_INVOCATION_SPECS: tuple[TaskInvocationSpec, ...] = (
     TaskInvocationSpec(
         "private_decision",
         ("tasks/private_decision",),
-        "code_fallback_only",
+        "messages",
         "clients.classifier_client.PrivateDecisionClassifier._parse",
     ),
     TaskInvocationSpec(
@@ -257,8 +403,26 @@ _TASK_INVOCATION_SPECS: tuple[TaskInvocationSpec, ...] = (
         "core.prompt_v2.task_contracts.parse_task_output",
     ),
     TaskInvocationSpec(
+        "timing_proactive",
+        ("tasks/timing_proactive",),
+        "messages",
+        "core.prompt_v2.task_contracts.parse_task_output",
+    ),
+    TaskInvocationSpec(
         "memory_extract",
         ("tasks/memory_extract",),
+        "prompt",
+        "core.prompt_v2.task_contracts.parse_task_output",
+    ),
+    TaskInvocationSpec(
+        "persona_candidate_system",
+        ("tasks/persona_candidate_system",),
+        "prompt",
+        "core.prompt_v2.task_contracts.parse_task_output",
+    ),
+    TaskInvocationSpec(
+        "model_scout",
+        ("tasks/model_scout_system",),
         "prompt",
         "core.prompt_v2.task_contracts.parse_task_output",
     ),
@@ -278,7 +442,7 @@ _TASK_INVOCATION_SPECS: tuple[TaskInvocationSpec, ...] = (
         "outreach_judge",
         ("tasks/outreach_judge",),
         "messages",
-        "core.proactive_outreach._parse_outreach_judge_contract",
+        "core.proactive.model_policy.parse_outreach_judge_contract",
     ),
     TaskInvocationSpec(
         "outreach_generate",
@@ -298,16 +462,25 @@ _TASK_INVOCATION_SPECS: tuple[TaskInvocationSpec, ...] = (
         "paired_messages",
         "app.memory_digest.llm_builder.parse_llm_digest_response",
     ),
+    TaskInvocationSpec(
+        "session_summary",
+        ("tasks/session_summary_system", "tasks/session_summary_output"),
+        "prompt",
+        "app.session_memory.llm_summarizer._accept_summary_batch_payload",
+    ),
 )
 
 
 def get_task_contract(task_key: str) -> TaskContract | None:
-    contract = _TASK_CONTRACTS.get(resolve_template_key(task_key))
-    return copy.deepcopy(contract) if contract is not None else None
+    return _TASK_CONTRACT_REGISTRY.get(task_key)
 
 
 def list_task_contract_keys() -> list[str]:
-    return sorted(_TASK_CONTRACTS)
+    return list(_TASK_CONTRACT_REGISTRY.keys())
+
+
+def task_contract_registry_snapshot() -> tuple[dict[str, Any], ...]:
+    return _TASK_CONTRACT_REGISTRY.snapshot()
 
 
 def list_task_invocation_specs() -> list[TaskInvocationSpec]:
@@ -355,7 +528,7 @@ def validate_task_invocation_specs() -> None:
                 raise TaskContractError(
                     f"task {canonical} render mode 与 invocation 不一致"
                 )
-    missing = sorted(set(_TASK_CONTRACTS) - seen)
+    missing = sorted(set(_TASK_CONTRACT_REGISTRY.keys()) - seen)
     if missing:
         raise TaskContractError(
             "task contracts missing invocation: " + ", ".join(missing)
@@ -428,6 +601,36 @@ def _parse_memory_candidates(raw: str) -> dict:
     return {"candidates": candidates}
 
 
+def _parse_model_catalog_candidates(raw: str) -> dict:
+    text = str(raw or "").strip()
+    if not text:
+        raise TaskOutputContractError("model_catalog_candidates_v1: empty_output")
+    try:
+        value = json.loads(text)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise TaskOutputContractError(
+            "model_catalog_candidates_v1: invalid_json"
+        ) from exc
+    models = [value] if isinstance(value, dict) else value
+    if not isinstance(models, list):
+        raise TaskOutputContractError(
+            "model_catalog_candidates_v1: root_must_be_array"
+        )
+    normalized: list[dict[str, Any]] = []
+    for item in models:
+        if not isinstance(item, dict):
+            raise TaskOutputContractError(
+                "model_catalog_candidates_v1: item_must_be_object"
+            )
+        model_id = str(item.get("id") or "").strip()
+        if not model_id:
+            raise TaskOutputContractError(
+                "model_catalog_candidates_v1: id_required"
+            )
+        normalized.append(dict(item, id=model_id))
+    return {"models": normalized}
+
+
 def _parse_timing_gate(raw: str) -> dict:
     value = _parse_json_object(raw, contract_id="timing_gate_v1")
     allowed = {"action", "delay_seconds", "reason"}
@@ -452,14 +655,36 @@ def _parse_timing_gate(raw: str) -> dict:
     }
 
 
+def _parse_timing_proactive(raw: str) -> dict:
+    value = _parse_json_object(raw, contract_id="timing_proactive_v1")
+    if set(value) != {"should_speak", "reason"}:
+        raise TaskOutputContractError("timing_proactive_v1: invalid_fields")
+    should_speak = value.get("should_speak")
+    reason = value.get("reason")
+    if type(should_speak) is not bool:
+        raise TaskOutputContractError(
+            "timing_proactive_v1: should_speak_must_be_boolean"
+        )
+    if not isinstance(reason, str):
+        raise TaskOutputContractError("timing_proactive_v1: reason_must_be_string")
+    return {
+        "should_speak": should_speak,
+        "reason": reason[:200],
+    }
+
+
 def parse_task_output(task_key: str, raw: str) -> dict:
     contract = get_task_contract(task_key)
     if contract is None:
         raise TaskOutputContractError("unregistered_task_contract")
     if contract.output_contract_id == "memory_candidates_v1":
         return _parse_memory_candidates(raw)
+    if contract.output_contract_id == "model_catalog_candidates_v1":
+        return _parse_model_catalog_candidates(raw)
     if contract.output_contract_id == "timing_gate_v1":
         return _parse_timing_gate(raw)
+    if contract.output_contract_id == "timing_proactive_v1":
+        return _parse_timing_proactive(raw)
     raise TaskOutputContractError(
         f"{contract.output_contract_id}: parser_not_implemented"
     )

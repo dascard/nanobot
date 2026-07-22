@@ -10,6 +10,16 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.database import SemanticIndexItem
+from core.retrieval import (
+    AllowAllCitationPolicy,
+    CitationEvaluation,
+    RankingOutcome,
+    RerankOutcome,
+    RetrievalCandidates,
+    RetrievalPipeline,
+    RetrievalPipelineState,
+    RetrievalRequest,
+)
 from core.semantic.adapters import is_recallable_memory_digest_meta
 from core.semantic.reranker import SemanticCandidate
 from core.semantic.retriever import (
@@ -162,53 +172,31 @@ class MemoryRagService:
         limit: int = 5,
         include_debug: bool = False,
     ) -> dict[str, Any]:
-        source_types = _source_types(source)
-        recall = self._recall(
-            query,
-            source_types=source_types,
-            user_id=user_id,
-            session_id=session_id,
+        request = RetrievalRequest(
+            query=query,
+            limit=max(1, int(limit)),
+            include_debug=include_debug,
+            options={
+                "domain": "memory",
+                "source": source,
+                "source_types": frozenset(_source_types(source)),
+                "user_id": user_id,
+                "session_id": session_id,
+            },
         )
-        debug_trace = (
-            self._build_debug_trace(
-                recall=recall,
-                source_types=source_types,
-                user_id=user_id,
-                session_id=session_id,
-            )
-            if include_debug
-            else None
-        )
-        candidates, counters = self._filter_candidates(query, recall=recall)
-        self._update_candidate_debug(
-            debug_trace,
-            candidates=candidates,
-            bm25_by_id=recall.bm25_by_id,
-        )
-        degraded = self.reranker_provider is None
-        rerank_candidates = self._prepare_rerank_candidates(
-            candidates,
-            bm25_by_id=recall.bm25_by_id,
-        )
-        reranker_latency_ms = self._rerank(
-            query,
-            candidates=candidates,
-            rerank_candidates=rerank_candidates,
-            debug_trace=debug_trace,
-        )
-        gated = self._apply_relevance_gate(candidates, degraded=degraded, debug_trace=debug_trace)
-        parent_items = self._group_by_parent(gated, limit=limit)
-        return self._build_result(
-            query,
-            source=source,
-            parent_items=parent_items,
-            candidates=candidates,
-            recall=recall,
-            rerank_candidates=rerank_candidates,
-            reranker_latency_ms=reranker_latency_ms,
-            counters=counters,
-            degraded=degraded,
-            debug_trace=debug_trace,
+        return self._build_pipeline().execute(request)
+
+    def _build_pipeline(self) -> RetrievalPipeline:
+        return RetrievalPipeline(
+            candidate_source=_MemoryCandidateSource(self),
+            citation_policy=AllowAllCitationPolicy(),
+            filter_policy=_MemoryFilterPolicy(self),
+            scoring_policy=_MemoryScoringPolicy(self),
+            reranker=_MemoryReranker(self),
+            budget_policy=_MemoryBudgetPolicy(self),
+            debug_trace_sink=_MemoryDebugTraceSink(self),
+            result_builder=_MemoryResultBuilder(self),
+            provider_id="memory_rag",
         )
 
     def _recall(
@@ -348,8 +336,7 @@ class MemoryRagService:
             if lexical > 0 or (semantic is not None and semantic >= 0.10):
                 candidates.append(_Candidate(row=row, lexical=lexical, semantic=semantic))
 
-        candidates.sort(key=lambda item: self._pre_score(item), reverse=True)
-        return candidates[:80], {
+        return candidates, {
             "fts_candidate_count": fts_candidate_count,
             "semantic_hits": semantic_hits,
         }
@@ -398,10 +385,9 @@ class MemoryRagService:
         *,
         candidates: list[_Candidate],
         rerank_candidates: list[_Candidate],
-        debug_trace: dict[str, Any] | None,
-    ) -> int:
+    ) -> tuple[int, list[dict[str, Any]]]:
         if self.reranker_provider is None or not rerank_candidates:
-            return 0
+            return 0, []
         rerank_inputs = [
             SemanticCandidate(
                 candidate_id=item.candidate_id,
@@ -412,38 +398,34 @@ class MemoryRagService:
             )
             for item in rerank_candidates
         ]
-        if debug_trace is not None:
-            debug_trace["reranker_input_pairs"] = [
-                {
-                    "candidate_id": candidate.candidate_id,
-                    "source_type": candidate.source_type,
-                    "query": query,
-                    "title": candidate.title,
-                    "text": candidate.text,
-                    "metadata": candidate.metadata,
-                }
-                for candidate in rerank_inputs
-            ]
+        debug_inputs = [
+            {
+                "candidate_id": candidate.candidate_id,
+                "source_type": candidate.source_type,
+                "query": query,
+                "title": candidate.title,
+                "text": candidate.text,
+                "metadata": candidate.metadata,
+            }
+            for candidate in rerank_inputs
+        ]
         reranker_started = time.perf_counter()
         reranked = self.reranker_provider.rerank(query, rerank_inputs, top_k=50)
         reranker_latency_ms = int((time.perf_counter() - reranker_started) * 1000)
-        if debug_trace is not None:
-            debug_trace.setdefault("timings", {})["reranker_latency_ms"] = reranker_latency_ms
         scores = {item.candidate_id: item for item in reranked}
         for item in candidates:
             score = scores.get(item.candidate_id)
             if score is not None:
                 item.reranker = score.score
                 item.raw_reranker = score.raw_score
-        return reranker_latency_ms
+        return reranker_latency_ms, debug_inputs
 
     def _apply_relevance_gate(
         self,
         candidates: list[_Candidate],
         *,
         degraded: bool,
-        debug_trace: dict[str, Any] | None,
-    ) -> list[_Candidate]:
+    ) -> tuple[list[_Candidate], list[dict[str, Any]]]:
         gated: list[_Candidate] = []
         gate_debug: list[dict[str, Any]] = []
         for item in candidates:
@@ -453,20 +435,17 @@ class MemoryRagService:
             )
             if passed:
                 gated.append(item)
-            if debug_trace is not None:
-                gate_debug.append({
-                    "candidate_id": item.candidate_id,
-                    "passed": passed,
-                    "degraded": degraded,
-                    "components": {
-                        "reranker": item.reranker,
-                        "semantic": item.semantic,
-                        "lexical": item.lexical,
-                    },
-                })
-        if debug_trace is not None:
-            debug_trace["relevance_gate"] = gate_debug
-        return gated
+            gate_debug.append({
+                "candidate_id": item.candidate_id,
+                "passed": passed,
+                "degraded": degraded,
+                "components": {
+                    "reranker": item.reranker,
+                    "semantic": item.semantic,
+                    "lexical": item.lexical,
+                },
+            })
+        return gated, gate_debug
 
     def _build_result(
         self,
@@ -644,3 +623,220 @@ class MemoryRagService:
 
         parents.sort(key=lambda item: item["parent_score"], reverse=True)
         return parents[: max(1, int(limit))]
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryCandidateSource:
+    service: MemoryRagService
+
+    def recall(self, request: RetrievalRequest) -> _MemoryRecallResult:
+        return self.service._recall(
+            request.query,
+            source_types=set(request.options["source_types"]),
+            user_id=str(request.options.get("user_id") or ""),
+            session_id=str(request.options.get("session_id") or ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryFilterPolicy:
+    service: MemoryRagService
+
+    def filter_candidates(
+        self,
+        request: RetrievalRequest,
+        citation: CitationEvaluation[_MemoryRecallResult],
+    ) -> RetrievalCandidates[_Candidate]:
+        candidates, counters = self.service._filter_candidates(
+            request.query,
+            recall=citation.source,
+        )
+        return RetrievalCandidates(
+            items=tuple(candidates),
+            metadata={
+                **counters,
+                "bm25_by_id": citation.source.bm25_by_id,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryScoringPolicy:
+    service: MemoryRagService
+
+    def pre_rank(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_Candidate],
+    ) -> RetrievalCandidates[_Candidate]:
+        ranked = tuple(
+            sorted(candidates.items, key=self.service._pre_score, reverse=True)
+        )
+        return candidates.with_items(ranked)
+
+    def final_rank(
+        self,
+        request: RetrievalRequest,
+        outcome: RerankOutcome[_Candidate],
+    ) -> RankingOutcome[_Candidate]:
+        degraded = bool(outcome.metadata["degraded"])
+        gated, gate_debug = self.service._apply_relevance_gate(
+            list(outcome.items),
+            degraded=degraded,
+        )
+        return RankingOutcome(
+            items=tuple(gated),
+            metadata={
+                "degraded": degraded,
+                "relevance_gate": gate_debug,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryReranker:
+    service: MemoryRagService
+
+    def rerank(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_Candidate],
+    ) -> RerankOutcome[_Candidate]:
+        all_candidates = list(candidates.items)
+        bm25_by_id = dict(candidates.metadata["bm25_by_id"])
+        reranker_candidates = self.service._prepare_rerank_candidates(
+            all_candidates,
+            bm25_by_id=bm25_by_id,
+        )
+        reranker_latency_ms, debug_inputs = self.service._rerank(
+            request.query,
+            candidates=all_candidates,
+            rerank_candidates=reranker_candidates,
+        )
+        return RerankOutcome(
+            items=tuple(all_candidates),
+            reranker_items=tuple(reranker_candidates),
+            metadata={
+                "degraded": self.service.reranker_provider is None,
+                "reranker_latency_ms": reranker_latency_ms,
+                "reranker_input_pairs": debug_inputs,
+                "reranker_executed": bool(debug_inputs),
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryBudgetPolicy:
+    service: MemoryRagService
+
+    def limit_candidates(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_Candidate],
+    ) -> RetrievalCandidates[_Candidate]:
+        return candidates.with_items(candidates.items[:80])
+
+    def select_results(
+        self,
+        request: RetrievalRequest,
+        ranking: RankingOutcome[_Candidate],
+    ) -> list[dict[str, Any]]:
+        return self.service._group_by_parent(
+            list(ranking.items),
+            limit=request.limit,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryDebugTraceSink:
+    service: MemoryRagService
+
+    def start(
+        self,
+        request: RetrievalRequest,
+        source: _MemoryRecallResult,
+        citation: CitationEvaluation[_MemoryRecallResult],
+    ) -> dict[str, Any] | None:
+        if not request.include_debug:
+            return None
+        return self.service._build_debug_trace(
+            recall=source,
+            source_types=set(request.options["source_types"]),
+            user_id=str(request.options.get("user_id") or ""),
+            session_id=str(request.options.get("session_id") or ""),
+        )
+
+    def candidates_ready(
+        self,
+        trace: object | None,
+        candidates: RetrievalCandidates[_Candidate],
+    ) -> None:
+        if not isinstance(trace, dict):
+            return
+        self.service._update_candidate_debug(
+            trace,
+            candidates=list(candidates.items),
+            bm25_by_id=dict(candidates.metadata["bm25_by_id"]),
+        )
+
+    def rerank_complete(
+        self,
+        trace: object | None,
+        outcome: RerankOutcome[_Candidate],
+    ) -> None:
+        if not isinstance(trace, dict):
+            return
+        trace["reranker_input_pairs"] = list(
+            outcome.metadata["reranker_input_pairs"]
+        )
+        if outcome.metadata["reranker_executed"]:
+            trace.setdefault("timings", {})["reranker_latency_ms"] = int(
+                outcome.metadata["reranker_latency_ms"]
+            )
+
+    def ranking_complete(
+        self,
+        trace: object | None,
+        ranking: RankingOutcome[_Candidate],
+    ) -> None:
+        if isinstance(trace, dict):
+            trace["relevance_gate"] = list(ranking.metadata["relevance_gate"])
+
+    def finish(
+        self,
+        trace: object | None,
+        selected: list[dict[str, Any]],
+    ) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryResultBuilder:
+    service: MemoryRagService
+
+    def build(
+        self,
+        state: RetrievalPipelineState[
+            _MemoryRecallResult,
+            _Candidate,
+            list[dict[str, Any]],
+            dict[str, Any],
+        ],
+    ) -> dict[str, Any]:
+        debug_trace = (
+            state.debug_trace if isinstance(state.debug_trace, dict) else None
+        )
+        return self.service._build_result(
+            state.request.query,
+            source=str(state.request.options.get("source") or "all"),
+            parent_items=state.selected,
+            candidates=list(state.candidates.items),
+            recall=state.source,
+            rerank_candidates=list(state.rerank_outcome.reranker_items),
+            reranker_latency_ms=int(
+                state.rerank_outcome.metadata["reranker_latency_ms"]
+            ),
+            counters=dict(state.candidates.metadata),
+            degraded=bool(state.rerank_outcome.metadata["degraded"]),
+            debug_trace=debug_trace,
+        )

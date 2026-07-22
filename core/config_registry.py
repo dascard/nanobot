@@ -1,24 +1,14 @@
-"""配置定义中心——所有可热重载设置的元数据注册表。"""
+"""配置定义中心——所有受管设置的类型化元数据注册表。"""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from types import MappingProxyType
 
-ValueType = Literal["str", "int", "float", "bool"]
-
-
-@dataclass(frozen=True)
-class SettingDef:
-    key: str
-    env_name: str
-    default: Any
-    value_type: ValueType
-    category: str
-    description: str = ""
-    restart_required: bool = False
-    min_value: float | None = None
-    max_value: float | None = None
-    sensitive: bool = False
-    dangerous: bool = False
+from core.settings_specs import (
+    SettingDef,
+    SettingSpec,
+    validate_setting_catalog,
+)
 
 
 @dataclass(frozen=True)
@@ -52,11 +42,51 @@ def canonical_setting_key(key: str) -> str:
     return LEGACY_SETTING_CANONICAL_KEYS.get(str(key), str(key))
 
 
+def _validate_proactive_outreach_probability_range(
+    values: Mapping[str, object],
+) -> None:
+    minimum = values.get("proactive_outreach.surge_min_prob")
+    maximum = values.get("proactive_outreach.surge_max_prob")
+    if minimum is None or maximum is None:
+        return
+    if float(minimum) > float(maximum):
+        raise ValueError(
+            "proactive_outreach.surge_min_prob 不能大于 surge_max_prob"
+        )
+
+
 SETTING_DEFS: dict[str, SettingDef] = {
+    "runtime.data_dir": SettingDef(
+        key="runtime.data_dir",
+        env_name="NANOBOT_DATA_DIR",
+        default="./data",
+        value_type="str",
+        category="system",
+        description="运行时持久数据根目录",
+        restart_required=True,
+        dangerous=True,
+        source_precedence=("environment", "default"),
+        owner_module="core.runtime_paths",
+    ),
+    "runtime.temp_dir": SettingDef(
+        key="runtime.temp_dir",
+        env_name="NANOBOT_TEMP_DIR",
+        default="./tmp",
+        value_type="str",
+        category="system",
+        description="运行时临时文件根目录",
+        restart_required=True,
+        dangerous=True,
+        source_precedence=("environment", "default"),
+        owner_module="core.runtime_paths",
+    ),
     "database.url": SettingDef(
         key="database.url", env_name="DATABASE_URL",
         default="sqlite:///./data/nanobot.db", value_type="str",
         category="system", description="数据库连接地址", restart_required=True, dangerous=True,
+        source_precedence=("environment", "default"),
+        owner_module="core.database",
+        safety_class="invariant",
     ),
     "log.level": SettingDef(
         key="log.level", env_name="LOG_LEVEL",
@@ -205,6 +235,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
         description="next_check_at 未到时，活跃时段提前考虑的最高冲击概率",
         min_value=0.0,
         max_value=1.0,
+        cross_field_validator=_validate_proactive_outreach_probability_range,
     ),
     "classifier.timeout": SettingDef(
         key="classifier.timeout", env_name="CLASSIFIER_TIMEOUT",
@@ -307,6 +338,25 @@ SETTING_DEFS: dict[str, SettingDef] = {
         key="model.reply", env_name="LLM_MODEL_REPLY",
         default="deepseek-v4-flash-max", value_type="str",
         category="model", description="对话回复模型ID",
+        owner_module="core.model_provider",
+    ),
+    "model.reply_intel_floor": SettingDef(
+        key="model.reply_intel_floor", env_name="REPLY_MODEL_INTEL_FLOOR",
+        default=12, value_type="int", category="model",
+        description="回复候选模型最低智能等级", min_value=1, max_value=20,
+        owner_module="core.model_provider",
+    ),
+    "model.reply_intel_boost": SettingDef(
+        key="model.reply_intel_boost", env_name="REPLY_MODEL_INTEL_BOOST",
+        default=2, value_type="int", category="model",
+        description="在请求复杂度基础上追加的智能等级", min_value=0, max_value=20,
+        owner_module="core.model_provider",
+    ),
+    "model.reply_max_cost": SettingDef(
+        key="model.reply_max_cost", env_name="REPLY_MODEL_MAX_COST",
+        default=10.0, value_type="float", category="model",
+        description="回复候选模型最大输入成本", min_value=0, max_value=1000,
+        owner_module="core.model_provider",
     ),
     "prompt_runtime.engine": SettingDef(
         key="prompt_runtime.engine", env_name="NANOBOT_PROMPT_ENGINE",
@@ -1056,3 +1106,16 @@ def _register_web_search_settings() -> None:
 
 
 _register_web_search_settings()
+
+# 动态 provider/web-search 设置全部注册完毕后再冻结校验。导入期失败即阻止服务
+# 带着不一致或可被数据库覆盖的安全不变量启动。
+validate_setting_catalog(SETTING_DEFS)
+SETTING_DEFS = MappingProxyType(dict(SETTING_DEFS))
+
+__all__ = [
+    "LEGACY_SETTING_ALIASES",
+    "SETTING_DEFS",
+    "SettingDef",
+    "SettingSpec",
+    "canonical_setting_key",
+]

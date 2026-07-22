@@ -103,7 +103,7 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
     except Exception as e:
         logger.warning("[Tools] registry probe failed: %s", e, exc_info=True)
 
-    from core.tool_registry import TOOL_METADATA
+    from core.tool_registry import list_user_tool_descriptors
     from core.runtime_tool_service import (
         normalize_tool_chat_type,
         normalize_tool_platform,
@@ -168,7 +168,13 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             override_state = {}
 
     items = []
-    for name, td in sorted(TOOL_METADATA.items(), key=lambda x: x[1].label):
+    descriptors = sorted(
+        list_user_tool_descriptors(),
+        key=lambda item: item.definition.label,
+    )
+    for descriptor in descriptors:
+        name = descriptor.name
+        td = descriptor.definition
         registered = name in kt_loaded if kt_loaded else None
         is_subagent = name in ("memory_read", "memory_write")
         items.append({

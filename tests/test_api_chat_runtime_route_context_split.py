@@ -137,7 +137,6 @@ def test_build_chat_runtime_route_context_applies_group_persona_gate():
         req=_request(session_id="group_42", stream=True),
         final_query="群聊问题",
         final_files=["a.png"],
-        persona_text="群聊画像",
         memory_header="历史摘要",
         history_messages=[{"role": "user", "content": "上一轮"}],
         ctx_debug={"source": "history"},
@@ -174,7 +173,6 @@ def test_build_chat_runtime_route_context_injects_private_persona_with_safe_mult
         req=_request(),
         final_query="私聊问题",
         final_files=["img.png"],
-        persona_text="静态画像",
         memory_header="历史摘要",
         history_messages=history,
         ctx_debug={"history": "ok"},
@@ -217,7 +215,6 @@ def test_build_chat_runtime_route_context_recovers_private_persona_injection_fai
         req=_request(),
         final_query="私聊问题",
         final_files=[],
-        persona_text="静态画像",
         memory_header="历史摘要",
         history_messages=[],
         ctx_debug={},
@@ -236,7 +233,7 @@ def test_build_chat_runtime_route_context_recovers_private_persona_injection_fai
     assert "persona injection context failed user=u-runtime-route: persona down" in calls["warning"][0]
 
 
-def test_build_chat_runtime_route_context_does_not_keep_stale_persona_on_empty_selection():
+def test_build_chat_runtime_route_context_uses_empty_dynamic_persona_on_miss():
     from api.chat_runtime_route_context import ChatRuntimeRouteInput, build_chat_runtime_route_context
 
     calls: dict[str, list[Any]] = {}
@@ -244,7 +241,6 @@ def test_build_chat_runtime_route_context_does_not_keep_stale_persona_on_empty_s
         req=_request(),
         final_query="与旧画像无关的问题",
         final_files=[],
-        persona_text="旧画像快照",
         memory_header="历史摘要",
         history_messages=[],
         ctx_debug={},
@@ -281,7 +277,6 @@ def test_build_chat_runtime_route_context_delegates_runtime_input_and_logs_promp
         req=_request(),
         final_query="私聊问题",
         final_files=[],
-        persona_text="画像",
         memory_header="历史",
         history_messages=[],
         ctx_debug={},
@@ -313,7 +308,6 @@ def test_build_chat_runtime_route_context_logs_injection_mode():
         req=_request(),
         final_query="注入文本",
         final_files=[],
-        persona_text="画像",
         memory_header="历史",
         history_messages=[],
         ctx_debug={},
@@ -349,7 +343,7 @@ def test_parent_proxy_chat_delegates_runtime_route_context_and_preserves_patch_p
             bridge_meta={"platform": "qq"},
             platform="qq",
             prompt_budget={},
-            persona_text=runtime_input.persona_text,
+            persona_text="动态画像",
             ctx_debug=runtime_input.ctx_debug,
             injection_mode=False,
         )
@@ -360,7 +354,6 @@ def test_parent_proxy_chat_delegates_runtime_route_context_and_preserves_patch_p
             req=_request(),
             final_query="问题",
             final_files=[],
-            persona_text="画像",
             memory_header="历史",
             history_messages=[],
             ctx_debug={},

@@ -13,7 +13,8 @@ from pydantic import BaseModel, StrictBool, StrictInt
 from sqlalchemy.orm import Session
 
 from api.admin.common import client_ip, verify_admin
-from core import outbound_delivery
+from core.outbound import service as outbound_delivery
+from core.outbound.policy import proactive_outreach_source_revision
 from core.database import (
     AdminAuditLog,
     OutboundDeliveryAttempt,
@@ -227,7 +228,7 @@ def _legacy_proactive_payload(row: ProactiveOutreachLog) -> dict:
         "status": str(row.status),
         "created_at": _datetime(row.created_at),
         "source_revision": (
-            outbound_delivery.proactive_outreach_source_revision(row)
+            proactive_outreach_source_revision(row)
         ),
     }
 

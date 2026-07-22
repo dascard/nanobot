@@ -1117,7 +1117,8 @@ async def test_private_buffer_silent_releases_waiters(db_session, monkeypatch):
     await first_sleep_started.wait()
     fake_now["value"] = 3.0
     task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
-    await real_sleep(0)
+    while len(_private_buffers.get("u-buffer", {}).get("queries", [])) < 2:
+        await real_sleep(0)
     release_first_sleep.set()
     await second_sleep_started.wait()
     release_second_sleep.set()
@@ -1178,7 +1179,8 @@ async def test_private_buffer_refreshes_window_and_persists_merged_messages(db_s
     await first_sleep_started.wait()
     fake_now["value"] = 3.0
     task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
-    await real_sleep(0)
+    while len(_private_buffers.get("u-merged", {}).get("queries", [])) < 2:
+        await real_sleep(0)
     release_first_sleep.set()
 
     await second_sleep_started.wait()
@@ -1254,7 +1256,8 @@ async def test_private_buffer_merges_files_for_final_bridge_request(db_session, 
     await first_sleep_started.wait()
     fake_now["value"] = 3.0
     task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
-    await real_sleep(0)
+    while _private_buffers.get("u-files", {}).get("window_seconds") != 10.0:
+        await real_sleep(0)
     assert _private_buffers["u-files"]["window_seconds"] == 10.0
     assert _private_buffers["u-files"]["deadline"] == 13.0
     release_first_sleep.set()
@@ -1359,7 +1362,8 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
 
     fake_now["value"] = 3.0
     task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
-    await real_sleep(0)
+    while _private_buffers.get("u-shrink", {}).get("window_seconds") != 5.0:
+        await real_sleep(0)
     assert _private_buffers["u-shrink"]["window_seconds"] == 5.0
     assert _private_buffers["u-shrink"]["deadline"] == 8.0
     try:
@@ -1425,7 +1429,8 @@ async def test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer(db
     try:
         await sleep_started.wait()
         task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
-        await real_sleep(0)
+        while len(_private_buffers.get("u-cancel", {}).get("queries", [])) < 2:
+            await real_sleep(0)
 
         task1.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -1467,7 +1472,8 @@ async def test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer(d
     try:
         await bridge_entered.wait()
         task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
-        await asyncio.sleep(0)
+        while len(_private_buffers.get("u-bridge-cancel", {}).get("queries", [])) < 2:
+            await asyncio.sleep(0)
 
         task1.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -1701,6 +1707,7 @@ async def test_group_message_releases_db_transaction_before_bridge(db_session, m
 @pytest.mark.asyncio
 async def test_group_message_retries_ambient_log_when_sqlite_locked(db_session, monkeypatch):
     from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as OrmSession
 
     from api.routes import GroupMessageRequest, group_message
     from core.database import User
@@ -1711,16 +1718,16 @@ async def test_group_message_retries_ambient_log_when_sqlite_locked(db_session, 
     async def fake_process(*args, **kwargs):
         return {"action": "no_reply", "generation": 1, "reason": "timing says no"}
 
-    original_commit = db_session.commit
+    original_commit = OrmSession.commit
     ambient_failures = 0
 
-    def flaky_commit():
+    def flaky_commit(session):
         nonlocal ambient_failures
         pending_ambient = any(
             isinstance(row, ChatLog)
             and row.role == "ambient"
             and row.message_id == "m-lock-retry-1"
-            for row in db_session.new
+            for row in session.new
         )
         if pending_ambient and ambient_failures == 0:
             ambient_failures += 1
@@ -1729,9 +1736,11 @@ async def test_group_message_retries_ambient_log_when_sqlite_locked(db_session, 
                 {},
                 Exception("database is locked"),
             )
-        return original_commit()
+        return original_commit(session)
 
-    monkeypatch.setattr(db_session, "commit", flaky_commit)
+    # 群聊数据库阶段使用同 bind 的 fresh Session；故障注入必须作用于共同基类，
+    # 不能只修改 FastAPI 请求 Session 的动态 sessionmaker 子类。
+    monkeypatch.setattr(OrmSession, "commit", flaky_commit)
     monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
 
     data = await group_message(
@@ -1757,6 +1766,7 @@ async def test_group_message_retries_ambient_log_when_sqlite_locked(db_session, 
 @pytest.mark.asyncio
 async def test_group_message_returns_no_reply_when_sqlite_lock_retries_exhausted(db_session, monkeypatch):
     from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as OrmSession
 
     from api.routes import GroupMessageRequest, group_message
     from core.database import InboundMessageClaim, User
@@ -1764,16 +1774,16 @@ async def test_group_message_returns_no_reply_when_sqlite_lock_retries_exhausted
     db_session.add(User(id="group_lock-exhausted", name="锁耗尽群"))
     db_session.commit()
 
-    original_commit = db_session.commit
+    original_commit = OrmSession.commit
     ambient_failures = 0
 
-    def ambient_locked_commit():
+    def ambient_locked_commit(session):
         nonlocal ambient_failures
         pending_ambient = any(
             isinstance(row, ChatLog)
             and row.role == "ambient"
             and row.message_id == "m-lock-exhausted-1"
-            for row in db_session.new
+            for row in session.new
         )
         if pending_ambient:
             ambient_failures += 1
@@ -1782,9 +1792,9 @@ async def test_group_message_returns_no_reply_when_sqlite_lock_retries_exhausted
                 {},
                 Exception("database is locked"),
             )
-        return original_commit()
+        return original_commit(session)
 
-    monkeypatch.setattr(db_session, "commit", ambient_locked_commit)
+    monkeypatch.setattr(OrmSession, "commit", ambient_locked_commit)
 
     data = await group_message(
         GroupMessageRequest(
@@ -2602,6 +2612,7 @@ class TestGroupMessageStructured:
 
     def test_sticker_auto_register_retries_when_sqlite_locked(self, client, db_session, monkeypatch):
         from sqlalchemy.exc import OperationalError
+        from sqlalchemy.orm import Session as OrmSession
 
         from core.database import StickerMemory
 
@@ -2612,20 +2623,25 @@ class TestGroupMessageStructured:
         monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FakeGroupRuntime())
         monkeypatch.setattr("core.sticker_preview_jobs.cache_sticker_preview_bg", lambda sticker_id: None)
         monkeypatch.setattr("app.group_ingress.helpers.settings.get_bool", lambda key, default=False: False)
-        original_commit = db_session.commit
+        original_commit = OrmSession.commit
         commit_calls = {"count": 0}
 
-        def flaky_commit():
-            commit_calls["count"] += 1
-            if commit_calls["count"] == 1:
+        def flaky_commit(session):
+            pending_sticker = any(
+                isinstance(row, StickerMemory)
+                for row in session.new
+            )
+            if pending_sticker:
+                commit_calls["count"] += 1
+            if pending_sticker and commit_calls["count"] == 1:
                 raise OperationalError(
                     "INSERT INTO sticker_memories ...",
                     {},
                     Exception("database is locked"),
                 )
-            return original_commit()
+            return original_commit(session)
 
-        monkeypatch.setattr(db_session, "commit", flaky_commit)
+        monkeypatch.setattr(OrmSession, "commit", flaky_commit)
 
         resp = client.post("/api/v1/group/message", json={
             "group_id": "123456",

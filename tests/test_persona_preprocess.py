@@ -814,16 +814,19 @@ class TestBuildPrompt:
             facts_summary="喜欢简洁代码",
             logs_text=logs_text,
         )
-        assert "喜欢简洁代码" in prompt
-        assert "给我代码别废话" in prompt
-        assert "[log_id=123]" in prompt
-        assert "memory_type" in prompt
-        assert "should_store" in prompt
-        assert "should_inject" in prompt
-        assert "confidence_hint" in prompt
-        assert "evidence_log_ids" in prompt
-        assert "reject_reason" in prompt
-        assert "temporary_task" in prompt
-        assert "tool_contract" in prompt
-        assert "test_noise" in prompt
-        assert '"candidates"' in prompt
+        from core.persona_preprocess import get_candidate_extraction_system_prompt
+
+        combined = f"{get_candidate_extraction_system_prompt()}\n{prompt}"
+        assert "喜欢简洁代码" in combined
+        assert "给我代码别废话" in combined
+        assert "[log_id=123]" in combined
+        assert "memory_type" in combined
+        assert "should_store" in combined
+        assert "should_inject" in combined
+        assert "confidence_hint" in combined
+        assert "evidence_log_ids" in combined
+        assert "reject_reason" in combined
+        assert "temporary_task" in combined
+        assert "tool_contract" in combined
+        assert "test_noise" in combined
+        assert '"candidates"' in combined

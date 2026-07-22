@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 
 from core.tool_contracts.ai_daily import ai_daily_parameters_schema
-from core.tool_registry import TOOL_METADATA, get_tool_def
+from core.tool_registry import get_tool_descriptor
 
 logger = logging.getLogger("nanobot.tool_schema")
 
@@ -509,8 +509,8 @@ def _with_background_option(tool_name: str, parameters: dict[str, Any]) -> dict[
     params = copy.deepcopy(parameters or {"type": "object", "properties": {}})
     if not isinstance(params.get("properties"), dict):
         params["properties"] = {}
-    td = get_tool_def(tool_name)
-    if td is None or td.supports_background:
+    descriptor = get_tool_descriptor(tool_name)
+    if descriptor is None or descriptor.supports_background:
         params["properties"]["run_in_background"] = _background_schema()
     else:
         params["properties"].pop("run_in_background", None)
@@ -538,7 +538,8 @@ def _static_tool_schema(name: str) -> dict[str, Any] | None:
 def _builtin_tool_schema(name: str) -> dict[str, Any] | None:
     if name not in KT_BUILTIN_SCHEMAS:
         return None
-    td = get_tool_def(name)
+    descriptor = get_tool_descriptor(name)
+    td = descriptor.definition if descriptor is not None else None
     return {
         "type": "function",
         "function": {
@@ -551,7 +552,8 @@ def _builtin_tool_schema(name: str) -> dict[str, Any] | None:
 
 
 def _metadata_fallback_schema(name: str) -> dict[str, Any]:
-    td = get_tool_def(name)
+    descriptor = get_tool_descriptor(name)
+    td = descriptor.definition if descriptor is not None else None
     return {
         "type": "function",
         "function": {
@@ -655,8 +657,9 @@ def delete_tool_schema_override(db, name: str) -> bool:
 
 def _add_tool_metadata(schema: dict[str, Any], tool_name: str) -> dict[str, Any]:
     result = copy.deepcopy(schema or {})
-    if tool_name in TOOL_METADATA:
-        td = TOOL_METADATA[tool_name]
+    descriptor = get_tool_descriptor(tool_name)
+    if descriptor is not None and not descriptor.framework_owned:
+        td = descriptor.definition
         result["category"] = td.category
         result["risk_level"] = td.risk_level
         result["label"] = td.label
@@ -672,7 +675,8 @@ def _ensure_known_tool(name: str) -> str:
     tool_name = str(name or "").strip()
     if not tool_name:
         raise ValueError("tool_name required")
-    if tool_name not in TOOL_METADATA:
+    descriptor = get_tool_descriptor(tool_name)
+    if descriptor is None or descriptor.framework_owned:
         raise ValueError(f"unknown tool: {tool_name}")
     return tool_name
 
@@ -693,8 +697,12 @@ def build_tool_schema(name: str, *, db=None, include_template_overlay: bool = Tr
         pass
     function = schema.get("function") if isinstance(schema, dict) else None
     parameters = function.get("parameters") if isinstance(function, dict) else None
-    td = get_tool_def(tool_name)
-    if isinstance(parameters, dict) and td is not None and not td.supports_background:
+    descriptor = get_tool_descriptor(tool_name)
+    if (
+        isinstance(parameters, dict)
+        and descriptor is not None
+        and not descriptor.supports_background
+    ):
         properties = parameters.get("properties")
         if isinstance(properties, dict):
             properties.pop("run_in_background", None)
@@ -725,7 +733,8 @@ def build_effective_tool_schemas(enabled: dict[str, bool], *, db=None) -> list[d
     """按当前启用工具构造预览 schema；memory subagent 保持元数据兜底。"""
     schemas: list[dict[str, Any]] = []
     for name in sorted(n for n, ok in (enabled or {}).items() if ok):
-        if name not in TOOL_METADATA:
+        descriptor = get_tool_descriptor(name)
+        if descriptor is None or descriptor.framework_owned:
             logger.warning("Skip unknown runtime tool schema: %s", name)
             continue
         schemas.append(build_tool_schema(name, db=db))

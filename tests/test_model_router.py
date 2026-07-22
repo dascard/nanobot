@@ -150,7 +150,6 @@ class TestClassifierRouteProviderResolution:
         assert route["model"] == "selected-reply-model"
 
     def test_session_summary_prefers_dedicated_model_setting(self, monkeypatch):
-        import config
         from clients.classifier_client import resolve_model_route
 
         values = {
@@ -159,7 +158,6 @@ class TestClassifierRouteProviderResolution:
             "model.providers.newapi.api_key": "newapi-key",
             "model.providers.newapi.enabled": True,
         }
-        monkeypatch.setattr(config, "LLM_MODEL_FAST", "legacy-fast-model")
         monkeypatch.setattr(
             "core.settings_service.settings.get",
             lambda key, default=None: values.get(key, default),
@@ -170,19 +168,18 @@ class TestClassifierRouteProviderResolution:
         assert route["provider_id"] == "newapi"
         assert route["model"] == "dedicated-summary-model"
 
-    def test_session_summary_falls_back_to_fast_model_for_compatibility(
+    def test_session_summary_falls_back_to_registered_fast_model(
         self,
         monkeypatch,
     ):
-        import config
         from clients.classifier_client import resolve_model_route
 
         values = {
+            "model.fast": "registered-fast-model",
             "model.providers.newapi.base_url": "http://newapi:9000/v1",
             "model.providers.newapi.api_key": "newapi-key",
             "model.providers.newapi.enabled": True,
         }
-        monkeypatch.setattr(config, "LLM_MODEL_FAST", "legacy-fast-model")
         monkeypatch.setattr(
             "core.settings_service.settings.get",
             lambda key, default=None: values.get(key, default),
@@ -191,7 +188,7 @@ class TestClassifierRouteProviderResolution:
         route = resolve_model_route("session_summary")
 
         assert route["provider_id"] == "newapi"
-        assert route["model"] == "legacy-fast-model"
+        assert route["model"] == "registered-fast-model"
 
     def test_timing_proactive_inherits_reply_route_config(self, monkeypatch):
         from clients.classifier_client import resolve_model_route
@@ -307,7 +304,7 @@ class TestClassifierRouteProviderResolution:
         task_path.parent.mkdir(parents=True)
         task_body = {
             "timing_gate": "V2 判定: {{ pending_text }} / {{ bot_name }}",
-            "private_decision": "V2 私聊判定",
+            "private_decision": "V2 私聊判定: {{ message }}",
             "classifier_legacy": "V2 兼容: {{ system_prompt }} / {{ message }}",
         }[route_key]
         task_path.write_text(
@@ -368,13 +365,11 @@ tool_name: {route_key}
         ) == "ok"
 
         messages = captured["payload"]["messages"]
-        if route_key in {"timing_gate", "classifier_legacy"}:
+        if route_key in {"timing_gate", "private_decision", "classifier_legacy"}:
             assert "ping" not in messages[0]["content"]
             assert "TaskPayload" in messages[0]["content"]
             assert messages[1] == {"role": "user", "content": "ping"}
             assert sum("ping" in str(message.get("content") or "") for message in messages) == 1
-        else:
-            assert messages[0] == {"role": "system", "content": "legacy system"}
         assert [m["role"] for m in messages] == ["system", "user"]
         assert messages[1]["content"] == "ping"
         if route_key == "timing_gate":

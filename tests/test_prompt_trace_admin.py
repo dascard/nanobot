@@ -331,7 +331,23 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     rendered_v2_request = json.dumps(effective_v2_json["request_json"], ensure_ascii=False)
     assert rendered_v2_request.count("EFFECTIVE_PROMPT_V2_MARKER") == 1
     assert rendered_v2_request.count("[RuntimeTool]") == 1
-    assert rendered_v2_request.count("<persona_reference") == 1
+    context_payloads = []
+    for message in effective_v2_json["request_json"]["messages"]:
+        content = str(message.get("content") or "")
+        if not content.startswith("<context_data_json>\n"):
+            continue
+        payload_text = content.removeprefix("<context_data_json>\n").removesuffix(
+            "\n</context_data_json>"
+        )
+        context_payloads.append(json.loads(payload_text))
+    persona_payloads = [
+        payload
+        for payload in context_payloads
+        if payload.get("section") == "persona_reference"
+    ]
+    assert len(persona_payloads) == 1
+    assert persona_payloads[0]["trust"] == "untrusted_data"
+    assert persona_payloads[0]["content"].count("<persona_reference>") == 1
 
     variables_resp = client.get(
         "/api/v1/admin/prompt-v2/variables?template=identity_context",

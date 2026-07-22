@@ -314,7 +314,14 @@ export function ReplyEvalPage() {
       .catch(() => setTraffic(null))
       .finally(() => setTrafficLoading(false))
   }, [trafficHours, trafficIncludeTest])
-  useEffect(() => { loadCases(); loadRuns(); loadTraffic() }, [loadCases, loadRuns, loadTraffic])
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadCases()
+      loadRuns()
+      loadTraffic()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadCases, loadRuns, loadTraffic])
 
   const setField = (key, value) => setForm(v => ({ ...v, [key]: value }))
   const runManualTest = (realSend = false) => {

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from api.admin.common import audit_request, verify_admin
 from core.database import get_db, sqlite_path_from_database_url
+from core.runtime_paths import RUNTIME_PATHS
 from evals.rag_benchmark.adapters import run_case_with_adapter
 from evals.rag_benchmark.baseline import (
     build_rag_baseline_diff,
@@ -33,13 +34,13 @@ from evals.rag_benchmark.scoring import aggregate_scores, score_case
 
 router = APIRouter(prefix="/benchmark", tags=["admin-rag-benchmark"])
 
-BENCHMARK_MANUAL_DIR = Path("evals/cases/rag_benchmark/manual")
-BENCHMARK_GENERATED_DIR = Path("tmp/rag_benchmark/generated")
-BENCHMARK_REPORT_DIR = Path("tmp/rag_benchmark/reports")
+BENCHMARK_MANUAL_DIR = RUNTIME_PATHS.rag_benchmark_manual_dir
+BENCHMARK_GENERATED_DIR = RUNTIME_PATHS.rag_benchmark_generated_dir
+BENCHMARK_REPORT_DIR = RUNTIME_PATHS.rag_benchmark_report_dir
 BENCHMARK_BASELINE_PATH = Path("evals/baselines/rag_benchmark.json")
-BENCHMARK_CASE_BACKUP_DIR = Path("tmp/rag_benchmark/case_backups")
-BENCHMARK_CASE_TRASH_DIR = Path("tmp/rag_benchmark/case_trash")
-BENCHMARK_RUN_LOCK = Path("tmp/rag_benchmark/run.lock")
+BENCHMARK_CASE_BACKUP_DIR = RUNTIME_PATHS.rag_benchmark_backup_dir
+BENCHMARK_CASE_TRASH_DIR = RUNTIME_PATHS.rag_benchmark_trash_dir
+BENCHMARK_RUN_LOCK = RUNTIME_PATHS.rag_benchmark_lock
 RUN_LOCK_STALE_SECONDS = 600
 GENERATOR_VERSION = "rag_benchmark:v1"
 CASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$")

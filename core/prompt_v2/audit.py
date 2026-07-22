@@ -15,6 +15,7 @@ from core.prompt_v2.flow_contract import (
     reserved_contract_by_template_key,
 )
 from core.prompt_v2.context_adapters import SESSION_GUIDANCE_NOTICE
+from core.prompt_v2.section_descriptors import descriptor_for_node
 from core.session_guidance import (
     SessionGuidanceValidationError,
     normalize_session_guidance,
@@ -81,6 +82,26 @@ def _section_origin(section: dict) -> str:
 
 def _section_status(section: dict) -> str:
     return _section_field(section, "status")
+
+
+def _section_descriptor(section: dict):
+    """从代码侧注册表解析段落能力，不能信任计划内可被篡改的声明。"""
+
+    return descriptor_for_node(
+        {
+            "id": _section_field(section, "node_id"),
+            "type": _section_field(section, "node_type"),
+            "template_key": _section_field(section, "template_key"),
+            "runtime_key": _section_field(section, "runtime_key"),
+        }
+    )
+
+
+def _expected_message_role(section: dict) -> str:
+    descriptor = _section_descriptor(section)
+    if descriptor.trust in {"untrusted_data", "untrusted_instruction"}:
+        return "user"
+    return "system"
 
 
 def _audit_section_shape(section: dict, issues: list[str]) -> None:
@@ -219,18 +240,17 @@ def _audit_all_message_indexes(plan, sections: list[dict], issues: list[str]) ->
             valid_indexes.append(index)
 
             role = str(messages[index].get("role") or "")
-            if node_type == "template" and role != "system":
-                issues.append(f"{node_id} message role must be system")
-            elif node_type == "runtime" and runtime_key == "history_messages":
+            if node_type == "runtime" and runtime_key == "history_messages":
                 if role not in {"user", "assistant"}:
                     issues.append(
                         f"{node_id} message role must be user or assistant"
                     )
-            elif node_type == "runtime" and runtime_key == "current_user_event":
-                if role != "user":
-                    issues.append(f"{node_id} message role must be user")
-            elif node_type == "runtime" and role != "system":
-                issues.append(f"{node_id} message role must be system")
+            else:
+                expected_role = _expected_message_role(section)
+                if role != expected_role:
+                    issues.append(
+                        f"{node_id} message role must be {expected_role}"
+                    )
 
         if valid_indexes != sorted(valid_indexes):
             issues.append(f"{node_id} message index order is invalid")
@@ -315,7 +335,7 @@ def _audit_core_contracts(
             plan,
             section,
             label=contract.node_id,
-            expected_role=contract.expected_role,
+            expected_role=_expected_message_role(section),
             issues=issues,
         )
         if resolved is not None:
@@ -613,20 +633,35 @@ def _audit_persona_reference(plan, sections: list[dict], issues: list[str]) -> N
         plan,
         section,
         label="persona_reference",
-        expected_role="system",
+        expected_role="user",
         issues=issues,
     )
     if resolved is None:
         return
     _index, message = resolved
-    content = str(message.get("content") or "").strip()
+    envelope = _parse_context_data_envelope(
+        str(message.get("content") or ""),
+        label="persona_reference",
+        issues=issues,
+    )
+    if envelope is None:
+        return
+    if envelope.get("section") != "persona_reference":
+        issues.append("persona_reference context envelope section is invalid")
+    if envelope.get("trust") != "untrusted_data":
+        issues.append("persona_reference context envelope trust is invalid")
+    content_value = envelope.get("content")
+    if not isinstance(content_value, str):
+        issues.append("persona_reference context envelope content must be a string")
+        return
+    content = content_value.strip()
     opening = "<persona_reference>"
     closing = "</persona_reference>"
     if content.count(opening) != 1 or content.count(closing) != 1:
         issues.append("persona_reference must contain exactly one fixed tag pair")
         return
     if not content.startswith(opening) or not content.endswith(closing):
-        issues.append("persona_reference must occupy the whole system message")
+        issues.append("persona_reference must occupy the whole context payload")
         return
     data_opening = "<persona_data>"
     data_closing = "</persona_data>"
@@ -651,6 +686,38 @@ def _audit_persona_reference(plan, sections: list[dict], issues: list[str]) -> N
         issues.append("persona_reference user_id must be a string")
     elif len(data["user_id"]) > 128:
         issues.append("persona_reference user_id exceeds its length limit")
+
+
+def _parse_context_data_envelope(
+    raw_content: str,
+    *,
+    label: str,
+    issues: list[str],
+) -> dict[str, Any] | None:
+    content = str(raw_content or "").strip()
+    opening = "<context_data_json>"
+    closing = "</context_data_json>"
+    if content.count(opening) != 1 or content.count(closing) != 1:
+        issues.append(f"{label} must contain exactly one context data envelope")
+        return None
+    if not content.startswith(f"{opening}\n") or not content.endswith(
+        f"\n{closing}"
+    ):
+        issues.append(f"{label} context data envelope must occupy the whole message")
+        return None
+    body = content[len(opening) : -len(closing)].strip()
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        issues.append(f"{label} context data envelope must be valid JSON")
+        return None
+    if not isinstance(payload, dict):
+        issues.append(f"{label} context data envelope must be a JSON object")
+        return None
+    if set(payload) != {"section", "trust", "content"}:
+        issues.append(f"{label} context data envelope fields are invalid")
+        return None
+    return payload
 
 
 def audit_prompt_plan(plan, *, audit_messages: bool = True) -> PromptAuditResult:

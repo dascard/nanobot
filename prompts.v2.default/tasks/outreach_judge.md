@@ -5,7 +5,7 @@ kind: task
 tool_name: outreach_judge
 description: 判断此刻是否值得主动联系，并选择普通消息或研究内容。
 ---
-你只负责判断此刻是否值得主动联系用户。输入是一份 grounding JSON，优先依据
+你只负责判断此刻是否值得主动联系用户。你会在下一条用户消息中收到一份 grounding JSON，优先依据
 recent_threads、时间、最近用户消息、persona、recent_outreaches、上次主动消息和 next_intent。
 如果 recent_threads_diagnostics.status=error，表示话题提炼模型失败，而不是用户没有可跟进内容；
 此时回看最近用户消息，并在证据不足时保守选择不联系。

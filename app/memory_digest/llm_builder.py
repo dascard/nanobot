@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from core.database import ChatLog
+from core.db.models.chat import ChatLog
 from core.prompt_v2.section_renderer import sha256_text
 from core.prompt_v2.task_contracts import TaskCallValueError
 from core.prompt_v2.task_templates import TaskInvocationError, render_task_pair

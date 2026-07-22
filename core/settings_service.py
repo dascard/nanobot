@@ -1,4 +1,4 @@
-"""热重载配置服务——DB覆盖>环境变量>默认值, TTL缓存+invalidate。"""
+"""类型化配置解析服务——按 SettingSpec 声明的来源优先级解析。"""
 
 from dataclasses import dataclass
 import logging
@@ -6,19 +6,14 @@ import math
 import os
 import time
 from threading import RLock
-from typing import Literal
+from collections.abc import Mapping
 
 from core.config_registry import LEGACY_SETTING_ALIASES, SETTING_DEFS, SettingDef
 from core.database import SessionLocal, SystemSetting
+from core.settings_specs import SettingSourceName, validate_setting_values
 
 
-SettingSource = Literal[
-    "database",
-    "environment",
-    "legacy_database",
-    "legacy_environment",
-    "default",
-]
+SettingSource = SettingSourceName
 
 logger = logging.getLogger("nanobot.settings")
 
@@ -28,6 +23,18 @@ class ResolvedSetting:
     key: str
     value: object
     source: SettingSource
+    origin: str = "default"
+    precedence_index: int = -1
+
+    def provenance(self) -> dict[str, object]:
+        """返回不包含设置值的来源说明。"""
+
+        return {
+            "key": self.key,
+            "source": self.source,
+            "origin": self.origin,
+            "precedence_index": self.precedence_index,
+        }
 
 
 def coerce_setting_value(value: object, defn: SettingDef) -> object:
@@ -85,7 +92,12 @@ class SettingsService:
         self._session_factory = factory
         self.invalidate()
 
-    def __init__(self, ttl_seconds: float = 2.0, session_factory=None):
+    def __init__(
+        self,
+        ttl_seconds: float = 2.0,
+        session_factory=None,
+        definitions: Mapping[str, SettingDef] | None = None,
+    ):
         if session_factory is not None:
             self._session_factory = session_factory
         else:
@@ -96,6 +108,7 @@ class SettingsService:
         self._ttl = ttl_seconds
         self._lock = RLock()
         self._warned_legacy_aliases: set[tuple[str, SettingSource]] = set()
+        self._definitions = dict(definitions or SETTING_DEFS)
 
     @property
     def version(self) -> int:
@@ -125,26 +138,91 @@ class SettingsService:
             source,
         )
 
-    def _resolve_without_database(self, key: str, defn: SettingDef) -> ResolvedSetting:
-        if defn.env_name and defn.env_name in os.environ:
-            return ResolvedSetting(
-                key=key,
-                value=self._cast(os.environ[defn.env_name], defn),
-                source="environment",
-            )
+    def _resolved(
+        self,
+        *,
+        key: str,
+        defn: SettingDef,
+        value: object,
+        source: SettingSource,
+        origin: str,
+    ) -> ResolvedSetting:
+        return ResolvedSetting(
+            key=key,
+            value=self._cast(value, defn),
+            source=source,
+            origin=origin,
+            precedence_index=defn.source_precedence.index(source),
+        )
+
+    def _resolve_from_sources(
+        self,
+        key: str,
+        defn: SettingDef,
+        row_map: Mapping[str, object] | None,
+    ) -> ResolvedSetting:
+        """严格按描述符顺序解析；不允许的来源即使存在也不会生效。"""
+
         alias = LEGACY_SETTING_ALIASES.get(key)
-        if alias is not None and alias.env_name in os.environ:
-            self._warn_legacy_alias(
-                canonical_key=key,
-                legacy_key=alias.env_name,
-                source="legacy_environment",
-            )
-            return ResolvedSetting(
-                key=key,
-                value=self._cast(os.environ[alias.env_name], defn),
-                source="legacy_environment",
-            )
-        return ResolvedSetting(key=key, value=defn.default, source="default")
+        for source in defn.source_precedence:
+            if source == "database":
+                if row_map is not None and key in row_map:
+                    return self._resolved(
+                        key=key,
+                        defn=defn,
+                        value=row_map[key].value,
+                        source=source,
+                        origin=f"system_settings:{key}",
+                    )
+            elif source == "environment":
+                if defn.env_name and defn.env_name in os.environ:
+                    return self._resolved(
+                        key=key,
+                        defn=defn,
+                        value=os.environ[defn.env_name],
+                        source=source,
+                        origin=f"env:{defn.env_name}",
+                    )
+            elif source == "legacy_database":
+                if alias is not None and row_map is not None and alias.key in row_map:
+                    self._warn_legacy_alias(
+                        canonical_key=key,
+                        legacy_key=alias.key,
+                        source=source,
+                    )
+                    return self._resolved(
+                        key=key,
+                        defn=defn,
+                        value=row_map[alias.key].value,
+                        source=source,
+                        origin=f"system_settings:{alias.key}",
+                    )
+            elif source == "legacy_environment":
+                if alias is not None and alias.env_name in os.environ:
+                    self._warn_legacy_alias(
+                        canonical_key=key,
+                        legacy_key=alias.env_name,
+                        source=source,
+                    )
+                    return self._resolved(
+                        key=key,
+                        defn=defn,
+                        value=os.environ[alias.env_name],
+                        source=source,
+                        origin=f"env:{alias.env_name}",
+                    )
+            elif source == "default":
+                return self._resolved(
+                    key=key,
+                    defn=defn,
+                    value=defn.default,
+                    source=source,
+                    origin="default",
+                )
+        raise RuntimeError(f"设置 {key} 没有可用来源")
+
+    def _resolve_without_database(self, key: str, defn: SettingDef) -> ResolvedSetting:
+        return self._resolve_from_sources(key, defn, None)
 
     def _resolve_with_database(
         self,
@@ -152,31 +230,7 @@ class SettingsService:
         defn: SettingDef,
         row_map: dict[str, object],
     ) -> ResolvedSetting:
-        if key in row_map:
-            return ResolvedSetting(
-                key=key,
-                value=self._cast(row_map[key].value, defn),
-                source="database",
-            )
-        if defn.env_name and defn.env_name in os.environ:
-            return ResolvedSetting(
-                key=key,
-                value=self._cast(os.environ[defn.env_name], defn),
-                source="environment",
-            )
-        alias = LEGACY_SETTING_ALIASES.get(key)
-        if alias is not None and alias.key in row_map:
-            self._warn_legacy_alias(
-                canonical_key=key,
-                legacy_key=alias.key,
-                source="legacy_database",
-            )
-            return ResolvedSetting(
-                key=key,
-                value=self._cast(row_map[alias.key].value, defn),
-                source="legacy_database",
-            )
-        return self._resolve_without_database(key, defn)
+        return self._resolve_from_sources(key, defn, row_map)
 
     def _load_all(self) -> dict[str, ResolvedSetting]:
         now = time.time()
@@ -191,13 +245,22 @@ class SettingsService:
                     row_map = {r.key: r for r in rows if r.value is not None}
                 finally:
                     db.close()
-                for key, defn in SETTING_DEFS.items():
+                for key, defn in self._definitions.items():
                     values[key] = self._resolve_with_database(key, defn, row_map)
+                validate_setting_values(
+                    self._definitions,
+                    {key: item.value for key, item in values.items()},
+                )
             except Exception as e:
                 logger.warning("DB load failed, using env/default: %s", e)
-                for key, defn in SETTING_DEFS.items():
-                    if key not in values:
-                        values[key] = self._resolve_without_database(key, defn)
+                values = {
+                    key: self._resolve_without_database(key, defn)
+                    for key, defn in self._definitions.items()
+                }
+                validate_setting_values(
+                    self._definitions,
+                    {key: item.value for key, item in values.items()},
+                )
             self._cache = values
             self._loaded_at = now
             return values
@@ -214,11 +277,40 @@ class SettingsService:
     def all_resolved(self) -> dict[str, ResolvedSetting]:
         return dict(self._load_all())
 
+    def catalog(self) -> dict[str, dict[str, object]]:
+        """返回启动期已校验的安全元数据目录。"""
+
+        return {key: spec.metadata() for key, spec in self._definitions.items()}
+
+    def explain(self, key: str) -> dict[str, object]:
+        """解释一个设置的最终来源和覆盖规则，不返回敏感值。"""
+
+        spec = self._definitions.get(key)
+        resolved = self.get_resolved(key)
+        result = resolved.provenance()
+        if spec is not None:
+            result.update(spec.metadata())
+        return result
+
+    def environment_provenance(self) -> dict[str, dict[str, object]]:
+        """列出当前实际由环境变量提供的设置及其 env 来源。"""
+
+        return {
+            key: resolved.provenance()
+            for key, resolved in self._load_all().items()
+            if resolved.source in {"environment", "legacy_environment"}
+        }
+
     def get_resolved(self, key: str, default=None) -> ResolvedSetting:
         resolved = self._load_all().get(key)
         if resolved is not None:
             return resolved
-        return ResolvedSetting(key=key, value=default, source="default")
+        return ResolvedSetting(
+            key=key,
+            value=default,
+            source="default",
+            origin="caller_default",
+        )
 
     def get(self, key: str, default=None):
         resolved = self._load_all().get(key)

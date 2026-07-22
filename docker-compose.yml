@@ -6,7 +6,7 @@ x-nanobot-logging: &nanobot-logging
 
 services:
   nanobot-server:
-    image: nanobot-runtime:latest
+    image: ${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}
     build:
       context: .
       args:
@@ -32,11 +32,29 @@ services:
       - ./sentinel:/app/sentinel
       - ./models:/app/models
       - /run/nanobot-sandboxd:/run/nanobot-sandboxd:ro
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: ${NANOBOT_SERVER_PIDS_LIMIT:-512}
+    mem_limit: ${NANOBOT_SERVER_MEMORY_LIMIT:-2g}
+    cpus: "${NANOBOT_SERVER_CPU_LIMIT:-2.0}"
+    tmpfs:
+      - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
+      - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8000/api/v1/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     logging: *nanobot-logging
     restart: unless-stopped
 
   session-summary-worker:
-    image: nanobot-runtime:latest
+    image: ${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}
     container_name: nanobot-session-summary-worker
     command: python -m workers.session_summary_worker --loop --interval 10
     environment:
@@ -57,12 +75,31 @@ services:
       - ./sentinel:/app/sentinel
       - ./models:/app/models
     depends_on:
-      - nanobot-server
+      nanobot-server:
+        condition: service_healthy
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: ${NANOBOT_SUMMARY_WORKER_PIDS_LIMIT:-256}
+    mem_limit: ${NANOBOT_SUMMARY_WORKER_MEMORY_LIMIT:-1g}
+    cpus: "${NANOBOT_SUMMARY_WORKER_CPU_LIMIT:-1.0}"
+    tmpfs:
+      - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
+      - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
+    healthcheck:
+      test: ["CMD", "python", "-m", "core.runtime_health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     logging: *nanobot-logging
     restart: unless-stopped
 
   outbound-delivery-worker:
-    image: nanobot-runtime:latest
+    image: ${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}
     container_name: nanobot-outbound-delivery-worker
     command: python -m workers.outbound_delivery_worker --loop
     environment:
@@ -82,13 +119,32 @@ services:
     volumes:
       - ./data:/app/data
     depends_on:
-      - nanobot-server
+      nanobot-server:
+        condition: service_healthy
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: ${NANOBOT_OUTBOUND_WORKER_PIDS_LIMIT:-128}
+    mem_limit: ${NANOBOT_OUTBOUND_WORKER_MEMORY_LIMIT:-512m}
+    cpus: "${NANOBOT_OUTBOUND_WORKER_CPU_LIMIT:-0.5}"
+    tmpfs:
+      - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
+      - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
+    healthcheck:
+      test: ["CMD", "python", "-m", "core.runtime_health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     stop_grace_period: 5m
     logging: *nanobot-logging
     restart: unless-stopped
 
   semantic-index-worker:
-    image: nanobot-runtime:latest
+    image: ${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}
     container_name: nanobot-semantic-index-worker
     command: python -m workers.semantic_index_worker --loop --interval 10 --owner semantic-index-worker
     environment:
@@ -102,6 +158,25 @@ services:
       - ./sentinel:/app/sentinel
       - ./models:/app/models
     depends_on:
-      - nanobot-server
+      nanobot-server:
+        condition: service_healthy
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: ${NANOBOT_SEMANTIC_WORKER_PIDS_LIMIT:-256}
+    mem_limit: ${NANOBOT_SEMANTIC_WORKER_MEMORY_LIMIT:-1g}
+    cpus: "${NANOBOT_SEMANTIC_WORKER_CPU_LIMIT:-1.0}"
+    tmpfs:
+      - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
+      - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
+    healthcheck:
+      test: ["CMD", "python", "-m", "core.runtime_health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     logging: *nanobot-logging
     restart: unless-stopped

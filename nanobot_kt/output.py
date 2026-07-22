@@ -8,6 +8,7 @@ processing errors in real time (heartbeats are managed by routes.py).
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 from kohakuterrarium.modules.output.base import BaseOutputModule
@@ -61,7 +62,7 @@ class BufferedOutput(BaseOutputModule):
         super().__init__()
         self._buffer: list[str] = []
         self._saved: str = ""  # clear_all 后仍可恢复
-        self._agent_ref: Any = None  # bridge 注入，tool_done 时设 interrupt
+        self._interrupt_callback: Callable[[str], bool] | None = None
         self._complete_event = asyncio.Event()
         self._stream_queue: asyncio.Queue[dict[str, Any]] | None = None
         self._stream_tasks: set[asyncio.Task[Any]] = set()
@@ -71,6 +72,14 @@ class BufferedOutput(BaseOutputModule):
 
     def disable_stream(self) -> None:
         self._stream_queue = None
+
+    def set_interrupt_callback(
+        self,
+        callback: Callable[[str], bool] | None,
+    ) -> None:
+        """安装框架无关的中断回调；输出模块不持有 KT Agent。"""
+
+        self._interrupt_callback = callback
 
     def _discard_stream_task(self, task: asyncio.Task[Any]) -> None:
         self._stream_tasks.discard(task)
@@ -205,9 +214,12 @@ class BufferedOutput(BaseOutputModule):
                 tool_name = detail.split("[", 2)[1].split("]", 1)[0] if "[" in detail else ""
             except (IndexError, ValueError):
                 tool_name = ""
-            if tool_name and tool_name in self._INTERRUPT_TOOLS and self._agent_ref is not None:
-                if hasattr(self._agent_ref, '_interrupt_requested'):
-                    self._agent_ref._interrupt_requested = True
+            if (
+                tool_name
+                and tool_name in self._INTERRUPT_TOOLS
+                and self._interrupt_callback is not None
+            ):
+                if self._interrupt_callback(f"tool_done:{tool_name}"):
                     logger.info("[BufferedOutput] interrupt after %s tool_done", tool_name)
             return
 

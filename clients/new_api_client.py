@@ -29,10 +29,20 @@ from clients.model_registry import (
     model_supports_capabilities,
     normalize_model_record,
 )
-from core.final_tools import filter_payload_tools
-from core.llm_stream_trace import LLMStreamTraceAccumulator
-from core.llm_request_sanitizer import sanitize_payload_messages
-from core.model_route_options import apply_enable_thinking_to_payload
+from core.model_provider import (
+    ModelProviderRequest,
+    ModelProviderResponse,
+    ProviderAvailability,
+    ProviderCapability,
+    ProviderDescriptor,
+)
+from core.runtime.event_bus import emit_runtime_event
+from core.runtime.events import RuntimeEventContext
+from foundation.llm.model_options import apply_enable_thinking_to_payload
+from foundation.llm.messages import format_openai_messages as format_openai_messages
+from foundation.llm.request_sanitizer import sanitize_payload_messages
+from foundation.llm.stream_trace import LLMStreamTraceAccumulator
+from foundation.llm.tool_policy import filter_payload_tools
 
 logger = logging.getLogger("nanobot.new_api")
 
@@ -59,6 +69,34 @@ def _raw_body_audit(raw_body: bytes) -> dict[str, Any]:
         "raw_body_preview": text[:_RAW_BODY_PREVIEW_LIMIT],
         "raw_body_chars": len(text),
         "raw_body_sha256": hashlib.sha256(raw_body).hexdigest(),
+    }
+
+
+def _event_payload_digest(value: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        dict(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8", errors="replace")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _model_event_attributes(
+    *,
+    provider: str,
+    model: str,
+    source: str,
+    payload: Mapping[str, Any],
+    candidate_index: int,
+) -> dict[str, object]:
+    return {
+        "provider": provider,
+        "model": model,
+        "source": source or "unknown",
+        "candidate_index": candidate_index,
+        "request_sha256": _event_payload_digest(payload),
     }
 
 
@@ -293,6 +331,104 @@ class NewAPIClient:
         self.max_retries = max_retries
         self.last_usage: dict[str, int] = {}
         self._session = session
+
+    @property
+    def descriptor(self) -> ProviderDescriptor:
+        """声明主聊天 NewAPI Adapter 的稳定能力，不暴露模型目录细节。"""
+
+        return ProviderDescriptor(
+            id="newapi",
+            display_name="New API",
+            capabilities=frozenset({
+                ProviderCapability.CHAT_COMPLETION,
+                ProviderCapability.STREAMING,
+                ProviderCapability.TOOL_CALLING,
+                ProviderCapability.VISION,
+                ProviderCapability.REASONING_CONTENT,
+            }),
+            aliases=("new-api",),
+            implementation="new_api_client",
+            built_in=True,
+        )
+
+    def availability(self) -> ProviderAvailability:
+        if not self.base_url:
+            return ProviderAvailability(
+                available=False,
+                configured=False,
+                reason_code="not_configured",
+            )
+        if not self.api_key:
+            return ProviderAvailability(
+                available=False,
+                configured=True,
+                reason_code="authentication_not_configured",
+            )
+        return ProviderAvailability(
+            available=True,
+            configured=True,
+            reason_code="configured",
+        )
+
+    def introspect(self) -> Mapping[str, object]:
+        """返回可供统一 Registry 使用的无密钥、无 endpoint 快照。"""
+
+        result = self.descriptor.metadata()
+        result.update(self.availability().metadata())
+        result["endpoint_configured"] = bool(self.base_url)
+        result["authentication_configured"] = bool(self.api_key)
+        result["registry_provider"] = self.registry_provider
+        return result
+
+    async def complete_async(
+        self,
+        request: ModelProviderRequest,
+    ) -> ModelProviderResponse:
+        """把现有 ``chat_completion`` 映射到类型化异步 Provider Port。"""
+
+        result = await self.chat_completion(
+            messages=[dict(message) for message in request.messages],
+            temperature=request.temperature,
+            model_tier=str(request.metadata.get("model_tier") or "smart"),
+            manual_model=request.model,
+            max_tokens=request.max_tokens,
+            trace_id=str(request.metadata.get("trace_id") or ""),
+            run_id=str(request.metadata.get("run_id") or ""),
+            llm_source=request.trace_source,
+            enable_thinking=request.enable_thinking,
+        )
+        if result.get("error"):
+            raise RuntimeError(f"NewAPI completion failed: {result['error']}")
+        choices = result.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ValueError("NewAPI response missing choices[0]")
+        choice = choices[0]
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise ValueError("NewAPI response missing choices[0].message")
+        content = message.get("content")
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            raise ValueError("NewAPI response message.content must be string or null")
+        reasoning = message.get("reasoning_content", message.get("reasoning", ""))
+        if reasoning is None:
+            reasoning = ""
+        if not isinstance(reasoning, str):
+            raise ValueError("NewAPI response reasoning_content must be string or null")
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None and not isinstance(finish_reason, str):
+            raise ValueError("NewAPI response finish_reason must be string or null")
+        usage = result.get("usage")
+        if usage is not None and not isinstance(usage, dict):
+            raise ValueError("NewAPI response usage must be object or null")
+        return ModelProviderResponse(
+            content=content,
+            reasoning_content=reasoning,
+            finish_reason=finish_reason,
+            usage=usage or {},
+            raw_response=result,
+        )
 
     @property
     def _timeout(self) -> int:
@@ -880,6 +1016,23 @@ class NewAPIClient:
                         _source = _source or _s
                     except Exception:
                         pass
+                event_context = RuntimeEventContext(
+                    trace_id=_trace_id,
+                    run_id=_run_id,
+                )
+                event_attributes = _model_event_attributes(
+                    provider=self.registry_provider,
+                    model=target_model,
+                    source=_source,
+                    payload=payload,
+                    candidate_index=i,
+                )
+                emit_runtime_event(
+                    "model.request",
+                    "started",
+                    context=event_context,
+                    attributes=event_attributes,
+                )
                 try:
                     from core.tracing import LLMRequestTracer
                     log_id = LLMRequestTracer.record_request(
@@ -921,6 +1074,16 @@ class NewAPIClient:
                                         )
                                     except Exception as _e:
                                         logger.warning("finish llm api request failed: %s", _e)
+                                    emit_runtime_event(
+                                        "model.request",
+                                        "failed",
+                                        context=event_context,
+                                        attributes={
+                                            **event_attributes,
+                                            "latency_ms": (time.time() - started) * 1000,
+                                            "error_type": type(exc).__name__,
+                                        },
+                                    )
                                     if tracker is not None:
                                         self.__class__._track_background_task(
                                             tracker.record_failure(target_model),
@@ -946,6 +1109,16 @@ class NewAPIClient:
                                     )
                                 except Exception as _e:
                                     logger.warning("finish llm api request failed: %s", _e)
+                                emit_runtime_event(
+                                    "model.request",
+                                    "succeeded",
+                                    context=event_context,
+                                    attributes={
+                                        **event_attributes,
+                                        "response_sha256": _event_payload_digest(result),
+                                        "latency_ms": (time.time() - started) * 1000,
+                                    },
+                                )
                                 if tracker is not None:
                                     self.__class__._track_background_task(
                                         tracker.record_success(target_model),
@@ -974,6 +1147,16 @@ class NewAPIClient:
                                 )
                             except Exception as _e:
                                 logger.warning("finish llm api request failed: %s", _e)
+                            emit_runtime_event(
+                                "model.request",
+                                "failed",
+                                context=event_context,
+                                attributes={
+                                    **event_attributes,
+                                    "latency_ms": (time.time() - started) * 1000,
+                                    "error_type": f"http_{resp.status}",
+                                },
+                            )
                             if tracker is not None:
                                 self.__class__._track_background_task(
                                     tracker.record_failure(target_model),
@@ -999,6 +1182,18 @@ class NewAPIClient:
                                 )
                                 break  # exhausted retries, move to next model
 
+                    except asyncio.CancelledError:
+                        emit_runtime_event(
+                            "model.request",
+                            "failed",
+                            context=event_context,
+                            attributes={
+                                **event_attributes,
+                                "latency_ms": (time.time() - started) * 1000,
+                                "error_type": "CancelledError",
+                            },
+                        )
+                        raise
                     except asyncio.TimeoutError as e:
                         last_error = f"timeout: {e}"
                         try:
@@ -1013,6 +1208,16 @@ class NewAPIClient:
                             )
                         except Exception:
                             pass
+                        emit_runtime_event(
+                            "model.request",
+                            "failed",
+                            context=event_context,
+                            attributes={
+                                **event_attributes,
+                                "latency_ms": (time.time() - started) * 1000,
+                                "error_type": type(e).__name__,
+                            },
+                        )
                         if tracker is not None:
                             self.__class__._track_background_task(
                                 tracker.record_failure(target_model),
@@ -1034,6 +1239,16 @@ class NewAPIClient:
                             )
                         except Exception:
                             pass
+                        emit_runtime_event(
+                            "model.request",
+                            "failed",
+                            context=event_context,
+                            attributes={
+                                **event_attributes,
+                                "latency_ms": (time.time() - started) * 1000,
+                                "error_type": type(e).__name__,
+                            },
+                        )
                         if tracker is not None:
                             self.__class__._track_background_task(
                                 tracker.record_failure(target_model),
@@ -1131,6 +1346,23 @@ class NewAPIClient:
                 _source = _source or _s
             except Exception:
                 pass
+        event_context = RuntimeEventContext(
+            trace_id=_trace_id,
+            run_id=_run_id,
+        )
+        event_attributes = _model_event_attributes(
+            provider=self.registry_provider,
+            model=target_model,
+            source=_source,
+            payload=payload,
+            candidate_index=0,
+        )
+        emit_runtime_event(
+            "model.request",
+            "started",
+            context=event_context,
+            attributes=event_attributes,
+        )
         try:
             from core.tracing import LLMRequestTracer
             log_id = LLMRequestTracer.record_request(
@@ -1171,6 +1403,16 @@ class NewAPIClient:
                             )
                         except Exception:
                             pass
+                        emit_runtime_event(
+                            "model.request",
+                            "failed",
+                            context=event_context,
+                            attributes={
+                                **event_attributes,
+                                "latency_ms": (time.time() - started) * 1000,
+                                "error_type": f"http_{resp.status}",
+                            },
+                        )
                         if tracker is not None:
                             self.__class__._track_background_task(
                                 tracker.record_failure(target_model),
@@ -1201,18 +1443,41 @@ class NewAPIClient:
                             yield chunk
                         except json.JSONDecodeError:
                             continue
+                    stream_response = stream_trace.build_response()
                     try:
                         from core.tracing import LLMRequestTracer
                         LLMRequestTracer.finish_request(
                             log_id=log_id,
-                            response=stream_trace.build_response(),
+                            response=stream_response,
                             response_status=resp.status,
                             status="stream_success",
                             latency_ms=int((time.time() - started) * 1000),
                         )
                     except Exception:
                         pass
+                    emit_runtime_event(
+                        "model.request",
+                        "succeeded",
+                        context=event_context,
+                        attributes={
+                            **event_attributes,
+                            "response_sha256": _event_payload_digest(stream_response),
+                            "latency_ms": (time.time() - started) * 1000,
+                        },
+                    )
 
+            except asyncio.CancelledError:
+                emit_runtime_event(
+                    "model.request",
+                    "failed",
+                    context=event_context,
+                    attributes={
+                        **event_attributes,
+                        "latency_ms": (time.time() - started) * 1000,
+                        "error_type": "CancelledError",
+                    },
+                )
+                raise
             except asyncio.TimeoutError:
                 logger.error("new-api stream timed out")
                 try:
@@ -1227,6 +1492,16 @@ class NewAPIClient:
                     )
                 except Exception:
                     pass
+                emit_runtime_event(
+                    "model.request",
+                    "failed",
+                    context=event_context,
+                    attributes={
+                        **event_attributes,
+                        "latency_ms": (time.time() - started) * 1000,
+                        "error_type": "TimeoutError",
+                    },
+                )
                 if tracker is not None:
                     self.__class__._track_background_task(
                         tracker.record_failure(target_model),
@@ -1247,17 +1522,19 @@ class NewAPIClient:
                     )
                 except Exception:
                     pass
+                emit_runtime_event(
+                    "model.request",
+                    "failed",
+                    context=event_context,
+                    attributes={
+                        **event_attributes,
+                        "latency_ms": (time.time() - started) * 1000,
+                        "error_type": type(e).__name__,
+                    },
+                )
                 if tracker is not None:
                     self.__class__._track_background_task(
                         tracker.record_failure(target_model),
                         label="stream_record_failure",
                     )
                 yield {"error": "NetworkError", "detail": str(e)}
-
-
-def format_openai_messages(system_prompt: str, persona: str, context: str, query: str) -> list[dict[str, str]]:
-    full_system = f"{system_prompt}\n\n[USER PERSONA]\n{persona}"
-    return [
-        {"role": "system", "content": full_system},
-        {"role": "user", "content": f"[HISTORY]\n{context}\n\n[USER QUERY]\n{query}"},
-    ]

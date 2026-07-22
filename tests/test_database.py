@@ -80,24 +80,24 @@ def test_sqlite_connect_args_include_busy_timeout(monkeypatch):
     assert args["timeout"] == 45.0
 
 
-def test_sqlite_connect_args_default_busy_timeout_is_short(monkeypatch):
+def test_sqlite_connect_args_default_busy_timeout_is_five_seconds(monkeypatch):
     from core.database import sqlite_connect_args_for_url
 
     monkeypatch.delenv("SQLITE_BUSY_TIMEOUT_MS", raising=False)
 
     args = sqlite_connect_args_for_url("sqlite:///./data/test.db")
 
-    assert args["timeout"] == 1.0
+    assert args["timeout"] == 5.0
 
 
-def test_sqlite_connect_args_invalid_busy_timeout_falls_back_short(monkeypatch):
+def test_sqlite_connect_args_invalid_busy_timeout_falls_back_to_five_seconds(monkeypatch):
     from core.database import sqlite_connect_args_for_url
 
     monkeypatch.setenv("SQLITE_BUSY_TIMEOUT_MS", "not-a-number")
 
     args = sqlite_connect_args_for_url("sqlite:///./data/test.db")
 
-    assert args["timeout"] == 1.0
+    assert args["timeout"] == 5.0
 
 
 def test_release_clean_transaction_refuses_flushed_writes(db_session):

@@ -17,6 +17,8 @@ RUN npm run build
 
 # ── 第二阶段：Python 运行时 ──
 FROM ${PYTHON_IMAGE} AS runtime
+ARG NANOBOT_UID=10001
+ARG NANOBOT_GID=10001
 WORKDIR /app
 RUN sed -i 's|http://deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g' \
 		/etc/apt/sources.list.d/debian.sources \
@@ -28,8 +30,12 @@ RUN sed -i 's|http://deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g' \
 	xvfb \
 	fonts-wqy-zenhei \
 	curl \
-	&& rm -rf /var/lib/apt/lists/*
+	&& rm -rf /var/lib/apt/lists/* \
+	&& groupadd --gid "${NANOBOT_GID}" nanobot \
+	&& useradd --uid "${NANOBOT_UID}" --gid "${NANOBOT_GID}" \
+		--create-home --home-dir /home/nanobot --shell /usr/sbin/nologin nanobot
 ENV TZ=Asia/Shanghai \
+	HOME=/home/nanobot \
 	PIP_DISABLE_PIP_VERSION_CHECK=1 \
 	PYTHONDONTWRITEBYTECODE=1 \
 	PYTHONUNBUFFERED=1
@@ -53,11 +59,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 	pip install --no-deps ./vendor/KohakuTerrarium
 
 # 业务代码位于依赖层之后；构建上下文由 .dockerignore 严格收窄。
-COPY . .
+COPY --chown=nanobot:nanobot . .
 # 从第一阶段复制 WebUI 构建产物
-COPY --from=webui-builder /webui/dist ./webui/dist
+COPY --from=webui-builder --chown=nanobot:nanobot /webui/dist ./webui/dist
+RUN install -d -o nanobot -g nanobot -m 0750 \
+	/app/data /app/models /app/sentinel /app/tmp
 EXPOSE 8000
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
 # 版本信息通过 build-arg 注入，不依赖 .git 目录
@@ -72,3 +79,6 @@ ENV NANOBOT_GIT_BRANCH=$GIT_BRANCH
 ENV NANOBOT_GIT_FULL_COMMIT=$GIT_FULL_COMMIT
 ENV NANOBOT_GIT_COMMIT_DATE=$GIT_COMMIT_DATE
 ENV NANOBOT_GIT_DIRTY=$GIT_DIRTY
+
+USER nanobot:nanobot
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Database, RefreshCw, Search } from 'lucide-react'
 
 import { api } from '../../api'
@@ -87,25 +87,31 @@ export function RagDebugPage() {
   const [buildLoading, setBuildLoading] = useState(false)
   const [buildResult, setBuildResult] = useState(null)
 
-  const loadRuns = () => {
+  const loadRuns = useCallback(() => {
     api.get('/rag/debug/runs', { params: { limit: 20 } })
       .then(r => setRuns(r.data.items || []))
       .catch(() => setRuns([]))
-  }
+  }, [])
 
-  const loadStatus = () => {
+  const loadStatus = useCallback(() => {
     setStatusLoading(true)
     api.get('/rag/debug/status', { params: { source_type: sourceType } })
       .then(r => setStatus(r.data))
       .catch(() => setStatus(null))
       .finally(() => setStatusLoading(false))
-  }
-
-  useEffect(() => { loadRuns() }, [])
-  useEffect(() => {
-    setBuildResult(null)
-    loadStatus()
   }, [sourceType])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { loadRuns() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadRuns])
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setBuildResult(null)
+      loadStatus()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadStatus])
 
   const runDebug = () => {
     setLoading(true)

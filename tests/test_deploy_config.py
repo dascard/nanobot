@@ -209,10 +209,11 @@ def test_worker_services_reuse_server_image_without_duplicate_builds():
     outbound_worker = _service_block(compose, "outbound-delivery-worker")
 
     assert "build:" in server
-    assert "image: nanobot-runtime:latest" in server
-    assert "image: nanobot-runtime:latest" in summary_worker
-    assert "image: nanobot-runtime:latest" in semantic_worker
-    assert "image: nanobot-runtime:latest" in outbound_worker
+    image_contract = "image: ${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}"
+    assert image_contract in server
+    assert image_contract in summary_worker
+    assert image_contract in semantic_worker
+    assert image_contract in outbound_worker
     assert "build:" not in summary_worker
     assert "build:" not in semantic_worker
     assert "build:" not in outbound_worker
@@ -251,6 +252,108 @@ def test_docker_daemon_example_bounds_build_cache_and_default_logs():
             "all": True,
         }
     ]
+
+
+def test_production_compose_requires_immutable_runtime_image():
+    compose = Path("docker-compose.prod.yml").read_text(encoding="utf-8")
+
+    assert "NANOBOT_RUNTIME_IMAGE" in compose
+    assert "@sha256:" in compose
+    assert "nanobot-runtime:latest" not in compose
+    for service_name in (
+        "nanobot-server",
+        "session-summary-worker",
+        "outbound-delivery-worker",
+        "semantic-index-worker",
+    ):
+        block = _service_block(compose, service_name)
+        assert "build: !reset null" in block
+
+
+def test_compose_services_apply_runtime_hardening_and_resource_limits():
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    for service_name in (
+        "nanobot-server",
+        "session-summary-worker",
+        "outbound-delivery-worker",
+        "semantic-index-worker",
+    ):
+        block = _service_block(compose, service_name)
+        assert "read_only: true" in block
+        assert "cap_drop:" in block
+        assert "- ALL" in block
+        assert "no-new-privileges:true" in block
+        assert "pids_limit:" in block
+        assert "mem_limit:" in block
+        assert "cpus:" in block
+        assert "init: true" in block
+        assert "/tmp:size=" in block
+        assert "healthcheck:" in block
+
+
+def test_compose_workers_wait_for_server_readiness():
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    server = _service_block(compose, "nanobot-server")
+
+    assert "healthcheck:" in server
+    assert "/api/v1/ready" in server
+    for service_name in (
+        "session-summary-worker",
+        "outbound-delivery-worker",
+        "semantic-index-worker",
+    ):
+        block = _service_block(compose, service_name)
+        assert "condition: service_healthy" in block
+        assert 'test: ["CMD", "python", "-m", "core.runtime_health"]' in block
+
+
+def test_runtime_image_uses_non_root_user():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "ARG NANOBOT_UID=10001" in dockerfile
+    assert "ARG NANOBOT_GID=10001" in dockerfile
+    assert "USER nanobot:nanobot" in dockerfile
+
+
+def test_runtime_mutable_paths_stay_under_data_or_temp(monkeypatch, tmp_path):
+    from core.runtime_paths import RuntimePaths
+
+    data_dir = tmp_path / "persistent"
+    temp_dir = tmp_path / "ephemeral"
+    monkeypatch.setenv("NANOBOT_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("NANOBOT_TEMP_DIR", str(temp_dir))
+
+    paths = RuntimePaths.from_environment()
+
+    assert paths.data_dir == data_dir.resolve()
+    assert paths.temp_dir == temp_dir.resolve()
+    assert paths.rag_benchmark_manual_dir.is_relative_to(paths.data_dir)
+    assert paths.rag_benchmark_report_dir.is_relative_to(paths.data_dir)
+    assert paths.rag_benchmark_generated_dir.is_relative_to(paths.temp_dir)
+
+
+def test_production_deploy_requires_digest_and_never_builds_in_place():
+    script = Path("scripts/deploy-production.sh").read_text(encoding="utf-8")
+
+    assert "@sha256:" in script
+    assert "docker-compose.prod.yml" in script
+    assert "--no-build" in script
+    assert "docker compose build" not in script
+    assert "prune" not in script
+
+
+def test_quality_gate_runs_full_backend_frontend_and_architecture_checks():
+    workflow = Path(".github/workflows/quality-gate.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "python -m pytest tests/ -v" in workflow
+    assert "python scripts/check_architecture.py" in workflow
+    assert "python -m ruff check" in workflow
+    assert "npm run lint" in workflow
+    assert "npm run build" in workflow
+    assert "docker compose -f docker-compose.yml config --quiet" in workflow
 
 
 def test_compose_workers_use_explicit_minimal_environment_allowlists():

@@ -115,6 +115,112 @@ async def test_lifespan_calls_bootstrap_facades(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_lifespan_startup_failure_releases_started_resources(monkeypatch):
+    import bootstrap.lifespan as bootstrap_lifespan
+    from core import daily_digest
+
+    calls: list[str] = []
+    maintenance = object()
+    new_api_session = object()
+
+    class Handles:
+        def stop_all(self):
+            calls.append("stop_schedulers")
+
+    monkeypatch.setenv("NANOBOT_TESTING", "0")
+    monkeypatch.setattr(bootstrap_lifespan, "init_db", lambda: calls.append("init_db"))
+    monkeypatch.setattr(
+        bootstrap_lifespan,
+        "start_sqlite_maintenance",
+        lambda: calls.append("start_sqlite_maintenance") or maintenance,
+    )
+    monkeypatch.setattr(
+        bootstrap_lifespan,
+        "stop_sqlite_maintenance",
+        lambda worker: calls.append(f"stop_sqlite_maintenance:{worker is maintenance}"),
+    )
+    monkeypatch.setattr(
+        bootstrap_lifespan,
+        "validate_sandbox_asset_token_config",
+        lambda: calls.append("validate_sandbox"),
+    )
+    monkeypatch.setattr(
+        bootstrap_lifespan,
+        "run_provider_migration",
+        lambda: calls.append("provider_migration"),
+    )
+    monkeypatch.setattr(
+        bootstrap_lifespan,
+        "init_prompt_runtimes",
+        lambda _logger: calls.append("prompt_runtime"),
+    )
+    monkeypatch.setattr(
+        bootstrap_lifespan,
+        "start_schedulers",
+        lambda *, testing, logger: calls.append("start_schedulers") or Handles(),
+    )
+
+    async def fake_init_new_api_session():
+        calls.append("init_new_api_session")
+        return new_api_session
+
+    async def fake_shutdown_new_api_session(session):
+        assert session is new_api_session
+        calls.append("shutdown_new_api_session")
+
+    async def fail_network_check(_logger, *, session):
+        assert session is new_api_session
+        calls.append("network_check")
+        raise RuntimeError("startup failed")
+
+    async def fail_if_bridge_initialized():
+        raise AssertionError("network check 失败后不能初始化 Bridge")
+
+    async def fake_close_push_session():
+        calls.append("close_push_session")
+
+    monkeypatch.setattr(
+        bootstrap_lifespan,
+        "init_new_api_session",
+        fake_init_new_api_session,
+    )
+    monkeypatch.setattr(
+        bootstrap_lifespan,
+        "shutdown_new_api_session",
+        fake_shutdown_new_api_session,
+    )
+    monkeypatch.setattr(
+        bootstrap_lifespan,
+        "run_startup_network_check",
+        fail_network_check,
+    )
+    monkeypatch.setattr(bootstrap_lifespan, "init_bridge", fail_if_bridge_initialized)
+    monkeypatch.setattr(daily_digest, "close_push_session", fake_close_push_session)
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    with pytest.raises(RuntimeError, match="startup failed"):
+        async with bootstrap_lifespan.lifespan(app):
+            raise AssertionError("启动失败时不能进入 lifespan body")
+
+    assert calls == [
+        "init_db",
+        "start_sqlite_maintenance",
+        "validate_sandbox",
+        "provider_migration",
+        "prompt_runtime",
+        "start_schedulers",
+        "init_new_api_session",
+        "network_check",
+        "stop_schedulers",
+        "shutdown_new_api_session",
+        "close_push_session",
+        "stop_sqlite_maintenance:True",
+    ]
+    assert app.state.bridge is None
+    assert app.state.new_api_session is None
+
+
+@pytest.mark.asyncio
 async def test_startup_network_check_uses_resolved_routes_and_redacts_sensitive_logs(
     monkeypatch,
     caplog,

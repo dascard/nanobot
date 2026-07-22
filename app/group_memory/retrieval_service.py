@@ -8,14 +8,27 @@ from __future__ import annotations
 import json
 import math
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy.orm import Session
 
 from core.group_runtime.ids import normalize_group_session_id
+from core.retrieval import (
+    AllowAllCitationPolicy,
+    ManagedRerankerExecutor,
+    NullDebugTraceSink,
+    RankingOutcome,
+    RerankOutcome,
+    RerankerExecutorPort,
+    RetrievalCandidates,
+    RetrievalPipeline,
+    RetrievalPipelineState,
+    RetrievalRequest,
+    get_retrieval_reranker_executor,
+)
 from core.semantic.reranker import SemanticCandidate
 from core.time_utils import db_now_naive
 
@@ -40,10 +53,6 @@ STRICT_RELEVANCE_TYPES = {"relationship", "event", "slang"}
 DEFAULT_MIN_RELEVANCE = 0.05
 STRICT_MIN_RELEVANCE = 0.18
 AUTO_INJECT_MEMORY_TYPES = {"topic", "preference"}
-_RERANKER_EXECUTOR = ThreadPoolExecutor(
-    max_workers=1,
-    thread_name_prefix="group-memory-reranker",
-)
 
 
 class GroupMemoryRerankerTimeout(TimeoutError):
@@ -58,7 +67,26 @@ class GroupMemorySelection:
 
     @property
     def selected_ids(self) -> list[int]:
-        return [int(getattr(row, "id", 0) or 0) for row in self.selected if getattr(row, "id", 0)]
+        return [
+            int(getattr(row, "id", 0) or 0)
+            for row in self.selected
+            if getattr(row, "id", 0)
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupMemoryRecall:
+    group_id: str
+    query_text: str
+    rows: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupMemoryCandidate:
+    row: Any
+    memory_type: str
+    relevance: float
+    components: Mapping[str, Any]
 
 
 def _safe_evidence_ids(raw: str) -> list[int]:
@@ -91,7 +119,9 @@ def _tokens(text: str) -> set[str]:
     cjk = [ch for ch in raw if "\u4e00" <= ch <= "\u9fff"]
     grams = set()
     for size in (2, 3, 4):
-        grams.update("".join(cjk[i:i + size]) for i in range(max(0, len(cjk) - size + 1)))
+        grams.update(
+            "".join(cjk[i : i + size]) for i in range(max(0, len(cjk) - size + 1))
+        )
     return {token for token in words | grams if token.strip()}
 
 
@@ -126,6 +156,7 @@ class GroupMemoryRetrievalService:
         min_reranker: float = 0.55,
         max_sql_candidates: int = 2000,
         reranker_timeout_ms: int | None = None,
+        reranker_executor: RerankerExecutorPort | None = None,
     ):
         self.db = db
         self.reranker_provider = reranker_provider
@@ -136,6 +167,7 @@ class GroupMemoryRetrievalService:
             if reranker_timeout_ms is not None
             else None
         )
+        self.reranker_executor = reranker_executor
 
     def select(
         self,
@@ -146,70 +178,34 @@ class GroupMemoryRetrievalService:
         max_items: int = 10,
         max_chars: int = 1200,
     ) -> GroupMemorySelection:
-        from core.database import GroupMemory
-
         norm = normalize_group_session_id(group_id)
-        recent_text = "\n".join(str(item.get("content") or "") for item in (recent_messages or []))
-        query_text = f"{current_user_input}\n{recent_text}".strip()
-        rows = (
-            self.db.query(GroupMemory)
-            .filter(GroupMemory.group_id == norm)
-            .order_by(GroupMemory.confidence.desc(), GroupMemory.last_seen.desc(), GroupMemory.id.asc())
-            .limit(max(1, self.max_sql_candidates))
-            .all()
+        recent_text = "\n".join(
+            str(item.get("content") or "") for item in (recent_messages or [])
         )
-        reranker_scores = self._reranker_scores(query_text, rows)
+        query_text = f"{current_user_input}\n{recent_text}".strip()
+        request = RetrievalRequest(
+            query=query_text,
+            limit=max(1, int(max_items)),
+            options={
+                "domain": "group_memory",
+                "group_id": norm,
+                "max_chars": int(max_chars),
+            },
+        )
+        return self._build_pipeline().execute(request)
 
-        candidates: list[tuple[float, Any]] = []
-        selection = GroupMemorySelection()
-        type_counts: dict[str, int] = {}
-
-        for row in rows:
-            memory_type = str(row.memory_type or "")
-            relevance = _lexical_relevance(row.content, query_text)
-            components = self._score_components(row, memory_type, relevance)
-            reason = self._skip_reason(row)
-            if reason:
-                components["skip_reason"] = reason
-                selection.score_components[str(row.id)] = components
-                selection.skipped.append({"id": row.id, "reason": reason})
-                continue
-            if self.reranker_provider is not None:
-                reranker = reranker_scores.get(int(row.id), 0.0)
-                components["reranker"] = reranker
-                if reranker < self.min_reranker:
-                    components["skip_reason"] = "low_reranker"
-                    selection.score_components[str(row.id)] = components
-                    selection.skipped.append({"id": row.id, "reason": "low_reranker"})
-                    continue
-                components["final"] = round(components["final"] * 0.65 + reranker * 0.35, 6)
-            min_relevance = STRICT_MIN_RELEVANCE if memory_type in STRICT_RELEVANCE_TYPES else DEFAULT_MIN_RELEVANCE
-            if self.reranker_provider is None and relevance < min_relevance and memory_type != "style":
-                components["skip_reason"] = "low_relevance"
-                selection.score_components[str(row.id)] = components
-                selection.skipped.append({"id": row.id, "reason": "low_relevance"})
-                continue
-            selection.score_components[str(row.id)] = components
-            candidates.append((components["final"], row))
-
-        for _, row in sorted(candidates, key=lambda item: item[0], reverse=True):
-            memory_type = str(row.memory_type or "")
-            if len(selection.selected) >= max_items:
-                selection.score_components[str(row.id)]["skip_reason"] = "max_items"
-                selection.skipped.append({"id": row.id, "reason": "max_items"})
-                continue
-            if type_counts.get(memory_type, 0) >= TYPE_LIMITS.get(memory_type, 2):
-                selection.score_components[str(row.id)]["skip_reason"] = "type_limit"
-                selection.skipped.append({"id": row.id, "reason": "type_limit"})
-                continue
-            if self._would_exceed_render_budget(norm, selection.selected + [row], max_chars):
-                selection.score_components[str(row.id)]["skip_reason"] = "over_budget"
-                selection.skipped.append({"id": row.id, "reason": "over_budget"})
-                continue
-            selection.selected.append(row)
-            type_counts[memory_type] = type_counts.get(memory_type, 0) + 1
-
-        return selection
+    def _build_pipeline(self) -> RetrievalPipeline:
+        return RetrievalPipeline(
+            candidate_source=_GroupMemoryCandidateSource(self),
+            citation_policy=AllowAllCitationPolicy(),
+            filter_policy=_GroupMemoryFilterPolicy(self),
+            scoring_policy=_GroupMemoryScoringPolicy(self),
+            reranker=_GroupMemoryReranker(self),
+            budget_policy=_GroupMemoryBudgetPolicy(self),
+            debug_trace_sink=NullDebugTraceSink(),
+            result_builder=_GroupMemoryResultBuilder(),
+            provider_id="group_memory",
+        )
 
     def _reranker_scores(self, query_text: str, rows: list[Any]) -> dict[int, float]:
         if self.reranker_provider is None or not rows:
@@ -222,28 +218,47 @@ class GroupMemoryRetrievalService:
                 text=row.content or "",
                 metadata={
                     "memory_type": row.memory_type,
-                    "evidence_short_summary": _safe_meta(getattr(row, "meta_json", "")).get("evidence_short_summary", ""),
+                    "evidence_short_summary": _safe_meta(
+                        getattr(row, "meta_json", "")
+                    ).get("evidence_short_summary", ""),
                 },
             )
             for row in rows
         ]
         try:
             if self.reranker_timeout_ms is None:
-                results = self.reranker_provider.rerank(query_text, candidates, top_k=50)
-            else:
-                future = _RERANKER_EXECUTOR.submit(
-                    self.reranker_provider.rerank,
-                    query_text,
-                    candidates,
-                    top_k=50,
+                results = self.reranker_provider.rerank(
+                    query_text, candidates, top_k=50
                 )
+            else:
+                executor = self.reranker_executor or get_retrieval_reranker_executor()
+                owns_executor = executor is None
+                if executor is None:
+                    executor = ManagedRerankerExecutor(
+                        max_workers=1,
+                        thread_name_prefix="group-memory-reranker-once",
+                    )
+                    executor.start()
                 try:
-                    results = future.result(timeout=self.reranker_timeout_ms / 1000.0)
-                except FutureTimeoutError as exc:
-                    future.cancel()
-                    raise GroupMemoryRerankerTimeout(
-                        f"group memory reranker exceeded {self.reranker_timeout_ms}ms"
-                    ) from exc
+                    future = executor.submit(
+                        self.reranker_provider.rerank,
+                        query_text,
+                        candidates,
+                        top_k=50,
+                    )
+                    try:
+                        results = future.result(
+                            timeout=self.reranker_timeout_ms / 1000.0
+                        )
+                    except FutureTimeoutError as exc:
+                        future.cancel()
+                        raise GroupMemoryRerankerTimeout(
+                            "group memory reranker exceeded "
+                            f"{self.reranker_timeout_ms}ms"
+                        ) from exc
+                finally:
+                    if owns_executor:
+                        executor.stop()
         except GroupMemoryRerankerTimeout:
             raise
         except Exception:
@@ -255,7 +270,9 @@ class GroupMemoryRetrievalService:
                 scores[int(parts[1])] = float(result.score or 0.0)
         return scores
 
-    def _score_components(self, row: Any, memory_type: str, relevance: float) -> dict[str, float]:
+    def _score_components(
+        self, row: Any, memory_type: str, relevance: float
+    ) -> dict[str, float]:
         components = {
             "confidence": max(0.0, min(1.0, float(getattr(row, "confidence", 0) or 0))),
             "decay": max(0.0, min(1.0, float(getattr(row, "decay_score", 0) or 0))),
@@ -275,7 +292,9 @@ class GroupMemoryRetrievalService:
         components["final"] = round(final, 6)
         return components
 
-    def _would_exceed_render_budget(self, group_id: str, rows: list[Any], max_chars: int) -> bool:
+    def _would_exceed_render_budget(
+        self, group_id: str, rows: list[Any], max_chars: int
+    ) -> bool:
         from app.group_memory.renderer import render_group_memory_context
 
         if int(max_chars or 0) <= 0:
@@ -301,3 +320,265 @@ class GroupMemoryRetrievalService:
         if not _safe_evidence_ids(getattr(row, "evidence_log_ids_json", "") or ""):
             return "no_evidence"
         return ""
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupMemoryCandidateSource:
+    service: GroupMemoryRetrievalService
+
+    def recall(self, request: RetrievalRequest) -> _GroupMemoryRecall:
+        from core.database import GroupMemory
+
+        group_id = str(request.options.get("group_id") or "")
+        rows = (
+            self.service.db.query(GroupMemory)
+            .filter(GroupMemory.group_id == group_id)
+            .order_by(
+                GroupMemory.confidence.desc(),
+                GroupMemory.last_seen.desc(),
+                GroupMemory.id.asc(),
+            )
+            .limit(max(1, self.service.max_sql_candidates))
+            .all()
+        )
+        return _GroupMemoryRecall(
+            group_id=group_id,
+            query_text=request.query,
+            rows=tuple(rows),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupMemoryFilterPolicy:
+    service: GroupMemoryRetrievalService
+
+    def filter_candidates(
+        self,
+        request: RetrievalRequest,
+        citation,
+    ) -> RetrievalCandidates[_GroupMemoryCandidate]:
+        del request
+        recall: _GroupMemoryRecall = citation.source
+        candidates: list[_GroupMemoryCandidate] = []
+        skipped: list[dict[str, Any]] = []
+        score_components: dict[str, dict[str, Any]] = {}
+        for row in recall.rows:
+            memory_type = str(row.memory_type or "")
+            relevance = _lexical_relevance(row.content, recall.query_text)
+            components = self.service._score_components(
+                row,
+                memory_type,
+                relevance,
+            )
+            reason = self.service._skip_reason(row)
+            if reason:
+                components["skip_reason"] = reason
+                score_components[str(row.id)] = components
+                skipped.append({"id": row.id, "reason": reason})
+                continue
+            candidates.append(
+                _GroupMemoryCandidate(
+                    row=row,
+                    memory_type=memory_type,
+                    relevance=relevance,
+                    components=dict(components),
+                )
+            )
+        return RetrievalCandidates(
+            items=tuple(candidates),
+            metadata={
+                "all_rows": recall.rows,
+                "skipped": tuple(skipped),
+                "score_components": score_components,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupMemoryScoringPolicy:
+    service: GroupMemoryRetrievalService
+
+    def pre_rank(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_GroupMemoryCandidate],
+    ) -> RetrievalCandidates[_GroupMemoryCandidate]:
+        del request
+        return candidates
+
+    def final_rank(
+        self,
+        request: RetrievalRequest,
+        outcome: RerankOutcome[_GroupMemoryCandidate],
+    ) -> RankingOutcome[_GroupMemoryCandidate]:
+        del request
+        skipped = [dict(item) for item in outcome.metadata.get("skipped", ())]
+        score_components = {
+            str(key): dict(value)
+            for key, value in dict(outcome.metadata.get("score_components", {})).items()
+        }
+        ranked: list[_GroupMemoryCandidate] = []
+        for candidate in outcome.items:
+            components = dict(candidate.components)
+            if self.service.reranker_provider is None:
+                minimum = (
+                    STRICT_MIN_RELEVANCE
+                    if candidate.memory_type in STRICT_RELEVANCE_TYPES
+                    else DEFAULT_MIN_RELEVANCE
+                )
+                if candidate.relevance < minimum and candidate.memory_type != "style":
+                    components["skip_reason"] = "low_relevance"
+                    score_components[str(candidate.row.id)] = components
+                    skipped.append({"id": candidate.row.id, "reason": "low_relevance"})
+                    continue
+            projected = _GroupMemoryCandidate(
+                row=candidate.row,
+                memory_type=candidate.memory_type,
+                relevance=candidate.relevance,
+                components=components,
+            )
+            score_components[str(candidate.row.id)] = components
+            ranked.append(projected)
+        ranked.sort(
+            key=lambda item: float(item.components.get("final") or 0.0),
+            reverse=True,
+        )
+        return RankingOutcome(
+            items=tuple(ranked),
+            metadata={
+                "skipped": tuple(skipped),
+                "score_components": score_components,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupMemoryReranker:
+    service: GroupMemoryRetrievalService
+
+    def rerank(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_GroupMemoryCandidate],
+    ) -> RerankOutcome[_GroupMemoryCandidate]:
+        skipped = [dict(item) for item in candidates.metadata.get("skipped", ())]
+        score_components = {
+            str(key): dict(value)
+            for key, value in dict(
+                candidates.metadata.get("score_components", {})
+            ).items()
+        }
+        if self.service.reranker_provider is None:
+            return RerankOutcome(
+                items=candidates.items,
+                reranker_items=(),
+                metadata={
+                    "skipped": tuple(skipped),
+                    "score_components": score_components,
+                },
+            )
+
+        all_rows = list(candidates.metadata.get("all_rows", ()))
+        scores = self.service._reranker_scores(request.query, all_rows)
+        accepted: list[_GroupMemoryCandidate] = []
+        for candidate in candidates.items:
+            components = dict(candidate.components)
+            reranker = scores.get(int(candidate.row.id), 0.0)
+            components["reranker"] = reranker
+            if reranker < self.service.min_reranker:
+                components["skip_reason"] = "low_reranker"
+                score_components[str(candidate.row.id)] = components
+                skipped.append({"id": candidate.row.id, "reason": "low_reranker"})
+                continue
+            components["final"] = round(
+                float(components["final"]) * 0.65 + reranker * 0.35,
+                6,
+            )
+            score_components[str(candidate.row.id)] = components
+            accepted.append(
+                _GroupMemoryCandidate(
+                    row=candidate.row,
+                    memory_type=candidate.memory_type,
+                    relevance=candidate.relevance,
+                    components=components,
+                )
+            )
+        return RerankOutcome(
+            items=tuple(accepted),
+            reranker_items=candidates.items,
+            metadata={
+                "skipped": tuple(skipped),
+                "score_components": score_components,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupMemoryBudgetPolicy:
+    service: GroupMemoryRetrievalService
+
+    def limit_candidates(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_GroupMemoryCandidate],
+    ) -> RetrievalCandidates[_GroupMemoryCandidate]:
+        del request
+        return candidates
+
+    def select_results(
+        self,
+        request: RetrievalRequest,
+        ranking: RankingOutcome[_GroupMemoryCandidate],
+    ) -> GroupMemorySelection:
+        selection = GroupMemorySelection(
+            skipped=[dict(item) for item in ranking.metadata.get("skipped", ())],
+            score_components={
+                str(key): dict(value)
+                for key, value in dict(
+                    ranking.metadata.get("score_components", {})
+                ).items()
+            },
+        )
+        type_counts: dict[str, int] = {}
+        group_id = str(request.options.get("group_id") or "")
+        max_chars = int(request.options.get("max_chars") or 0)
+        for candidate in ranking.items:
+            row = candidate.row
+            reason = ""
+            if len(selection.selected) >= request.limit:
+                reason = "max_items"
+            elif type_counts.get(candidate.memory_type, 0) >= TYPE_LIMITS.get(
+                candidate.memory_type,
+                2,
+            ):
+                reason = "type_limit"
+            elif self.service._would_exceed_render_budget(
+                group_id,
+                selection.selected + [row],
+                max_chars,
+            ):
+                reason = "over_budget"
+            if reason:
+                components = selection.score_components[str(row.id)]
+                components["skip_reason"] = reason
+                selection.skipped.append({"id": row.id, "reason": reason})
+                continue
+            selection.selected.append(row)
+            type_counts[candidate.memory_type] = (
+                type_counts.get(candidate.memory_type, 0) + 1
+            )
+        return selection
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupMemoryResultBuilder:
+    def build(
+        self,
+        state: RetrievalPipelineState[
+            _GroupMemoryRecall,
+            _GroupMemoryCandidate,
+            GroupMemorySelection,
+            GroupMemorySelection,
+        ],
+    ) -> GroupMemorySelection:
+        return state.selected

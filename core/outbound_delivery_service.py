@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -17,19 +18,22 @@ from urllib.parse import urlsplit
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from core.database import OutboundDeliveryControl
-from core.outbound_delivery import (
+from core.db.models.outbound import OutboundDeliveryControl
+from core.fencing import positive_seconds
+from core.outbound.contracts import DeliveryClaimHandle, DeliverySettlementResult
+from core.outbound.delivery_claims import (
     cancel_invalid_delivery_before_send,
-    DeliveryClaimHandle,
-    DeliverySettlementResult,
     claim_due_outbox,
     claim_legacy_direct_outbox,
-    expire_stale_delivery_leases,
     mark_delivery_request_started,
+)
+from core.outbound.settlement import (
+    expire_stale_delivery_leases,
     settle_delivery_attempt,
 )
 from core.outbound_transport import DeliveryOutcome, resolve_qq_push_token
 from core.qq_outbound_renderer import render_qq_outbound_envelope
+from core.runtime.event_bus import emit_runtime_event
 
 
 QQ_ENDPOINT_KEY = "qq_push"
@@ -273,12 +277,10 @@ class _DecodedDelivery:
 
 
 def _require_positive_number(value: Any, *, name: str) -> float:
-    if type(value) not in {int, float}:
-        raise ValueError(f"{name} 必须是有限正数")
-    normalized = float(value)
-    if not math.isfinite(normalized) or normalized <= 0:
-        raise ValueError(f"{name} 必须是有限正数")
-    return normalized
+    try:
+        return positive_seconds(value, field_name=name)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} 必须是有限正数") from exc
 
 
 def _require_positive_integer(value: Any, *, name: str) -> int:
@@ -536,6 +538,19 @@ async def _deliver_claim(
     jitter_source: Callable[[float], float],
     settlement_retry_sleep: Callable[[float], Awaitable[None]],
 ) -> OutboundDeliveryWorkResult:
+    event_started = time.perf_counter()
+    event_attributes = {
+        "channel": "qq",
+        "target_type": claim.target_type,
+        "attempt_no": claim.attempt_no,
+        "payload_sha256": claim.payload_sha256,
+        "payload_bytes": len(claim.payload_json.encode("utf-8", errors="replace")),
+    }
+    emit_runtime_event(
+        "delivery.attempt",
+        "started",
+        attributes=event_attributes,
+    )
     preflight = await _transaction(
         session_factory,
         lambda db: cancel_invalid_delivery_before_send(
@@ -548,6 +563,15 @@ async def _deliver_claim(
         ),
     )
     if preflight is not None:
+        emit_runtime_event(
+            "delivery.attempt",
+            "failed",
+            attributes={
+                **event_attributes,
+                "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "error_type": "preflight_cancelled",
+            },
+        )
         return _work_result(claim, preflight)
     try:
         decoded = _decode_delivery(claim)
@@ -571,6 +595,15 @@ async def _deliver_claim(
                 "now": current,
             },
             retry_sleep=settlement_retry_sleep,
+        )
+        emit_runtime_event(
+            "delivery.attempt",
+            "failed",
+            attributes={
+                **event_attributes,
+                "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "error_type": "delivery_contract_invalid",
+            },
         )
         return _work_result(claim, settlement)
 
@@ -599,6 +632,15 @@ async def _deliver_claim(
         start_request_if_source_is_valid,
     )
     if isinstance(request_started, DeliverySettlementResult):
+        emit_runtime_event(
+            "delivery.attempt",
+            "failed",
+            attributes={
+                **event_attributes,
+                "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "error_type": "source_invalidated",
+            },
+        )
         return _work_result(claim, request_started)
     request = OutboundTransportRequest(
         push_url=config.push_url,
@@ -613,6 +655,17 @@ async def _deliver_claim(
     )
     try:
         delivery_outcome = await transport(request)
+    except asyncio.CancelledError:
+        emit_runtime_event(
+            "delivery.attempt",
+            "failed",
+            attributes={
+                **event_attributes,
+                "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "error_type": "CancelledError",
+            },
+        )
+        raise
     except Exception:
         delivery_outcome = DeliveryOutcome(
             category="ambiguous",
@@ -653,6 +706,19 @@ async def _deliver_claim(
             "now": completed_at,
         },
         retry_sleep=settlement_retry_sleep,
+    )
+    emit_runtime_event(
+        "delivery.attempt",
+        "succeeded" if delivery_outcome.category == "success" else "failed",
+        attributes={
+            **event_attributes,
+            "latency_ms": (time.perf_counter() - event_started) * 1000,
+            "error_type": (
+                ""
+                if delivery_outcome.category == "success"
+                else delivery_outcome.error_type or delivery_outcome.category
+            ),
+        },
     )
     return _work_result(claim, settlement)
 

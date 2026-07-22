@@ -20,17 +20,22 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import exists, or_
 from sqlalchemy.orm import Session
 
-from core.database import OutboundDeliveryOutbox, OutboundRun, ScheduledTask
+from core.db.models.outbound import OutboundDeliveryOutbox, OutboundRun
+from core.db.models.scheduling import ScheduledTask
 from core.message_envelope import build_chat_response_envelope
-from core.outbound_delivery import (
+from core.outbound.contracts import (
     OUTBOUND_PROTOCOL_VERSION,
     OutboundConflictError,
     SourceCancellationSummary,
-    cancel_safe_deliveries_for_source,
-    claim_outbound_run,
+)
+from core.outbound.control import lock_outbound_source_control
+from core.outbound.delivery_claims import cancel_safe_deliveries_for_source
+from core.outbound.generation import (
     commit_generated_outbox,
     fail_outbound_generation,
-    lock_outbound_source_control,
+)
+from core.outbound.run_claims import (
+    claim_outbound_run,
     quarantine_expired_generation_run,
     start_generation_attempt,
 )
@@ -493,8 +498,6 @@ def _existing_result(
     deduplicated: bool = True,
     generation_attempted: bool = False,
 ) -> ScheduledTaskEnqueueResult:
-    from core.database import OutboundDeliveryOutbox
-
     run = db.get(OutboundRun, int(run_id))
     if run is None:
         raise ScheduledTaskOutboundError("已登记的定时任务 run 不存在")

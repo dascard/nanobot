@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 
 def _normalize_message(message: dict[str, Any]) -> dict[str, Any]:
@@ -23,6 +23,13 @@ class PromptFlowSection(TypedDict):
     origin: PromptFlowOrigin
     status: PromptFlowStatus
     message_indexes: list[int]
+    phase: NotRequired[str]
+    authority: NotRequired[str]
+    trust: NotRequired[str]
+    dependencies: NotRequired[list[str]]
+    source_precedence: NotRequired[list[str]]
+    editable: NotRequired[bool]
+    failure_policy: NotRequired[str]
 
 
 @dataclass(frozen=True)

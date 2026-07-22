@@ -5,10 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy.orm import Session
-
 from app.persona.renderer import render_persona_context
 from app.persona.retrieval_service import PersonaRetrievalService
+from core.db import PersonaFactRepositoryPort, persona_fact_repository
 from core.time_utils import db_now_naive
 
 
@@ -22,8 +21,10 @@ class PersonaInjectionResult:
 
 
 class PersonaInjectionService:
-    def __init__(self, db: Session):
-        self.db = db
+    def __init__(self, repository: Any):
+        self.repository: PersonaFactRepositoryPort = persona_fact_repository(
+            repository
+        )
 
     def build_context(
         self,
@@ -45,7 +46,7 @@ class PersonaInjectionService:
         if not str(user_id or "").strip():
             return PersonaInjectionResult(debug=debug)
 
-        selection = PersonaRetrievalService(self.db).select(
+        selection = PersonaRetrievalService(self.repository).select(
             user_id=str(user_id),
             current_user_input=current_user_input,
             recent_messages=recent_messages or [],
@@ -70,10 +71,10 @@ class PersonaInjectionService:
         )
 
     def record_injected(self, selected_ids: list[int]) -> int:
-        return record_persona_injected(self.db, selected_ids)
+        return record_persona_injected(self.repository, selected_ids)
 
 
-def record_persona_injected(db: Session, selected_ids: list[int]) -> int:
+def record_persona_injected(repository: Any, selected_ids: list[int]) -> int:
     ids: list[int] = []
     for item in selected_ids or []:
         try:
@@ -85,12 +86,11 @@ def record_persona_injected(db: Session, selected_ids: list[int]) -> int:
     if not ids:
         return 0
 
-    from core.database import PersonaFact
-
+    facts = persona_fact_repository(repository)
     now = db_now_naive()
-    rows = db.query(PersonaFact).filter(PersonaFact.id.in_(ids)).all()
+    rows = facts.list_by_ids(ids)
     for row in rows:
         row.last_injected_at = now
         row.injected_count = int(row.injected_count or 0) + 1
-    db.flush()
+    facts.flush()
     return len(rows)

@@ -28,6 +28,25 @@ from core import database  # noqa: E402
 from server import app  # noqa: E402
 from tests.sqlite_test_utils import restore_in_memory_base_schema  # noqa: E402
 
+
+@pytest.fixture(scope="function", autouse=True)
+def proactive_runtime_identity():
+    """测试 composition root 显式安装主动外呼进程身份。"""
+    from core.proactive.runtime_identity import (
+        ProactiveProcessIdentity,
+        start_proactive_runtime,
+        stop_proactive_runtime,
+    )
+
+    start_proactive_runtime(ProactiveProcessIdentity(
+        owner="proactive-outreach:pytest",
+        writer_token="pytest-writer-token-0123456789abcdef",
+    ))
+    try:
+        yield
+    finally:
+        stop_proactive_runtime()
+
 # 创建测试专用的 engine 和 session（使用 StaticPool 允许多线程共享同一块 memoryDB）
 test_engine = create_engine(
     "sqlite:///:memory:", 

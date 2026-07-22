@@ -8,6 +8,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from core.db import chat_persistence_repository
 from core.inbound_idempotency import (
     CompletedInboundResponse,
     InboundClaimKey,
@@ -298,17 +299,11 @@ def load_private_request_journal(
 ) -> tuple[Any, dict[str, Any]] | None:
     """加载并验证唯一的私聊 request journal。"""
 
-    from core.database import ChatLog
-
-    rows = (
-        db.query(ChatLog)
-        .filter(
-            ChatLog.session_id == key.session_id,
-            ChatLog.message_id == key.message_id,
-            ChatLog.role == "user",
-        )
-        .order_by(ChatLog.created_at.asc(), ChatLog.id.asc())
-        .all()
+    repository = chat_persistence_repository(db)
+    rows = repository.find_chat_logs(
+        session_id=key.session_id,
+        message_id=key.message_id,
+        role="user",
     )
     if not rows:
         return None
@@ -330,10 +325,9 @@ def load_private_recoverable_completion(
 ) -> CompletedInboundResponse | None:
     """按完整入站 identity 加载唯一、严格校验的私聊完成结果。"""
 
-    from core.database import ChatLog
-
+    repository = chat_persistence_repository(db)
     loaded = load_private_request_journal(
-        db,
+        repository,
         key=key,
         request_sha256=request_sha256,
     )
@@ -350,15 +344,10 @@ def load_private_recoverable_completion(
     if completion.outcome != "respond":
         return completion
 
-    rows = (
-        db.query(ChatLog)
-        .filter(
-            ChatLog.session_id == key.session_id,
-            ChatLog.message_id == key.message_id,
-            ChatLog.role == "assistant",
-        )
-        .order_by(ChatLog.created_at.asc(), ChatLog.id.asc())
-        .all()
+    rows = repository.find_chat_logs(
+        session_id=key.session_id,
+        message_id=key.message_id,
+        role="assistant",
     )
     if len(rows) != 1:
         raise PrivateRecoveryCorruptError(

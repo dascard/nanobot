@@ -5,7 +5,12 @@ import logging
 from datetime import timedelta
 
 from core.time_utils import db_now_naive
-from core.tool_registry import SANDBOX_TOOL_NAMES, TOOL_METADATA, get_tool_def
+from core.tool_registry import (
+    SANDBOX_TOOL_NAMES,
+    get_tool_def,
+    get_tool_descriptor,
+    list_user_tool_descriptors,
+)
 
 logger = logging.getLogger("nanobot.runtime_tools")
 
@@ -219,7 +224,7 @@ def resolve_effective_tools(
     """解析实际生效的工具启用/禁用。
 
     合并顺序（后面覆盖前面）：
-    1. TOOL_METADATA 默认值 (private_default/group_default)
+    1. ToolDescriptor Registry 默认值 (private_default/group_default)
     2. force_enabled / force_disabled / force_disabled_group 初始硬约束
     3. 运行时预设 (none/lightweight/full)
     4. ToolOverride 表 (scope_type=chat_type/platform/group/user)，显式覆盖可放开轻量预设
@@ -234,10 +239,13 @@ def resolve_effective_tools(
     enabled: dict[str, bool] = {}
     disabled: dict[str, str] = {}
 
-    for name, td in TOOL_METADATA.items():
+    for descriptor in list_user_tool_descriptors():
+        name = descriptor.name
         enabled[name] = resolve_tool_default(name, chat_type, db=db)
 
-    for name, td in TOOL_METADATA.items():
+    for descriptor in list_user_tool_descriptors():
+        name = descriptor.name
+        td = descriptor.definition
         if td.force_disabled:
             enabled[name] = False
             disabled[name] = "系统安全硬禁用"
@@ -282,7 +290,8 @@ def resolve_effective_tools(
             for row in sorted(rows, key=lambda r: {
                 "chat_type": 1, "platform": 2, "group": 3, "user": 4,
             }.get(r.scope_type, 9)):
-                if row.tool_name not in TOOL_METADATA:
+                descriptor = get_tool_descriptor(row.tool_name)
+                if descriptor is None or descriptor.framework_owned:
                     continue
                 td = get_tool_def(row.tool_name)
                 if td and (
@@ -299,7 +308,9 @@ def resolve_effective_tools(
         except Exception as e:
             logger.warning("Failed to load ToolOverride: %s", e)
 
-    for name, td in TOOL_METADATA.items():
+    for descriptor in list_user_tool_descriptors():
+        name = descriptor.name
+        td = descriptor.definition
         if td.force_disabled:
             enabled[name] = False
             disabled[name] = "系统安全硬禁用"
@@ -317,7 +328,9 @@ def resolve_effective_tools(
             enabled[name] = False
             disabled[name] = "研究预设固定权限上限"
 
-    for name, td in TOOL_METADATA.items():
+    for descriptor in list_user_tool_descriptors():
+        name = descriptor.name
+        td = descriptor.definition
         if td.force_disabled:
             enabled[name] = False
             disabled[name] = "系统安全硬禁用"

@@ -4,6 +4,37 @@ from types import SimpleNamespace
 from tests.async_helpers import run_async
 
 
+def test_metadata_only_trace_policy_comes_from_tool_descriptor_registry(monkeypatch):
+    import core.tracing as tracing
+    from core.tool_registry import list_tool_descriptors
+
+    metadata_only_names = {
+        descriptor.name
+        for descriptor in list_tool_descriptors()
+        if descriptor.trace_policy == "metadata_only"
+    }
+    assert metadata_only_names
+    for tool_name in metadata_only_names:
+        assert tracing._uses_metadata_only_trace(tool_name) is True
+
+    future_name = "future_metadata_only_tool"
+    original_get_descriptor = tracing.get_tool_descriptor
+
+    def _get_descriptor(name: str):
+        if name == future_name:
+            return SimpleNamespace(trace_policy="metadata_only")
+        return original_get_descriptor(name)
+
+    monkeypatch.setattr(tracing, "get_tool_descriptor", _get_descriptor)
+    sanitized = tracing.sanitize_tool_trace_args(
+        future_name,
+        {"secret_payload": "MUST_NOT_ENTER_TRACE"},
+    )
+
+    assert sanitized == {"args_omitted": True}
+    assert not hasattr(tracing, "SANDBOX_TRACE_TOOL_NAMES")
+
+
 def test_sandbox_trace_sanitizers_omit_commands_file_bodies_and_process_output():
     from core.tracing import sanitize_tool_trace_args, sanitize_tool_trace_result
 

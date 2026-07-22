@@ -886,7 +886,7 @@ class TestGroupRuntime:
             PendingMessage("u1", "用户1", "闲聊1", message_id="m1")
         )
         monkeypatch.setattr(
-            "clients.classifier_client.judge_proactive",
+            "core.group_runtime.runtime.judge_group_proactive",
             lambda _context: {
                 "should_speak": True,
                 "reason": "可补充",
@@ -1077,7 +1077,7 @@ class TestGroupRuntime:
         def fake_judge(_ctx):
             return {"should_speak": True, "reason": "有可贡献的内容", "error_type": None}
 
-        monkeypatch.setattr("clients.classifier_client.judge_proactive", fake_judge)
+        monkeypatch.setattr("core.group_runtime.runtime.judge_group_proactive", fake_judge)
         transaction = runtime._begin_gate("group_g1", state)
         gen = state.generation
         r = await runtime._run_proactive(
@@ -1101,7 +1101,7 @@ class TestGroupRuntime:
         runtime = GroupRuntime()
         state = self._cold_active_state(runtime, n_msgs=3)
 
-        monkeypatch.setattr("clients.classifier_client.judge_proactive",
+        monkeypatch.setattr("core.group_runtime.runtime.judge_group_proactive",
                             lambda _c: {"should_speak": False, "reason": "无需插话", "error_type": None})
         transaction = runtime._begin_gate("group_g1", state)
         gen = state.generation
@@ -1123,7 +1123,7 @@ class TestGroupRuntime:
         runtime = GroupRuntime()
         state = self._cold_active_state(runtime, n_msgs=3)
 
-        monkeypatch.setattr("clients.classifier_client.judge_proactive",
+        monkeypatch.setattr("core.group_runtime.runtime.judge_group_proactive",
                             lambda _c: {"should_speak": True, "reason": "x", "error_type": None})
         transaction = runtime._begin_gate("group_g1", state)
         gen = state.generation
@@ -1146,7 +1146,7 @@ class TestGroupRuntime:
         runtime = GroupRuntime()
         state = self._cold_active_state(runtime, n_msgs=3)
 
-        monkeypatch.setattr("clients.classifier_client.judge_proactive",
+        monkeypatch.setattr("core.group_runtime.runtime.judge_group_proactive",
                             lambda _c: {"should_speak": False, "reason": "裁判不可用", "error_type": "network_error"})
         transaction = runtime._begin_gate("group_g1", state)
         gen = state.generation
@@ -1171,7 +1171,7 @@ class TestGroupRuntime:
         def cancel_proactive(_context):
             raise cancellation
 
-        monkeypatch.setattr("clients.classifier_client.judge_proactive", cancel_proactive)
+        monkeypatch.setattr("core.group_runtime.runtime.judge_group_proactive", cancel_proactive)
         transaction = runtime._begin_gate("group_g1", state)
 
         with pytest.raises(asyncio.CancelledError) as raised:
@@ -1256,7 +1256,7 @@ class TestGroupRuntime:
             raise cleanup_error
 
         monkeypatch.setattr(
-            "clients.classifier_client.judge_proactive",
+            "core.group_runtime.runtime.judge_group_proactive",
             lambda _context: {
                 "should_speak": False,
                 "reason": "declined",

@@ -92,11 +92,22 @@ def _template_from_path(task_key: str, path: Path) -> PromptV2Template:
 def select_task_template(prompt_key: str) -> TaskTemplateSelection:
     task_key = resolve_template_key(prompt_key)
     contract = get_task_contract(task_key)
-    if contract is not None and contract.render_mode == "code_fallback_only":
-        return TaskTemplateSelection(task_key, "code_fallback", None)
+    source_precedence = (
+        contract.source_precedence
+        if contract is not None
+        else ("runtime", "default", "code_fallback")
+    )
 
     invalid_sources: list[str] = []
-    for source, runtime in (("runtime", True), ("default", False)):
+    for source in source_precedence:
+        if source == "code_fallback":
+            return TaskTemplateSelection(
+                task_key,
+                "code_fallback",
+                None,
+                tuple(invalid_sources),
+            )
+        runtime = source == "runtime"
         path = first_existing_template_path(task_key, runtime=runtime)
         if path is None:
             continue
@@ -113,7 +124,7 @@ def select_task_template(prompt_key: str) -> TaskTemplateSelection:
             invalid_sources.append(source)
     return TaskTemplateSelection(
         task_key,
-        "code_fallback",
+        "unavailable",
         None,
         tuple(invalid_sources),
     )
@@ -208,14 +219,24 @@ def _render_selection(selection: TaskTemplateSelection, values: dict[str, Any]) 
 
 def render_task_prompt(prompt_key: str, values: dict[str, Any], *, fallback_text: str = "") -> str:
     render_values = dict(values or {})
-    validate_task_call_values(prompt_key, render_values)
+    contract = validate_task_call_values(prompt_key, render_values)
     _require_invocation_api(prompt_key, "prompt")
     selection = select_task_template(prompt_key)
     rendered = _render_selection(selection, render_values)
+    if (
+        not rendered
+        and contract is not None
+        and contract.template_failure_policy == "runtime_default_fail_closed"
+    ):
+        invalid = ",".join(selection.invalid_sources) or "missing"
+        raise TaskTemplateUnavailableError(
+            f"task {selection.task_key} template unavailable: {invalid}"
+        )
     if not rendered and selection.invalid_sources:
         logger.warning(
-            "[PromptV2Task] render unavailable key=%s fallback=code invalid=%s",
+            "[PromptV2Task] render unavailable key=%s source=%s invalid=%s",
             resolve_template_key(prompt_key),
+            selection.source,
             ",".join(selection.invalid_sources),
         )
     return rendered or str(fallback_text or "")
@@ -236,10 +257,20 @@ def render_task_messages(
         for variable in contract.payload_variables:
             render_values[variable] = TASK_PAYLOAD_MARKER
     rendered = _render_selection(selection, render_values)
+    if (
+        not rendered
+        and contract is not None
+        and contract.template_failure_policy == "runtime_default_fail_closed"
+    ):
+        invalid = ",".join(selection.invalid_sources) or "missing"
+        raise TaskTemplateUnavailableError(
+            f"task {selection.task_key} template unavailable: {invalid}"
+        )
     if not rendered and selection.invalid_sources:
         logger.warning(
-            "[PromptV2Task] message render unavailable key=%s fallback=code invalid=%s",
+            "[PromptV2Task] message render unavailable key=%s source=%s invalid=%s",
             resolve_template_key(prompt_key),
+            selection.source,
             ",".join(selection.invalid_sources),
         )
     if not rendered:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from core.prompt_v2.flow_storage import (
@@ -19,12 +20,21 @@ class TemplateRecord:
     kind: str
     tool_name: str = ""
     display_name: str = ""
+    editable: bool = True
+    runtime_effective: bool = True
+    runtime_status: str = "runtime_template"
+    owner_module: str = ""
+    domain: str = ""
+    source_precedence: tuple[str, ...] = ("runtime", "default")
+    failure_policy: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["source_precedence"] = list(self.source_precedence)
+        return data
 
 
-_LEGACY_ALIASES: dict[str, str] = {
+_LEGACY_ALIASES = MappingProxyType({
     "chat_main": "chat/main",
     "chat_branch_group": "chat/branch_group",
     "chat_branch_private": "chat/branch_private",
@@ -64,76 +74,47 @@ _LEGACY_ALIASES: dict[str, str] = {
     "classifier_legacy": "tasks/classifier_legacy",
     "private_decision": "tasks/private_decision",
     "timing_gate": "tasks/timing_gate",
+    "timing_proactive": "tasks/timing_proactive",
     "memory_extract": "tasks/memory_extract",
+    "persona_candidate_system": "tasks/persona_candidate_system",
+    "model_scout_system": "tasks/model_scout_system",
     "memory_digest_system": "tasks/memory_digest_system",
     "memory_digest_user": "tasks/memory_digest_user",
+    "session_summary_system": "tasks/session_summary_system",
+    "session_summary_output": "tasks/session_summary_output",
     "reply_contract_retry": "tasks/reply_contract_retry",
     "outreach_extract": "tasks/outreach_extract",
     "outreach_judge": "tasks/outreach_judge",
     "outreach_generate": "tasks/outreach_generate",
     "proactive_research": "tasks/proactive_research",
-}
+})
 
-_TASK_TOOL_NAMES: dict[str, str] = {
+_TASK_TOOL_NAMES = MappingProxyType({
     "tasks/classifier_legacy": "classifier_legacy",
     "tasks/private_decision": "private_decision",
     "tasks/timing_gate": "timing_gate",
+    "tasks/timing_proactive": "timing_proactive",
     "tasks/memory_extract": "memory_extract",
+    "tasks/persona_candidate_system": "persona_candidate_system",
+    "tasks/model_scout_system": "model_scout",
     "tasks/memory_digest_system": "memory_digest",
     "tasks/memory_digest_user": "memory_digest",
+    "tasks/session_summary_system": "session_summary",
+    "tasks/session_summary_output": "session_summary",
     "tasks/reply_contract_retry": "reply",
     "tasks/outreach_extract": "outreach_extract",
     "tasks/outreach_judge": "outreach_judge",
     "tasks/outreach_generate": "outreach_generate",
     "tasks/proactive_research": "web_search",
-}
+})
 
-_TOOL_WORKFLOW_TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
-    "group_analysis": (
-        "tools/group_analysis/system",
-        "tools/group_analysis/topics",
-        "tools/group_analysis/titles",
-        "tools/group_analysis/quotes",
-        "tools/group_analysis/quality",
-    ),
-    "image_summary": (
-        "tools/image_summary/system",
-        "tools/image_summary/user",
-    ),
-    "ai_daily": (
-        "tools/ai_daily/digest_system",
-        "tools/ai_daily/digest_user",
-        "tools/ai_daily/quality_system",
-        "tools/ai_daily/quality_user",
-    ),
-}
+def tool_template_keys(tool_name: str) -> tuple[str, ...]:
+    """从类型化 ToolDescriptor 获取唯一 Prompt 模板绑定。"""
 
-_TOOL_USAGE_TEMPLATE_KEYS: dict[str, str] = {
-    tool_name: f"tools/{tool_name}/usage"
-    for tool_name in (
-        "reply",
-        "no_reply",
-        "sticker_search",
-        "image_generation",
-        "sql_analysis",
-        "python_sandbox",
-        "ai_daily",
-        "memory_query",
-        "knowledge_query",
-        "web_search",
-        "image_summary",
-        "group_analysis",
-        "persona_update",
-        "schedule_task",
-        "sandbox_exec",
-        "workspace_list",
-        "workspace_read",
-        "workspace_search",
-        "workspace_write",
-        "asset_import",
-        "asset_publish",
-    )
-}
+    from core.tool_registry import get_tool_descriptor
+
+    descriptor = get_tool_descriptor(tool_name)
+    return descriptor.prompt_template_keys if descriptor is not None else ()
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -165,7 +146,12 @@ def _active_runtime_template_keys(
         get_task_contract,
         list_task_contract_keys,
     )
-    from core.tool_registry import TOOL_METADATA
+    from core.tool_registry import (
+        list_user_tool_descriptors,
+        validate_tool_descriptor_registry,
+    )
+
+    validate_tool_descriptor_registry()
 
     active_keys = {"chat/flow"}
     active_flow = load_flow()
@@ -186,7 +172,9 @@ def _active_runtime_template_keys(
         if contract is not None and contract.render_mode != "code_fallback_only":
             active_keys.add(template_key)
 
-    for tool_name, definition in TOOL_METADATA.items():
+    for descriptor in list_user_tool_descriptors():
+        tool_name = descriptor.name
+        definition = descriptor.definition
         if definition.force_disabled:
             continue
         if not (
@@ -195,11 +183,7 @@ def _active_runtime_template_keys(
             or definition.group_default
         ):
             continue
-        candidates = set(_TOOL_WORKFLOW_TEMPLATE_KEYS.get(tool_name, ()))
-        usage_key = _TOOL_USAGE_TEMPLATE_KEYS.get(tool_name)
-        if usage_key is not None:
-            candidates.add(usage_key)
-        active_keys.update(candidates)
+        active_keys.update(tool_template_keys(tool_name))
     return active_keys
 
 
@@ -416,13 +400,96 @@ def classify_template(template_key: str, frontmatter: dict[str, Any] | None = No
         elif key in _TASK_TOOL_NAMES:
             tool_name = _TASK_TOOL_NAMES[key]
     display_name = str(frontmatter.get("name") or key)
+    editable = True
+    runtime_effective = True
+    runtime_status = "runtime_template"
+    owner_module = ""
+    domain = ""
+    source_precedence = ("runtime", "default")
+    failure_policy = ""
+    if category == "chat":
+        from core.prompt_v2.section_descriptors import descriptor_for_template_key
+
+        descriptor = descriptor_for_template_key(key)
+        if descriptor is None:
+            editable = False
+            runtime_effective = False
+            runtime_status = "unregistered_chat_section"
+            source_precedence = ()
+            failure_policy = "fail_closed"
+        else:
+            editable = descriptor.editable
+            owner_module = descriptor.owner_module
+            domain = descriptor.domain
+            source_precedence = descriptor.source_precedence
+            failure_policy = descriptor.failure_policy
+    elif category == "tasks":
+        from core.prompt_v2.task_contracts import get_task_contract
+
+        contract = get_task_contract(key)
+        if contract is None:
+            editable = False
+            runtime_effective = False
+            runtime_status = "unregistered_task"
+            source_precedence = ()
+            failure_policy = "fail_closed"
+        else:
+            editable = contract.editable
+            owner_module = contract.owner_module
+            domain = contract.domain
+            source_precedence = contract.source_precedence
+            failure_policy = contract.template_failure_policy
+        if contract is not None and contract.render_mode == "code_fallback_only":
+            editable = False
+            runtime_effective = False
+            runtime_status = "code_fallback_only"
+    elif category == "tools":
+        from core.tool_registry import get_tool_descriptor
+
+        descriptor = get_tool_descriptor(tool_name)
+        if descriptor is None or key not in descriptor.prompt_template_keys:
+            editable = False
+            runtime_effective = False
+            runtime_status = "unregistered_tool_template"
+            source_precedence = ()
+            failure_policy = "fail_closed"
+        else:
+            editable = descriptor.prompt_editable
+            runtime_effective = descriptor.availability_policy != "force_disabled"
+            runtime_status = (
+                "runtime_template"
+                if runtime_effective
+                else "force_disabled_tool"
+            )
+            owner_module = descriptor.owner_module
+            domain = descriptor.domain
+            source_precedence = descriptor.prompt_source_precedence
+            failure_policy = "fail_closed"
     return TemplateRecord(
         template_key=key,
         category=category,
         kind=kind,
         tool_name=tool_name,
         display_name=display_name,
+        editable=editable,
+        runtime_effective=runtime_effective,
+        runtime_status=runtime_status,
+        owner_module=owner_module,
+        domain=domain,
+        source_precedence=source_precedence,
+        failure_policy=failure_policy,
     )
+
+
+def assert_template_editable(template_key: str) -> None:
+    """拒绝保存运行时不会读取的伪可编辑模板。"""
+
+    record = classify_template(template_key)
+    if not record.editable:
+        raise ValueError(
+            f"template {record.template_key} is {record.runtime_status}; "
+            "运行时不读取该模板，禁止创建无效覆盖"
+        )
 
 
 def _scan_keys(base: Path) -> set[str]:

@@ -237,14 +237,15 @@ def overview(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     except Exception as e:
         health.append({"name": "健康检查异常", "ok": False, "detail": str(e)})
 
-    from config import LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
+    from core.settings_service import settings
+
     return {
         "time": now.isoformat(timespec="seconds"),
         "service": {"name": "Nanobot Server", "ok": True},
         "models": {
-            "main": LLM_MODEL_REPLY,
-            "fast": LLM_MODEL_FAST,
-            "smart": LLM_MODEL_SMART,
+            "main": settings.get("model.reply", ""),
+            "fast": settings.get("model.fast", ""),
+            "smart": settings.get("model.smart", ""),
             "timing_gate": "Qwen TimingGate",
         },
         "counters": counters,

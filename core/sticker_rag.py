@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy.orm import Session
 
 from core.database import SemanticIndexItem, StickerMemory
+from core.retrieval import (
+    AllowAllCitationPolicy,
+    RankingOutcome,
+    RerankOutcome,
+    RetrievalCandidates,
+    RetrievalPipeline,
+    RetrievalPipelineState,
+    RetrievalRequest,
+)
 from core.semantic.reranker import SemanticCandidate
 from core.semantic.retriever import (
     fts_recall_hits,
@@ -62,6 +71,19 @@ class _StickerCandidate:
         return f"{self.row.source_type}:{self.row.source_id}:{self.row.source_sub_id}"
 
 
+@dataclass(frozen=True, slots=True)
+class _StickerRecallResult:
+    recall_query: str
+    query_vector: list[float] | None
+    fts_hits: tuple[Any, ...]
+    vector_hits: tuple[Any, ...]
+    index_rows: tuple[SemanticIndexItem, ...]
+    rows_by_id: Mapping[int, SemanticIndexItem]
+    lexical_by_id: Mapping[int, float]
+    bm25_by_id: Mapping[int, float]
+    semantic_by_id: Mapping[int, float]
+
+
 def _query_vector(query: str, embedding_provider: Any) -> list[float] | None:
     if embedding_provider is None:
         return None
@@ -71,10 +93,14 @@ def _query_vector(query: str, embedding_provider: Any) -> list[float] | None:
         return None
 
 
-def _scope_ids(*, group_id: str = "", chat_stream_id: str = "", include_global: bool = True) -> set[str]:
+def _scope_ids(
+    *, group_id: str = "", chat_stream_id: str = "", include_global: bool = True
+) -> set[str]:
     if not group_id and not chat_stream_id:
         return set()
-    stream_id = normalize_sticker_stream_id(group_id=group_id, chat_stream_id=chat_stream_id)
+    stream_id = normalize_sticker_stream_id(
+        group_id=group_id, chat_stream_id=chat_stream_id
+    )
     ids = {stream_id}
     if include_global:
         ids.add(GLOBAL_STICKER_STREAM_ID)
@@ -149,242 +175,31 @@ class StickerRagService:
         limit: int = 5,
         include_debug: bool = False,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        recall_query = _normalize_sticker_query(query)
-        has_vector_rows = has_vector_recall_rows(
-            self.db,
-            source_types={"sticker"},
-            ensure_schema=not self.readonly,
+        request = RetrievalRequest(
+            query=_normalize_sticker_query(query),
+            limit=max(1, int(limit)),
+            include_debug=include_debug,
+            options={
+                "domain": "sticker",
+                "group_id": group_id,
+                "chat_stream_id": chat_stream_id,
+                "include_global": bool(include_global),
+            },
         )
-        query_vector = _query_vector(recall_query, self.embedding_provider) if has_vector_rows else None
-        fts_hits = fts_recall_hits(
-            self.db,
-            recall_query,
-            source_types={"sticker"},
-            limit=200,
-            ensure_schema=not self.readonly,
-        )
-        lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
-        bm25_by_id = {hit.item_id: hit.bm25_raw for hit in fts_hits}
-        vector_hits = vector_recall_hits(
-            self.db,
-            query_vector=query_vector,
-            source_types={"sticker"},
-            limit=200,
-            ensure_schema=not self.readonly,
-        )
-        semantic_by_id = {hit.item_id: hit.semantic_score for hit in vector_hits}
-        recent_rows = load_recall_rows(
-            self.db,
-            source_types={"sticker"},
-            limit=400,
-            ensure_schema=not self.readonly,
-        )
-        rows_by_id = {int(row.id): row for row in recent_rows}
-        recall_ids = [hit.item_id for hit in fts_hits] + [hit.item_id for hit in vector_hits]
-        missing_fts_ids = [item_id for item_id in recall_ids if item_id not in rows_by_id]
-        rows_by_id.update(load_recall_rows_by_ids(
-            self.db,
-            missing_fts_ids,
-            ensure_schema=not self.readonly,
-        ))
-        fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
-        vector_ordered = [rows_by_id[hit.item_id] for hit in vector_hits if hit.item_id in rows_by_id]
-        index_rows = _merge_recall_rows(fts_ordered, vector_ordered, recent_rows)
-        sticker_ids = [
-            sticker_id
-            for row in index_rows
-            if (sticker_id := _safe_sticker_id(row.source_id)) is not None
-        ]
-        if not sticker_ids:
-            if include_debug:
-                return {
-                    "items": [],
-                    "degraded": self.reranker_provider is None,
-                    "fallback_reason": "reranker_unavailable" if self.reranker_provider is None else "",
-                    "stats": {
-                        "fts_candidates": len(fts_hits),
-                        "vector_candidates": len(vector_hits),
-                        "merged_candidates": 0,
-                        "reranker_candidates": 0,
-                        "reranker_input_limit": MAX_RERANK_INPUTS,
-                        "normalized_query": recall_query,
-                        "final_items": 0,
-                    },
-                    "debug_trace": {
-                        "sql_filters": self._debug_sql_filters(group_id, chat_stream_id, include_global),
-                        "fts_hits": [],
-                        "hard_gate": [],
-                        "vector_hits": [],
-                        "embedding_hits": [],
-                        "merged_candidates": [],
-                        "reranker_input_pairs": [],
-                        "final_candidates": [],
-                        "relevance_gate": [],
-                    },
-                }
-            return []
+        return self._build_pipeline().execute(request)
 
-        stickers = {
-            int(row.id): row
-            for row in (
-                self.db.query(StickerMemory)
-                .filter(StickerMemory.id.in_(sticker_ids))
-                .all()
-            )
-        }
-        scope = _scope_ids(
-            group_id=group_id,
-            chat_stream_id=chat_stream_id,
-            include_global=include_global,
+    def _build_pipeline(self) -> RetrievalPipeline:
+        return RetrievalPipeline(
+            candidate_source=_StickerCandidateSource(self),
+            citation_policy=AllowAllCitationPolicy(),
+            filter_policy=_StickerFilterPolicy(self),
+            scoring_policy=_StickerScoringPolicy(self),
+            reranker=_StickerReranker(self),
+            budget_policy=_StickerBudgetPolicy(self),
+            debug_trace_sink=_StickerDebugTraceSink(self),
+            result_builder=_StickerResultBuilder(self),
+            provider_id="sticker",
         )
-        debug_stages: dict[str, Any] | None = None
-        if include_debug:
-            debug_stages = {
-                "sql_filters": self._debug_sql_filters(group_id, chat_stream_id, include_global),
-                "fts_hits": [
-                    {
-                        "item_id": hit.item_id,
-                        "bm25_raw": hit.bm25_raw,
-                        "lexical_score": hit.lexical_score,
-                        "candidate_id": self._row_candidate_id(rows_by_id.get(hit.item_id)),
-                    }
-                    for hit in fts_hits
-                    if hit.item_id in rows_by_id
-                ],
-                "hard_gate": [],
-                "vector_hits": [
-                    {
-                        "item_id": hit.item_id,
-                        "semantic_score": hit.semantic_score,
-                        "candidate_id": self._row_candidate_id(rows_by_id.get(hit.item_id)),
-                    }
-                    for hit in vector_hits
-                    if hit.item_id in rows_by_id
-                ],
-                "embedding_hits": [],
-                "merged_candidates": [],
-                "reranker_input_pairs": [],
-                "final_candidates": [],
-                "relevance_gate": [],
-            }
-        candidates: list[_StickerCandidate] = []
-        semantic_hits = 0
-        for row in index_rows:
-            sticker_id = _safe_sticker_id(row.source_id)
-            if sticker_id is None:
-                continue
-            sticker = stickers.get(sticker_id)
-            skip_reason = "missing_sticker" if sticker is None else self._hard_gate_reason(sticker, scope)
-            if debug_stages is not None and sticker is not None:
-                debug_stages["hard_gate"].append({
-                    "candidate_id": self._row_candidate_id(row),
-                    "item_id": row.id,
-                    "sticker_id": sticker.id,
-                    "chat_stream_id": sticker.chat_stream_id,
-                    "status": sticker.status,
-                    "dedupe_status": sticker.dedupe_status,
-                    "duplicate_of_id": sticker.duplicate_of_id,
-                    "describe_status": sticker.describe_status,
-                    "replyable": is_sticker_replyable(sticker),
-                    "has_text_index_payload": sticker_has_text_index_payload(sticker),
-                    "passed": not skip_reason,
-                    "skip_reason": skip_reason,
-                })
-            if skip_reason:
-                continue
-            lexical = lexical_by_id.get(int(row.id))
-            if lexical is None:
-                lexical = lexical_overlap_score(recall_query, row.lexical_text or row.text or "")
-            semantic = semantic_by_id.get(int(row.id))
-            if semantic is None:
-                semantic = semantic_score_for_row(row, query_vector=query_vector, embedding_provider=None)
-            if semantic is not None and semantic > 0:
-                semantic_hits += 1
-            if lexical > 0 or (semantic is not None and semantic >= 0.10):
-                candidates.append(_StickerCandidate(
-                    row=row,
-                    sticker=sticker,
-                    lexical=lexical,
-                    semantic=semantic,
-                ))
-
-        candidates.sort(key=self._pre_score, reverse=True)
-        candidates = candidates[:80]
-        if debug_stages is not None:
-            debug_stages["embedding_hits"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in candidates
-                if item.semantic is not None and item.semantic > 0
-            ]
-            debug_stages["merged_candidates"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in candidates
-            ]
-        rerank_candidates = self._reranker_candidates(candidates, limit=limit)
-        rerank_inputs = self._apply_reranker(recall_query, rerank_candidates)
-        if debug_stages is not None:
-            debug_stages["reranker_input_pairs"] = [
-                {
-                    "candidate_id": candidate.candidate_id,
-                    "source_type": candidate.source_type,
-                    "query": recall_query,
-                    "title": candidate.title,
-                    "text": candidate.text,
-                    "metadata": candidate.metadata,
-                }
-                for candidate in rerank_inputs
-            ]
-        degraded = self.reranker_provider is None
-        gated: list[_StickerCandidate] = []
-        gate_debug: list[dict[str, Any]] = []
-        for item in candidates:
-            passed = passes_relevance_gate(
-                {"reranker": item.reranker, "semantic": item.semantic, "lexical": item.lexical},
-                degraded=degraded,
-                min_reranker=self.min_reranker,
-            )
-            if passed:
-                gated.append(item)
-            if debug_stages is not None:
-                gate_debug.append({
-                    "candidate_id": item.candidate_id,
-                    "passed": passed,
-                    "degraded": degraded,
-                    "components": {
-                        "reranker": item.reranker,
-                        "semantic": item.semantic,
-                        "lexical": item.lexical,
-                    },
-                })
-        ranked = sorted(gated, key=self._final_score, reverse=True)
-        items = [self._result_item(item) for item in ranked[: max(1, int(limit))]]
-        if debug_stages is not None:
-            debug_stages["merged_candidates"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in candidates
-            ]
-            debug_stages["final_candidates"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in ranked[: max(1, int(limit))]
-            ]
-            debug_stages["relevance_gate"] = gate_debug
-            return {
-                "items": items,
-                "degraded": degraded,
-                "fallback_reason": "reranker_unavailable" if degraded else "",
-                "stats": {
-                    "fts_candidates": len(fts_hits),
-                    "vector_candidates": len(vector_hits),
-                    "embedding_candidates": semantic_hits,
-                    "merged_candidates": len(candidates),
-                    "reranker_candidates": len(rerank_candidates),
-                    "reranker_input_limit": MAX_RERANK_INPUTS,
-                    "normalized_query": recall_query,
-                    "final_items": len(items),
-                },
-                "debug_trace": debug_stages,
-            }
-        return items
 
     def _passes_hard_gate(self, row: StickerMemory, scope: set[str]) -> bool:
         return self._hard_gate_reason(row, scope) == ""
@@ -392,7 +207,10 @@ class StickerRagService:
     def _hard_gate_reason(self, row: StickerMemory, scope: set[str]) -> str:
         if str(row.status or "") != "active":
             return "inactive_status"
-        if str(row.dedupe_status or "") == "duplicate" or row.duplicate_of_id is not None:
+        if (
+            str(row.dedupe_status or "") == "duplicate"
+            or row.duplicate_of_id is not None
+        ):
             return "duplicate"
         if str(row.describe_status or "") != "ok":
             return "describe_not_ok"
@@ -411,7 +229,9 @@ class StickerRagService:
         return f"{row.source_type}:{row.source_id}:{row.source_sub_id}"
 
     @staticmethod
-    def _debug_sql_filters(group_id: str, chat_stream_id: str, include_global: bool) -> dict[str, Any]:
+    def _debug_sql_filters(
+        group_id: str, chat_stream_id: str, include_global: bool
+    ) -> dict[str, Any]:
         return {
             "source_types": ["sticker"],
             "status": "active",
@@ -431,13 +251,17 @@ class StickerRagService:
             {"semantic": 0.60, "lexical": 0.40},
         )
 
-    def _reranker_candidates(self, candidates: list[_StickerCandidate], *, limit: int) -> list[_StickerCandidate]:
+    def _reranker_candidates(
+        self, candidates: list[_StickerCandidate], *, limit: int
+    ) -> list[_StickerCandidate]:
         if self.reranker_provider is None:
             return []
         max_inputs = min(MAX_RERANK_INPUTS, max(int(limit) * 2, int(limit)))
-        return candidates[:max(1, max_inputs)]
+        return candidates[: max(1, max_inputs)]
 
-    def _apply_reranker(self, query: str, candidates: list[_StickerCandidate]) -> list[SemanticCandidate]:
+    def _apply_reranker(
+        self, query: str, candidates: list[_StickerCandidate]
+    ) -> list[SemanticCandidate]:
         if self.reranker_provider is None or not candidates:
             return []
         rerank_inputs = [
@@ -447,14 +271,19 @@ class StickerRagService:
                 title=item.sticker.name or item.row.title or "",
                 text=item.row.embedding_text or item.row.text or "",
                 metadata={
-                    "tags": item.row.meta_json and _safe_meta_list(item.row.meta_json, "tags"),
-                    "emotions": item.row.meta_json and _safe_meta_list(item.row.meta_json, "emotions"),
-                    "scenario": item.row.meta_json and _safe_meta_text(item.row.meta_json, "scenario"),
+                    "tags": item.row.meta_json
+                    and _safe_meta_list(item.row.meta_json, "tags"),
+                    "emotions": item.row.meta_json
+                    and _safe_meta_list(item.row.meta_json, "emotions"),
+                    "scenario": item.row.meta_json
+                    and _safe_meta_text(item.row.meta_json, "scenario"),
                 },
             )
             for item in candidates
         ]
-        reranked = self.reranker_provider.rerank(query, rerank_inputs, top_k=len(rerank_inputs))
+        reranked = self.reranker_provider.rerank(
+            query, rerank_inputs, top_k=len(rerank_inputs)
+        )
         scores = {item.candidate_id: item for item in reranked}
         for item in candidates:
             score = scores.get(item.candidate_id)
@@ -474,9 +303,15 @@ class StickerRagService:
         )
         return recency_score(event_at, half_life_days=RECENCY_HALF_LIFE_DAYS)
 
-    def _final_score(self, item: _StickerCandidate, *, recency: float | None = None) -> float:
+    def _final_score(
+        self, item: _StickerCandidate, *, recency: float | None = None
+    ) -> float:
         relevance = weighted_score(
-            {"reranker": item.reranker, "semantic": item.semantic, "lexical": item.lexical},
+            {
+                "reranker": item.reranker,
+                "semantic": item.semantic,
+                "lexical": item.lexical,
+            },
             RELEVANCE_WEIGHTS,
         )
         return weighted_score(
@@ -484,7 +319,9 @@ class StickerRagService:
                 "relevance": relevance,
                 "usage": _usage_score(item.sticker),
                 "source_prior": item.row.source_prior or 0.0,
-                "recency": recency if recency is not None else self._recency_score(item),
+                "recency": recency
+                if recency is not None
+                else self._recency_score(item),
             },
             FINAL_WEIGHTS,
         )
@@ -505,7 +342,9 @@ class StickerRagService:
             },
         }
 
-    def _debug_candidate(self, item: _StickerCandidate, *, bm25_by_id: dict[int, float]) -> dict[str, Any]:
+    def _debug_candidate(
+        self, item: _StickerCandidate, *, bm25_by_id: dict[int, float]
+    ) -> dict[str, Any]:
         result = self._result_item(item)
         return {
             "candidate_id": item.candidate_id,
@@ -524,10 +363,426 @@ class StickerRagService:
             "reranker_score": item.reranker,
             "raw_reranker": item.raw_reranker,
             "final_score": result.get("score"),
-            "score_breakdown": result.get("score_breakdown") | {
+            "score_breakdown": result.get("score_breakdown")
+            | {
                 "bm25_raw": bm25_by_id.get(int(item.row.id)),
             },
             "skipped_reason": "",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _StickerCandidateSource:
+    service: StickerRagService
+
+    def recall(self, request: RetrievalRequest) -> _StickerRecallResult:
+        has_vector_rows = has_vector_recall_rows(
+            self.service.db,
+            source_types={"sticker"},
+            ensure_schema=not self.service.readonly,
+        )
+        query_vector = (
+            _query_vector(request.query, self.service.embedding_provider)
+            if has_vector_rows
+            else None
+        )
+        fts_hits = fts_recall_hits(
+            self.service.db,
+            request.query,
+            source_types={"sticker"},
+            limit=200,
+            ensure_schema=not self.service.readonly,
+        )
+        lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
+        bm25_by_id = {hit.item_id: hit.bm25_raw for hit in fts_hits}
+        vector_hits = vector_recall_hits(
+            self.service.db,
+            query_vector=query_vector,
+            source_types={"sticker"},
+            limit=200,
+            ensure_schema=not self.service.readonly,
+        )
+        semantic_by_id = {hit.item_id: hit.semantic_score for hit in vector_hits}
+        recent_rows = load_recall_rows(
+            self.service.db,
+            source_types={"sticker"},
+            limit=400,
+            ensure_schema=not self.service.readonly,
+        )
+        rows_by_id = {int(row.id): row for row in recent_rows}
+        recall_ids = [hit.item_id for hit in fts_hits] + [
+            hit.item_id for hit in vector_hits
+        ]
+        missing_ids = [item_id for item_id in recall_ids if item_id not in rows_by_id]
+        rows_by_id.update(
+            load_recall_rows_by_ids(
+                self.service.db,
+                missing_ids,
+                ensure_schema=not self.service.readonly,
+            )
+        )
+        fts_ordered = [
+            rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id
+        ]
+        vector_ordered = [
+            rows_by_id[hit.item_id] for hit in vector_hits if hit.item_id in rows_by_id
+        ]
+        return _StickerRecallResult(
+            recall_query=request.query,
+            query_vector=query_vector,
+            fts_hits=tuple(fts_hits),
+            vector_hits=tuple(vector_hits),
+            index_rows=tuple(
+                _merge_recall_rows(fts_ordered, vector_ordered, recent_rows)
+            ),
+            rows_by_id=rows_by_id,
+            lexical_by_id=lexical_by_id,
+            bm25_by_id=bm25_by_id,
+            semantic_by_id=semantic_by_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _StickerFilterPolicy:
+    service: StickerRagService
+
+    def filter_candidates(
+        self,
+        request: RetrievalRequest,
+        citation,
+    ) -> RetrievalCandidates[_StickerCandidate]:
+        recall: _StickerRecallResult = citation.source
+        sticker_ids = [
+            sticker_id
+            for row in recall.index_rows
+            if (sticker_id := _safe_sticker_id(row.source_id)) is not None
+        ]
+        stickers = (
+            {
+                int(row.id): row
+                for row in self.service.db.query(StickerMemory)
+                .filter(StickerMemory.id.in_(sticker_ids))
+                .all()
+            }
+            if sticker_ids
+            else {}
+        )
+        scope = _scope_ids(
+            group_id=str(request.options.get("group_id") or ""),
+            chat_stream_id=str(request.options.get("chat_stream_id") or ""),
+            include_global=bool(request.options.get("include_global", True)),
+        )
+        candidates: list[_StickerCandidate] = []
+        hard_gate: list[dict[str, Any]] = []
+        semantic_hits = 0
+        for row in recall.index_rows:
+            sticker_id = _safe_sticker_id(row.source_id)
+            if sticker_id is None:
+                continue
+            sticker = stickers.get(sticker_id)
+            skip_reason = (
+                "missing_sticker"
+                if sticker is None
+                else self.service._hard_gate_reason(sticker, scope)
+            )
+            if sticker is not None:
+                hard_gate.append(
+                    {
+                        "candidate_id": self.service._row_candidate_id(row),
+                        "item_id": row.id,
+                        "sticker_id": sticker.id,
+                        "chat_stream_id": sticker.chat_stream_id,
+                        "status": sticker.status,
+                        "dedupe_status": sticker.dedupe_status,
+                        "duplicate_of_id": sticker.duplicate_of_id,
+                        "describe_status": sticker.describe_status,
+                        "replyable": is_sticker_replyable(sticker),
+                        "has_text_index_payload": sticker_has_text_index_payload(
+                            sticker
+                        ),
+                        "passed": not skip_reason,
+                        "skip_reason": skip_reason,
+                    }
+                )
+            if skip_reason or sticker is None:
+                continue
+            lexical = recall.lexical_by_id.get(int(row.id))
+            if lexical is None:
+                lexical = lexical_overlap_score(
+                    recall.recall_query,
+                    row.lexical_text or row.text or "",
+                )
+            semantic = recall.semantic_by_id.get(int(row.id))
+            if semantic is None:
+                semantic = semantic_score_for_row(
+                    row,
+                    query_vector=recall.query_vector,
+                    embedding_provider=None,
+                )
+            if semantic is not None and semantic > 0:
+                semantic_hits += 1
+            if lexical > 0 or (semantic is not None and semantic >= 0.10):
+                candidates.append(
+                    _StickerCandidate(
+                        row=row,
+                        sticker=sticker,
+                        lexical=lexical,
+                        semantic=semantic,
+                    )
+                )
+        return RetrievalCandidates(
+            items=tuple(candidates),
+            metadata={
+                "hard_gate": tuple(hard_gate),
+                "semantic_hits": semantic_hits,
+                "bm25_by_id": dict(recall.bm25_by_id),
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _StickerScoringPolicy:
+    service: StickerRagService
+
+    def pre_rank(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_StickerCandidate],
+    ) -> RetrievalCandidates[_StickerCandidate]:
+        del request
+        return candidates.with_items(
+            tuple(
+                sorted(
+                    candidates.items,
+                    key=self.service._pre_score,
+                    reverse=True,
+                )
+            )
+        )
+
+    def final_rank(
+        self,
+        request: RetrievalRequest,
+        outcome: RerankOutcome[_StickerCandidate],
+    ) -> RankingOutcome[_StickerCandidate]:
+        del request
+        degraded = bool(outcome.metadata.get("degraded"))
+        gated: list[_StickerCandidate] = []
+        gate_debug: list[dict[str, Any]] = []
+        for item in outcome.items:
+            passed = passes_relevance_gate(
+                {
+                    "reranker": item.reranker,
+                    "semantic": item.semantic,
+                    "lexical": item.lexical,
+                },
+                degraded=degraded,
+                min_reranker=self.service.min_reranker,
+            )
+            if passed:
+                gated.append(item)
+            gate_debug.append(
+                {
+                    "candidate_id": item.candidate_id,
+                    "passed": passed,
+                    "degraded": degraded,
+                    "components": {
+                        "reranker": item.reranker,
+                        "semantic": item.semantic,
+                        "lexical": item.lexical,
+                    },
+                }
+            )
+        return RankingOutcome(
+            items=tuple(sorted(gated, key=self.service._final_score, reverse=True)),
+            metadata={
+                **dict(outcome.metadata),
+                "all_candidates": outcome.items,
+                "relevance_gate": tuple(gate_debug),
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _StickerReranker:
+    service: StickerRagService
+
+    def rerank(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_StickerCandidate],
+    ) -> RerankOutcome[_StickerCandidate]:
+        all_candidates = list(candidates.items)
+        reranker_candidates = self.service._reranker_candidates(
+            all_candidates,
+            limit=request.limit,
+        )
+        reranker_inputs = self.service._apply_reranker(
+            request.query,
+            reranker_candidates,
+        )
+        return RerankOutcome(
+            items=tuple(all_candidates),
+            reranker_items=tuple(reranker_candidates),
+            metadata={
+                **dict(candidates.metadata),
+                "degraded": self.service.reranker_provider is None,
+                "reranker_inputs": tuple(reranker_inputs),
+                "reranker_candidate_count": len(reranker_candidates),
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _StickerBudgetPolicy:
+    service: StickerRagService
+
+    def limit_candidates(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_StickerCandidate],
+    ) -> RetrievalCandidates[_StickerCandidate]:
+        del request
+        return candidates.with_items(candidates.items[:80])
+
+    def select_results(
+        self,
+        request: RetrievalRequest,
+        ranking: RankingOutcome[_StickerCandidate],
+    ) -> list[dict[str, Any]]:
+        return [
+            self.service._result_item(item) for item in ranking.items[: request.limit]
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class _StickerDebugTraceSink:
+    service: StickerRagService
+
+    def start(self, request, source: _StickerRecallResult, citation):
+        del citation
+        if not request.include_debug:
+            return None
+        return {
+            "sql_filters": self.service._debug_sql_filters(
+                str(request.options.get("group_id") or ""),
+                str(request.options.get("chat_stream_id") or ""),
+                bool(request.options.get("include_global", True)),
+            ),
+            "fts_hits": [
+                {
+                    "item_id": hit.item_id,
+                    "bm25_raw": hit.bm25_raw,
+                    "lexical_score": hit.lexical_score,
+                    "candidate_id": self.service._row_candidate_id(
+                        source.rows_by_id.get(hit.item_id)
+                    ),
+                }
+                for hit in source.fts_hits
+                if hit.item_id in source.rows_by_id
+            ],
+            "hard_gate": [],
+            "vector_hits": [
+                {
+                    "item_id": hit.item_id,
+                    "semantic_score": hit.semantic_score,
+                    "candidate_id": self.service._row_candidate_id(
+                        source.rows_by_id.get(hit.item_id)
+                    ),
+                }
+                for hit in source.vector_hits
+                if hit.item_id in source.rows_by_id
+            ],
+            "embedding_hits": [],
+            "merged_candidates": [],
+            "reranker_input_pairs": [],
+            "final_candidates": [],
+            "relevance_gate": [],
+        }
+
+    def candidates_ready(self, trace, candidates) -> None:
+        if not isinstance(trace, dict):
+            return
+        bm25_by_id = dict(candidates.metadata.get("bm25_by_id", {}))
+        trace["hard_gate"] = list(candidates.metadata.get("hard_gate", ()))
+        trace["embedding_hits"] = [
+            self.service._debug_candidate(item, bm25_by_id=bm25_by_id)
+            for item in candidates.items
+            if item.semantic is not None and item.semantic > 0
+        ]
+        trace["merged_candidates"] = [
+            self.service._debug_candidate(item, bm25_by_id=bm25_by_id)
+            for item in candidates.items
+        ]
+
+    def rerank_complete(self, trace, outcome) -> None:
+        if not isinstance(trace, dict):
+            return
+        trace["reranker_input_pairs"] = [
+            {
+                "candidate_id": candidate.candidate_id,
+                "source_type": candidate.source_type,
+                "query": "",
+                "title": candidate.title,
+                "text": candidate.text,
+                "metadata": candidate.metadata,
+            }
+            for candidate in outcome.metadata.get("reranker_inputs", ())
+        ]
+
+    def ranking_complete(self, trace, ranking) -> None:
+        if not isinstance(trace, dict):
+            return
+        bm25_by_id = dict(ranking.metadata.get("bm25_by_id", {}))
+        trace["merged_candidates"] = [
+            self.service._debug_candidate(item, bm25_by_id=bm25_by_id)
+            for item in ranking.metadata.get("all_candidates", ())
+        ]
+        trace["final_candidates"] = [
+            self.service._debug_candidate(item, bm25_by_id=bm25_by_id)
+            for item in ranking.items
+        ]
+        trace["relevance_gate"] = list(ranking.metadata.get("relevance_gate", ()))
+
+    def finish(self, trace, selected) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class _StickerResultBuilder:
+    service: StickerRagService
+
+    def build(
+        self,
+        state: RetrievalPipelineState[
+            _StickerRecallResult,
+            _StickerCandidate,
+            list[dict[str, Any]],
+            list[dict[str, Any]] | dict[str, Any],
+        ],
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        if not state.request.include_debug:
+            return state.selected
+        degraded = bool(state.rerank_outcome.metadata.get("degraded"))
+        return {
+            "items": state.selected,
+            "degraded": degraded,
+            "fallback_reason": "reranker_unavailable" if degraded else "",
+            "stats": {
+                "fts_candidates": len(state.source.fts_hits),
+                "vector_candidates": len(state.source.vector_hits),
+                "embedding_candidates": int(
+                    state.candidates.metadata.get("semantic_hits") or 0
+                ),
+                "merged_candidates": len(state.candidates.items),
+                "reranker_candidates": int(
+                    state.rerank_outcome.metadata.get("reranker_candidate_count") or 0
+                ),
+                "reranker_input_limit": MAX_RERANK_INPUTS,
+                "normalized_query": state.source.recall_query,
+                "final_items": len(state.selected),
+            },
+            "debug_trace": state.debug_trace,
         }
 
 

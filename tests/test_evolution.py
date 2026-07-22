@@ -115,21 +115,18 @@ async def test_legacy_adapter_memory_extract_uses_v2_task_template(monkeypatch):
             captured["query"] = query
             return '{"candidates":[]}'
 
-    class FakeAnalyst:
-        async def run(self, logs, provider):
-            return {}
-
     monkeypatch.setattr(
         "core.prompt_v2.task_templates.render_task_prompt",
         lambda key, values, fallback_text="": (
-            f"V2 记忆模板: {values['conversation']} / {values['existing_memory']}"
+            "V2 Persona System"
+            if key == "tasks/persona_candidate_system"
+            else f"V2 记忆模板: {values['conversation']} / {values['existing_memory']}"
         ),
     )
 
     engine = NanobotKTController.__new__(NanobotKTController)
     engine.memory = FakeMemory()
     engine.provider = FakeProvider()
-    engine.log_analyst = FakeAnalyst()
 
     await engine.evolve("u1")
 
@@ -169,14 +166,9 @@ async def test_memory_extract_contract_failure_keeps_logs_unprocessed(
             self.calls += 1
             return model_output
 
-    class FakeAnalyst:
-        async def run(self, logs, provider):
-            return {}
-
     engine = NanobotKTController.__new__(NanobotKTController)
     engine.memory = FakeMemory()
     engine.provider = FakeProvider()
-    engine.log_analyst = FakeAnalyst()
 
     with pytest.raises(TaskOutputContractError):
         await engine.evolve("u1")
@@ -205,10 +197,6 @@ async def test_memory_extract_state_machine_failure_keeps_logs_unprocessed(monke
         async def invoke_raw(self, **_kwargs):
             return '{"candidates":[{"text":"长期使用 Python"}]}'
 
-    class FakeAnalyst:
-        async def run(self, logs, provider):
-            return {}
-
     class FailingStateMachine:
         def __init__(self, db, user_id):
             pass
@@ -226,7 +214,6 @@ async def test_memory_extract_state_machine_failure_keeps_logs_unprocessed(monke
     engine = NanobotKTController.__new__(NanobotKTController)
     engine.memory = FakeMemory()
     engine.provider = FakeProvider()
-    engine.log_analyst = FakeAnalyst()
 
     with pytest.raises(RuntimeError, match="state machine rollback"):
         await engine.evolve("u1")
@@ -259,10 +246,7 @@ async def test_memory_extract_post_parse_failure_keeps_logs_unprocessed(
         def get_user_persona(self, user_id):
             return "{}"
 
-        def get_system_prompt(self, user_id):
-            return "稳定系统提示"
-
-        def update_persona_and_prompt(self, user_id, persona_summary, system_prompt):
+        def update_persona(self, user_id, persona_summary):
             return update_result
 
         def mark_logs_processed(self, ids):
@@ -271,14 +255,6 @@ async def test_memory_extract_post_parse_failure_keeps_logs_unprocessed(
     class FakeProvider:
         async def invoke_raw(self, **_kwargs):
             return '{"candidates":[{"text":"长期使用 Python"}]}'
-
-    class FakeAnalyst:
-        async def run(self, logs, provider):
-            return {}
-
-    class FakeAuditor:
-        async def run(self, current_prompt, persona_summary, provider):
-            return {"final_system_prompt": "稳定系统提示"}
 
     class FakeStateMachine:
         def __init__(self, db, user_id):
@@ -300,8 +276,6 @@ async def test_memory_extract_post_parse_failure_keeps_logs_unprocessed(
     engine = NanobotKTController.__new__(NanobotKTController)
     engine.memory = FakeMemory()
     engine.provider = FakeProvider()
-    engine.log_analyst = FakeAnalyst()
-    engine.prompt_auditor = FakeAuditor()
 
     with pytest.raises(RuntimeError, match=error_match):
         await engine.evolve("u1")
@@ -310,7 +284,7 @@ async def test_memory_extract_post_parse_failure_keeps_logs_unprocessed(
 
 
 @pytest.mark.asyncio
-async def test_memory_extract_code_fallback_keeps_payload_in_user_query(
+async def test_memory_extract_invalid_templates_fail_closed_and_keep_logs_pending(
     tmp_path,
     monkeypatch,
 ):
@@ -346,20 +320,92 @@ async def test_memory_extract_code_fallback_keeps_payload_in_user_query(
             captured["system_prompt"] = system_prompt
             return '{"candidates":[]}'
 
-    class FakeAnalyst:
-        async def run(self, logs, provider):
-            return {}
-
     engine = NanobotKTController.__new__(NanobotKTController)
     engine.memory = FakeMemory()
     engine.provider = FakeProvider()
-    engine.log_analyst = FakeAnalyst()
 
-    await engine.evolve("u1")
+    from core.prompt_v2.task_templates import TaskTemplateUnavailableError
 
-    assert "长期使用 Rust" in captured["query"]
-    assert "UNIQUE_EXISTING_MEMORY_123" in captured["query"]
-    assert "长期使用 Rust" not in captured["system_prompt"]
-    assert "UNIQUE_EXISTING_MEMORY_123" not in captured["system_prompt"]
-    assert captured["processed"] == [1]
+    with pytest.raises(TaskTemplateUnavailableError, match="memory_extract"):
+        await engine.evolve("u1")
+
+    assert "query" not in captured
+    assert "system_prompt" not in captured
+    assert captured["processed"] == []
+
+
+@pytest.mark.asyncio
+async def test_evolution_hot_path_only_extracts_candidates_and_updates_persona(
+    monkeypatch,
+):
+    from core.legacy_adapter import NanobotKTController
+
+    captured = {"provider_calls": 0, "processed": [], "updates": []}
+
+    class FakeMemory:
+        def get_unprocessed_logs(self, user_id):
+            return [{"id": 7, "role": "user", "content": "我长期使用 Rust"}]
+
+        def get_user_persona(self, user_id):
+            return "{}"
+
+        def update_persona(self, user_id, persona_summary):
+            captured["updates"].append((user_id, persona_summary))
+            return True
+
+        def mark_logs_processed(self, ids):
+            captured["processed"].extend(ids)
+
+    class FakeProvider:
+        async def invoke_raw(self, **_kwargs):
+            captured["provider_calls"] += 1
+            return '{"candidates":[{"text":"长期使用 Rust"}]}'
+
+    class FakeStateMachine:
+        def __init__(self, db, user_id):
+            pass
+
+        def process_candidates(self, candidates):
+            return {"processing_errors": 0, "created": 1}
+
+        def build_summary(self):
+            return '{"facts":[{"content":"长期使用 Rust"}],"count":1}'
+
+    class FakeDb:
+        def close(self):
+            pass
+
+    monkeypatch.setattr("core.legacy_adapter.PersonaStateMachine", FakeStateMachine)
+    monkeypatch.setattr("core.legacy_adapter.SessionLocal", lambda: FakeDb())
+
+    controller = NanobotKTController.__new__(NanobotKTController)
+    controller.memory = FakeMemory()
+    controller.provider = FakeProvider()
+
+    await controller.evolve("u1")
+
+    assert captured["provider_calls"] == 1
+    assert captured["updates"] == [
+        ("u1", '{"facts":[{"content":"长期使用 Rust"}],"count":1}')
+    ]
+    assert captured["processed"] == [7]
+
+
+def test_update_persona_does_not_modify_legacy_system_prompt(db_session, monkeypatch):
+    from core import database
+    from core.database import Persona, SystemPrompt
+    from core.legacy_adapter import SQLiteMemory
+
+    monkeypatch.setattr("core.legacy_adapter.SessionLocal", database.SessionLocal)
+
+    db_session.add(SystemPrompt(user_id="u1", prompt_text="历史提示词"))
+    db_session.commit()
+
+    assert SQLiteMemory().update_persona("u1", '{"facts":[],"count":0}') is True
+
+    db_session.expire_all()
+    persona = db_session.query(Persona).filter(Persona.user_id == "u1").one()
+    prompt = db_session.query(SystemPrompt).filter(SystemPrompt.user_id == "u1").one()
+    assert persona.persona_json == '{"facts": [], "count": 0}'
+    assert prompt.prompt_text == "历史提示词"
 

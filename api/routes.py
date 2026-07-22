@@ -6,8 +6,10 @@ import logging
 import json
 import asyncio
 import time as _time
+from collections.abc import Callable
+from dataclasses import dataclass
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from typing import Any
 
@@ -17,7 +19,8 @@ from config import (
 )
 from core.database import (
     get_db,
-    release_clean_session_transaction,
+    run_session_phase_async,
+    session_factory_from_session,
     User,
     Persona,
     ChatLog,
@@ -222,6 +225,8 @@ def _format_persona_for_prompt(persona_data: dict, max_chars: int = MAX_PERSONA_
 
 
 def _resolve_chat_persona_snapshot(db: Session, user_id: str) -> chat_persona_lookup.ChatPersonaSnapshot:
+    """旧管理/兼容入口；在线聊天主链路只使用 PersonaInjectionService。"""
+
     return chat_persona_lookup.resolve_chat_persona_snapshot(
         db, user_id, persona_model=Persona, format_persona=_format_persona_for_prompt
     )
@@ -531,7 +536,74 @@ def _chat_pre_bridge_route_callbacks(
     *,
     claim_key: Any | None = None,
     request_sha256: str = "",
+    offload_persistence: bool = False,
+    session_factory: Callable[[], Session] | None = None,
 ) -> chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks:
+    if offload_persistence:
+        async def persist_chat_turn(
+            req: ChatProxyRequest,
+            answer: str,
+            guardrail_status: str | None = None,
+            **kwargs: Any,
+        ) -> int:
+            return await run_session_phase_async(
+                lambda phase_db: _persist_chat_turn(
+                    phase_db,
+                    req,
+                    answer,
+                    guardrail_status=guardrail_status,
+                    **kwargs,
+                ),
+                session_factory=session_factory,
+            )
+
+        async def persist_claimed_response(
+            req: ChatProxyRequest,
+            completion: Any,
+            *,
+            persist_answer: str | None,
+            guardrail_status: str | None,
+            timing_meta: dict[str, Any] | None,
+        ) -> Any:
+            if claim_key is None or not request_sha256:
+                raise RuntimeError("claimed pre-bridge 持久化缺少 claim identity")
+
+            def operation(phase_db: Session) -> Any:
+                if persist_answer is None:
+                    return chat_persistence.persist_private_claim_completion(
+                        phase_db,
+                        _chat_persistence_input(req),
+                        key=claim_key,
+                        request_sha256=request_sha256,
+                        completion=completion,
+                    )
+                result = _persist_claimed_chat_turn(
+                    phase_db,
+                    req,
+                    persist_answer,
+                    guardrail_status,
+                    key=claim_key,
+                    request_sha256=request_sha256,
+                    completion=completion,
+                    timing_meta=timing_meta,
+                )
+                return result.completion
+
+            return await run_session_phase_async(
+                operation,
+                session_factory=session_factory,
+            )
+
+        return chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks(
+            clone_chat_request=_clone_chat_request,
+            persist_chat_turn=persist_chat_turn,
+            chat_response_payload=_chat_response_payload,
+            finalize_private_buffer=_finalize_private_buffer,
+            persist_claimed_response=(
+                persist_claimed_response if claim_key is not None else None
+            ),
+        )
+
     def persist_chat_turn(
         req: ChatProxyRequest,
         answer: str,
@@ -588,6 +660,7 @@ async def _resolve_pre_bridge_route_result(
     *,
     claim_key: Any | None = None,
     request_sha256: str = "",
+    session_factory: Callable[[], Session] | None = None,
 ) -> Any:
     return await chat_pre_bridge_route_result.resolve_pre_bridge_route_result(
         req,
@@ -596,6 +669,8 @@ async def _resolve_pre_bridge_route_result(
             db,
             claim_key=claim_key,
             request_sha256=request_sha256,
+            offload_persistence=True,
+            session_factory=session_factory,
         ),
     )
 
@@ -657,13 +732,51 @@ def _build_chat_runtime_route_context(
 
 def _chat_route_runner_callbacks(
     background_tasks: BackgroundTasks,
+    *,
+    session_factory: Callable[[], Session] | None = None,
 ) -> chat_route_runner.ChatRouteRunnerCallbacks:
     from core.daily_digest import push_envelope_to_qq
+
+    async def persist_chat_turn(
+        _db: Any,
+        req: ChatProxyRequest,
+        answer: str,
+        guardrail_status: str | None = None,
+        **kwargs: Any,
+    ) -> int:
+        return await run_session_phase_async(
+            lambda phase_db: _persist_chat_turn(
+                phase_db,
+                req,
+                answer,
+                guardrail_status,
+                **kwargs,
+            ),
+            session_factory=session_factory,
+        )
+
+    async def persist_claimed_chat_turn(
+        _db: Any,
+        req: ChatProxyRequest,
+        answer: str,
+        guardrail_status: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        return await run_session_phase_async(
+            lambda phase_db: _persist_claimed_chat_turn(
+                phase_db,
+                req,
+                answer,
+                guardrail_status,
+                **kwargs,
+            ),
+            session_factory=session_factory,
+        )
 
     return chat_route_runner.ChatRouteRunnerCallbacks(
         call_bridge_non_streaming=getattr(chat_runtime_facade, "call_bridge_non_streaming"),
         finalize_private_buffer=_finalize_private_buffer,
-        persist_chat_turn=_persist_chat_turn,
+        persist_chat_turn=persist_chat_turn,
         pop_bridge_reply_meta=_pop_bridge_reply_meta,
         private_prompt_audit_failure_meta=_private_prompt_audit_failure_meta,
         expand_chat_transport_answer=_expand_chat_transport_answer,
@@ -676,7 +789,7 @@ def _chat_route_runner_callbacks(
         finalize_non_streaming_chat_result=chat_non_streaming_result.finalize_non_streaming_chat_result,
         add_background_task=background_tasks.add_task,
         evolution_task=evolution_task,
-        persist_claimed_chat_turn=_persist_claimed_chat_turn,
+        persist_claimed_chat_turn=persist_claimed_chat_turn,
     )
 
 
@@ -691,6 +804,7 @@ def _chat_route_runner_context(
     guardrail_status: str | None,
     private_timing_meta: dict[str, Any] | None,
     background_tasks: BackgroundTasks,
+    session_factory: Callable[[], Session] | None = None,
     claim_owner: InboundClaimOwner | None = None,
     claim_key: Any | None = None,
     request_sha256: str = "",
@@ -708,7 +822,10 @@ def _chat_route_runner_context(
         empty_assistant_placeholder=EMPTY_ASSISTANT_PLACEHOLDER,
         safe_error_message=SAFE_STREAM_ERROR_MESSAGE,
         evolution_threshold=EVOLUTION_THRESHOLD,
-        callbacks=_chat_route_runner_callbacks(background_tasks),
+        callbacks=_chat_route_runner_callbacks(
+            background_tasks,
+            session_factory=session_factory,
+        ),
         claim_owner=claim_owner,
         claim_key=claim_key,
         request_sha256=request_sha256,
@@ -743,6 +860,90 @@ router.include_router(group_utility_router)
 router.include_router(agent_step_router)
 
 
+@dataclass(frozen=True)
+class _ChatDatabasePreparation:
+    blocked_completion: Any | None
+    memory_header: str
+    history_messages: list[dict[str, str]]
+    context_debug: dict[str, Any]
+
+
+def _prepare_chat_database_phase(
+    db: Session,
+    req: ChatProxyRequest,
+    *,
+    is_group: bool,
+    private_claim_key: Any | None,
+    private_request_sha256: str,
+) -> _ChatDatabasePreparation:
+    """完成 Bridge 前的数据库读写；调用方必须把整个阶段放入工作线程。"""
+
+    user = db.query(User).filter(User.id == req.user_id).first()
+    if not user:
+        db.add(User(id=req.user_id, name=(req.sender_name or "")))
+        db.commit()
+    elif req.sender_name and user.name != req.sender_name:
+        user.name = req.sender_name
+        db.commit()
+
+    if _check_user_blocked(db, req.user_id, target_type="private"):
+        blocked_completion = chat_response_contract.build_completed_inbound_response(
+            outcome="blocked",
+            reason="user_blocked",
+            guardrail_status="silent",
+        )
+        blocked_content = _build_chatlog_user_content(req.query, req.files)
+        if private_claim_key is not None:
+            chat_persistence.persist_private_claim_completion(
+                db,
+                _chat_persistence_input(req),
+                key=private_claim_key,
+                request_sha256=private_request_sha256,
+                completion=blocked_completion,
+                journal_content=blocked_content,
+                journal_processed=1,
+            )
+        else:
+            db.add(ChatLog(
+                user_id=req.user_id,
+                session_id=req.session_id,
+                role="user",
+                content=blocked_content,
+                sender_name=req.sender_name or "",
+                session_name=req.session_name or "",
+                processed=1,
+                message_id=req.message_id or "",
+                meta_json=json.dumps(
+                    {"blocked": True, "reason": "user_blocked"},
+                    ensure_ascii=False,
+                ),
+            ))
+            db.commit()
+        return _ChatDatabasePreparation(
+            blocked_completion=blocked_completion,
+            memory_header="",
+            history_messages=[],
+            context_debug={},
+        )
+
+    memory_header, history_messages, context_debug = _build_chat_context(
+        db,
+        req.session_id,
+        user_id=req.user_id,
+        max_per_msg=MAX_MEMORY_PER_MSG_CHARS,
+        is_group=is_group,
+        group_id=_extract_group_id_from_chat_request(req) if is_group else "",
+        max_total=MAX_MEMORY_TOTAL_CHARS,
+        current_user_input=req.query,
+    )
+    return _ChatDatabasePreparation(
+        blocked_completion=None,
+        memory_header=memory_header,
+        history_messages=history_messages,
+        context_debug=context_debug,
+    )
+
+
 @router.post("/chat")
 async def proxy_chat(
     req: ChatProxyRequest,
@@ -756,14 +957,21 @@ async def proxy_chat(
     _normalize_request_client_meta(req, expected_chat_type=_chat_request_type(req))
     normalized_files = _normalize_files(req.files)
     req.files = normalized_files
-    release_clean_session_transaction(db, label="chat_before_inbound_claim")
+    phase_session_factory = (
+        session_factory_from_session(db)
+        if isinstance(db, Session)
+        else None
+    )
     claim_key = normalize_inbound_claim_key(
         _chat_request_platform(req),
         _chat_request_type(req),
         req.session_id,
         req.message_id,
     )
-    claim_decision = acquire_inbound_claim(db, claim_key)
+    claim_decision = await run_session_phase_async(
+        lambda phase_db: acquire_inbound_claim(phase_db, claim_key),
+        session_factory=phase_session_factory,
+    )
 
     if claim_decision.kind == ClaimDecisionKind.DUPLICATE_INFLIGHT:
         return chat_response_contract.duplicate_inflight_chat_response_payload(req)
@@ -781,7 +989,10 @@ async def proxy_chat(
         if claim_decision.kind == ClaimDecisionKind.ACQUIRED:
             if claim_decision.handle is None:
                 raise RuntimeError("acquired claim 缺少 owner handle")
-            claim_owner = InboundClaimOwner(claim_decision.handle)
+            claim_owner = InboundClaimOwner(
+                claim_decision.handle,
+                session_factory=phase_session_factory,
+            )
 
         if claim_owner is not None:
             await claim_owner.start()
@@ -796,40 +1007,40 @@ async def proxy_chat(
                         private_business_input
                     )
                 )
-                chat_persistence.ensure_private_request_journal(
-                    db,
-                    _chat_persistence_input(req),
-                    key=private_claim_key,
-                    request_sha256=private_request_sha256,
-                )
                 handle = claim_decision.handle
                 if handle is None:
                     raise RuntimeError("acquired claim 缺少 owner handle")
-                if handle.attempt_count > 1:
-                    recovered_completion = (
-                        chat_recovery.load_private_recoverable_completion(
-                            db,
+                def journal_phase(phase_db: Session) -> Any | None:
+                    chat_persistence.ensure_private_request_journal(
+                        phase_db,
+                        _chat_persistence_input(req),
+                        key=private_claim_key,
+                        request_sha256=private_request_sha256,
+                    )
+                    if handle.attempt_count <= 1:
+                        return None
+                    return chat_recovery.load_private_recoverable_completion(
+                            phase_db,
                             key=private_claim_key,
                             request_sha256=private_request_sha256,
                         )
+
+                recovered_completion = await run_session_phase_async(
+                    journal_phase,
+                    session_factory=phase_session_factory,
+                )
+                if recovered_completion is not None:
+                    completed = await claim_owner.complete(
+                        recovered_completion
                     )
-                    if recovered_completion is not None:
-                        release_clean_session_transaction(
-                            db,
-                            label="chat_before_recovery_complete",
-                            logger=logger,
+                    if completed is not True:
+                        raise RuntimeError(
+                            "私聊恢复 claim complete 未成功"
                         )
-                        completed = await claim_owner.complete(
-                            recovered_completion
-                        )
-                        if completed is not True:
-                            raise RuntimeError(
-                                "私聊恢复 claim complete 未成功"
-                            )
-                        return _completed_chat_route_response(
-                            req,
-                            recovered_completion,
-                        )
+                    return _completed_chat_route_response(
+                        req,
+                        recovered_completion,
+                    )
 
         _safe_log(
             "info",
@@ -841,48 +1052,22 @@ async def proxy_chat(
             req.session_name,
         )
 
-        # 1. 自动注册用户 & 更新用户名
-        user = db.query(User).filter(User.id == req.user_id).first()
-        if not user:
-            db.add(User(id=req.user_id, name=(req.sender_name or "")))
-            db.commit()
-        elif req.sender_name and user.name != req.sender_name:
-            user.name = req.sender_name
-            db.commit()
+        is_group = not str(req.session_id).startswith("private_")
+        is_superuser = (not is_group) and _is_guardrail_superuser(req.user_id)
+        db_preparation = await run_session_phase_async(
+            lambda phase_db: _prepare_chat_database_phase(
+                phase_db,
+                req,
+                is_group=is_group,
+                private_claim_key=private_claim_key,
+                private_request_sha256=private_request_sha256,
+            ),
+            session_factory=phase_session_factory,
+        )
 
-        # 1.5 检查用户屏蔽规则——命中后只写 ChatLog，不回复
-        if _check_user_blocked(db, req.user_id, target_type="private"):
+        # 1.5 检查用户屏蔽规则——持久化已在同一个短事务阶段完成
+        if db_preparation.blocked_completion is not None:
             _safe_log("info", "[/chat] blocked user=%s", req.user_id)
-            blocked_completion = chat_response_contract.build_completed_inbound_response(
-                outcome="blocked",
-                reason="user_blocked",
-                guardrail_status="silent",
-            )
-            blocked_content = _build_chatlog_user_content(req.query, req.files)
-            if private_claim_key is not None:
-                chat_persistence.persist_private_claim_completion(
-                    db,
-                    _chat_persistence_input(req),
-                    key=private_claim_key,
-                    request_sha256=private_request_sha256,
-                    completion=blocked_completion,
-                    journal_content=blocked_content,
-                    journal_processed=1,
-                )
-            else:
-                db.add(ChatLog(
-                    user_id=req.user_id, session_id=req.session_id,
-                    role="user",
-                    content=blocked_content,
-                    sender_name=req.sender_name or "",
-                    session_name=req.session_name or "",
-                    processed=1, message_id=req.message_id or "",
-                    meta_json=json.dumps(
-                        {"blocked": True, "reason": "user_blocked"},
-                        ensure_ascii=False,
-                    ),
-                ))
-                db.commit()
             blocked_payload = _chat_response_payload(
                 req,
                 status="silent",
@@ -891,7 +1076,9 @@ async def proxy_chat(
                 include_answer_chunks=True,
             )
             if claim_owner is not None:
-                completed = await claim_owner.complete(blocked_completion)
+                completed = await claim_owner.complete(
+                    db_preparation.blocked_completion
+                )
                 if completed is not True:
                     raise RuntimeError("blocked claim complete 未成功")
             return blocked_payload
@@ -903,50 +1090,10 @@ async def proxy_chat(
             source_name_prefix=f"{req.session_id}_{req.message_id or 'message'}",
         )
 
-        # 2. 加载用户画像 snapshot；动态 PersonaInjectionService 仍在 runtime payload 前处理
-        persona_snapshot = _resolve_chat_persona_snapshot(db, req.user_id)
-        persona_obj = persona_snapshot.persona_obj
-        persona_json_str = persona_snapshot.persona_json
-        persona_data = persona_snapshot.persona_data
-        persona_text = persona_snapshot.persona_text
-        if persona_snapshot.matched_user_id and persona_snapshot.matched_user_id != persona_snapshot.lookup_user_id:
-            _safe_log(
-                "info",
-                "[/chat] Persona found via fallback: tried=%s, matched=%s",
-                persona_snapshot.lookup_user_id,
-                persona_snapshot.matched_user_id,
-            )
-        if persona_obj is None:
-            _safe_log(
-                "debug",
-                "[/chat] No persona for user_id=%s (tried %s variants)",
-                req.user_id,
-                persona_snapshot.candidate_count,
-            )
-
-        _safe_log(
-            "info",
-            f"[/chat] Persona lookup: user_id={req.user_id}, "
-            f"found={persona_obj is not None}, persona_raw_len={len(persona_json_str)}, "
-            f"persona_text_len={len(persona_text)}, "
-            f"keys={list(persona_data.keys()) if isinstance(persona_data, dict) else 'N/A'}"
-        )
-
-        is_group = not str(req.session_id).startswith("private_")
-        is_superuser = (not is_group) and _is_guardrail_superuser(req.user_id)
-
-        # 3. 构建会话记忆上下文 (时间窗口 + clear 标记感知)
-        memory_header, history_messages, _ctx_debug = _build_chat_context(
-            db,
-            req.session_id,
-            user_id=req.user_id,
-            max_per_msg=MAX_MEMORY_PER_MSG_CHARS,
-            is_group=is_group,
-            group_id=_extract_group_id_from_chat_request(req) if is_group else "",
-            max_total=MAX_MEMORY_TOTAL_CHARS,
-            current_user_input=req.query,
-        )
-        release_clean_session_transaction(db, label="chat_before_private_decision", logger=logger)
+        # 2. 会话记忆已在短数据库阶段构建；画像只在 runtime route 中动态选择一次。
+        memory_header = db_preparation.memory_header
+        history_messages = db_preparation.history_messages
+        _ctx_debug = db_preparation.context_debug
 
         # 4a. 私聊三态分类、guardrail 和 private buffer pre-bridge 决策
         pre_bridge = await _resolve_chat_pre_bridge_decision(
@@ -961,6 +1108,7 @@ async def proxy_chat(
             pre_bridge,
             claim_key=private_claim_key,
             request_sha256=private_request_sha256,
+            session_factory=phase_session_factory,
         )
         if isinstance(pre_bridge_route, chat_pre_bridge_route_result.ChatPreBridgeRouteEarlyResponse):
             if claim_owner is not None:
@@ -982,12 +1130,10 @@ async def proxy_chat(
         persist_req = pre_bridge_route.persist_req
 
         # 4b. 组装 runtime payload — 使用缓冲合并后的查询
-        runtime_route_context = _build_chat_runtime_route_context(
-            chat_runtime_route_context.ChatRuntimeRouteInput(
+        runtime_input = chat_runtime_route_context.ChatRuntimeRouteInput(
                 req=req,
                 final_query=final_query,
                 final_files=final_files,
-                persona_text=persona_text,
                 memory_header=memory_header,
                 history_messages=history_messages,
                 ctx_debug=_ctx_debug,
@@ -996,14 +1142,17 @@ async def proxy_chat(
                 private_decision=_private_decision,
                 guardrail_status=guardrail_status,
                 classifier_ran=_classifier_ran,
+            )
+        runtime_route_context = await run_session_phase_async(
+            lambda phase_db: _build_chat_runtime_route_context(
+                runtime_input,
+                services=_chat_runtime_route_services(phase_db),
             ),
-            services=_chat_runtime_route_services(db),
+            session_factory=phase_session_factory,
         )
         enriched_query = runtime_route_context.enriched_query
         bridge_meta = runtime_route_context.bridge_meta
         platform = runtime_route_context.platform
-        release_clean_session_transaction(db, label="chat_before_bridge", logger=logger)
-
         # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
         bridge = get_bridge()
         route_runner_context = _chat_route_runner_context(
@@ -1016,6 +1165,7 @@ async def proxy_chat(
             guardrail_status=guardrail_status,
             private_timing_meta=private_timing_meta,
             background_tasks=background_tasks,
+            session_factory=phase_session_factory,
             claim_owner=claim_owner,
             claim_key=private_claim_key,
             request_sha256=private_request_sha256,
@@ -1058,3 +1208,13 @@ router.include_router(asset_router)
 def health_check():
     """健康检查端点。"""
     return {"status": "healthy", "version": "0.2.0"}
+
+
+@router.get("/ready")
+def readiness_check():
+    """本地依赖 readiness；不探测外部 LLM，避免瞬时网络抖动摘流量。"""
+
+    from core.runtime_health import readiness_snapshot
+
+    payload = readiness_snapshot()
+    return JSONResponse(payload, status_code=200 if payload["ready"] else 503)

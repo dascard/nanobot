@@ -1,0 +1,16 @@
+services:
+  nanobot-server:
+    image: ${NANOBOT_RUNTIME_IMAGE:?生产部署必须设置 NANOBOT_RUNTIME_IMAGE=仓库/镜像@sha256:摘要}
+    build: !reset null
+
+  session-summary-worker:
+    image: ${NANOBOT_RUNTIME_IMAGE:?生产部署必须设置 NANOBOT_RUNTIME_IMAGE=仓库/镜像@sha256:摘要}
+    build: !reset null
+
+  outbound-delivery-worker:
+    image: ${NANOBOT_RUNTIME_IMAGE:?生产部署必须设置 NANOBOT_RUNTIME_IMAGE=仓库/镜像@sha256:摘要}
+    build: !reset null
+
+  semantic-index-worker:
+    image: ${NANOBOT_RUNTIME_IMAGE:?生产部署必须设置 NANOBOT_RUNTIME_IMAGE=仓库/镜像@sha256:摘要}
+    build: !reset null

@@ -811,10 +811,10 @@ def test_prompt_v2_template_admin_crud_runtime_overrides(tmp_path, monkeypatch):
             },
             headers=_auth_header(),
         )
-        assert created.status_code == 200, created.text
+        assert created.status_code == 400, created.text
+        assert "unregistered_tool_template" in created.text
         created_path = runtime_dir / "tools" / "custom_tool" / "usage.md"
-        assert created_path.exists()
-        assert "tool_name: custom_tool" in created_path.read_text(encoding="utf-8")
+        assert not created_path.exists()
 
         saved = client.put(
             "/api/v1/admin/prompt-v2/templates/tools/group_analysis/topics",

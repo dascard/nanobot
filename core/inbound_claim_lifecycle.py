@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
@@ -17,6 +16,7 @@ from core.inbound_idempotency import (
     fail_inbound_claim,
     renew_inbound_claim,
 )
+from core.fencing import positive_seconds
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,12 +39,7 @@ def _default_session_factory() -> Any:
 
 
 def _positive_seconds(value: int | float, *, field_name: str) -> float:
-    if type(value) not in (int, float):
-        raise TypeError(f"{field_name} 必须是数字")
-    normalized = float(value)
-    if not math.isfinite(normalized) or normalized <= 0:
-        raise ValueError(f"{field_name} 必须是有限正数")
-    return normalized
+    return positive_seconds(value, field_name=field_name)
 
 
 class InboundClaimOwner:

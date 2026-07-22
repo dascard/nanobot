@@ -150,7 +150,7 @@ async def test_takeover_recovers_persisted_private_reply_without_second_bridge(
     completions = []
 
     class FakeOwner:
-        def __init__(self, handle):
+        def __init__(self, handle, **_kwargs):
             self.handle = handle
 
         async def start(self):
@@ -233,7 +233,7 @@ async def test_takeover_recovers_blocked_completion_from_single_request_journal(
     blocked_checks = []
 
     class FakeOwner:
-        def __init__(self, handle):
+        def __init__(self, handle, **_kwargs):
             self.handle = handle
 
         async def start(self):
@@ -314,7 +314,7 @@ async def test_nonstream_takeover_recovers_after_stream_complete_failure(
             return "只应生成一次的回复"
 
     class FakeOwner:
-        def __init__(self, handle):
+        def __init__(self, handle, **_kwargs):
             self.handle = handle
 
         async def start(self):
@@ -446,7 +446,7 @@ async def test_private_bridge_resolver_failure_returns_502_then_recovers_once(
     assert failed_claim.attempt_count == 1
     journal = db_session.query(ChatLog).one()
     assert journal.role == "user"
-    assert journal.content == ""
+    assert journal.content == "resolver 恢复请求"
     assert json.loads(journal.meta_json)["kind"] == chat_recovery.REQUEST_JOURNAL_KIND
     assert db_session.query(ConversationTurn).count() == 0
     db_session.rollback()
@@ -537,7 +537,7 @@ async def test_private_stream_resolver_failure_has_no_empty_push_or_outbox(
     assert db_session.query(ChatDeliveryOutbox).count() == 0
     journal = db_session.query(ChatLog).one()
     assert journal.role == "user"
-    assert journal.content == ""
+    assert journal.content == "流式 resolver 恢复请求"
     assert json.loads(journal.meta_json)["kind"] == chat_recovery.REQUEST_JOURNAL_KIND
     assert db_session.query(ConversationTurn).count() == 0
     db_session.rollback()
@@ -572,7 +572,7 @@ async def test_blocked_route_rejects_false_claim_completion(
     failed = []
 
     class FakeOwner:
-        def __init__(self, _handle):
+        def __init__(self, _handle, **_kwargs):
             pass
 
         async def start(self):
@@ -634,7 +634,7 @@ async def test_pre_bridge_route_rejects_false_claim_completion(
     )
 
     class FakeOwner:
-        def __init__(self, _handle):
+        def __init__(self, _handle, **_kwargs):
             pass
 
         async def start(self):

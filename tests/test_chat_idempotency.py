@@ -3917,10 +3917,17 @@ async def test_proxy_chat_claims_normalized_identity_before_logging_or_side_effe
         assert key.message_id == "same-message"
         return InboundClaimDecision(kind=ClaimDecisionKind.DUPLICATE_INFLIGHT)
 
+    async def run_fake_session_phase(operation, **_kwargs):
+        # 本用例只验证 claim 发生在日志和业务副作用之前。生产实现使用 fresh
+        # Session；这里显式注入无业务能力的测试 phase，避免继续把 request
+        # Session 当作生产持久化事实源。
+        return operation(_NoChatRouteSideEffectsDb())
+
     monkeypatch.setattr(routes, "_normalize_request_client_meta", normalize_meta)
     monkeypatch.setattr(routes, "_normalize_files", normalize_files)
     monkeypatch.setattr(routes, "normalize_inbound_claim_key", normalize_key, raising=False)
     monkeypatch.setattr(routes, "acquire_inbound_claim", acquire_claim, raising=False)
+    monkeypatch.setattr(routes, "run_session_phase_async", run_fake_session_phase)
     monkeypatch.setattr(
         routes,
         "InboundClaimOwner",
@@ -4217,7 +4224,7 @@ async def test_proxy_chat_acquired_stream_cold_body_starts_no_renewal_and_close_
     class FakeOwner:
         renewal_task = None
 
-        def __init__(self, actual_handle):
+        def __init__(self, actual_handle, **_kwargs):
             assert actual_handle is handle
             events.append("constructed")
 
@@ -4365,7 +4372,7 @@ async def test_proxy_chat_stream_renews_during_prebridge_then_pauses_until_cold_
             lease_seconds=lease_seconds,
         )
 
-    def owner_factory(handle):
+    def owner_factory(handle, **_kwargs):
         owner = RealInboundClaimOwner(
             handle,
             session_factory=Session,
@@ -4374,6 +4381,15 @@ async def test_proxy_chat_stream_renews_during_prebridge_then_pauses_until_cold_
         )
         owners.append(owner)
         return owner
+
+    async def run_test_session_phase(operation, **_kwargs):
+        from core.database import run_session_phase
+
+        return await asyncio.to_thread(
+            run_session_phase,
+            operation,
+            session_factory=Session,
+        )
 
     class Bridge:
         async def handle_message(self, *args, **kwargs):
@@ -4398,6 +4414,7 @@ async def test_proxy_chat_stream_renews_during_prebridge_then_pauses_until_cold_
 
     monkeypatch.setattr(routes, "acquire_inbound_claim", short_acquire, raising=False)
     monkeypatch.setattr(routes, "InboundClaimOwner", owner_factory, raising=False)
+    monkeypatch.setattr(routes, "run_session_phase_async", run_test_session_phase)
     monkeypatch.setattr(routes, "_check_user_blocked", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(routes, "_schedule_image_precache", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -4505,37 +4522,41 @@ async def test_proxy_chat_blocked_commits_chat_log_before_completing_claim(
     from fastapi import BackgroundTasks
 
     from api import routes
-    from core.database import User
+    from core.database import ChatLog, User
     from core.inbound_idempotency import ClaimDecisionKind, InboundClaimDecision
 
     db_session.add(User(id="blocked-owner-user", name="屏蔽用户"))
     db_session.commit()
     handle = _route_claim_handle("blocked-message")
     events: list[object] = []
-    real_commit = db_session.commit
-    commit_calls = 0
-
-    def tracked_commit():
-        nonlocal commit_calls
-        commit_calls += 1
-        real_commit()
 
     class FakeOwner:
-        def __init__(self, actual_handle):
+        def __init__(self, actual_handle, **_kwargs):
             assert actual_handle is handle
+            self.session_factory = _kwargs["session_factory"]
 
         async def start(self):
             events.append("start")
 
         async def complete(self, response):
-            events.append(("complete", commit_calls, response))
+            with self.session_factory() as verify_db:
+                persisted = (
+                    verify_db.query(ChatLog)
+                    .filter(
+                        ChatLog.user_id == "blocked-owner-user",
+                        ChatLog.message_id == "blocked-message",
+                    )
+                    .one()
+                )
+                assert persisted.processed == 1
+            events.append("persisted")
+            events.append(("complete", response))
             return True
 
         async def fail(self, error):
             events.append(("fail", error))
             return True
 
-    monkeypatch.setattr(db_session, "commit", tracked_commit)
     monkeypatch.setattr(
         routes,
         "acquire_inbound_claim",
@@ -4562,8 +4583,13 @@ async def test_proxy_chat_blocked_commits_chat_log_before_completing_claim(
 
     assert result["status"] == "silent"
     assert events[0] == "start"
-    _, completed_after_commits, completion = events[1]
-    assert completed_after_commits == 1
+    complete_index = next(
+        index
+        for index, event in enumerate(events)
+        if isinstance(event, tuple) and event[0] == "complete"
+    )
+    assert "persisted" in events[:complete_index]
+    _, completion = events[complete_index]
     assert completion.outcome == "blocked"
     assert completion.reason == "user_blocked"
     assert completion.guardrail_status == "silent"
@@ -4595,7 +4621,7 @@ async def test_proxy_chat_pre_bridge_persistence_completes_claim_before_return(
     events: list[object] = []
 
     class FakeOwner:
-        def __init__(self, actual_handle):
+        def __init__(self, actual_handle, **_kwargs):
             assert actual_handle is handle
 
         async def start(self):
@@ -4693,7 +4719,7 @@ async def test_proxy_chat_owner_handoff_failure_best_effort_fails_and_reraises_o
     owners: list["FakeOwner"] = []
 
     class FakeOwner:
-        def __init__(self, actual_handle):
+        def __init__(self, actual_handle, **_kwargs):
             assert actual_handle is handle
             self.renewal_task = None
             owners.append(self)

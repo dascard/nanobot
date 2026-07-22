@@ -9,6 +9,15 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.database import KnowledgeChunk, KnowledgeDocument, SemanticIndexItem
+from core.retrieval import (
+    CitationEvaluation,
+    RankingOutcome,
+    RerankOutcome,
+    RetrievalCandidates,
+    RetrievalPipeline,
+    RetrievalPipelineState,
+    RetrievalRequest,
+)
 from core.semantic.reranker import SemanticCandidate
 from core.semantic.retriever import (
     fts_recall_hits,
@@ -59,6 +68,12 @@ class _KnowledgeRecallResult:
     bm25_by_id: dict[int, float]
     semantic_by_id: dict[int, float]
     query_vector: list[float] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeSourceData:
+    recall: _KnowledgeRecallResult
+    documents: dict[int, KnowledgeDocument]
 
 
 def _safe_json(raw: str | None) -> dict[str, Any]:
@@ -148,49 +163,32 @@ class KnowledgeRagService:
     ) -> dict[str, Any]:
         published_after = str(published_after or date_start or "")
         published_before = str(published_before or date_end or "")
-        recall = self._recall(query)
-        documents = self._load_documents(recall.rows)
-        debug_trace = (
-            self._build_debug_trace(
-                recall=recall,
-                min_trust_level=min_trust_level,
-                source_type=source_type,
-                domain=domain,
-                published_after=published_after,
-                published_before=published_before,
-            )
-            if include_debug
-            else None
+        request = RetrievalRequest(
+            query=query,
+            limit=max(1, int(limit)),
+            include_debug=include_debug,
+            options={
+                "domain": "knowledge",
+                "min_trust_level": min_trust_level,
+                "source_type": source_type,
+                "knowledge_domain": domain,
+                "published_after": published_after,
+                "published_before": published_before,
+            },
         )
-        candidates, skipped = self._filter_candidates(
-            query,
-            recall=recall,
-            documents=documents,
-            min_trust_level=min_trust_level,
-            published_after=published_after,
-            published_before=published_before,
-            source_type=source_type,
-            domain=domain,
-        )
-        self._update_candidate_debug(
-            debug_trace,
-            candidates=candidates,
-            bm25_by_id=recall.bm25_by_id,
-            skipped=skipped,
-        )
-        self._rerank(query, candidates, debug_trace)
-        degraded = self.reranker_provider is None
-        gated = self._apply_relevance_gate(candidates, degraded=degraded, debug_trace=debug_trace)
-        ranked = sorted(gated, key=self._final_score, reverse=True)
-        return self._build_result(
-            query,
-            ranked=ranked,
-            candidates=candidates,
-            recall=recall,
-            skipped=skipped,
-            limit=limit,
-            degraded=degraded,
-            debug_trace=debug_trace,
+        return self._build_pipeline().execute(request)
+
+    def _build_pipeline(self) -> RetrievalPipeline:
+        return RetrievalPipeline(
+            candidate_source=_KnowledgeCandidateSource(self),
+            citation_policy=_KnowledgeCitationPolicy(),
+            filter_policy=_KnowledgeFilterPolicy(self),
+            scoring_policy=_KnowledgeScoringPolicy(self),
+            reranker=_KnowledgeReranker(self),
+            budget_policy=_KnowledgeBudgetPolicy(),
+            debug_trace_sink=_KnowledgeDebugTraceSink(self),
+            result_builder=_KnowledgeResultBuilder(self),
+            provider_id="knowledge_rag",
         )
 
     def _recall(self, query: str) -> _KnowledgeRecallResult:
@@ -305,16 +303,20 @@ class KnowledgeRagService:
         published_before: str,
         source_type: str,
         domain: str,
+        accepted_citation_ids: frozenset[int] | None = None,
+        skipped_no_citation: int = 0,
     ) -> tuple[list[_KnowledgeCandidate], dict[str, int]]:
         candidates: list[_KnowledgeCandidate] = []
-        skipped_no_citation = 0
         skipped_filter = 0
         semantic_hits = 0
         for row in recall.rows:
             meta = _safe_json(row.meta_json)
             citation = meta.get("citation") if isinstance(meta.get("citation"), dict) else {}
-            if not _has_valid_citation(citation):
-                skipped_no_citation += 1
+            if accepted_citation_ids is None:
+                if not _has_valid_citation(citation):
+                    skipped_no_citation += 1
+                    continue
+            elif int(row.id) not in accepted_citation_ids:
                 continue
             document = documents.get(_safe_int(row.source_id) or -1)
             if document is not None and str(document.status or "active") != "active":
@@ -349,8 +351,7 @@ class KnowledgeRagService:
                     semantic=semantic,
                 ))
 
-        candidates.sort(key=self._pre_score, reverse=True)
-        return candidates[:100], {
+        return candidates, {
             "skipped_no_citation": skipped_no_citation,
             "skipped_filter": skipped_filter,
             "semantic_hits": semantic_hits,
@@ -384,29 +385,26 @@ class KnowledgeRagService:
         self,
         query: str,
         candidates: list[_KnowledgeCandidate],
-        debug_trace: dict[str, Any] | None,
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         rerank_inputs = self._apply_reranker(query, candidates)
-        if debug_trace is not None:
-            debug_trace["reranker_input_pairs"] = [
-                {
-                    "candidate_id": candidate.candidate_id,
-                    "source_type": candidate.source_type,
-                    "query": query,
-                    "title": candidate.title,
-                    "text": candidate.text,
-                    "metadata": candidate.metadata,
-                }
-                for candidate in rerank_inputs
-            ]
+        return [
+            {
+                "candidate_id": candidate.candidate_id,
+                "source_type": candidate.source_type,
+                "query": query,
+                "title": candidate.title,
+                "text": candidate.text,
+                "metadata": candidate.metadata,
+            }
+            for candidate in rerank_inputs
+        ]
 
     def _apply_relevance_gate(
         self,
         candidates: list[_KnowledgeCandidate],
         *,
         degraded: bool,
-        debug_trace: dict[str, Any] | None,
-    ) -> list[_KnowledgeCandidate]:
+    ) -> tuple[list[_KnowledgeCandidate], list[dict[str, Any]]]:
         gated: list[_KnowledgeCandidate] = []
         gate_debug: list[dict[str, Any]] = []
         for item in candidates:
@@ -417,20 +415,17 @@ class KnowledgeRagService:
             )
             if passed:
                 gated.append(item)
-            if debug_trace is not None:
-                gate_debug.append({
-                    "candidate_id": item.candidate_id,
-                    "passed": passed,
-                    "degraded": degraded,
-                    "components": {
-                        "reranker": item.reranker,
-                        "semantic": item.semantic,
-                        "lexical": item.lexical,
-                    },
-                })
-        if debug_trace is not None:
-            debug_trace["relevance_gate"] = gate_debug
-        return gated
+            gate_debug.append({
+                "candidate_id": item.candidate_id,
+                "passed": passed,
+                "degraded": degraded,
+                "components": {
+                    "reranker": item.reranker,
+                    "semantic": item.semantic,
+                    "lexical": item.lexical,
+                },
+            })
+        return gated, gate_debug
 
     def _build_result(
         self,
@@ -666,3 +661,250 @@ class KnowledgeRagService:
             },
             "skipped_reason": "",
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeCandidateSource:
+    service: KnowledgeRagService
+
+    def recall(self, request: RetrievalRequest) -> _KnowledgeSourceData:
+        recall = self.service._recall(request.query)
+        return _KnowledgeSourceData(
+            recall=recall,
+            documents=self.service._load_documents(recall.rows),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeCitationPolicy:
+    def evaluate(
+        self,
+        request: RetrievalRequest,
+        source: _KnowledgeSourceData,
+    ) -> CitationEvaluation[_KnowledgeSourceData]:
+        accepted_ids: set[int] = set()
+        skipped_no_citation = 0
+        for row in source.recall.rows:
+            meta = _safe_json(row.meta_json)
+            citation = (
+                meta.get("citation")
+                if isinstance(meta.get("citation"), dict)
+                else {}
+            )
+            if _has_valid_citation(citation):
+                accepted_ids.add(int(row.id))
+            else:
+                skipped_no_citation += 1
+        return CitationEvaluation(
+            source=source,
+            accepted_ids=frozenset(accepted_ids),
+            metadata={"skipped_no_citation": skipped_no_citation},
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeFilterPolicy:
+    service: KnowledgeRagService
+
+    def filter_candidates(
+        self,
+        request: RetrievalRequest,
+        citation: CitationEvaluation[_KnowledgeSourceData],
+    ) -> RetrievalCandidates[_KnowledgeCandidate]:
+        accepted_citation_ids = frozenset(
+            int(item) for item in (citation.accepted_ids or frozenset())
+        )
+        source = citation.source
+        candidates, skipped = self.service._filter_candidates(
+            request.query,
+            recall=source.recall,
+            documents=source.documents,
+            min_trust_level=str(
+                request.options.get("min_trust_level") or "low"
+            ),
+            published_after=str(request.options.get("published_after") or ""),
+            published_before=str(request.options.get("published_before") or ""),
+            source_type=str(request.options.get("source_type") or ""),
+            domain=str(request.options.get("knowledge_domain") or ""),
+            accepted_citation_ids=accepted_citation_ids,
+            skipped_no_citation=int(
+                citation.metadata.get("skipped_no_citation") or 0
+            ),
+        )
+        return RetrievalCandidates(
+            items=tuple(candidates),
+            metadata={
+                **skipped,
+                "bm25_by_id": source.recall.bm25_by_id,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeScoringPolicy:
+    service: KnowledgeRagService
+
+    def pre_rank(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_KnowledgeCandidate],
+    ) -> RetrievalCandidates[_KnowledgeCandidate]:
+        ranked = tuple(
+            sorted(candidates.items, key=self.service._pre_score, reverse=True)
+        )
+        return candidates.with_items(ranked)
+
+    def final_rank(
+        self,
+        request: RetrievalRequest,
+        outcome: RerankOutcome[_KnowledgeCandidate],
+    ) -> RankingOutcome[_KnowledgeCandidate]:
+        degraded = bool(outcome.metadata["degraded"])
+        gated, gate_debug = self.service._apply_relevance_gate(
+            list(outcome.items),
+            degraded=degraded,
+        )
+        ranked = tuple(
+            sorted(gated, key=self.service._final_score, reverse=True)
+        )
+        return RankingOutcome(
+            items=ranked,
+            metadata={
+                "degraded": degraded,
+                "relevance_gate": gate_debug,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeReranker:
+    service: KnowledgeRagService
+
+    def rerank(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_KnowledgeCandidate],
+    ) -> RerankOutcome[_KnowledgeCandidate]:
+        all_candidates = list(candidates.items)
+        debug_inputs = self.service._rerank(request.query, all_candidates)
+        reranker_items = (
+            tuple(all_candidates)
+            if self.service.reranker_provider is not None
+            else ()
+        )
+        return RerankOutcome(
+            items=tuple(all_candidates),
+            reranker_items=reranker_items,
+            metadata={
+                "degraded": self.service.reranker_provider is None,
+                "reranker_input_pairs": debug_inputs,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeBudgetPolicy:
+    def limit_candidates(
+        self,
+        request: RetrievalRequest,
+        candidates: RetrievalCandidates[_KnowledgeCandidate],
+    ) -> RetrievalCandidates[_KnowledgeCandidate]:
+        return candidates.with_items(candidates.items[:100])
+
+    def select_results(
+        self,
+        request: RetrievalRequest,
+        ranking: RankingOutcome[_KnowledgeCandidate],
+    ) -> tuple[_KnowledgeCandidate, ...]:
+        return ranking.items[: request.limit]
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeDebugTraceSink:
+    service: KnowledgeRagService
+
+    def start(
+        self,
+        request: RetrievalRequest,
+        source: _KnowledgeSourceData,
+        citation: CitationEvaluation[_KnowledgeSourceData],
+    ) -> dict[str, Any] | None:
+        if not request.include_debug:
+            return None
+        return self.service._build_debug_trace(
+            recall=source.recall,
+            min_trust_level=str(
+                request.options.get("min_trust_level") or "low"
+            ),
+            source_type=str(request.options.get("source_type") or ""),
+            domain=str(request.options.get("knowledge_domain") or ""),
+            published_after=str(request.options.get("published_after") or ""),
+            published_before=str(request.options.get("published_before") or ""),
+        )
+
+    def candidates_ready(
+        self,
+        trace: object | None,
+        candidates: RetrievalCandidates[_KnowledgeCandidate],
+    ) -> None:
+        if not isinstance(trace, dict):
+            return
+        self.service._update_candidate_debug(
+            trace,
+            candidates=list(candidates.items),
+            bm25_by_id=dict(candidates.metadata["bm25_by_id"]),
+            skipped=dict(candidates.metadata),
+        )
+
+    def rerank_complete(
+        self,
+        trace: object | None,
+        outcome: RerankOutcome[_KnowledgeCandidate],
+    ) -> None:
+        if isinstance(trace, dict):
+            trace["reranker_input_pairs"] = list(
+                outcome.metadata["reranker_input_pairs"]
+            )
+
+    def ranking_complete(
+        self,
+        trace: object | None,
+        ranking: RankingOutcome[_KnowledgeCandidate],
+    ) -> None:
+        if isinstance(trace, dict):
+            trace["relevance_gate"] = list(ranking.metadata["relevance_gate"])
+
+    def finish(
+        self,
+        trace: object | None,
+        selected: tuple[_KnowledgeCandidate, ...],
+    ) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeResultBuilder:
+    service: KnowledgeRagService
+
+    def build(
+        self,
+        state: RetrievalPipelineState[
+            _KnowledgeSourceData,
+            _KnowledgeCandidate,
+            tuple[_KnowledgeCandidate, ...],
+            dict[str, Any],
+        ],
+    ) -> dict[str, Any]:
+        debug_trace = (
+            state.debug_trace if isinstance(state.debug_trace, dict) else None
+        )
+        return self.service._build_result(
+            state.request.query,
+            ranked=list(state.selected),
+            candidates=list(state.candidates.items),
+            recall=state.source.recall,
+            skipped=dict(state.candidates.metadata),
+            limit=state.request.limit,
+            degraded=bool(state.rerank_outcome.metadata["degraded"]),
+            debug_trace=debug_trace,
+        )

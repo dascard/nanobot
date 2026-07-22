@@ -223,6 +223,12 @@ def test_proxy_chat_group_persona_does_not_bypass_disabled_gate(
     db_session.commit()
 
     monkeypatch.setattr("api.routes._schedule_image_precache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "api.routes._resolve_chat_persona_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("在线聊天不应查询旧 persona snapshot")
+        ),
+    )
 
     mock_bridge = AsyncMock()
     mock_bridge.handle_message = AsyncMock(return_value="画像回复")

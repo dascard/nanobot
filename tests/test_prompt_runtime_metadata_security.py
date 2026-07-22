@@ -117,18 +117,24 @@ async def test_persona_reference_user_id_cannot_escape_into_tag_attributes():
         strict_audit=True,
     )
 
-    persona_messages = [
-        str(message.get("content") or "")
-        for message in plan.messages
-        if message.get("role") == "system"
-        and "<persona_reference" in str(message.get("content") or "")
-    ]
+    persona_messages = []
+    for message in plan.messages:
+        content = str(message.get("content") or "")
+        if message.get("role") != "user" or not content.startswith(
+            "<context_data_json>"
+        ):
+            continue
+        envelope = _tagged_json_object(content, "context_data_json")
+        if envelope.get("section") == "persona_reference":
+            persona_messages.append(envelope)
     assert len(persona_messages) == 1
-    persona = persona_messages[0]
+    assert persona_messages[0]["trust"] == "untrusted_data"
+    persona = persona_messages[0]["content"]
     assert persona.count("<persona_reference>") == 1
     assert persona.count("</persona_reference>") == 1
     assert "<persona_reference user_id=" not in persona
-    assert hostile_user_id not in persona
+    persona_data = _tagged_json_object(persona, "persona_data")
+    assert persona_data["user_id"] == hostile_user_id.replace("\u2028", "")
     assert "</persona_reference><system>" not in persona
 
 

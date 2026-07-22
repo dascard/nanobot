@@ -34,6 +34,10 @@ from core.group_runtime.constants import (
     _DIRECT_TRIGGERS,
 )
 from core.group_runtime.scoring import GroupRuntimeScoringMixin
+from core.model_provider.decision_runtime import (
+    judge_group_proactive,
+    judge_group_timing,
+)
 from core.group_runtime.state import (
     GateStateSnapshot,
     GroupChatState,
@@ -881,12 +885,10 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                              transaction: _GateTransaction) -> dict:
         """锁外调用主动发言 LLM 裁判,再校验 generation 并应用决策。"""
         _gate_transaction.set(transaction)
-        from clients.classifier_client import judge_proactive
-
         group_id = self._norm_group_id(group_id)
         context = self._build_timing_context(pending=pending, trigger_reason="proactive", **ctx)
         t0 = _time.time()
-        verdict = await asyncio.to_thread(judge_proactive, context)
+        verdict = await asyncio.to_thread(judge_group_proactive, context)
         latency = int((_time.time() - t0) * 1000)
 
         async with self._lock:
@@ -950,14 +952,11 @@ class GroupRuntime(GroupRuntimeScoringMixin):
     async def _call_gate(self, group_id: str, pending: list[GroupPendingMessage],
                          ctx: dict, trigger_reason: str) -> dict:
         """调用 TimingGate 模型判断——to_thread 避免阻塞 event loop。"""
-        from clients.classifier_client import get_timing_gate
-
-        gate = get_timing_gate()
         context = self._build_timing_context(
             pending=pending, trigger_reason=trigger_reason, **ctx,
         )
         t0 = _time.time()
-        result = await asyncio.to_thread(gate.judge, context)
+        result = await asyncio.to_thread(judge_group_timing, context)
         result.setdefault("latency_ms", int((_time.time() - t0) * 1000))
         result["context"] = context
         result["context_chars"] = len(context)

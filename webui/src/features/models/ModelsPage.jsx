@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { api } from '../../api'
 import { ActionButton, Badge, Card, Field, Modal, Spinner, Toolbar } from '../../components/ui'
@@ -62,17 +62,17 @@ function ModelCatalogTab({ providers }) {
   const [catQ, setCatQ] = useState('')
   const [catLoading, setCatLoading] = useState(false)
   const [refreshResult, setRefreshResult] = useState(null)
-  const loadCatalog = () => {
+  const loadCatalog = useCallback(() => {
     setCatLoading(true)
     const params = { limit: 200 }
     if (catProvider) params.provider = catProvider
     if (catQ) params.q = catQ
     api.get('/models/catalog', { params }).then(r => setCatalog(r.data.catalog || [])).catch(() => {}).finally(() => setCatLoading(false))
-  }
+  }, [catProvider, catQ])
   useEffect(() => {
     const id = setTimeout(loadCatalog, 0)
     return () => clearTimeout(id)
-  }, [catProvider, catQ])
+  }, [loadCatalog])
   useEffect(() => { api.get('/models/route-references').then(r => setRouteRefs(r.data.route_references || [])).catch(() => {}) }, [])
   const doRefresh = () => {
     setRefreshResult({ loading: true })

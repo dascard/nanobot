@@ -19,7 +19,7 @@ from urllib.parse import parse_qsl, unquote_to_bytes, urlsplit
 
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError
 
-from clients.classifier_client import strip_think_blocks
+from core.model_provider.response_normalization import strip_think_blocks
 from core.proactive_diagnostics import (
     generation_failure_from_exception,
     normalize_research_reason_code,

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 from collections.abc import Iterable
 
-from core.database import ChatLog
+from core.db.models.chat import ChatLog
 
 from .quality import build_quality
 from .renderer import render_digest_levels

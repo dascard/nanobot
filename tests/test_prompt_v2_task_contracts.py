@@ -147,7 +147,31 @@ def test_task_invocation_manifest_covers_live_tasks_and_pair_wrapper():
     assert set(manifest) == set(live_task_template_keys())
     assert manifest["tasks/memory_digest_system"] == "render_task_pair"
     assert manifest["tasks/memory_digest_user"] == "render_task_pair"
-    assert manifest["tasks/private_decision"] == "code_fallback_only"
+    assert manifest["tasks/private_decision"] == "render_task_messages"
+    assert manifest["tasks/timing_proactive"] == "render_task_messages"
+
+
+def test_timing_proactive_output_contract_is_strict():
+    from core.prompt_v2.task_contracts import (
+        TaskOutputContractError,
+        parse_task_output,
+    )
+
+    assert parse_task_output(
+        "timing_proactive",
+        '{"should_speak":true,"reason":"可以补充"}',
+    ) == {"should_speak": True, "reason": "可以补充"}
+
+    with pytest.raises(TaskOutputContractError):
+        parse_task_output(
+            "timing_proactive",
+            '{"should_speak":"true","reason":"类型错误"}',
+        )
+    with pytest.raises(TaskOutputContractError):
+        parse_task_output(
+            "timing_proactive",
+            '{"should_speak":false,"reason":"沉默","extra":1}',
+        )
 
 
 def test_task_invocation_specs_declare_output_parser_owner():
@@ -201,7 +225,7 @@ def test_live_task_selection_falls_back_from_invalid_runtime_to_valid_default(
     assert selected.invalid_sources == ("runtime",)
 
 
-def test_live_task_selection_uses_code_fallback_when_both_templates_are_invalid(
+def test_fail_closed_task_selection_reports_unavailable_when_sources_are_invalid(
     tmp_path,
     monkeypatch,
 ):
@@ -216,9 +240,32 @@ def test_live_task_selection_uses_code_fallback_when_both_templates_are_invalid(
 
     selected = select_task_template("memory_extract")
 
-    assert selected.source == "code_fallback"
+    assert selected.source == "unavailable"
     assert selected.template is None
     assert selected.invalid_sources == ("runtime", "default")
+
+
+def test_task_contract_registry_exposes_owner_domain_precedence_and_editability():
+    from core.prompt_v2.task_contracts import (
+        get_task_contract,
+        task_contract_registry_snapshot,
+    )
+
+    memory_extract = get_task_contract("memory_extract")
+    code_fallback = get_task_contract("reply_contract_retry")
+
+    assert memory_extract is not None
+    assert memory_extract.owner_module == "core.persona_preprocess"
+    assert memory_extract.domain == "persona"
+    assert memory_extract.source_precedence == ("runtime", "default")
+    assert memory_extract.editable is True
+    assert code_fallback is not None
+    assert code_fallback.source_precedence == ("code_fallback",)
+    assert code_fallback.editable is False
+    assert all(
+        item["owner_module"] and item["domain"]
+        for item in task_contract_registry_snapshot()
+    )
 
 
 def test_live_task_audit_fails_closed_when_memory_digest_pair_is_invalid(

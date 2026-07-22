@@ -10,7 +10,8 @@ import json
 from typing import Any
 from collections.abc import Sequence
 
-from core.database import ConversationTurn, RollingSessionSummary
+from core.db.models.chat import ConversationTurn
+from core.db.models.session_memory import RollingSessionSummary
 from app.session_memory import config
 from app.session_memory.windowing import estimate_tokens, safe_meta
 

@@ -10,6 +10,7 @@ from typing import Any
 from core.prompt_v2.template_resolution import serialize_template_resolutions_json
 from core.safe_diagnostics import safe_response_summary, safe_url_for_logging
 from core.time_utils import db_now_naive, to_db_naive
+from core.tool_registry import get_tool_descriptor
 
 logger = logging.getLogger("nanobot.tracing")
 
@@ -24,15 +25,6 @@ MAX_WEB_SEARCH_PREVIEW_CHARS = 40000
 MAX_LLM_REQUEST_JSON_CHARS = 256_000
 MAX_LLM_RESPONSE_JSON_CHARS = 64_000
 MAX_LLM_FAILURE_SUMMARY_CHARS = 4_000
-SANDBOX_TRACE_TOOL_NAMES = frozenset({
-    "sandbox_exec",
-    "workspace_list",
-    "workspace_read",
-    "workspace_search",
-    "workspace_write",
-    "asset_import",
-    "asset_publish",
-})
 
 
 @dataclass
@@ -134,11 +126,18 @@ def _safe_sandbox_ref(value: Any) -> str | dict[str, Any]:
     return {"ref_omitted": True, **_text_audit(ref)}
 
 
+def _uses_metadata_only_trace(tool_name: str) -> bool:
+    """从类型化工具描述符读取 Trace 策略，避免维护第二份工具名集合。"""
+
+    descriptor = get_tool_descriptor(str(tool_name or ""))
+    return descriptor is not None and descriptor.trace_policy == "metadata_only"
+
+
 def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
     """Sandbox 工具参数进入持久 Trace 前仅保留安全元数据。"""
 
     name = str(tool_name or "")
-    if name not in SANDBOX_TRACE_TOOL_NAMES:
+    if not _uses_metadata_only_trace(name):
         return args
     if not isinstance(args, Mapping):
         return {"args_omitted": True, "args_type": type(args).__name__}
@@ -319,7 +318,7 @@ def sanitize_tool_trace_result(tool_name: str, result: Any) -> Any:
     """Sandbox 结果正文和进程输出不得进入 ToolCall.result_preview。"""
 
     name = str(tool_name or "")
-    if name not in SANDBOX_TRACE_TOOL_NAMES:
+    if not _uses_metadata_only_trace(name):
         return result
     parsed = result
     if isinstance(result, str):
@@ -346,7 +345,7 @@ def sanitize_tool_trace_result(tool_name: str, result: Any) -> Any:
 
 
 def sanitize_tool_trace_error(tool_name: str, error: Any) -> str:
-    if str(tool_name or "") not in SANDBOX_TRACE_TOOL_NAMES or not error:
+    if not _uses_metadata_only_trace(tool_name) or not error:
         return str(error or "")
     return _json_dumps({"error_omitted": True, **_text_audit(error)})
 

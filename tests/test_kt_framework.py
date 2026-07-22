@@ -11,6 +11,16 @@ from tests.async_helpers import run_async
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
+from core.agent_runtime import (
+    AgentTurnResult,
+    RequestRuntimeContext,
+    RuntimeChatType,
+    RuntimeMessage,
+    RuntimeOwnerType,
+    RuntimePrincipal,
+    RuntimeToolCall,
+)
+
 
 @pytest.fixture(autouse=True)
 def _isolate_model_failure_state(monkeypatch, tmp_path):
@@ -70,6 +80,34 @@ def _rich_tool_exchange(
     )
 
 
+def _runtime_context(session_id: str = "test-session") -> RequestRuntimeContext:
+    return RequestRuntimeContext(
+        request_id=f"request:{session_id}",
+        principal=RuntimePrincipal("qq", RuntimeOwnerType.USER, "u1"),
+        session_id=session_id,
+        chat_type=RuntimeChatType.PRIVATE,
+        trace_id="trace-test",
+        run_id="run-test",
+    )
+
+
+def _runtime_tool_exchange(tool_name: str, output: str) -> tuple[RuntimeMessage, ...]:
+    call_id = f"call_{tool_name}"
+    return (
+        RuntimeMessage(
+            "assistant",
+            "",
+            tool_calls=(RuntimeToolCall(call_id, tool_name, "{}"),),
+        ),
+        RuntimeMessage(
+            "tool",
+            output,
+            name=tool_name,
+            tool_call_id=call_id,
+        ),
+    )
+
+
 @pytest.fixture(autouse=True)
 def _stub_session_guidance_resolver(monkeypatch):
     """框架单元测试不依赖数据库，统一模拟未配置会话指导。"""
@@ -121,12 +159,7 @@ def _stub_healthy_reply_route(monkeypatch):
     )
     monkeypatch.setattr(
         "core.settings_service.settings.get",
-        lambda key, default=None: "" if key == "model.reply" else default,
-    )
-    monkeypatch.setattr(
-        "nanobot_kt.bridge.LLM_MODEL_REPLY",
-        "test-model",
-        raising=False,
+        lambda key, default=None: "test-model" if key == "model.reply" else default,
     )
     monkeypatch.setattr(
         "nanobot_kt.bridge.registry.get_model_info",
@@ -295,6 +328,8 @@ class TestNanobotBridge:
 
         bridge = NanobotBridge()
         bridge._agent = SimpleNamespace(controller=SimpleNamespace())
+        runtime = MagicMock()
+        runtime.read_conversation.return_value = ()
         bridge._extract_last_rich_tool_output = MagicMock(return_value=None)
         bridge._extract_reply_from_tool_output = MagicMock(return_value="")
 
@@ -303,10 +338,13 @@ class TestNanobotBridge:
             record_success=AsyncMock(),
         )
 
-        async def process_event(_agent, _event):
+        async def execute_turn(_request):
             if process_outcome == "system_error":
                 raise RuntimeError("模型调用失败")
-            return None
+            return AgentTurnResult(raw_result=None, messages=())
+
+        runtime.execute_turn = AsyncMock(side_effect=execute_turn)
+        bridge._runtime = runtime
 
         result = run_async(bridge._run_model_loop(
             candidate_models=[{"id": "only-model"}],
@@ -319,8 +357,7 @@ class TestNanobotBridge:
             trace_id="trace-1",
             run_id="run-1",
             reply_llm_source="replyer.private_chat",
-            create_user_event=lambda content, stream: (content, stream),
-            process_event=process_event,
+            runtime_context=_runtime_context("session-1"),
         ))
 
         if process_outcome == "empty":
@@ -355,6 +392,9 @@ class TestNanobotBridge:
         bridge._agent = SimpleNamespace(
             controller=SimpleNamespace(conversation=conversation),
         )
+        runtime = MagicMock()
+        runtime.read_conversation.return_value = ()
+        bridge._runtime = runtime
 
         if terminal_kind == "reply":
             tool_output = json.dumps(
@@ -375,22 +415,24 @@ class TestNanobotBridge:
                 ensure_ascii=False,
             )
 
-        async def process_event(_agent, _event):
+        async def execute_turn(_request):
             if terminal_kind == "html":
-                messages.extend(_rich_tool_exchange(
+                from nanobot_kt.reply_contract import build_rich_output
+
+                runtime_messages = _runtime_tool_exchange(
                     "ai_daily",
-                    tool_output,
-                    as_objects=True,
-                ))
+                    build_rich_output(tool_output, report_kind="ai_daily"),
+                )
             else:
                 tool_name = "reply" if terminal_kind == "reply" else "no_reply"
-                messages.extend(_tool_exchange(
+                runtime_messages = _runtime_tool_exchange(
                     tool_name,
                     tool_output,
-                    as_objects=True,
-                ))
+                )
+            runtime.read_conversation.return_value = runtime_messages
+            return AgentTurnResult(raw_result=None, messages=runtime_messages)
 
-        process_event_mock = AsyncMock(side_effect=process_event)
+        runtime.execute_turn = AsyncMock(side_effect=execute_turn)
         tracker = MagicMock(
             record_failure=AsyncMock(),
             record_success=AsyncMock(),
@@ -407,16 +449,12 @@ class TestNanobotBridge:
             trace_id="trace-terminal",
             run_id="run-terminal",
             reply_llm_source="replyer.private_chat",
-            create_user_event=lambda content, stream: SimpleNamespace(
-                content=content,
-                stream=stream,
-            ),
-            process_event=process_event_mock,
+            runtime_context=_runtime_context("session-terminal"),
         ))
 
         assert result.target_model == "model-a"
         assert result.attempts == 1
-        process_event_mock.assert_awaited_once()
+        runtime.execute_turn.assert_awaited_once()
         tracker.record_success.assert_awaited_once_with("model-a")
         tracker.record_failure.assert_not_awaited()
         if terminal_kind == "no_reply":
@@ -442,6 +480,8 @@ class TestNanobotBridge:
 
         bridge = NanobotBridge()
         bridge._agent = SimpleNamespace(controller=SimpleNamespace())
+        runtime = MagicMock()
+        runtime.read_conversation.return_value = ()
         bridge._extract_last_rich_tool_output = MagicMock(return_value=None)
         bridge._extract_reply_from_tool_output = MagicMock(return_value="")
         bridge._record_reply_contract_check = MagicMock()
@@ -450,11 +490,12 @@ class TestNanobotBridge:
             record_success=AsyncMock(),
         )
 
-        async def process_event(_agent, _event):
+        async def execute_turn(_request):
             bridge._output._buffer.append(raw_output)
+            return AgentTurnResult(raw_result=None, messages=())
 
-        def create_user_event(content, stream):
-            return SimpleNamespace(content=content, stream=stream)
+        runtime.execute_turn = AsyncMock(side_effect=execute_turn)
+        bridge._runtime = runtime
         model_loop = run_async(bridge._run_model_loop(
             candidate_models=[{"id": "only-model"}],
             route_plan=SimpleNamespace(),
@@ -466,8 +507,7 @@ class TestNanobotBridge:
             trace_id="trace-suppressed",
             run_id="run-suppressed",
             reply_llm_source="replyer.private_chat",
-            create_user_event=create_user_event,
-            process_event=process_event,
+            runtime_context=_runtime_context("session-suppressed"),
         ))
 
         resolution = run_async(bridge._check_reply_contract(
@@ -482,8 +522,6 @@ class TestNanobotBridge:
                 "enable_reply_contract_retry": False,
             },
             event_content="你好",
-            create_user_event=create_user_event,
-            process_event=process_event,
             trace_id="trace-suppressed",
             run_id="run-suppressed",
             reply_llm_source="replyer.private_chat",
@@ -603,32 +641,6 @@ class TestNanobotBridge:
         assert finalizer.final_tools_token is None
         assert finalizer.trace_tokens is None
 
-    def test_remove_system_contexts_cleans_effort_and_retry_prompts(self):
-        from nanobot_kt.bridge import NanobotBridge
-
-        class Msg:
-            def __init__(self, role, content):
-                self.role = role
-                self.content = content
-
-        conv = MagicMock()
-        conv._messages = [
-            Msg("system", "base prompt"),
-            Msg("system", "本轮简短处理。先给判断"),
-            Msg("system", "本轮认真处理。可以使用工具"),
-            Msg("system", "<reply_contract_retry>\nretry\n</reply_contract_retry>"),
-            Msg("system", "<runtime_context>\nold\n</runtime_context>"),
-            Msg(
-                "system",
-                "<session_guidance>\n旧会话指导\n</session_guidance>",
-            ),
-        ]
-
-        bridge = NanobotBridge.__new__(NanobotBridge)
-        bridge._remove_system_contexts(conv, NanobotBridge.DYNAMIC_SYSTEM_PREFIXES)
-
-        assert [m.content for m in conv._messages] == ["base prompt"]
-
     def test_strip_kt_framework_prompt_sections_keeps_project_prompt_only(self):
         from nanobot_kt.bridge import _strip_kt_framework_prompt_sections
 
@@ -641,14 +653,28 @@ class TestNanobotBridge:
 
         assert _strip_kt_framework_prompt_sections(prompt) == "## 交互定位\n\n项目提示"
 
-    def test_get_bridge_singleton(self):
-        # Reset module-level singleton between tests
+    @pytest.mark.asyncio
+    async def test_get_bridge_requires_explicit_lifecycle_and_stays_singleton(self):
         import nanobot_kt.bridge as bridge_mod
+
         bridge_mod._bridge = None
+        bridge_mod._bridge_lifecycle_state = bridge_mod.BridgeLifecycleState.NEW
+        with pytest.raises(bridge_mod.BridgeUnavailableError):
+            bridge_mod.get_bridge()
+
+        initialized = await bridge_mod.init_bridge()
         b1 = bridge_mod.get_bridge()
         b2 = bridge_mod.get_bridge()
+        assert initialized is b1
         assert b1 is b2
-        bridge_mod._bridge = None  # cleanup
+        await bridge_mod.shutdown_bridge()
+        assert bridge_mod.get_bridge_lifecycle_state() is bridge_mod.BridgeLifecycleState.STOPPED
+        with pytest.raises(bridge_mod.BridgeUnavailableError):
+            bridge_mod.get_bridge()
+
+        restarted = await bridge_mod.init_bridge()
+        assert restarted is bridge_mod.get_bridge()
+        await bridge_mod.shutdown_bridge()
 
     def test_bridge_pool_allows_different_sessions_to_run_concurrently(self, monkeypatch):
         import nanobot_kt.bridge as bridge_mod
@@ -1549,12 +1575,21 @@ class TestNanobotBridge:
         from nanobot_kt.bridge import NanobotBridge
         import json
 
-        monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "", raising=False)
-        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_FLOOR", 12, raising=False)
-        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_BOOST", 2, raising=False)
-        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_MAX_COST", 10.0, raising=False)
-        # settings.get("model.reply") 优先于 LLM_MODEL_REPLY，mock 为空以触发 auto-routing
+        # 回复模型及路由阈值统一来自 SettingSpec/SettingsService。
         monkeypatch.setattr("core.settings_service.settings.get", lambda key, default=None: default)
+        monkeypatch.setattr(
+            "core.settings_service.settings.get_int",
+            lambda key, default=0: {
+                "model.reply_intel_floor": 12,
+                "model.reply_intel_boost": 2,
+            }.get(key, default),
+        )
+        monkeypatch.setattr(
+            "core.settings_service.settings.get_float",
+            lambda key, default=0.0: {
+                "model.reply_max_cost": 10.0,
+            }.get(key, default),
+        )
 
         captured = {}
 
@@ -2405,7 +2440,8 @@ class TestNanobotBridge:
         failure_tracker.record_failure.assert_awaited_once_with("model-a")
         failure_tracker.record_success.assert_awaited_once_with("model-b")
         assert llm.config.model == "model-b"
-        mock_conv.truncate_from.assert_called_once_with(0)
+        # Bridge 已经只经 AgentRuntimePort 回滚 conversation，不再调用 KT 私有截断 API。
+        mock_conv.truncate_from.assert_not_called()
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")

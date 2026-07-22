@@ -21,8 +21,8 @@ def _local_now() -> datetime:
 class KeywordEmbeddingProvider:
     def embed(self, texts):
         vectors = []
-        for text in texts:
-            value = str(text)
+        for source_text in texts:
+            value = str(source_text)
             if any(token in value for token in ("端口", "部署", "uvicorn")):
                 vectors.append([1.0, 0.0, 0.0])
             elif any(token in value for token in ("模型", "路由")):

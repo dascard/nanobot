@@ -323,8 +323,6 @@ class TestHtmlPassthrough:
             query="生成日报",
             meta={"enable_reply_contract_retry": False},
             event_content="生成日报",
-            create_user_event=MagicMock(),
-            process_event=AsyncMock(),
             trace_id="trace-test",
             run_id="run-test",
             reply_llm_source="replyer.private_chat",

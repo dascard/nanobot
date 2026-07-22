@@ -14,12 +14,12 @@ from sqlalchemy.orm import Session
 from api.admin.common import audit_request, verify_admin
 from core.database import ChatLog, Persona, PersonaFact, User, get_db
 from core.persona_preprocess import (
-    CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
     PersonaStateMachine,
     build_candidate_extraction_prompt,
     content_hash,
     filter_user_messages,
     format_candidate_logs,
+    get_candidate_extraction_system_prompt,
 )
 from core.time_utils import db_now_naive
 
@@ -310,7 +310,10 @@ async def persona_extract_user(
     )
     resp = await client.chat_completion(
         messages=[
-            {"role": "system", "content": CANDIDATE_EXTRACTION_SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": get_candidate_extraction_system_prompt(),
+            },
             {"role": "user", "content": prompt},
         ],
         manual_model=str(route.get("model") or ""),

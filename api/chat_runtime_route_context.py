@@ -26,7 +26,6 @@ class ChatRuntimeRouteInput:
     req: Any
     final_query: str
     final_files: list[str]
-    persona_text: str
     memory_header: str
     history_messages: list[dict[str, str]]
     ctx_debug: dict[str, Any]

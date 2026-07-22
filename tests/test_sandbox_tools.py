@@ -11,6 +11,16 @@ from core.tool_registry import SANDBOX_TOOL_NAMES
 from tests.async_helpers import run_async
 
 
+def test_sandbox_tool_implementation_is_owned_by_kt_adapter_layer():
+    from creatures.nanobot.prompts.skills.sandbox.tool import (
+        SandboxExecTool as LegacySandboxExecTool,
+    )
+    from nanobot_kt.tools.sandbox import SandboxExecTool
+
+    assert LegacySandboxExecTool is SandboxExecTool
+    assert SandboxExecTool.__module__ == "nanobot_kt.tools.sandbox"
+
+
 IMAGE_ID = "sha256:" + "a" * 64
 
 

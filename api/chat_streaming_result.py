@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
@@ -22,6 +23,31 @@ def _safe_log(method_name: str, message: str, *args: Any, **kwargs: Any) -> None
         log_method(message, *args, **kwargs)
     except BaseException:
         pass
+
+
+async def _invoke_persistence(
+    callback: Callable[..., Any],
+    persist_db: Any | None,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """生产 callback 自行创建线程内 Session；兼容测试可显式传入 db。"""
+
+    if persist_db is not None:
+        value = callback(persist_db, *args, **kwargs)
+        return await value if inspect.isawaitable(value) else value
+    if inspect.iscoroutinefunction(callback):
+        return await callback(None, *args, **kwargs)
+
+    def operation() -> Any:
+        from core.uow import UnitOfWork
+
+        with UnitOfWork() as uow:
+            if uow.db is None:
+                raise RuntimeError("UnitOfWork session is not open")
+            return callback(uow.db, *args, **kwargs)
+
+    return await asyncio.to_thread(operation)
 
 
 async def _best_effort_fail_claim(owner: Any | None, error: BaseException) -> None:
@@ -269,9 +295,10 @@ async def persist_stream_result_after_runner_done(
                     cleanup_error=cleanup_error,
                 )
             else:
-                def _write_bridge_error(db_for_write: Any) -> None:
-                    callbacks.persist_chat_turn(
-                        db_for_write,
+                async def _write_bridge_error() -> None:
+                    await _invoke_persistence(
+                        callbacks.persist_chat_turn,
+                        persist_db,
                         context.persist_req,
                         context.empty_assistant_placeholder,
                         context.guardrail_status,
@@ -282,15 +309,7 @@ async def persist_stream_result_after_runner_done(
 
                 if context.claim_key is None:
                     try:
-                        if persist_db is not None:
-                            _write_bridge_error(persist_db)
-                        else:
-                            from core.uow import UnitOfWork
-
-                            with UnitOfWork() as uow:
-                                if uow.db is None:
-                                    raise RuntimeError("UnitOfWork session is not open")
-                                _write_bridge_error(uow.db)
+                        await _write_bridge_error()
                     except BaseException as cleanup_error:
                         _log_secondary_cleanup_error(
                             bridge_error,
@@ -317,9 +336,10 @@ async def persist_stream_result_after_runner_done(
                     cleanup_error=cleanup_error,
                 )
             else:
-                def _write_prompt_audit(db_for_write: Any) -> None:
-                    callbacks.persist_chat_turn(
-                        db_for_write,
+                async def _write_prompt_audit() -> None:
+                    await _invoke_persistence(
+                        callbacks.persist_chat_turn,
+                        persist_db,
                         context.persist_req,
                         context.empty_assistant_placeholder,
                         context.guardrail_status,
@@ -330,15 +350,7 @@ async def persist_stream_result_after_runner_done(
 
                 if context.claim_key is None:
                     try:
-                        if persist_db is not None:
-                            _write_prompt_audit(persist_db)
-                        else:
-                            from core.uow import UnitOfWork
-
-                            with UnitOfWork() as uow:
-                                if uow.db is None:
-                                    raise RuntimeError("UnitOfWork session is not open")
-                                _write_prompt_audit(uow.db)
+                        await _write_prompt_audit()
                     except BaseException as cleanup_error:
                         _log_secondary_cleanup_error(
                             prompt_audit_error,
@@ -360,12 +372,13 @@ async def persist_stream_result_after_runner_done(
             guardrail_status=context.guardrail_status,
         )
 
-        def _write_success(db_for_write: Any) -> tuple[int, CompletedInboundResponse]:
+        async def _write_success() -> tuple[int, CompletedInboundResponse]:
             if context.claim_key is not None:
                 if callbacks.persist_claimed_chat_turn is None or not context.request_sha256:
                     raise RuntimeError("claimed 流式结果缺少可恢复持久化依赖")
-                claimed_result = callbacks.persist_claimed_chat_turn(
-                    db_for_write,
+                claimed_result = await _invoke_persistence(
+                    callbacks.persist_claimed_chat_turn,
+                    persist_db,
                     context.persist_req,
                     final_answer,
                     context.guardrail_status,
@@ -377,8 +390,9 @@ async def persist_stream_result_after_runner_done(
                     timing_meta=context.private_timing_meta,
                 )
                 return int(claimed_result.pending), claimed_result.completion
-            pending = callbacks.persist_chat_turn(
-                db_for_write,
+            pending = await _invoke_persistence(
+                callbacks.persist_chat_turn,
+                persist_db,
                 context.persist_req,
                 final_answer,
                 context.guardrail_status,
@@ -394,15 +408,7 @@ async def persist_stream_result_after_runner_done(
                 unprocessed_logs=pending,
             )
 
-        if persist_db is not None:
-            pending, completion = _write_success(persist_db)
-        else:
-            from core.uow import UnitOfWork
-
-            with UnitOfWork() as uow:
-                if uow.db is None:
-                    raise RuntimeError("UnitOfWork session is not open")
-                pending, completion = _write_success(uow.db)
+        pending, completion = await _write_success()
         transport_answer = final_answer
         try:
             transport_answer = callbacks.expand_chat_transport_answer(final_answer)

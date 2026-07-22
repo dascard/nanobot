@@ -6,6 +6,7 @@ import urllib.error
 from dataclasses import asdict, dataclass, field
 
 from core.timing_score import TimingDecision, TimingModelHint, decide_timing
+from core.model_provider.decision_runtime import classify_private_decision
 
 logger = logging.getLogger("nanobot.private_timing")
 
@@ -212,12 +213,16 @@ class PrivateTimingGate:
 
         # Qwen 分类（仅 short/serious）
         try:
-            from clients.classifier_client import get_private_decision_classifier
             from config import CLASSIFIER_TIMEOUT
             import asyncio
-            classifier = self.classifier or get_private_decision_classifier()
+            classifier = self.classifier
+            classify = (
+                classifier.classify
+                if classifier is not None
+                else classify_private_decision
+            )
             result = await asyncio.wait_for(
-                asyncio.to_thread(classifier.classify, text, has_files),
+                asyncio.to_thread(classify, text, has_files),
                 timeout=CLASSIFIER_TIMEOUT + 1,
             )
             scoring = _score_private_timing(text, has_files=has_files, model_result=result)

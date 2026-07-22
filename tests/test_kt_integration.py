@@ -419,16 +419,12 @@ class TestEvolveWithDictLogs:
             {"id": 2, "user_id": "u1", "role": "model", "content": "hello", "sender_name": None, "session_id": "s1", "created_at": None},
         ]
         mock_memory.get_user_persona.return_value = "{}"
-        mock_memory.get_system_prompt.return_value = "test prompt"
 
         mock_provider = MagicMock(spec=UnifiedProvider)
         mock_provider.provider_type = "new-api"
         mock_provider.invoke_raw = AsyncMock(return_value='{"candidates": []}')
 
         controller = NanobotKTController(provider=mock_provider, memory=mock_memory)
-        controller.log_analyst.run = AsyncMock(return_value={"summary": "test", "kb_document": ""})
-        controller.persona_architect.run = AsyncMock(return_value={"traits": []})
-        controller.prompt_auditor.run = AsyncMock(return_value={"final_system_prompt": "new prompt"})
 
         await controller.evolve("u1")
 

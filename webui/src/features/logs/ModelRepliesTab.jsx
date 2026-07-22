@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { api } from '../../api'
 
@@ -28,7 +28,11 @@ export function ModelRepliesTab() {
       setHasMore(data.page_info?.has_more || false)
     })
   }
-  useEffect(() => { load(0) }, [])
+  const initialLoadRef = useRef(load)
+  useEffect(() => {
+    const timer = window.setTimeout(() => { initialLoadRef.current(0) }, 0)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   const goBack = () => {
     if (cursorStack.length === 0) return

@@ -87,7 +87,7 @@ async def test_session_guidance_is_unique_between_identity_and_persona(
     ]
     assert len(matching) == 1
     section = matching[0]
-    assert section == {
+    expected_legacy_fields = {
         "node_id": "session_guidance",
         "node_type": "runtime",
         "template_key": "",
@@ -96,6 +96,14 @@ async def test_session_guidance_is_unique_between_identity_and_persona(
         "status": "emitted",
         "message_indexes": section["message_indexes"],
     }
+    assert all(section[key] == value for key, value in expected_legacy_fields.items())
+    assert section["phase"] == "policy"
+    assert section["authority"] == "operator_policy"
+    assert section["trust"] == "trusted_instruction"
+    assert section["dependencies"] == ["identity_context"]
+    assert section["source_precedence"] == ["request"]
+    assert section["editable"] is False
+    assert section["failure_policy"] == "fail_closed"
     assert len(section["message_indexes"]) == 1
 
     sections = {item["node_id"]: item for item in plan.flow_sections}

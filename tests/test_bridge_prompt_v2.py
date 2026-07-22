@@ -339,9 +339,10 @@ async def test_research_metadata_reaches_real_internal_private_strict_compiler(
     assert "template_paths" not in captured_renders[0]["variables"]
     assert captured_results[0].prompt_key == "chat_private"
     assert captured_results[0].meta_update["prompt_engine"] == "prompt"
-    runtime_context = bridge._agent.executor._session.extra["nanobot_runtime_context"]
-    assert runtime_context["platform"] == "internal"
-    assert runtime_context["chat_type"] == "private"
+    # 编译失败发生在 Agent turn 之前；请求上下文应通过 Prompt 输入合同验证，
+    # 不再依赖 KT executor 的私有临时状态。
+    assert captured_inputs[0].platform == "internal"
+    assert captured_inputs[0].chat_type == "private"
 
 
 def test_bridge_build_prompt_runtime_input_passes_explicit_super_user_fact(monkeypatch):
@@ -811,6 +812,11 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     bridge._output = _FakeOutput()
     bridge._session_locks = {}
     bridge._last_prompt_render_meta = {}
+    monkeypatch.setattr(
+        bridge,
+        "_apply_runtime_model_route",
+        lambda *_args, **_kwargs: None,
+    )
 
     conversation = _FakeConversation()
     seen_events = []
@@ -1038,6 +1044,11 @@ async def test_bridge_engine_v2_maps_private_runtime_metadata(
     bridge._output = _FakeOutput()
     bridge._session_locks = {}
     bridge._last_prompt_render_meta = {}
+    monkeypatch.setattr(
+        bridge,
+        "_apply_runtime_model_route",
+        lambda *_args, **_kwargs: None,
+    )
     bridge._agent = SimpleNamespace(
         controller=SimpleNamespace(conversation=_FakeConversation()),
         registry=SimpleNamespace(_tools={"reply": object(), "no_reply": object()}),
@@ -1484,6 +1495,11 @@ async def test_bridge_tool_plan_does_not_mutate_registry_tools(monkeypatch, db_s
     bridge._output = _FakeOutput()
     bridge._session_locks = {}
     bridge._last_prompt_render_meta = {}
+    monkeypatch.setattr(
+        bridge,
+        "_apply_runtime_model_route",
+        lambda *_args, **_kwargs: None,
+    )
 
     conversation = _FakeConversation()
     registry_tools = {

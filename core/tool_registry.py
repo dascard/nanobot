@@ -1,6 +1,8 @@
-"""工具注册表——所有工具的元数据单一来源。"""
+"""工具注册表——兼容元数据与类型化能力描述的单一来源。"""
 
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Literal, Mapping
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,150 @@ class ToolDef:
     force_disabled: bool = False          # 全局硬禁用（任何默认或覆盖都不能开启）
     force_disabled_group: bool = False    # 群聊强制禁用（bash/write/edit）
     supports_background: bool = True      # 是否向模型暴露 run_in_background
+    prompt_template_keys: tuple[str, ...] | None = None
+
+
+ToolAvailabilityPolicy = Literal[
+    "force_enabled",
+    "force_disabled",
+    "configurable",
+    "framework_only",
+]
+ToolExecutionPolicy = Literal["foreground_or_background", "foreground_only"]
+ToolTracePolicy = Literal["standard", "metadata_only"]
+
+
+class ToolDescriptorRegistryError(ValueError):
+    """工具描述符注册失败。"""
+
+
+@dataclass(frozen=True)
+class ToolDescriptor:
+    """由兼容 ToolDef 派生的稳定、可验证工具能力描述。"""
+
+    name: str
+    definition: ToolDef
+    availability_policy: ToolAvailabilityPolicy
+    execution_policy: ToolExecutionPolicy
+    trace_policy: ToolTracePolicy
+    prompt_template_keys: tuple[str, ...]
+    prompt_source_precedence: tuple[str, ...]
+    prompt_editable: bool
+    owner_module: str
+    domain: str
+    framework_owned: bool = False
+
+    @property
+    def supports_background(self) -> bool:
+        return self.execution_policy == "foreground_or_background"
+
+
+class ToolDescriptorRegistry:
+    """启动后只读的工具描述符快照。"""
+
+    def __init__(self, descriptors: Mapping[str, ToolDescriptor]):
+        self._descriptors = MappingProxyType(dict(descriptors))
+
+    @property
+    def frozen(self) -> bool:
+        return True
+
+    @classmethod
+    def from_metadata(
+        cls,
+        metadata: Mapping[str, ToolDef],
+        framework_metadata: Mapping[str, ToolDef] | None = None,
+    ) -> "ToolDescriptorRegistry":
+        descriptors: dict[str, ToolDescriptor] = {}
+        for framework_owned, definitions in (
+            (False, metadata),
+            (True, framework_metadata or {}),
+        ):
+            for key, definition in definitions.items():
+                name = str(key or "").strip()
+                if name != definition.name:
+                    raise ToolDescriptorRegistryError(
+                        f"tool registry key {name!r} 与 ToolDef.name {definition.name!r} 不一致"
+                    )
+                if name in descriptors:
+                    raise ToolDescriptorRegistryError(f"tool descriptor 重复登记: {name}")
+                if definition.force_enabled and definition.force_disabled:
+                    raise ToolDescriptorRegistryError(
+                        f"tool {name} 不能同时 force_enabled 与 force_disabled"
+                    )
+                if definition.risk_level not in {"low", "medium", "high"}:
+                    raise ToolDescriptorRegistryError(
+                        f"tool {name} risk_level 不支持: {definition.risk_level}"
+                    )
+                if definition.category not in {
+                    "communication",
+                    "data",
+                    "analysis",
+                    "system",
+                    "file",
+                }:
+                    raise ToolDescriptorRegistryError(
+                        f"tool {name} category 不支持: {definition.category}"
+                    )
+                prompt_keys = _derive_prompt_template_keys(definition)
+                expected_prefix = f"tools/{name}/"
+                invalid_prompt_keys = [
+                    item for item in prompt_keys if not item.startswith(expected_prefix)
+                ]
+                if invalid_prompt_keys:
+                    raise ToolDescriptorRegistryError(
+                        f"tool {name} prompt template 不属于自身命名空间: "
+                        + ", ".join(invalid_prompt_keys)
+                    )
+                if len(set(prompt_keys)) != len(prompt_keys):
+                    raise ToolDescriptorRegistryError(
+                        f"tool {name} prompt template 重复登记"
+                    )
+                if framework_owned:
+                    availability: ToolAvailabilityPolicy = "framework_only"
+                elif definition.force_disabled:
+                    availability = "force_disabled"
+                elif definition.force_enabled:
+                    availability = "force_enabled"
+                else:
+                    availability = "configurable"
+                descriptors[name] = ToolDescriptor(
+                    name=name,
+                    definition=definition,
+                    availability_policy=availability,
+                    execution_policy=(
+                        "foreground_or_background"
+                        if definition.supports_background
+                        else "foreground_only"
+                    ),
+                    trace_policy=(
+                        "metadata_only" if name in SANDBOX_TOOL_NAMES else "standard"
+                    ),
+                    prompt_template_keys=prompt_keys,
+                    prompt_source_precedence=(
+                        ("runtime", "default") if prompt_keys else ()
+                    ),
+                    prompt_editable=bool(prompt_keys)
+                    and availability != "force_disabled"
+                    and not framework_owned,
+                    owner_module=(
+                        "core.sandbox"
+                        if name in SANDBOX_TOOL_NAMES
+                        else "core.tool_registry"
+                    ),
+                    domain=f"tool.{definition.category}",
+                    framework_owned=framework_owned,
+                )
+        return cls(descriptors)
+
+    def get(self, name: str) -> ToolDescriptor | None:
+        return self._descriptors.get(str(name or "").strip())
+
+    def values(self) -> tuple[ToolDescriptor, ...]:
+        return tuple(self._descriptors[name] for name in sorted(self._descriptors))
+
+    def snapshot(self) -> Mapping[str, ToolDescriptor]:
+        return self._descriptors
 
 
 SANDBOX_TOOL_NAMES = frozenset({
@@ -40,7 +186,13 @@ LEGACY_FILE_TOOL_NAMES = frozenset({
 })
 
 
-TOOL_METADATA: dict[str, ToolDef] = {
+def _derive_prompt_template_keys(definition: ToolDef) -> tuple[str, ...]:
+    if definition.prompt_template_keys is not None:
+        return tuple(definition.prompt_template_keys)
+    return (f"tools/{definition.name}/usage",)
+
+
+TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
     # ── 通讯工具 ──
     "reply": ToolDef(
         name="reply", label="回复", category="communication", risk_level="low",
@@ -81,6 +233,13 @@ TOOL_METADATA: dict[str, ToolDef] = {
         name="ai_daily", label="AI日报", category="data", risk_level="low",
         private_default=True, group_default=True,
         description="聚合 AI/科技可信来源，生成日报/简报。",
+        prompt_template_keys=(
+            "tools/ai_daily/usage",
+            "tools/ai_daily/digest_system",
+            "tools/ai_daily/digest_user",
+            "tools/ai_daily/quality_system",
+            "tools/ai_daily/quality_user",
+        ),
     ),
     "memory_query": ToolDef(
         name="memory_query", label="摘要记忆查询", category="data", risk_level="low",
@@ -112,11 +271,24 @@ TOOL_METADATA: dict[str, ToolDef] = {
         name="image_summary", label="图片描述", category="analysis", risk_level="low",
         private_default=True, group_default=True,
         description="OCR/图片内容分析，生成结构化摘要。",
+        prompt_template_keys=(
+            "tools/image_summary/usage",
+            "tools/image_summary/system",
+            "tools/image_summary/user",
+        ),
     ),
     "group_analysis": ToolDef(
         name="group_analysis", label="群聊分析", category="analysis", risk_level="medium",
         private_default=False, group_default=True,
         description="分析目标群聊近期内容；可直接传群号、群名、session_id 或 stream_id，无需先查 SQL。",
+        prompt_template_keys=(
+            "tools/group_analysis/usage",
+            "tools/group_analysis/system",
+            "tools/group_analysis/topics",
+            "tools/group_analysis/titles",
+            "tools/group_analysis/quotes",
+            "tools/group_analysis/quality",
+        ),
     ),
 
     # ── 系统工具 ──
@@ -135,12 +307,14 @@ TOOL_METADATA: dict[str, ToolDef] = {
         private_default=False, group_default=False,
         description="旧 KT 记忆子代理的路径隔离不足，已安全禁用；结构化摘要查询使用 memory_query。",
         force_disabled=True,
+        prompt_template_keys=(),
     ),
     "memory_write": ToolDef(
         name="memory_write", label="记忆写入 (subagent)", category="system", risk_level="low",
         private_default=False, group_default=False,
         description="旧 KT 记忆子代理可写通用宿主工作目录，路径隔离不足，已安全禁用。",
         force_disabled=True,
+        prompt_template_keys=(),
     ),
 
     # ── 持久 Workspace 与一次性 Sandbox ──
@@ -193,6 +367,7 @@ TOOL_METADATA: dict[str, ToolDef] = {
         private_default=True, group_default=False,
         description="旧 KT 宿主文件读取入口，已由 workspace_read 替代。",
         force_disabled=True,
+        prompt_template_keys=(),
     ),
     "write": ToolDef(
         name="write", label="写入文件", category="file", risk_level="medium",
@@ -200,6 +375,7 @@ TOOL_METADATA: dict[str, ToolDef] = {
         description="旧 KT 宿主文件写入入口，已由 workspace_write 替代。",
         force_disabled=True,
         force_disabled_group=True,
+        prompt_template_keys=(),
     ),
     "edit": ToolDef(
         name="edit", label="编辑文件", category="file", risk_level="medium",
@@ -207,18 +383,21 @@ TOOL_METADATA: dict[str, ToolDef] = {
         description="旧 KT 宿主文件编辑入口，已安全禁用。",
         force_disabled=True,
         force_disabled_group=True,
+        prompt_template_keys=(),
     ),
     "grep": ToolDef(
         name="grep", label="文件搜索", category="file", risk_level="low",
         private_default=True, group_default=False,
         description="旧 KT 宿主文件搜索入口，已由 workspace_search 替代。",
         force_disabled=True,
+        prompt_template_keys=(),
     ),
     "glob": ToolDef(
         name="glob", label="文件查找", category="file", risk_level="low",
         private_default=True, group_default=False,
         description="旧 KT 宿主文件查找入口，已由 workspace_list 替代。",
         force_disabled=True,
+        prompt_template_keys=(),
     ),
     "bash": ToolDef(
         name="bash", label="命令行", category="file", risk_level="high",
@@ -226,12 +405,13 @@ TOOL_METADATA: dict[str, ToolDef] = {
         description="旧 KT 宿主命令执行入口，已由 sandbox_exec 替代。",
         force_disabled=True,
         force_disabled_group=True,
+        prompt_template_keys=(),
     ),
-}
+})
 
 
 # KT 自动注册但不会进入 Nanobot 用户可见 ToolPlan 的框架工具。
-FRAMEWORK_TOOL_METADATA: dict[str, ToolDef] = {
+FRAMEWORK_TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
     "skill": ToolDef(
         name="skill",
         label="技能加载（框架）",
@@ -240,9 +420,41 @@ FRAMEWORK_TOOL_METADATA: dict[str, ToolDef] = {
         private_default=False,
         group_default=False,
         description="KT 框架按需读取过程技能；不作为 Nanobot 对话工具暴露。",
+        prompt_template_keys=(),
     ),
-}
+})
+
+
+TOOL_DESCRIPTOR_REGISTRY = ToolDescriptorRegistry.from_metadata(
+    TOOL_METADATA,
+    FRAMEWORK_TOOL_METADATA,
+)
+
+
+def get_tool_descriptor(name: str) -> ToolDescriptor | None:
+    return TOOL_DESCRIPTOR_REGISTRY.get(name)
+
+
+def list_tool_descriptors() -> tuple[ToolDescriptor, ...]:
+    return TOOL_DESCRIPTOR_REGISTRY.values()
+
+
+def list_user_tool_descriptors() -> tuple[ToolDescriptor, ...]:
+    """返回进入 Nanobot ToolPlan 的描述符，不包含 KT 框架内部工具。"""
+
+    return tuple(
+        descriptor
+        for descriptor in list_tool_descriptors()
+        if not descriptor.framework_owned
+    )
+
+
+def validate_tool_descriptor_registry() -> None:
+    """供启动期显式校验；构造新快照会重新执行全部 fail-closed 规则。"""
+
+    ToolDescriptorRegistry.from_metadata(TOOL_METADATA, FRAMEWORK_TOOL_METADATA)
 
 
 def get_tool_def(name: str) -> ToolDef | None:
-    return TOOL_METADATA.get(name) or FRAMEWORK_TOOL_METADATA.get(name)
+    descriptor = get_tool_descriptor(name)
+    return descriptor.definition if descriptor is not None else None

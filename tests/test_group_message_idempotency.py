@@ -27,6 +27,30 @@ def _request(
 
 
 @pytest.mark.asyncio
+async def test_group_database_phase_uses_injected_session_bind(
+    db_session,
+    monkeypatch,
+):
+    from app.group_ingress.service import GroupIngressService
+    from core import database
+
+    def forbidden_global_session():
+        raise AssertionError("群聊数据库阶段不得退回全局 SessionLocal")
+
+    monkeypatch.setattr(database, "SessionLocal", forbidden_global_session)
+    service = GroupIngressService(db=db_session)
+
+    result = await service._run_db_phase(
+        lambda: (
+            service._current_db() is not db_session,
+            service._current_db().get_bind() is db_session.get_bind(),
+        )
+    )
+
+    assert result == (True, True)
+
+
+@pytest.mark.asyncio
 async def test_canonical_group_ids_share_claim_and_replay_uses_current_identity(
     db_session,
     monkeypatch,

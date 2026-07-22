@@ -10,10 +10,17 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
+from sqlalchemy.orm import Session
+
 from app.group_ingress import helpers as h
 from app.group_ingress import recovery
 from app.group_ingress import response_contract
-from core.database import ChatLog, User, release_clean_session_transaction
+from core.database import (
+    ChatLog,
+    User,
+    run_session_phase_async,
+    session_factory_from_session,
+)
 from core.inbound_claim_lifecycle import (
     InboundClaimOwner,
     InboundClaimOwnershipLostError,
@@ -69,13 +76,64 @@ class GroupIngressResult:
             raise ValueError("completion 与 technical_error 必须恰好一个非空")
 
 
+@dataclass(frozen=True)
+class _GroupTimingPreparation:
+    early_result: GroupIngressResult | None
+    registered_stickers: list[dict]
+    ambient_log_id: int | None = None
+    ambient_meta: dict[str, Any] | None = None
+    recent_context: Any = None
+    bot_sender_kind: str = ""
+    reason: str = ""
+    timing_message: dict[str, Any] | None = None
+    talk_value: float = 0.5
+    platform: str = "qq"
+
+
+@dataclass(frozen=True)
+class _GroupBridgePreparation:
+    source_message_ids: list[str]
+    chat_query: str
+    bridge_meta: dict[str, Any]
+    enriched_query: str
+
+
 class GroupIngressService:
     """处理 /group/message 的业务流程。"""
 
-    def __init__(self, *, db: Any, background_tasks: Any = None, bridge_provider: Any = None):
+    def __init__(
+        self,
+        *,
+        db: Any,
+        background_tasks: Any = None,
+        bridge_provider: Any = None,
+        session_factory: Callable[[], Any] | None = None,
+    ):
         self.db = db
+        self._phase_db: Any | None = None
+        self._phase_session_factory = session_factory
+        if self._phase_session_factory is None and isinstance(db, Session):
+            self._phase_session_factory = session_factory_from_session(db)
         self.background_tasks = background_tasks
         self.bridge_provider = bridge_provider
+
+    def _current_db(self) -> Any:
+        return self._phase_db if self._phase_db is not None else self.db
+
+    def _run_with_phase_db(self, db: Any, operation: Callable[[], Any]) -> Any:
+        if self._phase_db is not None:
+            raise RuntimeError("群聊数据库阶段不允许嵌套")
+        self._phase_db = db
+        try:
+            return operation()
+        finally:
+            self._phase_db = None
+
+    async def _run_db_phase(self, operation: Callable[[], Any]) -> Any:
+        return await run_session_phase_async(
+            lambda phase_db: self._run_with_phase_db(phase_db, operation),
+            session_factory=self._phase_session_factory,
+        )
 
     def _platform_from_request(self, req: Any) -> str:
         client_meta = getattr(req, "client_meta", None)
@@ -136,8 +194,11 @@ class GroupIngressService:
         )
 
     def _rollback_request_session_best_effort(self) -> None:
+        db = self._phase_db
+        if db is None:
+            return
         try:
-            self.db.rollback()
+            db.rollback()
         except BaseException as exc:
             try:
                 logger.error("[GroupMsg] request Session rollback failed: %r", exc)
@@ -190,20 +251,16 @@ class GroupIngressService:
             await asyncio.gather(business_task, return_exceptions=True)
 
     async def handle(self, req: Any) -> dict[str, Any]:
-        db = self.db
         group_user_id = h.normalize_group_session_id(req.group_id)
-        release_clean_session_transaction(
-            db,
-            label="group_before_inbound_claim",
-            logger=logger,
-        )
         claim_key = normalize_inbound_claim_key(
             self._platform_from_request(req),
             "group",
             group_user_id,
             req.message_id,
         )
-        claim_decision = acquire_inbound_claim(db, claim_key)
+        claim_decision = await self._run_db_phase(
+            lambda: acquire_inbound_claim(self._current_db(), claim_key)
+        )
         if claim_key is not None:
             req.message_id = claim_key.message_id
         elif claim_decision.kind is ClaimDecisionKind.BYPASS:
@@ -223,7 +280,10 @@ class GroupIngressService:
         if claim_decision.kind is ClaimDecisionKind.ACQUIRED:
             if claim_decision.handle is None:
                 raise RuntimeError("acquired group claim 缺少 owner handle")
-            owner = InboundClaimOwner(claim_decision.handle)
+            owner = InboundClaimOwner(
+                claim_decision.handle,
+                session_factory=self._phase_session_factory,
+            )
             attempt_count = claim_decision.handle.attempt_count
         elif claim_decision.kind is not ClaimDecisionKind.BYPASS:
             raise RuntimeError(f"未知 group claim decision: {claim_decision.kind}")
@@ -278,11 +338,6 @@ class GroupIngressService:
             if owner is not None:
                 if result.completion is None:
                     raise RuntimeError("group business result 缺少 completion")
-                release_clean_session_transaction(
-                    db,
-                    label="group_before_claim_complete",
-                    logger=logger,
-                )
                 completed = await owner.complete(result.completion)
                 if completed is not True:
                     raise InboundClaimOwnershipLostError(
@@ -314,7 +369,6 @@ class GroupIngressService:
     ) -> GroupIngressResult:
         from core.timing_runtime import get_group_runtime
 
-        db = self.db
         message_text = h.build_group_message_text(req)
         fingerprint_meta = h.build_group_message_meta(req, [])
         fingerprint_stickers = h.group_sticker_payloads(req)
@@ -336,267 +390,47 @@ class GroupIngressService:
                     exc,
                     reason="inbound_request_invalid",
                 )
-
-        existing_ambient = None
-        if req.message_id:
-            existing_ambient = (
-                db.query(ChatLog)
-                .filter(
-                    ChatLog.session_id == group_user_id,
-                    ChatLog.message_id == req.message_id,
-                    ChatLog.role == "ambient",
-                )
-                .order_by(ChatLog.created_at.asc(), ChatLog.id.asc())
-                .first()
-            )
-        if attempt_count == 1 and existing_ambient is not None:
-            logger.info(
-                "[GroupMsg] legacy duplicate ignored group=%s message_id=%s",
-                group_user_id,
-                req.message_id,
-            )
-            return self._business_result(
+        preparation = await self._run_db_phase(
+            lambda: self._prepare_timing_phase(
                 req,
-                outcome="no_reply",
-                reason="duplicate_message",
+                group_user_id=group_user_id,
+                attempt_count=attempt_count,
+                claim_key=claim_key,
+                request_sha256=request_sha256,
+                message_text=message_text,
             )
-
-        reuse_ambient = attempt_count > 1 and existing_ambient is not None
-
-        logger.info("[GroupMsg] recv group=%s sender=%s len=%d at=%s reply=%s",
-                    req.group_id, req.sender_name, len(message_text or ""),
-                    req.is_at_bot, req.is_reply_to_bot)
-
-        if reuse_ambient:
-            ambient_log = existing_ambient
-            try:
-                meta = recovery.verify_group_request_sha256(
-                    ambient_log.meta_json,
-                    request_sha256,
-                )
-                recovered = recovery.load_group_recoverable_completion(
-                    db,
-                    key=claim_key,
-                    request_sha256=request_sha256,
-                )
-            except recovery.GroupRequestMismatchError as exc:
-                return self._technical_result(
-                    req,
-                    exc,
-                    reason="inbound_request_mismatch",
-                )
-            except recovery.GroupRecoveryCorruptError as exc:
-                return self._technical_result(
-                    req,
-                    exc,
-                    reason=f"inbound_recovery_corrupt: {exc}",
-                )
-
-            if recovered is not None:
-                return GroupIngressResult(
-                    payload=response_contract.completed_group_response_payload(
-                        req,
-                        recovered,
-                    ),
-                    completion=recovered,
-                )
-            logger.info(
-                "[GroupMsg] ambient_reused group=%s message_id=%s attempt=%d",
-                group_user_id,
-                req.message_id,
-                attempt_count,
-            )
-        else:
-            registered_stickers = h.register_group_stickers_from_message(
-                db,
-                req,
-                background_tasks=self.background_tasks,
-            )
-            if registered_stickers and self.background_tasks is None:
-                release_clean_session_transaction(
-                    db,
-                    label="group_before_sticker_preview",
-                    logger=logger,
-                )
-                await self._cache_registered_sticker_previews(registered_stickers)
-            try:
-                self._sync_group_user(group_user_id, req.session_name or "")
-            except Exception as exc:
-                if is_sqlite_locked_error(exc):
-                    logger.warning("[GroupMsg] db locked while syncing group user group=%s: %s", req.group_id, exc)
-                    return self._technical_result(
-                        req,
-                        exc,
-                        reason="db_locked:group_user_sync",
-                    )
-                raise
-
-            formatted = f"[{req.sender_name}]: {message_text}" if message_text else ""
-            meta = h.build_group_message_meta(req, registered_stickers)
-            if registered_stickers:
-                meta["registered_sticker_ids"] = [item["id"] for item in registered_stickers]
-            if claim_key is not None:
-                meta = recovery.attach_group_request_fingerprint(
-                    meta,
-                    request_sha256,
-                )
-            self._schedule_image_precache(
-                meta.get("files"),
-                group_id=req.group_id,
-                message_id=req.message_id or "",
-            )
-            try:
-                ambient_log = self._save_ambient_log(
-                    group_user_id=group_user_id,
-                    sender_name=req.sender_name,
-                    session_name=req.session_name,
-                    formatted=formatted,
-                    message_id=req.message_id,
-                    meta=meta,
-                )
-            except Exception as exc:
-                if is_sqlite_locked_error(exc):
-                    logger.warning("[GroupMsg] db locked while saving ambient group=%s: %s", req.group_id, exc)
-                    return self._technical_result(
-                        req,
-                        exc,
-                        reason="db_locked:ambient_log",
-                    )
-                raise
-            logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
-
-        from core.context_builder import build_timing_recent_context
-        recent_ctx = build_timing_recent_context(
-            db,
-            group_user_id,
-            limit=5,
-            exclude_message_ids=[req.message_id] if req.message_id else None,
         )
-
-        bot_sender_kind = str(meta.get("sender", {}).get("bot_sender_kind") or "")
-        if bot_sender_kind == "current_bot":
-            result = {
-                "action": "no_reply",
-                "reason": f"bot_sender:{bot_sender_kind}",
-                "generation": 0,
-                "hard_rule": "bot_sender_no_timing",
-            }
-            h.annotate_group_timing_event(
-                db, ambient_log, result,
-                trigger_reason="bot_sender",
-                latency_ms=0,
+        if preparation.registered_stickers and self.background_tasks is None:
+            await self._cache_registered_sticker_previews(
+                preparation.registered_stickers
             )
-            return self._business_result(
-                req,
-                outcome="no_reply",
-                generation=0,
-                reason=f"bot_sender:{bot_sender_kind}",
-                hard_rule="bot_sender_no_timing",
-            )
+        if preparation.early_result is not None:
+            return preparation.early_result
 
-        if h.check_user_blocked(db, req.sender_id, target_type="group", group_id=req.group_id):
-            logger.info("[GroupMsg] blocked group=%s sender=%s", req.group_id, req.sender_id)
-            h.annotate_group_timing_event(
-                db, ambient_log,
-                {"action": "no_reply", "reason": "user_blocked", "generation": 0},
-                trigger_reason="user_blocked",
-                latency_ms=0,
-            )
-            return self._business_result(
-                req,
-                outcome="blocked",
-                reason="user_blocked",
-                generation=0,
-            )
-
-        from core.group_runtime.ids import normalize_group_stream_id
-        stream_id = normalize_group_stream_id(req.group_id)
-        mod_result = check_message_moderation_db(db, message_text, chat_stream_id=stream_id)
-        if mod_result:
-            meta["moderation"] = {
-                "matched": True,
-                "match_type": "content_rule",
-                "pattern": mod_result["pattern"],
-                "rule_id": mod_result.get("rule_id"),
-                "category": mod_result.get("category", ""),
-                "rule_match_type": mod_result.get("match_type", "contains"),
-                "scope_type": mod_result.get("scope_type", ""),
-                "reason": mod_result.get("reason", ""),
-                "no_reply": mod_result["no_reply"],
-                "no_learn": mod_result["no_learn"],
-                "no_context": mod_result["no_context"],
-            }
-
-            def operation() -> None:
-                ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)
-                db.commit()
-
-            run_sqlite_locked_retry(
-                operation,
-                rollback=db.rollback,
-                label="group_moderation_meta",
-                logger=logger,
-            )
-            if mod_result["no_reply"]:
-                logger.info("[GroupMsg] content-blocked group=%s pattern=%s",
-                            req.group_id, mod_result["pattern"])
-                h.annotate_group_timing_event(
-                    db, ambient_log,
-                    {"action": "no_reply", "reason": "content_blocked", "generation": 0},
-                    trigger_reason="content_blocked",
-                    latency_ms=0,
-                )
-                return self._business_result(
-                    req,
-                    outcome="blocked",
-                    reason="content_blocked",
-                    generation=0,
-                )
-
-        reason = h.derive_group_trigger_reason(req)
+        reason = preparation.reason
         logger.info("[GroupMsg] trigger=%s enter_timing=true", reason)
-
         runtime = get_group_runtime()
         t0 = _time.time()
         try:
-            ambient_meta = meta
-            timing_message = {
-                "sender_id": req.sender_id,
-                "sender_name": req.sender_name,
-                "message": message_text,
-                "message_id": req.message_id or "",
-                "is_reply_to_bot": bool(ambient_meta.get("directed", {}).get("reply_to_bot")),
-                "is_at_bot": bool(ambient_meta.get("directed", {}).get("at_bot")),
-                "segments": ambient_meta.get("segments", []),
-                "mentions": ambient_meta.get("mentions", []),
-                "reply_to": ambient_meta.get("reply_to"),
-                "directed": ambient_meta.get("directed", {}),
-                "is_directed_to_other": bool(ambient_meta.get("directed", {}).get("directed_to_other")),
-                "self_id": ambient_meta.get("bot", {}).get("self_id", ""),
-                "bot_id": ambient_meta.get("bot", {}).get("bot_id", ""),
-                "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
-                "is_other_bot": bot_sender_kind in {"explicit_bot", "client_meta"},
-            }
-            talk_value = h.get_group_talk_value(group_user_id)
-            client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
-            platform = str(client_meta.get("platform") or "qq").strip() or "qq"
-            release_clean_session_transaction(db, label="group_before_timing_gate", logger=logger)
             result = await runtime.process_message(
                 req.group_id,
-                timing_message,
+                preparation.timing_message or {},
                 session_name=req.session_name or "",
                 bot_aliases=list(req.bot_aliases or []),
                 trigger_reason=reason,
-                recent_context=recent_ctx,
-                talk_value=talk_value,
-                platform=platform,
+                recent_context=preparation.recent_context,
+                talk_value=preparation.talk_value,
+                platform=preparation.platform,
             )
             elapsed_ms = int((_time.time() - t0) * 1000)
             action = result.get("action", "no_reply")
-            h.annotate_group_timing_event(
-                db, ambient_log, result,
-                trigger_reason=reason,
-                latency_ms=elapsed_ms,
+            await self._run_db_phase(
+                lambda: self._annotate_timing_phase(
+                    preparation.ambient_log_id,
+                    result,
+                    trigger_reason=reason,
+                    latency_ms=elapsed_ms,
+                )
             )
 
             logger.info(
@@ -635,11 +469,318 @@ class GroupIngressService:
             reason=reason,
             group_user_id=group_user_id,
             message_text=message_text,
-            ambient_meta=ambient_meta,
+            ambient_meta=preparation.ambient_meta or {},
             runtime=runtime,
             claim_key=claim_key,
             claim_owner=claim_owner,
             request_sha256=request_sha256,
+        )
+
+    def _prepare_timing_phase(
+        self,
+        req: Any,
+        *,
+        group_user_id: str,
+        attempt_count: int,
+        claim_key: InboundClaimKey | None,
+        request_sha256: str,
+        message_text: str,
+    ) -> _GroupTimingPreparation:
+        """在一个工作线程内完成群聊 Timing Gate 前的数据库阶段。"""
+
+        db = self._current_db()
+        existing_ambient = None
+        if req.message_id:
+            existing_ambient = (
+                db.query(ChatLog)
+                .filter(
+                    ChatLog.session_id == group_user_id,
+                    ChatLog.message_id == req.message_id,
+                    ChatLog.role == "ambient",
+                )
+                .order_by(ChatLog.created_at.asc(), ChatLog.id.asc())
+                .first()
+            )
+        if attempt_count == 1 and existing_ambient is not None:
+            return _GroupTimingPreparation(
+                early_result=self._business_result(
+                    req,
+                    outcome="no_reply",
+                    reason="duplicate_message",
+                ),
+                registered_stickers=[],
+            )
+
+        logger.info(
+            "[GroupMsg] recv group=%s sender=%s len=%d at=%s reply=%s",
+            req.group_id,
+            req.sender_name,
+            len(message_text or ""),
+            req.is_at_bot,
+            req.is_reply_to_bot,
+        )
+        reuse_ambient = attempt_count > 1 and existing_ambient is not None
+        registered_stickers: list[dict] = []
+        if reuse_ambient:
+            ambient_log = existing_ambient
+            try:
+                meta = recovery.verify_group_request_sha256(
+                    ambient_log.meta_json,
+                    request_sha256,
+                )
+                recovered = recovery.load_group_recoverable_completion(
+                    db,
+                    key=claim_key,
+                    request_sha256=request_sha256,
+                )
+            except recovery.GroupRequestMismatchError as exc:
+                return _GroupTimingPreparation(
+                    early_result=self._technical_result(
+                        req,
+                        exc,
+                        reason="inbound_request_mismatch",
+                    ),
+                    registered_stickers=[],
+                )
+            except recovery.GroupRecoveryCorruptError as exc:
+                return _GroupTimingPreparation(
+                    early_result=self._technical_result(
+                        req,
+                        exc,
+                        reason=f"inbound_recovery_corrupt: {exc}",
+                    ),
+                    registered_stickers=[],
+                )
+            if recovered is not None:
+                return _GroupTimingPreparation(
+                    early_result=GroupIngressResult(
+                        payload=response_contract.completed_group_response_payload(
+                            req,
+                            recovered,
+                        ),
+                        completion=recovered,
+                    ),
+                    registered_stickers=[],
+                )
+        else:
+            registered_stickers = h.register_group_stickers_from_message(
+                db,
+                req,
+                background_tasks=self.background_tasks,
+            )
+            try:
+                self._sync_group_user(group_user_id, req.session_name or "")
+            except Exception as exc:
+                if is_sqlite_locked_error(exc):
+                    return _GroupTimingPreparation(
+                        early_result=self._technical_result(
+                            req,
+                            exc,
+                            reason="db_locked:group_user_sync",
+                        ),
+                        registered_stickers=registered_stickers,
+                    )
+                raise
+
+            formatted = f"[{req.sender_name}]: {message_text}" if message_text else ""
+            meta = h.build_group_message_meta(req, registered_stickers)
+            if registered_stickers:
+                meta["registered_sticker_ids"] = [
+                    item["id"] for item in registered_stickers
+                ]
+            if claim_key is not None:
+                meta = recovery.attach_group_request_fingerprint(
+                    meta,
+                    request_sha256,
+                )
+            self._schedule_image_precache(
+                meta.get("files"),
+                group_id=req.group_id,
+                message_id=req.message_id or "",
+            )
+            try:
+                ambient_log = self._save_ambient_log(
+                    group_user_id=group_user_id,
+                    sender_name=req.sender_name,
+                    session_name=req.session_name,
+                    formatted=formatted,
+                    message_id=req.message_id,
+                    meta=meta,
+                )
+            except Exception as exc:
+                if is_sqlite_locked_error(exc):
+                    return _GroupTimingPreparation(
+                        early_result=self._technical_result(
+                            req,
+                            exc,
+                            reason="db_locked:ambient_log",
+                        ),
+                        registered_stickers=registered_stickers,
+                    )
+                raise
+
+        from core.context_builder import build_timing_recent_context
+
+        recent_context = build_timing_recent_context(
+            db,
+            group_user_id,
+            limit=5,
+            exclude_message_ids=[req.message_id] if req.message_id else None,
+        )
+        bot_sender_kind = str(
+            meta.get("sender", {}).get("bot_sender_kind") or ""
+        )
+        if bot_sender_kind == "current_bot":
+            timing_result = {
+                "action": "no_reply",
+                "reason": f"bot_sender:{bot_sender_kind}",
+                "generation": 0,
+                "hard_rule": "bot_sender_no_timing",
+            }
+            h.annotate_group_timing_event(
+                db,
+                ambient_log,
+                timing_result,
+                trigger_reason="bot_sender",
+                latency_ms=0,
+            )
+            return _GroupTimingPreparation(
+                early_result=self._business_result(
+                    req,
+                    outcome="no_reply",
+                    generation=0,
+                    reason=f"bot_sender:{bot_sender_kind}",
+                    hard_rule="bot_sender_no_timing",
+                ),
+                registered_stickers=registered_stickers,
+            )
+
+        if h.check_user_blocked(
+            db,
+            req.sender_id,
+            target_type="group",
+            group_id=req.group_id,
+        ):
+            h.annotate_group_timing_event(
+                db,
+                ambient_log,
+                {"action": "no_reply", "reason": "user_blocked", "generation": 0},
+                trigger_reason="user_blocked",
+                latency_ms=0,
+            )
+            return _GroupTimingPreparation(
+                early_result=self._business_result(
+                    req,
+                    outcome="blocked",
+                    reason="user_blocked",
+                    generation=0,
+                ),
+                registered_stickers=registered_stickers,
+            )
+
+        from core.group_runtime.ids import normalize_group_stream_id
+
+        stream_id = normalize_group_stream_id(req.group_id)
+        mod_result = check_message_moderation_db(
+            db,
+            message_text,
+            chat_stream_id=stream_id,
+        )
+        if mod_result:
+            meta["moderation"] = {
+                "matched": True,
+                "match_type": "content_rule",
+                "pattern": mod_result["pattern"],
+                "rule_id": mod_result.get("rule_id"),
+                "category": mod_result.get("category", ""),
+                "rule_match_type": mod_result.get("match_type", "contains"),
+                "scope_type": mod_result.get("scope_type", ""),
+                "reason": mod_result.get("reason", ""),
+                "no_reply": mod_result["no_reply"],
+                "no_learn": mod_result["no_learn"],
+                "no_context": mod_result["no_context"],
+            }
+
+            def operation() -> None:
+                ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)
+                db.commit()
+
+            run_sqlite_locked_retry(
+                operation,
+                rollback=db.rollback,
+                label="group_moderation_meta",
+                logger=logger,
+            )
+            if mod_result["no_reply"]:
+                h.annotate_group_timing_event(
+                    db,
+                    ambient_log,
+                    {"action": "no_reply", "reason": "content_blocked", "generation": 0},
+                    trigger_reason="content_blocked",
+                    latency_ms=0,
+                )
+                return _GroupTimingPreparation(
+                    early_result=self._business_result(
+                        req,
+                        outcome="blocked",
+                        reason="content_blocked",
+                        generation=0,
+                    ),
+                    registered_stickers=registered_stickers,
+                )
+
+        reason = h.derive_group_trigger_reason(req)
+        timing_message = {
+            "sender_id": req.sender_id,
+            "sender_name": req.sender_name,
+            "message": message_text,
+            "message_id": req.message_id or "",
+            "is_reply_to_bot": bool(meta.get("directed", {}).get("reply_to_bot")),
+            "is_at_bot": bool(meta.get("directed", {}).get("at_bot")),
+            "segments": meta.get("segments", []),
+            "mentions": meta.get("mentions", []),
+            "reply_to": meta.get("reply_to"),
+            "directed": meta.get("directed", {}),
+            "is_directed_to_other": bool(
+                meta.get("directed", {}).get("directed_to_other")
+            ),
+            "self_id": meta.get("bot", {}).get("self_id", ""),
+            "bot_id": meta.get("bot", {}).get("bot_id", ""),
+            "bot_name": meta.get("bot", {}).get("bot_name", ""),
+            "is_other_bot": bot_sender_kind in {"explicit_bot", "client_meta"},
+        }
+        client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
+        return _GroupTimingPreparation(
+            early_result=None,
+            registered_stickers=registered_stickers,
+            ambient_log_id=int(ambient_log.id),
+            ambient_meta=meta,
+            recent_context=recent_context,
+            bot_sender_kind=bot_sender_kind,
+            reason=reason,
+            timing_message=timing_message,
+            talk_value=h.get_group_talk_value(group_user_id),
+            platform=str(client_meta.get("platform") or "qq").strip() or "qq",
+        )
+
+    def _annotate_timing_phase(
+        self,
+        ambient_log_id: int | None,
+        result: dict[str, Any],
+        *,
+        trigger_reason: str,
+        latency_ms: int,
+    ) -> None:
+        if ambient_log_id is None:
+            return
+        db = self._current_db()
+        ambient_log = db.get(ChatLog, ambient_log_id)
+        h.annotate_group_timing_event(
+            db,
+            ambient_log,
+            result,
+            trigger_reason=trigger_reason,
+            latency_ms=latency_ms,
         )
 
     async def _continue_to_bridge(
@@ -656,7 +797,6 @@ class GroupIngressService:
         claim_owner: InboundClaimOwner | None,
         request_sha256: str,
     ) -> GroupIngressResult:
-        db = self.db
         try:
             if self.bridge_provider is None:
                 from nanobot_kt.bridge import get_bridge
@@ -664,66 +804,16 @@ class GroupIngressService:
                 bridge = get_bridge()
             else:
                 bridge = self.bridge_provider()
-            source_message_ids = [
-                str(x) for x in (result.get("source_message_ids") or [])
-                if str(x).strip()
-            ]
-            bridge_files = self._collect_bridge_files(
-                group_user_id=group_user_id,
-                source_message_ids=source_message_ids,
-                ambient_meta=ambient_meta,
-            )
-            chat_query = str(result.get("pending_text") or "").strip()
-            if not chat_query:
-                chat_query = h.format_group_planner_message(
-                    sender_name=req.sender_name,
-                    content=message_text,
-                    message_id=req.message_id or "",
+            preparation = await self._run_db_phase(
+                lambda: self._prepare_bridge_phase(
+                    req=req,
+                    result=result,
+                    reason=reason,
+                    group_user_id=group_user_id,
+                    message_text=message_text,
+                    ambient_meta=ambient_meta,
                 )
-                source_message_ids = [req.message_id] if req.message_id else []
-            memory_header, history_messages, ctx_debug = h.build_chat_context(
-                db, group_user_id, user_id=group_user_id,
-                is_group=True, group_id=req.group_id,
-                exclude_message_ids=source_message_ids,
-                current_user_input=chat_query,
             )
-            sender_id = str(getattr(req, "sender_id", "") or getattr(req, "user_id", "") or "")
-            is_super_user = is_super_user_id(sender_id)
-            identity_vars = build_identity_vars(
-                sender_id=sender_id,
-                bot_name=ambient_meta.get("bot", {}).get("bot_name", ""),
-                bot_aliases=list(req.bot_aliases or []),
-                is_super_user=is_super_user,
-            )
-            client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
-            platform = str(client_meta.get("platform") or "qq").strip().lower() or "qq"
-            bridge_meta = {
-                "chat_type": "group",
-                "platform": platform,
-                "user_id": group_user_id,
-                "session_id": group_user_id,
-                "sender_name": req.sender_name,
-                "sender_id": sender_id,
-                "is_group": True,
-                "is_superuser": is_super_user,
-                "history_header": memory_header,
-                "history_messages": history_messages,
-                "group_id": req.group_id,
-                "session_name": req.session_name or "",
-                "trigger_reason": reason,
-                "message_id": req.message_id or "",
-                "files": bridge_files,
-                "timing_decision": "continue",
-                "source_message_ids": source_message_ids,
-                "context_debug": ctx_debug,
-                "self_id": ambient_meta.get("bot", {}).get("self_id", ""),
-                "bot_id": ambient_meta.get("bot", {}).get("bot_id", ""),
-                "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
-                "bot_aliases": list(req.bot_aliases or []),
-                **identity_vars,
-            }
-            enriched = f"<user_input>\n{chat_query}\n</user_input>"
-            release_clean_session_transaction(db, label="group_before_bridge", logger=logger)
         except Exception as exc:
             logger.error("[GroupMsg] bridge failed group=%s: %s", req.group_id, exc)
             return self._technical_result(
@@ -737,8 +827,10 @@ class GroupIngressService:
 
         try:
             reply = await bridge.handle_message(
-                enriched, session_id=group_user_id, user_id=group_user_id,
-                metadata=bridge_meta,
+                preparation.enriched_query,
+                session_id=group_user_id,
+                user_id=group_user_id,
+                metadata=preparation.bridge_meta,
             )
             answer = reply if isinstance(reply, str) else str(reply or "")
             reply_meta = h.pop_bridge_reply_meta(bridge, group_user_id)
@@ -755,10 +847,24 @@ class GroupIngressService:
 
         try:
             if answer.strip():
-                duplicate = h.find_recent_duplicate_group_reply(db, group_user_id, answer)
+                duplicate = await self._run_db_phase(
+                    lambda: h.find_recent_duplicate_group_reply(
+                        self._current_db(),
+                        group_user_id,
+                        answer,
+                    )
+                )
                 if duplicate:
                     agent_result = "duplicate_reply_suppressed"
-                    h.log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
+                    await self._run_db_phase(
+                        lambda: h.log_group_no_reply(
+                            self._current_db(),
+                            group_user_id,
+                            preparation.chat_query,
+                            agent_result,
+                            req.message_id,
+                        )
+                    )
                     return self._business_result(
                         req,
                         outcome="no_reply",
@@ -775,26 +881,39 @@ class GroupIngressService:
                     reason=str(result.get("reason", ""))[:120],
                 )
                 assert business_result.completion is not None
-                h.persist_group_bridge_reply(
-                    db,
-                    group_user_id=group_user_id,
-                    sender_name=req.sender_name,
-                    session_name=req.session_name or "",
-                    query=chat_query,
-                    answer=answer,
-                    bot_name=ambient_meta.get("bot", {}).get("bot_name", "") or "nanobot",
-                    message_id=req.message_id,
-                    source_message_ids=source_message_ids,
-                    reply_meta=reply_meta,
-                    claim_key=claim_key,
-                    request_sha256=request_sha256,
-                    completion=business_result.completion,
+                await self._run_db_phase(
+                    lambda: h.persist_group_bridge_reply(
+                        self._current_db(),
+                        group_user_id=group_user_id,
+                        sender_name=req.sender_name,
+                        session_name=req.session_name or "",
+                        query=preparation.chat_query,
+                        answer=answer,
+                        bot_name=(
+                            ambient_meta.get("bot", {}).get("bot_name", "")
+                            or "nanobot"
+                        ),
+                        message_id=req.message_id,
+                        source_message_ids=preparation.source_message_ids,
+                        reply_meta=reply_meta,
+                        claim_key=claim_key,
+                        request_sha256=request_sha256,
+                        completion=business_result.completion,
+                    )
                 )
                 runtime.note_bot_replied(req.group_id)
                 return business_result
             else:
                 agent_result = h.derive_group_agent_result(bridge, group_user_id, reply_meta)
-                h.log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
+                await self._run_db_phase(
+                    lambda: h.log_group_no_reply(
+                        self._current_db(),
+                        group_user_id,
+                        preparation.chat_query,
+                        agent_result,
+                        req.message_id,
+                    )
+                )
                 if agent_result == "prompt_v2_audit_failed":
                     diagnostics = {
                             "timing_action": result.get("action", "continue"),
@@ -823,8 +942,90 @@ class GroupIngressService:
                 reason=f"bridge_error: {exc}",
             )
 
+    def _prepare_bridge_phase(
+        self,
+        *,
+        req: Any,
+        result: dict[str, Any],
+        reason: str,
+        group_user_id: str,
+        message_text: str,
+        ambient_meta: dict[str, Any],
+    ) -> _GroupBridgePreparation:
+        db = self._current_db()
+        source_message_ids = [
+            str(item)
+            for item in (result.get("source_message_ids") or [])
+            if str(item).strip()
+        ]
+        bridge_files = self._collect_bridge_files(
+            group_user_id=group_user_id,
+            source_message_ids=source_message_ids,
+            ambient_meta=ambient_meta,
+        )
+        chat_query = str(result.get("pending_text") or "").strip()
+        if not chat_query:
+            chat_query = h.format_group_planner_message(
+                sender_name=req.sender_name,
+                content=message_text,
+                message_id=req.message_id or "",
+            )
+            source_message_ids = [req.message_id] if req.message_id else []
+        memory_header, history_messages, ctx_debug = h.build_chat_context(
+            db,
+            group_user_id,
+            user_id=group_user_id,
+            is_group=True,
+            group_id=req.group_id,
+            exclude_message_ids=source_message_ids,
+            current_user_input=chat_query,
+        )
+        sender_id = str(
+            getattr(req, "sender_id", "") or getattr(req, "user_id", "") or ""
+        )
+        is_super_user = is_super_user_id(sender_id)
+        identity_vars = build_identity_vars(
+            sender_id=sender_id,
+            bot_name=ambient_meta.get("bot", {}).get("bot_name", ""),
+            bot_aliases=list(req.bot_aliases or []),
+            is_super_user=is_super_user,
+        )
+        client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
+        platform = str(client_meta.get("platform") or "qq").strip().lower() or "qq"
+        bridge_meta = {
+            "chat_type": "group",
+            "platform": platform,
+            "user_id": group_user_id,
+            "session_id": group_user_id,
+            "sender_name": req.sender_name,
+            "sender_id": sender_id,
+            "is_group": True,
+            "is_superuser": is_super_user,
+            "history_header": memory_header,
+            "history_messages": history_messages,
+            "group_id": req.group_id,
+            "session_name": req.session_name or "",
+            "trigger_reason": reason,
+            "message_id": req.message_id or "",
+            "files": bridge_files,
+            "timing_decision": "continue",
+            "source_message_ids": source_message_ids,
+            "context_debug": ctx_debug,
+            "self_id": ambient_meta.get("bot", {}).get("self_id", ""),
+            "bot_id": ambient_meta.get("bot", {}).get("bot_id", ""),
+            "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
+            "bot_aliases": list(req.bot_aliases or []),
+            **identity_vars,
+        }
+        return _GroupBridgePreparation(
+            source_message_ids=source_message_ids,
+            chat_query=chat_query,
+            bridge_meta=bridge_meta,
+            enriched_query=f"<user_input>\n{chat_query}\n</user_input>",
+        )
+
     def _sync_group_user(self, group_user_id: str, session_name: str) -> None:
-        db = self.db
+        db = self._current_db()
 
         def operation() -> None:
             user = db.query(User).filter(User.id == group_user_id).first()
@@ -853,7 +1054,7 @@ class GroupIngressService:
         message_id: str,
         meta: dict,
     ) -> ChatLog:
-        db = self.db
+        db = self._current_db()
 
         def operation() -> ChatLog:
             ambient_log = ChatLog(
@@ -921,7 +1122,7 @@ class GroupIngressService:
             return files
 
         rows = (
-            self.db.query(ChatLog)
+            self._current_db().query(ChatLog)
             .filter(
                 ChatLog.session_id == group_user_id,
                 ChatLog.role == "ambient",

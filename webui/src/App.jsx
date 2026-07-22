@@ -803,10 +803,18 @@ function StickerDedupPage() {
     .then(r => { setNearDuplicates(r.data.items || []); setNearError('') })
     .catch(e => setNearError(formatApiError(e)))
 
-  const load = () => api.get('/stickers/duplicate-groups?limit=100')
-    .then(r => { setData(r.data || {}); setError(''); if (!selectedGroup && (r.data?.groups || []).length) setSelectedGroup(r.data.groups[0]) })
-    .catch(e => { setError(formatApiError(e, '加载失败')) })
-  useEffect(() => { load() }, [])
+  const load = useCallback(() => api.get('/stickers/duplicate-groups?limit=100')
+    .then(r => {
+      const groups = r.data?.groups || []
+      setData(r.data || {})
+      setError('')
+      setSelectedGroup(current => current || groups[0] || null)
+    })
+    .catch(e => { setError(formatApiError(e, '加载失败')) }), [])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { load() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [load])
 
   const doAction = (stickerId, action, body = {}) => {
     api.post(`/stickers/${stickerId}/${action}`, body)
@@ -1919,7 +1927,10 @@ function SessionSummaryBrowser({ mode }) {
   }, [includeArchived, includeContent, isRecent, selectedSession])
 
   useEffect(() => { loadSessions() }, [loadSessions])
-  useEffect(() => { loadDetail() }, [loadDetail])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { loadDetail() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadDetail])
 
   const filtered = sessions.filter(s => {
     const needle = query.trim().toLowerCase()
@@ -2207,7 +2218,8 @@ function MemoryPage() {
   }, [groupId, memType])
 
   useEffect(() => {
-    loadOverview()
+    const timer = window.setTimeout(() => { loadOverview() }, 0)
+    return () => window.clearTimeout(timer)
   }, [loadOverview])
 
   const exactOverviewGroup = overview.find(item => {
@@ -2584,7 +2596,10 @@ function PersonaPage() {
     }
   }, [userId, status, memoryType])
 
-  useEffect(() => { loadUsers().catch(() => {}) }, [loadUsers])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { loadUsers().catch(() => {}) }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadUsers])
 
   const updateFact = async (factId, patch) => {
     try {

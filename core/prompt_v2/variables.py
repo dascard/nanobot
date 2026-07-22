@@ -89,6 +89,7 @@ def _scoped_variables(scope: str) -> tuple[VariableDef, ...]:
         "tasks/classifier_legacy",
         "tasks/private_decision",
         "tasks/timing_gate",
+        "tasks/timing_proactive",
         "tasks/outreach_extract",
         "tasks/outreach_judge",
         "tasks/outreach_generate",

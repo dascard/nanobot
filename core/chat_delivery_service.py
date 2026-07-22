@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import math
+import hashlib
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,8 +23,10 @@ from core.chat_delivery_outbox import (
     mark_chat_delivery_failed,
     recover_stale_chat_deliveries,
 )
-from core.database import ChatDeliveryOutbox
+from core.db.models.inbound import ChatDeliveryOutbox
+from core.fencing import require_lease_exceeds_operation
 from core.inbound_idempotency import InboundClaimKey
+from core.runtime.event_bus import emit_runtime_event
 
 
 ChatDeliveryPublisher = Callable[
@@ -48,6 +51,7 @@ class _ClaimedChatDelivery:
     target_type: str
     target_id: str
     envelope_json: str
+    attempt_no: int
 
 
 def _session_factory_or_default(
@@ -65,15 +69,17 @@ def _validate_attempt_window(
     attempt_timeout_seconds: int | float,
     lease_seconds: int | float,
 ) -> float:
-    if type(attempt_timeout_seconds) not in (int, float) or not math.isfinite(
-        float(attempt_timeout_seconds)
-    ) or float(attempt_timeout_seconds) <= 0:
-        raise ValueError("attempt_timeout_seconds 必须是有限正数")
-    if type(lease_seconds) not in (int, float) or not math.isfinite(
-        float(lease_seconds)
-    ) or float(lease_seconds) <= float(attempt_timeout_seconds):
-        raise ValueError("lease_seconds 必须严格大于投递尝试超时")
-    return float(attempt_timeout_seconds)
+    try:
+        timeout, _lease = require_lease_exceeds_operation(
+            operation_timeout_seconds=attempt_timeout_seconds,
+            lease_seconds=lease_seconds,
+            operation_field_name="attempt_timeout_seconds",
+        )
+    except (TypeError, ValueError) as exc:
+        if str(exc).startswith("attempt_timeout_seconds"):
+            raise ValueError("attempt_timeout_seconds 必须是有限正数") from exc
+        raise ValueError("lease_seconds 必须严格大于投递尝试超时") from exc
+    return timeout
 
 
 def _existing_result(
@@ -125,6 +131,7 @@ def _claim_attempt(
                 target_type=str(row.target_type),
                 target_id=str(row.target_id),
                 envelope_json=str(row.envelope_json),
+                attempt_no=int(row.attempt_count or 0),
             )
         )
         db.commit()
@@ -244,6 +251,20 @@ async def deliver_chat_delivery(
     target_type = claimed.target_type
     target_id = claimed.target_id
     envelope_json = claimed.envelope_json
+    payload_bytes = envelope_json.encode("utf-8", errors="replace")
+    event_attributes = {
+        "channel": "qq",
+        "target_type": target_type,
+        "attempt_no": claimed.attempt_no,
+        "payload_bytes": len(payload_bytes),
+        "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
+    }
+    event_started = time.perf_counter()
+    emit_runtime_event(
+        "delivery.attempt",
+        "started",
+        attributes=event_attributes,
+    )
 
     try:
         envelope = decode_chat_delivery_envelope(envelope_json)
@@ -256,6 +277,17 @@ async def deliver_chat_delivery(
                 publisher(target_type, target_id, envelope),
                 timeout=attempt_timeout,
             )
+        except asyncio.CancelledError:
+            emit_runtime_event(
+                "delivery.attempt",
+                "failed",
+                attributes={
+                    **event_attributes,
+                    "latency_ms": (time.perf_counter() - event_started) * 1000,
+                    "error_type": "CancelledError",
+                },
+            )
+            raise
         except Exception as exc:
             status = "ambiguous"
             error = str(exc) or type(exc).__name__
@@ -280,6 +312,15 @@ async def deliver_chat_delivery(
         now=now,
     )
     if not settled:
+        emit_runtime_event(
+            "delivery.attempt",
+            "failed",
+            attributes={
+                **event_attributes,
+                "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "error_type": "fencing_lost",
+            },
+        )
         current = await asyncio.to_thread(
             _existing_result,
             factory,
@@ -291,6 +332,15 @@ async def deliver_chat_delivery(
             attempted=True,
             error="投递结算时已失去 owner",
         )
+    emit_runtime_event(
+        "delivery.attempt",
+        "succeeded" if status == "delivered" else "failed",
+        attributes={
+            **event_attributes,
+            "latency_ms": (time.perf_counter() - event_started) * 1000,
+            "error_type": "" if status == "delivered" else status,
+        },
+    )
     return ChatDeliveryAttemptResult(
         row_id=claimed_row_id,
         status=status,

@@ -10,7 +10,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.memory_digest.retrieval_service import validate_digest_date_range
-from core.database import RollingSessionSummary
+from core.db.models.session_memory import RollingSessionSummary
 
 
 def _date_bounds(date_start: str = "", date_end: str = "") -> tuple[datetime | None, datetime | None]:

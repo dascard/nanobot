@@ -251,6 +251,15 @@ def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
         if node_type == "runtime" and str(node.get("runtime_key") or "") not in RUNTIME_NODE_KEYS:
             raise PromptFlowError(f"runtime_key 不支持: {node.get('runtime_key')}")
         _validate_reserved_node_identity(node)
+        from core.prompt_v2.section_descriptors import (
+            PromptSectionDescriptorError,
+            validate_node_descriptor_declaration,
+        )
+
+        try:
+            validate_node_descriptor_declaration(node)
+        except PromptSectionDescriptorError as exc:
+            raise PromptFlowError(str(exc)) from exc
         chat_types = _normalize_chat_types(node, label=f"node {node_id}")
         if chat_types:
             node["chat_types"] = chat_types

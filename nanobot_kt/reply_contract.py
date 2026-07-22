@@ -92,9 +92,17 @@ def _declared_tool_calls(msg: Any) -> list[tuple[str, str]]:
 
     declared: list[tuple[str, str]] = []
     for raw_call in raw_calls:
-        call_id = str(_nested_field(raw_call, "id", "") or "").strip()
+        call_id = str(
+            _nested_field(raw_call, "id", "")
+            or _nested_field(raw_call, "call_id", "")
+            or ""
+        ).strip()
         function = _nested_field(raw_call, "function", None)
-        tool_name = str(_nested_field(function, "name", "") or "").strip()
+        tool_name = str(
+            _nested_field(function, "name", "")
+            or _nested_field(raw_call, "name", "")
+            or ""
+        ).strip()
         if call_id and tool_name:
             declared.append((call_id, tool_name))
     return declared

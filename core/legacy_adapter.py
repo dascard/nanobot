@@ -3,157 +3,32 @@ KohakuTerrarium (KT) Adapter for Nanobot.
 This module bridges the KT framework components with the Nanobot SQLite DB and OpenAI-compatible APIs.
 """
 import asyncio
-import copy
 import json
 import logging
-import re
 from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from core.database import ChatLog, Persona, SystemPrompt, SessionLocal
+from core.database import SessionLocal
+from core.db.models.chat import ChatLog
+from core.db.models.persona import Persona, SystemPrompt
 from core.json_utils import json_repair as _json_repair
-from core.token_utils import estimate_tokens as _shared_estimate_tokens
 from config import MAX_TOOL_ROUNDS
 from core.state_manager import StateManager
 from sandbox import AnalysisSandbox
 from creatures.nanobot.prompts.skills.news_search.tool import search_and_extract_news
-from clients.new_api_client import NewAPIClient, format_openai_messages
+from core.model_provider.chat_runtime import RuntimeChatCompletionClient
+from core.model_provider.catalog_runtime import (
+    ModelCatalogWriterPort,
+    upsert_model_catalog,
+)
+from foundation.llm.messages import format_openai_messages
 from core.persona_preprocess import (
-    CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
     PersonaStateMachine,
     build_candidate_extraction_prompt,
     filter_user_messages,
     format_candidate_logs,
+    get_candidate_extraction_system_prompt,
 )
-
-
-# --- Local Evolution Prompts (High Fidelity) ---
-
-LOG_ANALYST_LLM_PROMPT = """你是一个专业的对话日志分析师。你的任务是从原始对话日志中提炼关键信息，生成结构化的日志摘要。
-## ⚠️ 核心原则：不记事实，只记偏好（对标 Claude Code 记忆系统设计）
-- ❌ 绝对不要记录具体的代码片段、文件路径、API 端点、数据库表名等"事实"信息
-- ✅ 只记录用户的行为模式、偏好倾向、思维方式、沟通风格
-- ✅ 只记录反复出现的痛点模式（≥2次出现才算"模式"）
-- ✅ 只记录用户对 AI 输出的偏好
-## 提取目标
-1. 用户行为模式
-2. 工作流痛点
-3. 技术偏好
-4. 沟通风格
-5. 高质量/低质量对话信号
-6. 领域信号（domain_signals）：snake_case 领域 ID + 水平信号 + 偏好 + 痛点
-"""
-
-PERSONA_MERGE_PROMPT = """你是用户行为分析师。从对话日志中提取可操作画像。
-
-## ⚠️ 数据格式
-日志格式: [时间] role(谁): 内容
-- role="user" → 用户说的话 ← **只分析这部分**
-- role="assistant" → 你的前任(nanobot)的回复 ← **忽略！不要分析 bot 的行为**
-- role="tool" → 工具调用记录 ← 忽略
-
-## 核心原则
-每一条必须回答：**AI 知道了这个，回复会发生什么具体改变？**
-描述系统的、描述 bot 的、描述工具错误的、泛化标签——全部丢弃。
-
-## 输出 JSON
-{
-  "summary": "用户是谁、主要聊什么（15-25字，中文）",
-  "traits": ["用户反复表现的具体行为。不是标签，是「每次提问都先发一段代码再问」这类可见模式。至少2次"],
-  "preferences": ["用户明确说的喜欢/不喜欢，如'别发太长''直接给答案别铺垫'"],
-  "pain_points": "用户表现不耐烦/受挫的行为。只看用户说了什么——不要填 SQL 报错、超时、API 失败、工具错误、PRAGMA 被拒绝等系统问题。无则\"\"",
-  "response_style": "具体回复指令：语气(随意/正式/幽默)？长度(简短/详细/看情况)？要不要客套？技术细节接受度？——这是最重要的字段",
-  "domain_profiles": {}
-}
-
-## 规则
-- ≥2 次同类信号才写
-- 旧信号不再出现则降 confidence 或删
-- 忽略"好的""谢谢""嗯""OK"
-
-## quality check (输出前自检)
-□ traits 里有没有"SQL 报错后重试查询"这类 bot 行为？→ 删掉
-□ pain_points 里有没有"PRAGMA 被拦截""超时""401 错误"？→ 删掉，不是用户行为
-□ 每条的"AI 知道了会怎么改回复"能答上来吗？
-"""
-
-PERSONA_CRITIQUE_PROMPT = """你是画像质量审计员。审查候选画像并输出修正版。
-
-## 审计方法（逐条检查，通过的不用提）
-
-### 第一遍：bot/系统污染扫描（最重要）
-traits / pain_points / preferences 中，逐条问：**这是描述用户的行为，还是描述 bot/系统/工具？**
-- "SQL 报错后会反复调整查询" → bot 行为，删除
-- "PRAGMA 被拦截后换写法重试" → bot 行为，删除
-- "直接查数据库表结构" → 这才是用户行为
-- "模型超时导致回复延迟" → 系统问题，删除
-- "API 返回 401 后切换模型" → bot/系统行为，删除
-
-### 第二遍：五问
-1. AI 不被告知也会这样做吗？→ 删。"默认行为"
-2. 与画像其他条目矛盾吗？→ 保留一方。"冲突"
-3. 换个说法重复了同一信息吗？→ 合并。"冗余"
-4. 仅针对一次翻车的临时修正吗？→ 删。"创可贴"
-5. 每次读到理解会不一样吗？→ 改写。"模糊"
-
-### 第三遍：response_style
-必须具体到 AI 能据此改变回复。泛词全部改写为具体指令。
-✗ "友好一些" → ✓ "用口语化语气，不叫用户尊称"
-✗ "更专业" → ✓ "给代码示例而非文字解释"
-
-## 输出
-修改要点：
-- [污染/bot行为] 条目 → 删除
-...
-
-修正 JSON：
-{...}
-```"""
-
-PROMPT_DRAFT_PROMPT = """你是一个 System Prompt 架构师，核心理念是"少即是多"。
-## 你的任务
-基于用户画像分析现有 System Prompt，生成候选最小必要规则集。
-## ⚠️ Token 预算硬约束
-最终精简后的 System Prompt 必须控制在 500 tokens 以内。
-## 重要原则
-- 不要写 AI 默认行为。
-- 与用户画像强相关。
-- 领域感知：对 interaction_count ≥ 5 的高频领域生成专属规则。
-"""
-
-PROMPT_AUDIT_PROMPT = """你是一个极度严格的 System Prompt 审计员。你的唯一职责是找出应该删除的规则。
-## 五问审计框架
-Q1. 本能判定：AI 默认也会做吗？
-Q2. 冲突判定：规则间有矛盾吗？
-Q3. 冗余判定：说了同一件事吗？
-Q4. 创可贴判定：是不是针对偶发错误的临时补丁？
-Q5. 模糊判定：规则足够具体可操作吗？
-"""
-
-PROMPT_SYNTHESIZE_PROMPT = """你是最终决策者。基于审计报告，输出最终极简版 System Prompt。
-## 合成原则
-1. 只保留通过审计的规则。
-2. 合并冗余。
-3. 顺序优化（重要度排序）。
-4. Token 预算检查 (≤500)。
-"""
-
-MODEL_SCOUT_PROMPT = """你是一个专业的 AI 模型情报分析师。
-## 你的任务
-从提供的 AI 新闻、早报或搜索结果中提取新发布的或更新的 LLM 模型信息。
-## 提取要求 (JSON 格式)
-请输出一个 JSON 数组，包含以下字段：
-- id: 官方模型 ID (字符串)
-- provider: 厂商 (gemini, deepseek, zhipu, qwen, siliconflow, openai 等)
-- intelligence: 智能水平评分 (1-10)
-- cost_input_1m: 每百万输入 Token 成本 ($ USD)
-- cost_output_1m: 每百万输出 Token 成本 ($ USD)
-- tier: 层级 (smart/fast/reasoning)
-- reasoning: 为什么给出该评分 (简短说明)
-
-## ⚠️ 严禁幻觉
-只提取明确提到的模型及其参数。如果由于是新模型信息不足，请给出合理的估计值并在 reasoning 中说明。
-"""
 
 logger = logging.getLogger("nanobot.kt_adapter")
 
@@ -306,50 +181,122 @@ class SQLiteMemory:
         finally:
             db.close()
 
-    def update_persona_and_prompt(
-        self,
+    @staticmethod
+    def _validated_persona_payload(
         user_id: str,
-        persona_json: str,
-        system_prompt: str,
-    ) -> bool:
-        """同步回写画像与提示词（带有效性校验）"""
+        persona_json: str | dict[str, Any],
+    ) -> dict[str, Any] | None:
         import json as _json
-        from core.time_utils import db_now_naive
 
         try:
-            data = _json.loads(persona_json) if isinstance(persona_json, str) else persona_json
+            data = (
+                _json.loads(persona_json)
+                if isinstance(persona_json, str)
+                else persona_json
+            )
         except (_json.JSONDecodeError, TypeError):
-            logger.error(f"Persona update rejected: invalid JSON for user {user_id}")
-            return False
+            logger.error("Persona update rejected: invalid JSON for user %s", user_id)
+            return None
         if not isinstance(data, dict):
-            logger.error(f"Persona update rejected: not dict, user={user_id}")
-            return False
+            logger.error("Persona update rejected: not dict, user=%s", user_id)
+            return None
         if "error" in data or "code" in data:
-            logger.error(f"Persona update rejected: error response, user={user_id}, "
-                          f"preview={str(data)[:200]}")
+            logger.error(
+                "Persona update rejected: error response, user=%s, preview=%s",
+                user_id,
+                str(data)[:200],
+            )
+            return None
+        return data
+
+    @staticmethod
+    def _upsert_persona_row(
+        db: Session,
+        *,
+        user_id: str,
+        data: dict[str, Any],
+        now: Any,
+    ) -> None:
+        persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
+        payload = json.dumps(data, ensure_ascii=False)
+        if persona_obj:
+            persona_obj.persona_json = payload
+            if str(persona_obj.status or "") == "archived":
+                persona_obj.status = "review"
+            persona_obj.updated_at = now
+            return
+        db.add(Persona(user_id=user_id, persona_json=payload, updated_at=now))
+
+    def update_persona(
+        self,
+        user_id: str,
+        persona_json: str | dict[str, Any],
+    ) -> bool:
+        """只回写 canonical 画像；不会创建无运行时消费者的 SystemPrompt。"""
+        from core.time_utils import db_now_naive
+
+        data = self._validated_persona_payload(user_id, persona_json)
+        if data is None:
             return False
 
         db = self._get_session()
         try:
-            persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
-            sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == user_id).first()
+            self._upsert_persona_row(
+                db,
+                user_id=user_id,
+                data=data,
+                now=db_now_naive(),
+            )
+            db.commit()
+            return True
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception("update_persona failed; transaction rolled back")
+            raise
+        finally:
+            db.close()
+
+    def update_persona_and_prompt(
+        self,
+        user_id: str,
+        persona_json: str | dict[str, Any],
+        system_prompt: str,
+    ) -> bool:
+        """兼容历史控制面；主聊天不读取 `system_prompts` 表。"""
+        from core.time_utils import db_now_naive
+
+        data = self._validated_persona_payload(user_id, persona_json)
+        if data is None:
+            return False
+
+        db = self._get_session()
+        try:
             now = db_now_naive()
-            if persona_obj:
-                persona_obj.persona_json = _json.dumps(data, ensure_ascii=False)
-                if str(persona_obj.status or "") == "archived":
-                    persona_obj.status = "review"
-                persona_obj.updated_at = now
-            else:
-                db.add(Persona(user_id=user_id,
-                               persona_json=_json.dumps(data, ensure_ascii=False),
-                               updated_at=now))
+            self._upsert_persona_row(db, user_id=user_id, data=data, now=now)
+            sys_obj = (
+                db.query(SystemPrompt)
+                .filter(SystemPrompt.user_id == user_id)
+                .first()
+            )
             if sys_obj:
                 sys_obj.prompt_text = system_prompt
                 sys_obj.updated_at = now
             else:
-                db.add(SystemPrompt(user_id=user_id, prompt_text=system_prompt, updated_at=now))
+                db.add(
+                    SystemPrompt(
+                        user_id=user_id,
+                        prompt_text=system_prompt,
+                        updated_at=now,
+                    )
+                )
             db.commit()
             return True
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception(
+                "update_persona_and_prompt failed; transaction rolled back"
+            )
+            raise
         finally:
             db.close()
 
@@ -364,7 +311,11 @@ class UnifiedProvider:
         self.api_key = api_key
         if provider_type == "dify":
             raise RuntimeError("Dify provider has been removed. Please migrate to NewAPI/OpenAI-compatible route.")
-        self.client = NewAPIClient(api_key=api_key, base_url=base_url, timeout=timeout)
+        self.client = RuntimeChatCompletionClient(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+        )
 
     async def invoke(self, 
                       query: str, 
@@ -426,10 +377,7 @@ class NanobotKTController:
         self.memory = memory
         self.state_manager = StateManager()
         self.sandbox = AnalysisSandbox()
-        # Sub-agents
-        self.log_analyst = LogAnalystAgent()
-        self.persona_architect = PersonaArchitectAgent()
-        self.prompt_auditor = PromptAuditorAgent()
+        # 仍在运行的后台能力；画像进化已收口为候选提取 + Python 状态机。
         self.data_analyst = DataAnalystAgent(self.sandbox)
         self.model_scout = ModelScoutAgent()
         # 本地工具注册表 (slash commands)
@@ -613,11 +561,7 @@ class NanobotKTController:
         if not logs:
             return
 
-        # 2. Analysis Stage: LogAnalyst sub-agent
-        logger.info(f"  [KT Local Analyst] Analyzing logs for {user_id}...")
-        await self.log_analyst.run(logs, self.provider)
-        
-        # 3. Design Stage: LLM 候选提取 + Python 状态机（替代旧的 PersonaArchitectAgent）
+        # 2. LLM 候选提取 + Python 状态机。
         logger.info(f"  [KT Local StateMachine] Extracting persona candidates for {user_id}...")
         existing_persona = self.memory.get_user_persona(user_id)
 
@@ -629,22 +573,16 @@ class NanobotKTController:
             self.memory.mark_logs_processed([log["id"] for log in logs])
             return
 
-        extraction_prompt = build_candidate_extraction_prompt(existing_persona, logs_text)
-        try:
-            from core.prompt_v2.task_templates import render_task_prompt
-
-            extraction_prompt = render_task_prompt(
-                "memory_extract",
-                {"conversation": logs_text, "existing_memory": existing_persona},
-                fallback_text=extraction_prompt,
-            )
-        except Exception:
-            pass
+        extraction_prompt = build_candidate_extraction_prompt(
+            existing_persona,
+            logs_text,
+        )
+        system_prompt = get_candidate_extraction_system_prompt()
 
         # 3b. LLM 调用（只用 fast tier，因为只做提取不推理）
         candidate_res = await self.provider.invoke_raw(
             query=extraction_prompt,
-            system_prompt=CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             user_id=user_id,
             model_tier="fast",
         )
@@ -661,7 +599,7 @@ class NanobotKTController:
             )
             candidate_res = await self.provider.invoke_raw(
                 query=retry_prompt,
-                system_prompt=CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 user_id=user_id,
                 model_tier="fast",
             )
@@ -687,16 +625,10 @@ class NanobotKTController:
 
         logger.info(f"  [KT Local StateMachine] {stats}")
 
-        # 4. Quality Stage: PromptAuditor sub-agent
-        logger.info(f"  [KT Local Auditor] Auditing system prompt for {user_id}...")
-        current_prompt = self.memory.get_system_prompt(user_id)
-        results_04 = await self.prompt_auditor.run(current_prompt, persona_summary, self.provider)
-
-        # 5. Commit Stage: Save to DB
-        update_result = self.memory.update_persona_and_prompt(
+        # 3. 只保存画像。SystemPrompt 历史表不是 canonical Prompt Runtime 输入。
+        update_result = self.memory.update_persona(
             user_id,
             persona_summary,
-            results_04["final_system_prompt"]
         )
         if update_result is False:
             raise RuntimeError("persona persistence rejected; logs remain unprocessed")
@@ -776,246 +708,6 @@ class EvolutionUtils:
             "meta_info": f"Turns: {turn_count}, Corrections: {user_corrections}, Tier: {quality_tier}"
         }
 
-class LogAnalystAgent:
-    """对话日志结构化提炼 (High Fidelity)"""
-    async def run(self, logs: list[Any], provider: Any) -> dict[str, Any]:
-        # 1. 预清洗与元数据生成
-        clean_res = EvolutionUtils.pre_clean_logs(logs, "N/A")
-        
-        # 2. 调用 LLM 结构化提取 (Use 'fast' tier)
-        prompt = f"## 元信息\n{clean_res['meta_info']}\n\n## 领域分布\n{clean_res['domain_distribution']}\n\n## 对话日志\n{clean_res['cleaned_log']}"
-        response = await provider.invoke_raw(
-            query=prompt, 
-            system_prompt=LOG_ANALYST_LLM_PROMPT, 
-            user_id="log_analyst",
-            model_tier="fast"
-        )
-        
-        # 3. JSON 修补并返回
-        structured = EvolutionUtils.json_repair(response)
-        if not isinstance(structured, dict):
-            structured = {"parse_error": True, "raw": str(structured)[:500]}
-        structured.update({
-            "quality_tier": clean_res["quality_tier"],
-            "kb_document": self._format_kb(structured, clean_res)
-        })
-        return structured
-
-    def _format_kb(self, structured: dict[str, Any], clean_res: dict[str, Any]) -> str:
-        """生成结构化知识库文档。"""
-        return f"""# 对话日志摘要
-{clean_res['meta_info']}
-Tier: {structured.get('quality_tier')} | Summary: {structured.get('summary')}
-## 行为模式
-{chr(10).join('- ' + s for s in structured.get('behavior_patterns', []))}
-## 技术偏好
-{chr(10).join('- ' + s for s in structured.get('tech_preferences', []))}
-"""
-
-class PersonaArchitectAgent:
-    """深层画像提炼引擎 (High Fidelity: Merge -> Critique -> Format)"""
-    @staticmethod
-    def _to_json_len(payload: dict[str, Any]) -> int:
-        return len(json.dumps(payload, ensure_ascii=False))
-
-    @staticmethod
-    def _enforce_persona_size(persona: dict[str, Any], max_chars: int = 3000) -> dict[str, Any]:
-        """将画像压缩到长度预算内，优先删除低置信/低活跃领域。"""
-        if not isinstance(persona, dict):
-            return {"parse_error": True, "raw": str(persona)[:1000]}
-
-        result = copy.deepcopy(persona)
-        if PersonaArchitectAgent._to_json_len(result) <= max_chars:
-            return result
-
-        # 先裁剪高噪声自由文本字段
-        for key in ["domain_update_log", "delta_from_previous", "persona_summary"]:
-            if key in result and PersonaArchitectAgent._to_json_len(result) > max_chars:
-                result[key] = ""
-
-        # 再裁剪低优先领域画像（low -> medium -> high, interaction_count 升序）
-        domain_profiles = result.get("domain_profiles")
-        if isinstance(domain_profiles, dict) and PersonaArchitectAgent._to_json_len(result) > max_chars:
-            def _rank(item: Any) -> Any:
-                _, value = item
-                if not isinstance(value, dict):
-                    return (3, 0)
-                conf = str(value.get("confidence", "low")).lower()
-                conf_rank = {"low": 0, "medium": 1, "high": 2}.get(conf, 0)
-                count = int(value.get("interaction_count", 0) or 0)
-                return (conf_rank, count)
-
-            for domain_key, _ in sorted(domain_profiles.items(), key=_rank):
-                if PersonaArchitectAgent._to_json_len(result) <= max_chars:
-                    break
-                domain_profiles.pop(domain_key, None)
-
-        # 裁剪过长列表
-        if PersonaArchitectAgent._to_json_len(result) > max_chars:
-            for key, value in list(result.items()):
-                if isinstance(value, list) and len(value) > 5:
-                    result[key] = value[:5]
-
-        # 兜底：裁剪长字符串
-        if PersonaArchitectAgent._to_json_len(result) > max_chars:
-            for key, value in list(result.items()):
-                if isinstance(value, str) and len(value) > 240:
-                    result[key] = value[:240]
-                    if PersonaArchitectAgent._to_json_len(result) <= max_chars:
-                        break
-
-        # 最终兜底：保留核心框架
-        if PersonaArchitectAgent._to_json_len(result) > max_chars:
-            result = {
-                "version": result.get("version", ""),
-                "user_id": result.get("user_id", ""),
-                "identity": result.get("identity", {}),
-                "communication_style": result.get("communication_style", ""),
-                "domain_profiles": result.get("domain_profiles", {}),
-                "persona_summary": str(result.get("persona_summary", ""))[:400],
-            }
-
-        return result
-
-    @staticmethod
-    def to_kb_document(persona: dict[str, Any], user_id: str) -> str:
-        """将画像转成可写入知识库的文本快照。"""
-        if not isinstance(persona, dict):
-            return ""
-        return (
-            f"# Persona Snapshot\n"
-            f"User: {user_id}\n\n"
-            f"## Summary\n{persona.get('persona_summary', '')}\n\n"
-            f"## Full JSON\n{json.dumps(persona, ensure_ascii=False)}"
-        )
-
-    async def run(self, existing_persona: str, log_summary: dict[str, Any], provider: Any) -> dict[str, Any]:
-        # 1. Stage: Merge (T2 - Use Smart model)
-        merge_input = f"## 现有画像\n{existing_persona}\n\n## 新日志摘要\n{json.dumps(log_summary, ensure_ascii=False)}"
-        draft_res = await provider.invoke_raw(query=merge_input, system_prompt=PERSONA_MERGE_PROMPT, user_id="p_architect_merge", model_tier="smart")
-        draft_json = EvolutionUtils.json_repair(draft_res)
-
-        # Validate merge output; retry once with explicit repair hint on parse failure
-        if isinstance(draft_json, dict) and draft_json.get("parse_error"):
-            logger.warning(f"PersonaArchitectAgent merge parse error, retrying: {draft_json.get('raw', '')[:200]}")
-            repair_input = f"## 修复要求\n之前的输出无法解析为 JSON。请直接输出有效的 JSON 对象，键为 identity/communication_style/domain_profiles/persona_summary/version。\n\n## 原始合并输入\n{merge_input}"
-            draft_res = await provider.invoke_raw(query=repair_input, system_prompt=PERSONA_MERGE_PROMPT, user_id="p_architect_merge_retry", model_tier="smart")
-            draft_json = EvolutionUtils.json_repair(draft_res)
-
-        # 2. Stage: Six-Dimension Critique (T3 - Use Reasoning model if available)
-        critique_res = await provider.invoke_raw(query=json.dumps(draft_json, ensure_ascii=False), system_prompt=PERSONA_CRITIQUE_PROMPT, user_id="p_architect_critique", model_tier="reasoning")
-
-        # 3. Stage: Final Repair & Truncation (Python)
-        final_persona = EvolutionUtils.json_repair(critique_res)
-
-        # Validate critique output; retry once on parse failure
-        if isinstance(final_persona, dict) and final_persona.get("parse_error"):
-            logger.warning(f"PersonaArchitectAgent critique parse error, retrying: {final_persona.get('raw', '')[:200]}")
-            repair_input = f"## 修复要求\n之前的输出无法解析为 JSON。请直接输出有效的 JSON 对象。\n\n## 草稿画像\n{json.dumps(draft_json, ensure_ascii=False)}"
-            critique_res = await provider.invoke_raw(query=repair_input, system_prompt=PERSONA_CRITIQUE_PROMPT, user_id="p_architect_critique_retry", model_tier="reasoning")
-            final_persona = EvolutionUtils.json_repair(critique_res)
-
-        # Validate expected keys; log warnings for missing fields
-        if isinstance(final_persona, dict):
-            expected_keys = {"identity", "communication_style", "domain_profiles", "persona_summary", "version"}
-            present_keys = set(final_persona.keys())
-            missing = expected_keys - present_keys
-            unexpected = present_keys - expected_keys - set(["parse_error", "raw"])
-            if missing:
-                logger.warning(f"PersonaArchitectAgent output missing expected keys: {missing}")
-            if unexpected:
-                logger.debug(f"PersonaArchitectAgent output has unexpected keys: {unexpected}")
-
-        normalized_persona = self._enforce_persona_size(final_persona, max_chars=3000)
-        if self._to_json_len(normalized_persona) > 3000:
-            logger.warning("Persona remains larger than 3000 chars after compression.")
-        return normalized_persona
-
-class PromptAuditorAgent:
-    """System Prompt 五问审计精简引擎 (High Fidelity: Draft -> Audit -> Synthesize)"""
-    @staticmethod
-    def _estimate_tokens(text: str) -> int:
-        return max(1, _shared_estimate_tokens(text))
-
-    @staticmethod
-    def _compute_deletion_rate(audit_report: str) -> float:
-        deleted = len(re.findall(r"❌", audit_report))
-        total = len(re.findall(r"\|\s*\d+\s*\|", audit_report))
-        if total == 0:
-            return 0.0
-        return min(1.0, deleted / total)
-
-    def _apply_token_budget(self, prompt: str, max_tokens: int = 500) -> tuple[str, int, bool]:
-        estimated = self._estimate_tokens(prompt)
-        if estimated <= max_tokens:
-            return prompt, estimated, False
-
-        # 按行裁剪，优先保留前置规则
-        kept_lines = []
-        running = ""
-        for line in prompt.splitlines():
-            candidate = (running + "\n" + line).strip() if running else line
-            if self._estimate_tokens(candidate) > max_tokens:
-                break
-            kept_lines.append(line)
-            running = candidate
-
-        truncated = "\n".join(kept_lines).strip()
-        if not truncated:
-            truncated = prompt[: max_tokens * 2]
-
-        return truncated, self._estimate_tokens(truncated), True
-
-    async def run(self, current_prompt: str, persona_json: str, provider: Any) -> dict[str, Any]:
-        # 1. Stage: Draft (T2 - Smart)
-        draft_res = await provider.invoke_raw(
-            query=f"## 现有 Prompt\n{current_prompt}\n\n## 患者画像\n{persona_json}", 
-            system_prompt=PROMPT_DRAFT_PROMPT, user_id="p_auditor_draft",
-            model_tier="smart"
-        )
-        
-        # 2. Stage: 5-Question Audit (T3 - Reasoning)
-        audit_res = await provider.invoke_raw(
-            query=f"## 候选规则\n{draft_res}\n\n## 参考原版\n{current_prompt}", 
-            system_prompt=PROMPT_AUDIT_PROMPT, user_id="p_auditor_audit",
-            model_tier="reasoning"
-        )
-        
-        # 3. Stage: Synthesize (T2 - Smart)
-        synth_res = await provider.invoke_raw(
-            query=f"## 审计报告\n{audit_res}\n\n## 原始 Prompt\n{current_prompt}", 
-            system_prompt=PROMPT_SYNTHESIZE_PROMPT, user_id="p_auditor_synth",
-            model_tier="smart"
-        )
-        
-        # 提取最终版本 (regex 保持鲁棒)
-        prompt_match = re.search(r'(?is)最终(精简)?(版)?Prompt[:：\s]*\n+([\s\S]*?)($|---)', synth_res)
-        final_prompt = prompt_match.group(3).strip() if prompt_match else current_prompt
-
-        # 质量门禁（删除率 > 60% 触发）
-        deletion_rate = self._compute_deletion_rate(audit_res)
-        quality_gate = "triggered" if deletion_rate > 0.6 else "pass"
-        quality_warning = (
-            f"草稿删除率 {deletion_rate * 100:.0f}% > 60%，建议回看候选规则生成阶段。"
-            if quality_gate == "triggered"
-            else ""
-        )
-
-        # Token 预算约束（<= 500）
-        bounded_prompt, estimated_tokens, was_truncated = self._apply_token_budget(final_prompt, max_tokens=500)
-        if was_truncated:
-            logger.warning(f"Final prompt truncated to fit token budget: ~{estimated_tokens}/500")
-        
-        return {
-            "final_system_prompt": bounded_prompt,
-            "audit_report": audit_res,
-            "quality_gate": quality_gate,
-            "quality_warning": quality_warning,
-            "deletion_rate": deletion_rate,
-            "estimated_tokens": estimated_tokens,
-            "token_budget_truncated": was_truncated,
-        }
-
 class DataAnalystAgent:
     """受限环境下的本地数据分析专家"""
     def __init__(self, sandbox: AnalysisSandbox):
@@ -1032,6 +724,10 @@ class DataAnalystAgent:
 
 class ModelScoutAgent:
     """自动模型情报侦察员：负责从海量信息中提取新模型并更新注册表"""
+
+    def __init__(self, catalog_writer: ModelCatalogWriterPort | None = None) -> None:
+        self.catalog_writer = catalog_writer
+
     async def run(self, scout_info: str, provider: Any) -> list[dict[str, Any]]:
         # 1. 自动决定是否执行实时搜索
         if not scout_info or "搜集" in scout_info or "search" in scout_info.lower():
@@ -1040,29 +736,37 @@ class ModelScoutAgent:
             scout_info = search_and_extract_news(search_query)
 
         # 2. 调用 LLM 进行情报分析 (Use 'reasoning' tier for high precision mapping)
+        from core.prompt_v2.task_contracts import (
+            TaskOutputContractError,
+            parse_task_output,
+        )
+        from core.prompt_v2.task_templates import render_task_prompt
+
+        system_prompt = render_task_prompt("tasks/model_scout_system", {})
         response = await provider.invoke_raw(
-            query=f"## 搜集到的实时情报\n{scout_info}", 
-            system_prompt=MODEL_SCOUT_PROMPT, 
+            query=f"## 搜集到的实时情报\n{scout_info}",
+            system_prompt=system_prompt,
             user_id="model_scout",
             model_tier="reasoning"
         )
-        
-        # 2. 解析 JSON 情报
-        models_to_update = EvolutionUtils.json_repair(response)
-        if isinstance(models_to_update, dict) and "parse_error" not in models_to_update:
-             # Handle case where LLM returns a single object instead of a list
-             models_to_update = [models_to_update]
-        elif not isinstance(models_to_update, list):
-             logger.error(f"ModelScout parse error: {response}")
-             return []
+
+        # 2. 通过 Task Contract 解析；无效结果不得污染目录。
+        try:
+            models_to_update = parse_task_output(
+                "model_scout_system",
+                response,
+            )["models"]
+        except TaskOutputContractError as exc:
+            logger.error("ModelScout output contract rejected: %s", exc)
+            return []
 
         # 3. 更新注册表
-        from clients.model_registry import registry
-        count = 0
-        for m_data in models_to_update:
-            if m_data.get("id"):
-                registry.add_or_update_model(m_data)
-                count += 1
+        if not models_to_update:
+            count = 0
+        elif self.catalog_writer is None:
+            count = upsert_model_catalog(models_to_update)
+        else:
+            count = self.catalog_writer.upsert_models(tuple(models_to_update))
         
         logger.info(f"  [Model Scout] Registry updated with {count} models.")
         return models_to_update

@@ -13,7 +13,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.session_memory import config
-from core.database import ConversationTurn, RollingSessionSummary, SessionSummaryJob
+from core.db.models.chat import ConversationTurn
+from core.db.models.session_memory import RollingSessionSummary, SessionSummaryJob
 from core.time_utils import db_now_naive, to_db_naive
 
 

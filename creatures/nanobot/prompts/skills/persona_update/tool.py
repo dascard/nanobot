@@ -1,8 +1,8 @@
 """
 Persona Update tool — trigger persona generation from within KT conversation.
 
-Lets the agent (or user) manually update the user persona by running the
-full PersonaArchitectAgent pipeline on recent chat logs.
+Lets the agent (or user) manually update the user persona through the
+canonical candidate-extraction task and deterministic state machine.
 """
 
 import json
@@ -67,14 +67,11 @@ class PersonaUpdateTool(BaseTool):
             return ToolResult(error="Unsupported persona update arguments")
 
         try:
-            from core.database import SessionLocal, Persona, ChatLog
-            from core.legacy_adapter import (
-                LogAnalystAgent,
-                EvolutionUtils,
-                SQLiteMemory,
-            )
-            from clients.new_api_client import NewAPIClient
-            from config import NEW_API_KEY, NEW_API_BASE_URL
+            from core.database import SessionLocal
+            from core.db.models.chat import ChatLog
+            from core.db.models.persona import Persona
+            from core.legacy_adapter import SQLiteMemory
+            from core.model_provider.chat_runtime import RuntimeChatCompletionClient
 
             db = SessionLocal()
             try:
@@ -105,23 +102,14 @@ class PersonaUpdateTool(BaseTool):
                 ]
 
                 # 3. Create provider with retry
-                client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+                client = RuntimeChatCompletionClient()
 
                 class _ToolProvider:
                     """Provider wrapping NewAPIClient with retry for evolution agents."""
                     def __init__(self, c):
                         self.client = c
 
-                    # 画像分析是高复杂度任务，跳过 cost 优先的路由器
-                    _PERSONA_MODEL_MAP = {
-                        "smart": "deepseek-v4-pro",
-                        "reasoning": "deepseek-v4-flash-high",
-                        "fast": "deepseek-v4-flash",
-                    }
-
                     async def invoke_raw(self, query, system_prompt, user_id, model_tier="smart", manual_model=""):
-                        # manual_model 由调用方指定则用调用方的，否则按 tier 映射
-                        target = manual_model or self._PERSONA_MODEL_MAP.get(model_tier, "")
                         messages = [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": query},
@@ -132,7 +120,7 @@ class PersonaUpdateTool(BaseTool):
                             with llm_trace_scope(source="persona_update"):
                                 resp = await self.client.chat_completion(
                                     messages=messages, model_tier=model_tier,
-                                    manual_model=target,
+                                    manual_model=manual_model,
                                 )
                             if isinstance(resp, dict) and "choices" in resp:
                                 return resp["choices"][0]["message"]["content"]
@@ -145,18 +133,15 @@ class PersonaUpdateTool(BaseTool):
 
                 provider = _ToolProvider(client)
 
-                # 4. Run analysis pipeline
-                logger.info(f"[persona_update] Analyzing {len(log_dicts)} logs for user={user_id}")
-                log_analyst = LogAnalystAgent()
-                await log_analyst.run(log_dicts, provider)
-
-                # 5. 新版状态机：LLM 候选提取 + Python 去重聚类（替代旧 PersonaArchitectAgent）
+                # 4. canonical 候选提取 + Python 去重聚类状态机。
                 logger.info(f"[persona_update] Extracting candidates for user={user_id}")
                 try:
                     from core.persona_preprocess import (
-                        PersonaStateMachine, build_candidate_extraction_prompt,
-                        CANDIDATE_EXTRACTION_SYSTEM_PROMPT, filter_user_messages,
+                        PersonaStateMachine,
+                        build_candidate_extraction_prompt,
+                        filter_user_messages,
                         format_candidate_logs,
+                        get_candidate_extraction_system_prompt,
                     )
                     user_log_dicts = filter_user_messages(log_dicts)
                     if not user_log_dicts:
@@ -168,15 +153,30 @@ class PersonaUpdateTool(BaseTool):
                     )
                     candidate_raw = await provider.invoke_raw(
                         query=extraction_prompt,
-                        system_prompt=CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
+                        system_prompt=get_candidate_extraction_system_prompt(),
                         user_id=user_id,
                         model_tier="fast",
                     )
-                    parsed = EvolutionUtils.json_repair(candidate_raw)
-                    candidates = (
-                        parsed.get("candidates", [])
-                        if isinstance(parsed, dict) else []
+                    from core.prompt_v2.task_contracts import (
+                        TaskOutputContractError,
+                        parse_task_output,
                     )
+
+                    try:
+                        parsed = parse_task_output("memory_extract", candidate_raw)
+                    except TaskOutputContractError:
+                        candidate_raw = await provider.invoke_raw(
+                            query=(
+                                f"{extraction_prompt}\n\n"
+                                "[输出契约修正] 只输出 JSON object，且必须显式包含 "
+                                "candidates 数组。"
+                            ),
+                            system_prompt=get_candidate_extraction_system_prompt(),
+                            user_id=user_id,
+                            model_tier="fast",
+                        )
+                        parsed = parse_task_output("memory_extract", candidate_raw)
+                    candidates = parsed["candidates"]
                     if not candidates:
                         return ToolResult(output="未提取到新的画像信息", exit_code=0)
 
@@ -188,11 +188,12 @@ class PersonaUpdateTool(BaseTool):
                     logger.error("[persona_update] StateMachine failed: %s", e)
                     return ToolResult(error=f"画像生成失败: {str(e)}")
 
-                # 6. Save to DB: personas(压缩摘要) + persona_facts/behaviors 已由状态机写入
+                # 5. personas(压缩摘要)；facts 已由状态机写入。
                 memory = SQLiteMemory()
-                memory.update_persona_and_prompt(user_id, persona_summary, "")
+                if memory.update_persona(user_id, persona_summary) is False:
+                    return ToolResult(error="画像持久化被拒绝")
 
-                # 7. Build summary from state machine stats
+                # 6. Build summary from state machine stats
                 parts = []
                 if stats.get("created"):
                     parts.append(f"新建 {stats['created']} 条")

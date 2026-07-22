@@ -1,0 +1,88 @@
+name: 通用质量门禁
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      NANOBOT_TESTING: "1"
+      DATABASE_URL: "sqlite:///:memory:"
+      NEW_API_KEY: "test-key-for-ci"
+      NANOBOT_ADMIN_TOKEN: "test-admin-token"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: 配置 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: 应用 KT 兼容补丁
+        run: bash scripts/apply_kohaku_patches.sh
+
+      - name: 安装锁定依赖
+        run: |
+          python -m pip install --upgrade pip
+          torch_requirement="$(sed -n '/^torch==/p' requirements-test.lock)"
+          python -m pip install --no-deps \
+            --index-url https://download.pytorch.org/whl/cpu \
+            "${torch_requirement}"
+          python -m pip install -r requirements-test.lock
+          python -m pip install --no-deps ./vendor/KohakuTerrarium
+          python -m pip install ruff==0.15.12
+          python -m pip check
+
+      - name: 检查架构边界
+        run: python scripts/check_architecture.py
+
+      - name: 检查 Python 致命静态错误
+        run: python -m ruff check --select E9,F63,F7,F82 .
+
+      - name: 校验 Compose
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          NANOBOT_RUNTIME_IMAGE="example.invalid/nanobot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+
+      - name: 运行完整测试
+        run: python -m pytest tests/ -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v7
+
+      - name: 配置 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: 安装前端依赖
+        working-directory: webui
+        run: npm ci
+
+      - name: 前端静态检查
+        working-directory: webui
+        run: npm run lint
+
+      - name: 前端构建
+        working-directory: webui
+        run: npm run build

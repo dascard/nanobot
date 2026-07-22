@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, MutableMapping
 from dataclasses import dataclass
@@ -27,6 +28,10 @@ def _safe_log(method_name: str, message: str, *args: Any, **kwargs: Any) -> None
         log_method(message, *args, **kwargs)
     except BaseException:
         pass
+
+
+async def _resolve_maybe_awaitable(value: Any) -> Any:
+    return await value if inspect.isawaitable(value) else value
 
 
 def _observe_stream_finalizer(task: asyncio.Task[Any]) -> None:
@@ -625,12 +630,14 @@ async def run_non_streaming_chat_response(
                 context.empty_assistant_placeholder,
             )
             if context.claim_key is None:
-                context.callbacks.persist_chat_turn(
-                    db,
-                    context.persist_req,
-                    context.empty_assistant_placeholder,
-                    context.guardrail_status,
-                    timing_meta=context.private_timing_meta,
+                await _resolve_maybe_awaitable(
+                    context.callbacks.persist_chat_turn(
+                        db,
+                        context.persist_req,
+                        context.empty_assistant_placeholder,
+                        context.guardrail_status,
+                        timing_meta=context.private_timing_meta,
+                    )
                 )
         except BaseException as persist_exc:
             _safe_log("error", "[/chat] Persist failed on KT error path: %r", persist_exc)

@@ -8,8 +8,29 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from core.database import init_db
+from core.runtime_health import (
+    mark_prompt_runtime_ready,
+    mark_starting,
+    mark_startup_complete,
+    mark_stopping,
+)
+from core.sqlite_maintenance import (
+    SQLiteMaintenanceWorker,
+    start_sqlite_maintenance,
+    stop_sqlite_maintenance,
+)
+from core.retrieval import (
+    RerankerExecutorPort,
+    start_retrieval_runtime,
+    stop_retrieval_runtime,
+)
+from core.proactive.runtime_identity import (
+    start_proactive_runtime,
+    stop_proactive_runtime,
+)
 
 from bootstrap.network_check import run_startup_network_check
+from bootstrap.model_runtime import start_model_runtime, stop_model_runtime
 from bootstrap.prompt_runtime import init_prompt_runtimes
 from bootstrap.provider_migration import run_provider_migration
 from bootstrap.schedulers import SchedulerHandles, start_schedulers
@@ -71,42 +92,66 @@ async def lifespan(app: Any):
     testing = os.environ.get("NANOBOT_TESTING") == "1"
     scheduler_handles: SchedulerHandles | None = None
     new_api_session: Any | None = None
+    sqlite_maintenance: SQLiteMaintenanceWorker | None = None
+    retrieval_executor: RerankerExecutorPort | None = None
+    proactive_runtime_started = False
 
     logger.info("Starting Nanobot Server Gateway...")
-    init_db()
-    logger.info("Database initialized.")
-    validate_sandbox_asset_token_config()
-    run_provider_migration()
-    init_prompt_runtimes(logger)
-    scheduler_handles = start_schedulers(testing=testing, logger=logger)
-    new_api_session = await init_new_api_session()
-    app.state.new_api_session = new_api_session
-
-    if not testing:
-        await run_startup_network_check(logger, session=new_api_session)
-        app.state.bridge = await init_bridge()
-        logger.info("KT Agent initialized via bridge.")
-    else:
-        logger.info("NANOBOT_TESTING=1: skipped network check and KT bridge init.")
-        app.state.bridge = None
-
-    init_legacy_memory()
+    mark_starting(testing=testing)
+    app.state.bridge = None
+    app.state.new_api_session = None
+    bridge_initialized = False
+    model_runtime_started = False
     try:
+        init_db()
+        logger.info("Database initialized.")
+        sqlite_maintenance = start_sqlite_maintenance()
+        validate_sandbox_asset_token_config()
+        run_provider_migration()
+        start_model_runtime()
+        model_runtime_started = True
+        retrieval_executor = start_retrieval_runtime()
+        start_proactive_runtime()
+        proactive_runtime_started = True
+        init_prompt_runtimes(logger)
+        mark_prompt_runtime_ready()
+        scheduler_handles = start_schedulers(testing=testing, logger=logger)
+        new_api_session = await init_new_api_session()
+        app.state.new_api_session = new_api_session
+
+        if not testing:
+            await run_startup_network_check(logger, session=new_api_session)
+            app.state.bridge = await init_bridge()
+            bridge_initialized = True
+            logger.info("KT Agent initialized via bridge.")
+        else:
+            logger.info("NANOBOT_TESTING=1: skipped network check and KT bridge init.")
+
+        init_legacy_memory()
+        mark_startup_complete()
         yield
     finally:
+        mark_stopping()
         logger.info("Shutting down Nanobot Server Gateway...")
         if scheduler_handles is not None:
             scheduler_handles.stop_all()
+        if proactive_runtime_started:
+            stop_proactive_runtime()
+        if model_runtime_started:
+            stop_model_runtime()
         try:
-            if not testing:
+            if bridge_initialized:
                 await shutdown_bridge()
         finally:
             await shutdown_new_api_session(new_api_session)
             # 关闭 daily_digest 模块级 push session（H7 复用单例的清理）
             try:
                 from core.daily_digest import close_push_session
+
                 await close_push_session()
             except Exception:
                 logger.debug("push session shutdown skipped", exc_info=True)
             app.state.bridge = None
             app.state.new_api_session = None
+            stop_retrieval_runtime(retrieval_executor)
+            stop_sqlite_maintenance(sqlite_maintenance)

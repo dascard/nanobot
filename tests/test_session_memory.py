@@ -2384,20 +2384,23 @@ def test_summary_inheritance_without_previous_allows_only_empty_audit():
 
 def test_summary_prompt_explains_disposition_semantics():
     from app.session_memory.llm_summarizer import (
-        SESSION_SUMMARY_OUTPUT_INSTRUCTION,
+        _render_session_summary_prompt,
     )
 
     assert "carried 仅表示目标文本与 obligation.normalized_text 完全一致" in (
-        SESSION_SUMMARY_OUTPUT_INSTRUCTION
+        _render_session_summary_prompt("tasks/session_summary_output")
     )
     assert "改写、压缩、合并或改述都必须使用 updated" in (
-        SESSION_SUMMARY_OUTPUT_INSTRUCTION
+        _render_session_summary_prompt("tasks/session_summary_output")
     )
-    assert "target_index 从 0 开始" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
-    assert "合并多个 obligation 到同一目标" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
-    assert "四个可继承数组合计最多 7 项" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
-    assert "summary 不超过 400 字" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
-    assert "约 3000 tokens 以内" in SESSION_SUMMARY_OUTPUT_INSTRUCTION
+    output_instruction = _render_session_summary_prompt(
+        "tasks/session_summary_output"
+    )
+    assert "target_index 从 0 开始" in output_instruction
+    assert "合并多个 obligation 到同一目标" in output_instruction
+    assert "四个可继承数组合计最多 7 项" in output_instruction
+    assert "summary 不超过 400 字" in output_instruction
+    assert "约 3000 tokens 以内" in output_instruction
 
 
 def test_summary_state_obligation_budget_caps_next_batch_audit():
@@ -3405,7 +3408,6 @@ def test_summary_input_manifest_drift_blocks_finalize(db_session, drift_kind):
 def test_summary_manifest_rejects_missing_fragment_completion_at_finalize(db_session):
     from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
-        _summarize_prepared_sync,
         finalize_claimed_session_summary_job,
         prepare_claimed_session_summary_job,
     )

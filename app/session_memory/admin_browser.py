@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.memory_digest.retrieval_service import validate_digest_date_range
 from app.memory_digest.renderer import render_digest_levels
-from core.database import MemoryDigest, RollingSessionSummary
+from core.db.models.session_memory import MemoryDigest, RollingSessionSummary
 
 
 def _safe_json(raw: str | None, fallback: Any) -> Any:

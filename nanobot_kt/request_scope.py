@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import Any
@@ -35,6 +36,7 @@ class BridgeRequestScope:
         self._dry_run = bool(dry_run)
         self._dry_run_token: Token[bool] | None = None
         self._trace_finalizer: Any = None
+        self._async_cleanups: list[Callable[[], Awaitable[None]]] = []
         self._lock_acquired = False
         self._closed = False
 
@@ -51,6 +53,7 @@ class BridgeRequestScope:
         _traceback: TracebackType | None,
     ) -> bool:
         try:
+            await self._run_async_cleanups()
             if exc_type is None:
                 self.finish("success")
             elif issubclass(exc_type, asyncio.CancelledError):
@@ -60,6 +63,29 @@ class BridgeRequestScope:
         finally:
             self.close()
         return False
+
+    def bind_async_cleanup(
+        self,
+        cleanup: Callable[[], Awaitable[None]],
+    ) -> None:
+        if self._closed:
+            raise RuntimeError("Bridge request scope 已关闭")
+        self._async_cleanups.append(cleanup)
+
+    async def _run_async_cleanups(self) -> None:
+        cleanups = list(reversed(self._async_cleanups))
+        self._async_cleanups.clear()
+        for cleanup in cleanups:
+            try:
+                await cleanup()
+            except asyncio.CancelledError:
+                logger.warning("Bridge request async cleanup was cancelled")
+            except Exception as exc:
+                logger.warning(
+                    "Bridge request async cleanup failed: %s",
+                    exc,
+                    exc_info=True,
+                )
 
     def bind_trace_finalizer(self, finalizer: Any) -> None:
         self._trace_finalizer = finalizer

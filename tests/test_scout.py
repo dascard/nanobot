@@ -6,7 +6,18 @@ from core.legacy_adapter import ModelScoutAgent
 @pytest.mark.asyncio
 async def test_model_scout_agent_logic():
     """测试 Scout Agent 的分析逻辑是否正确映射到注册表指令"""
-    agent = ModelScoutAgent()
+    written_models = []
+
+    class FakeCatalogWriter:
+        @property
+        def adapter_id(self):
+            return "fake_catalog"
+
+        def upsert_models(self, models):
+            written_models.extend(dict(model) for model in models)
+            return len(models)
+
+    agent = ModelScoutAgent(catalog_writer=FakeCatalogWriter())
     
     # Mock Provider
     mock_provider = MagicMock()
@@ -33,12 +44,36 @@ async def test_model_scout_agent_logic():
     assert extracted_models[0]["id"] == "new-reasoning-model-v1"
     assert extracted_models[0]["intelligence"] == 9.8
     assert "reasoning" in extracted_models[0]["tags"]
+    assert written_models == extracted_models
     
     # 验证 Provider 调用了正确的提示词
     mock_provider.invoke_raw.assert_called_once()
     args, kwargs = mock_provider.invoke_raw.call_args
     assert "new-reasoning-model-v1" in kwargs["query"]
+    assert "模型目录情报提取器" in kwargs["system_prompt"]
     assert kwargs["model_tier"] == "reasoning"
+
+
+@pytest.mark.asyncio
+async def test_model_scout_rejects_invalid_output_without_writing_catalog():
+    written_models = []
+
+    class FakeCatalogWriter:
+        @property
+        def adapter_id(self):
+            return "fake_catalog"
+
+        def upsert_models(self, models):
+            written_models.extend(models)
+            return len(models)
+
+    provider = MagicMock()
+    provider.invoke_raw = AsyncMock(return_value='[{"provider":"unknown"}]')
+
+    result = await ModelScoutAgent(FakeCatalogWriter()).run("已获取资料", provider)
+
+    assert result == []
+    assert written_models == []
 
 @pytest.mark.asyncio
 async def test_model_scout_search_trigger():

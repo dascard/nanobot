@@ -20,10 +20,10 @@ def _assert_directed_to_other_softened_semantics(prompt: str) -> None:
     assert "结合上下文" in prompt
 
 
-def test_embedded_timing_gate_prompt_is_conservative_and_parser_aligned():
-    from clients.classifier_client import TIMING_GATE_PROMPT
-
-    prompt = TIMING_GATE_PROMPT
+def test_runtime_timing_gate_prompt_is_conservative_and_parser_aligned():
+    prompt = _strip_frontmatter(
+        Path("data/prompts_v2/tasks/timing_gate.md").read_text(encoding="utf-8")
+    )
 
     _assert_directed_to_other_softened_semantics(prompt)
     assert "continue|wait|no_reply" in prompt
@@ -38,6 +38,14 @@ def test_embedded_timing_gate_prompt_is_conservative_and_parser_aligned():
     assert "- reply:" not in prompt
     assert "- ignore:" not in prompt
     assert "- merge:" not in prompt
+
+
+def test_classifier_transport_does_not_embed_active_timing_prompts():
+    source = Path("clients/classifier_client.py").read_text(encoding="utf-8")
+
+    assert "PRIVATE_DECISION_PROMPT" not in source
+    assert "TIMING_GATE_PROMPT" not in source
+    assert "_PROACTIVE_PROMPT" not in source
 
 
 def test_default_timing_gate_template_matches_runtime_actions():

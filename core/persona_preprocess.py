@@ -23,13 +23,14 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 warnings.filterwarnings("ignore", message=".*CUDA initialization.*")
 from sqlalchemy.orm import Session  # noqa: E402
 
-from core.database import ChatLog, PersonaFact  # noqa: E402
+from core.db.models.chat import ChatLog  # noqa: E402
+from core.db.models.persona import PersonaFact  # noqa: E402
 from core.moderation import is_no_learn_meta  # noqa: E402
 from core.persona_candidate_prompt import (  # noqa: E402
-    CANDIDATE_EXTRACTION_SYSTEM_PROMPT as CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
     build_candidate_extraction_prompt as build_candidate_extraction_prompt,
     filter_user_messages as filter_user_messages,
     format_candidate_logs as format_candidate_logs,
+    get_candidate_extraction_system_prompt as get_candidate_extraction_system_prompt,
 )
 from core.persona_fact_evidence import (  # noqa: E402
     content_hash as content_hash,

@@ -7,8 +7,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from clients.new_api_client import NewAPIClient
 from config import NANOBOT_AGENT_STEP_MODEL, NEW_API_BASE_URL, NEW_API_KEY
+from core.model_provider.chat_runtime import (
+    RuntimeChatCompletionClient as NewAPIClient,
+)
 
 
 AGENT_STEP_PROTOCOL = "agent-step.v1"

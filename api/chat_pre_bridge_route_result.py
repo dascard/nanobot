@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import inspect
 from typing import Any
 
 from api import chat_pre_bridge_decision, chat_response_contract
@@ -36,6 +37,10 @@ class ChatPreBridgeRouteContinue:
     persist_req: Any
 
 
+async def _resolve_maybe_awaitable(value: Any) -> Any:
+    return await value if inspect.isawaitable(value) else value
+
+
 async def _resolve_early_return(
     req: Any,
     pre_bridge: chat_pre_bridge_decision.ChatPreBridgeEarlyReturn,
@@ -62,19 +67,23 @@ async def _resolve_early_return(
         guardrail_status=pre_bridge.guardrail_status,
     )
     if callbacks.persist_claimed_response is not None:
-        completion = callbacks.persist_claimed_response(
-            req,
-            completion,
-            persist_answer=pre_bridge.persist_answer,
-            guardrail_status=pre_bridge.persist_guardrail_status,
-            timing_meta=pre_bridge.persist_timing_meta,
+        completion = await _resolve_maybe_awaitable(
+            callbacks.persist_claimed_response(
+                req,
+                completion,
+                persist_answer=pre_bridge.persist_answer,
+                guardrail_status=pre_bridge.persist_guardrail_status,
+                timing_meta=pre_bridge.persist_timing_meta,
+            )
         )
     elif pre_bridge.persist_answer is not None:
-        callbacks.persist_chat_turn(
-            req,
-            pre_bridge.persist_answer,
-            guardrail_status=pre_bridge.persist_guardrail_status,
-            timing_meta=pre_bridge.persist_timing_meta,
+        await _resolve_maybe_awaitable(
+            callbacks.persist_chat_turn(
+                req,
+                pre_bridge.persist_answer,
+                guardrail_status=pre_bridge.persist_guardrail_status,
+                timing_meta=pre_bridge.persist_timing_meta,
+            )
         )
 
     return ChatPreBridgeRouteEarlyResponse(
@@ -112,19 +121,23 @@ async def _resolve_continue(
             guardrail_status=pre_bridge.guardrail_status,
         )
         if callbacks.persist_claimed_response is not None:
-            completion = callbacks.persist_claimed_response(
-                persist_req,
-                completion,
-                persist_answer="（数据中转，自动静默）",
-                guardrail_status=pre_bridge.guardrail_status,
-                timing_meta=pre_bridge.private_timing_meta,
+            completion = await _resolve_maybe_awaitable(
+                callbacks.persist_claimed_response(
+                    persist_req,
+                    completion,
+                    persist_answer="（数据中转，自动静默）",
+                    guardrail_status=pre_bridge.guardrail_status,
+                    timing_meta=pre_bridge.private_timing_meta,
+                )
             )
         else:
-            callbacks.persist_chat_turn(
-                persist_req,
-                "（数据中转，自动静默）",
-                pre_bridge.guardrail_status,
-                timing_meta=pre_bridge.private_timing_meta,
+            await _resolve_maybe_awaitable(
+                callbacks.persist_chat_turn(
+                    persist_req,
+                    "（数据中转，自动静默）",
+                    pre_bridge.guardrail_status,
+                    timing_meta=pre_bridge.private_timing_meta,
+                )
             )
         return ChatPreBridgeRouteEarlyResponse(
             payload=callbacks.chat_response_payload(

@@ -13,7 +13,8 @@ from sqlalchemy import and_, func, or_, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from core.database import ChatLog, MemoryDigestJob
+from core.db.models.chat import ChatLog
+from core.db.models.session_memory import MemoryDigestJob
 from core.time_utils import db_now_naive, to_db_naive
 
 

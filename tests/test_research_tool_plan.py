@@ -75,11 +75,49 @@ def test_research_runtime_preset_force_enabled_cannot_reopen_memory_query(
 
     from core import runtime_tool_service
 
-    memory_tool = runtime_tool_service.TOOL_METADATA["memory_query"]
-    monkeypatch.setitem(
-        runtime_tool_service.TOOL_METADATA,
-        "memory_query",
-        replace(memory_tool, force_enabled=True),
+    from core.tool_registry import get_tool_descriptor, list_user_tool_descriptors
+
+    original_descriptor = get_tool_descriptor("memory_query")
+    assert original_descriptor is not None
+    forced_definition = replace(
+        original_descriptor.definition,
+        force_enabled=True,
+    )
+    forced_descriptor = replace(
+        original_descriptor,
+        definition=forced_definition,
+        availability_policy="force_enabled",
+    )
+    descriptors = tuple(
+        forced_descriptor if item.name == "memory_query" else item
+        for item in list_user_tool_descriptors()
+    )
+    monkeypatch.setattr(
+        runtime_tool_service,
+        "list_user_tool_descriptors",
+        lambda: descriptors,
+    )
+    monkeypatch.setattr(
+        runtime_tool_service,
+        "get_tool_descriptor",
+        lambda name: (
+            forced_descriptor
+            if name == "memory_query"
+            else get_tool_descriptor(name)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_tool_service,
+        "get_tool_def",
+        lambda name: (
+            forced_definition
+            if name == "memory_query"
+            else (
+                descriptor.definition
+                if (descriptor := get_tool_descriptor(name)) is not None
+                else None
+            )
+        ),
     )
 
     enabled, disabled = runtime_tool_service.resolve_effective_tools(

@@ -8,7 +8,6 @@ from core.async_bridge import run_awaitable_sync
 from core.legacy_adapter import SQLiteMemory, UnifiedProvider, NanobotKTController
 from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER,
-    LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING,
     NEW_API_KEY, NEW_API_BASE_URL
 )
 
@@ -31,12 +30,14 @@ def _get_lock(user_id: str) -> threading.Lock:
 
 def _build_provider() -> UnifiedProvider:
     """构建统一推理提供者 (DRY: 避免在多处重复初始化)"""
+    from core.settings_service import settings
+
     if LLM_PROVIDER == "dify":
         raise RuntimeError("Dify provider has been removed. Please migrate to NewAPI/OpenAI-compatible route.")
     model_map = {
-        "smart": LLM_MODEL_SMART,
-        "fast": LLM_MODEL_FAST,
-        "reasoning": LLM_MODEL_REASONING
+        "smart": str(settings.get("model.smart", "") or ""),
+        "fast": str(settings.get("model.fast", "") or ""),
+        "reasoning": str(settings.get("model.reasoning", "") or ""),
     }
     return UnifiedProvider(
         provider_type=LLM_PROVIDER, 

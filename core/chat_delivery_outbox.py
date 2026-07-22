@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -13,7 +12,8 @@ from sqlalchemy import or_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from core.database import ChatDeliveryOutbox
+from core.db.models.inbound import ChatDeliveryOutbox
+from core.fencing import positive_seconds
 from core.inbound_idempotency import InboundClaimKey
 
 
@@ -222,6 +222,13 @@ def _normalize_owner_token(owner_token: str) -> str:
     return normalized
 
 
+def _normalize_lease_seconds(value: int | float) -> float:
+    try:
+        return positive_seconds(value, field_name="lease_seconds")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("lease_seconds 必须是有限正数") from exc
+
+
 def _claim_chat_delivery_candidate(
     db: Session,
     *,
@@ -274,10 +281,7 @@ def claim_chat_delivery(
     """按 id 条件领取到期 delivery；调用方负责提交。"""
 
     owner = _normalize_owner_token(owner_token)
-    if type(lease_seconds) not in (int, float) or not math.isfinite(
-        float(lease_seconds)
-    ) or float(lease_seconds) <= 0:
-        raise ValueError("lease_seconds 必须是有限正数")
+    lease_seconds = _normalize_lease_seconds(lease_seconds)
     current = _utc_naive(now)
     candidate = db.get(ChatDeliveryOutbox, int(row_id))
     if (
@@ -309,10 +313,7 @@ def claim_due_chat_delivery(
     """条件领取一条到期 delivery；调用方负责提交。"""
 
     owner = _normalize_owner_token(owner_token)
-    if type(lease_seconds) not in (int, float) or not math.isfinite(
-        float(lease_seconds)
-    ) or float(lease_seconds) <= 0:
-        raise ValueError("lease_seconds 必须是有限正数")
+    lease_seconds = _normalize_lease_seconds(lease_seconds)
     current = _utc_naive(now)
     candidate = (
         db.query(ChatDeliveryOutbox)

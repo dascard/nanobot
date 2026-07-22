@@ -1,49 +1,19 @@
-"""最终工具集解析与真实请求出口过滤。"""
+"""最终工具业务解析；请求过滤原语位于 LLM foundation。"""
 
 from __future__ import annotations
 
-import copy
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
 from typing import Any
 
-
-@dataclass
-class FinalToolSet:
-    allowed: set[str]
-    disabled: dict[str, str]
-    sent_tools: list[str] = field(default_factory=list)
-    hidden_framework_tools: list[str] = field(default_factory=list)
-    enabled: dict[str, bool] = field(default_factory=dict)
-
-
-_CURRENT_FINAL_TOOLS: ContextVar[Any | None] = ContextVar(
-    "nanobot_final_tools",
-    default=None,
+from foundation.llm.tool_policy import (
+    FinalToolSet,
+    filter_payload_tools,
+    filter_sdk_kwargs,
+    final_tools_scope,
+    get_current_final_tools,
+    reset_current_final_tools,
+    set_current_final_tools,
+    tool_name,
 )
-
-
-def get_current_final_tools() -> Any | None:
-    return _CURRENT_FINAL_TOOLS.get()
-
-
-def set_current_final_tools(final_tools: Any | None) -> Token[Any | None]:
-    return _CURRENT_FINAL_TOOLS.set(final_tools)
-
-
-def reset_current_final_tools(token: Token[Any | None]) -> None:
-    _CURRENT_FINAL_TOOLS.reset(token)
-
-
-@contextmanager
-def final_tools_scope(final_tools: Any | None) -> Iterator[None]:
-    token = set_current_final_tools(final_tools)
-    try:
-        yield
-    finally:
-        reset_current_final_tools(token)
 
 
 def resolve_final_tools(
@@ -55,6 +25,7 @@ def resolve_final_tools(
     db: Any = None,
 ) -> FinalToolSet:
     """把 RuntimeTool 结果转成真实请求出口使用的最终工具集。"""
+
     from core.runtime_tool_service import resolve_effective_tools
 
     enabled, disabled = resolve_effective_tools(
@@ -75,48 +46,14 @@ def resolve_final_tools(
     )
 
 
-def tool_name(tool: Any) -> str:
-    if not isinstance(tool, dict):
-        return ""
-    function = tool.get("function")
-    if isinstance(function, dict) and function.get("name"):
-        return str(function.get("name") or "")
-    if tool.get("name"):
-        return str(tool.get("name") or "")
-    return ""
-
-
-def filter_payload_tools(
-    payload: dict[str, Any],
-    final_tools: Any | None = None,
-) -> dict[str, Any]:
-    """按 final tools 硬裁剪 OpenAI-compatible payload.tools。"""
-    if final_tools is None:
-        final_tools = get_current_final_tools()
-    if final_tools is None or "tools" not in payload:
-        return copy.deepcopy(payload)
-
-    filtered = copy.deepcopy(payload)
-    tools = filtered.get("tools")
-    if isinstance(tools, tuple):
-        tools = list(tools)
-        filtered["tools"] = tools
-    if not isinstance(tools, list):
-        return filtered
-
-    if hasattr(final_tools, "sent_tool_names"):
-        allowed = set(final_tools.sent_tool_names or set())
-    else:
-        allowed = set(getattr(final_tools, "allowed", set()) or set())
-    kept = [tool for tool in tools if tool_name(tool) in allowed]
-    if kept:
-        filtered["tools"] = kept
-    else:
-        filtered.pop("tools", None)
-        filtered.pop("tool_choice", None)
-    return filtered
-
-
-def filter_sdk_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """过滤 OpenAI SDK create(**kwargs) 的 tools 参数。"""
-    return filter_payload_tools(dict(kwargs))
+__all__ = [
+    "FinalToolSet",
+    "filter_payload_tools",
+    "filter_sdk_kwargs",
+    "final_tools_scope",
+    "get_current_final_tools",
+    "reset_current_final_tools",
+    "resolve_final_tools",
+    "set_current_final_tools",
+    "tool_name",
+]

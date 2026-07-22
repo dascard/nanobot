@@ -8,14 +8,15 @@ import re
 import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from core.database import InboundMessageClaim
+from core.db.models.inbound import InboundMessageClaim
+from core.fencing import lease_deadline
 from core.message_envelope import sanitize_reply_meta
 from core.sqlite_retry import run_sqlite_locked_retry
 
@@ -403,11 +404,10 @@ def _utc_naive(value: datetime | None) -> datetime:
 
 
 def _lease_expiry(now: datetime, lease_seconds: int | float) -> datetime:
-    if type(lease_seconds) not in (int, float):
-        raise ValueError("lease_seconds 必须是正数")
-    if not math.isfinite(float(lease_seconds)) or lease_seconds <= 0:
-        raise ValueError("lease_seconds 必须是正数")
-    return now + timedelta(seconds=lease_seconds)
+    try:
+        return lease_deadline(now, lease_seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("lease_seconds 必须是正数") from exc
 
 
 def _reject_dirty_session(db: Any) -> None:

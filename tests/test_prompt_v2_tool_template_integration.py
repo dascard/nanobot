@@ -161,7 +161,7 @@ def test_tool_template_policy_caches_directory_scan(tmp_path, monkeypatch):
 def test_saving_template_clears_tool_template_policy_cache(tmp_path, monkeypatch):
     default_dir = tmp_path / "defaults"
     runtime_dir = tmp_path / "runtime"
-    _write_tool_template(default_dir, "tools/cache_clear/usage", "cache_clear", "DEFAULT CACHE BODY")
+    _write_tool_template(default_dir, "tools/reply/usage", "reply", "DEFAULT CACHE BODY")
     monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
 
@@ -169,12 +169,12 @@ def test_saving_template_clears_tool_template_policy_cache(tmp_path, monkeypatch
     from core.prompt_v2.tool_templates import clear_tool_template_policy_cache, get_tool_template_policy
 
     clear_tool_template_policy_cache()
-    before = get_tool_template_policy("cache_clear")
+    before = get_tool_template_policy("reply")
     assert before and before.body == "DEFAULT CACHE BODY"
 
-    save_template("tools/cache_clear/usage", "RUNTIME CACHE BODY")
+    save_template("tools/reply/usage", "RUNTIME CACHE BODY")
 
-    after = get_tool_template_policy("cache_clear")
+    after = get_tool_template_policy("reply")
     assert after and after.body == "RUNTIME CACHE BODY"
     assert after.source == "runtime"
 

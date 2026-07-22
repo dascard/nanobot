@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from api import chat_content_helpers, chat_recovery
-from core.database import ChatLog, ConversationTurn, SensitiveData
+from core.db import ChatPersistenceRepositoryPort, chat_persistence_repository
 from core.inbound_idempotency import CompletedInboundResponse, InboundClaimKey
 from core.sqlite_retry import run_sqlite_locked_retry
 
@@ -157,15 +157,15 @@ def _prepare_chat_turn(
     )
 
 
-def _pending_chat_log_count(db: Session, user_id: str) -> int:
+def _pending_chat_log_count(
+    repository: ChatPersistenceRepositoryPort,
+    user_id: str,
+) -> int:
     from core.evolution import _evolution_running
 
     if user_id in _evolution_running:
         return 0
-    return db.query(ChatLog).filter(
-        ChatLog.user_id == user_id,
-        ChatLog.processed == 0,
-    ).count()
+    return repository.count_pending_chat_logs(user_id)
 
 
 def ensure_private_request_journal(
@@ -174,34 +174,44 @@ def ensure_private_request_journal(
     *,
     key: InboundClaimKey | None,
     request_sha256: str,
-) -> ChatLog | None:
+) -> Any | None:
     """为非空私聊 claim 建立或验证唯一 request journal。"""
 
     if key is None:
         return None
     if type(key) is not InboundClaimKey or key.chat_type != "private":
         raise TypeError("key 必须是 private InboundClaimKey 或 null")
+    repository = chat_persistence_repository(db)
 
     def operation() -> int:
         loaded = chat_recovery.load_private_request_journal(
-            db,
+            repository,
             key=key,
             request_sha256=request_sha256,
         )
         if loaded is not None:
-            row_id = int(loaded[0].id)
-            db.commit()
+            journal = loaded[0]
+            if not str(journal.content or ""):
+                journal.content = chat_content_helpers.build_chatlog_user_content(
+                    req.query,
+                    req.files,
+                )
+            row_id = int(journal.id)
+            repository.commit()
             return row_id
 
         meta = chat_recovery.attach_private_request_fingerprint(
             {"kind": chat_recovery.REQUEST_JOURNAL_KIND},
             request_sha256,
         )
-        row = ChatLog(
+        row = repository.add_chat_log(
             user_id=req.user_id,
             session_id=key.session_id,
             role="user",
-            content="",
+            content=chat_content_helpers.build_chatlog_user_content(
+                req.query,
+                req.files,
+            ),
             sender_name=req.sender_name or "",
             session_name=req.session_name or "",
             processed=1,
@@ -212,21 +222,20 @@ def ensure_private_request_journal(
             ),
             meta_json=json.dumps(meta, ensure_ascii=False),
         )
-        db.add(row)
-        db.commit()
+        repository.commit()
         return int(row.id)
 
     try:
         row_id = run_sqlite_locked_retry(
             operation,
-            rollback=db.rollback,
+            rollback=repository.rollback,
             label="private_request_journal",
             logger=logger,
         )
     except BaseException:
-        db.rollback()
+        repository.rollback()
         raise
-    row = db.get(ChatLog, row_id)
+    row = repository.get_chat_log(row_id)
     if row is None:
         raise chat_recovery.PrivateRecoveryCorruptError(
             "private request journal 提交后不可见"
@@ -266,10 +275,11 @@ def persist_claimed_chat_turn(
         message_id=key.message_id,
         user_kind=chat_recovery.REQUEST_JOURNAL_KIND,
     )
+    repository = chat_persistence_repository(db)
 
     def operation() -> ClaimedChatTurnPersistenceResult:
         loaded = chat_recovery.load_private_request_journal(
-            db,
+            repository,
             key=key,
             request_sha256=request_sha256,
         )
@@ -280,14 +290,14 @@ def persist_claimed_chat_turn(
         journal, journal_meta = loaded
 
         if prepared.is_silent:
-            db.add(SensitiveData(
+            repository.add_sensitive_data(
                 user_id=req.user_id,
                 session_id=key.session_id,
                 content=prepared.archive_user_content,
                 guardrail_status="silent",
                 sender_name=req.sender_name or "",
                 session_name=req.session_name or "",
-            ))
+            )
 
         journal.user_id = req.user_id
         journal.session_id = key.session_id
@@ -303,7 +313,7 @@ def persist_claimed_chat_turn(
             "kind",
             prepared.assistant_turn_meta.get("kind", "chat"),
         )
-        db.add(ChatLog(
+        repository.add_chat_log(
             user_id=req.user_id,
             session_id=key.session_id,
             role="assistant",
@@ -313,24 +323,24 @@ def persist_claimed_chat_turn(
             processed=prepared.assistant_processed_val,
             message_id=key.message_id,
             meta_json=json.dumps(assistant_chat_meta, ensure_ascii=False),
-        ))
-        db.add(ConversationTurn(
+        )
+        repository.add_conversation_turn(
             user_id=req.user_id,
             session_id=key.session_id,
             role="user",
             content=prepared.context_display_content,
             source_message_ids_json=prepared.source_ids_json,
             meta_json=json.dumps(prepared.user_meta, ensure_ascii=False),
-        ))
-        db.add(ConversationTurn(
+        )
+        repository.add_conversation_turn(
             user_id=req.user_id,
             session_id=key.session_id,
             role="assistant",
             content=prepared.turn_answer,
             meta_json=json.dumps(prepared.assistant_turn_meta, ensure_ascii=False),
-        ))
-        db.flush()
-        pending = _pending_chat_log_count(db, req.user_id)
+        )
+        repository.flush()
+        pending = _pending_chat_log_count(repository, req.user_id)
         final_completion = replace(completion, unprocessed_logs=pending)
         completed_journal_meta = dict(prepared.user_meta)
         completed_journal_meta[chat_recovery.REQUEST_META_FIELD] = dict(
@@ -345,7 +355,7 @@ def persist_claimed_chat_turn(
             ),
             ensure_ascii=False,
         )
-        db.commit()
+        repository.commit()
         return ClaimedChatTurnPersistenceResult(
             pending=pending,
             completion=final_completion,
@@ -354,12 +364,12 @@ def persist_claimed_chat_turn(
     try:
         return run_sqlite_locked_retry(
             operation,
-            rollback=db.rollback,
+            rollback=repository.rollback,
             label="claimed_chat_turn_persist",
             logger=logger,
         )
     except BaseException:
-        db.rollback()
+        repository.rollback()
         raise
 
 
@@ -381,10 +391,11 @@ def persist_private_claim_completion(
         raise TypeError("completion 必须是 CompletedInboundResponse")
     if completion.outcome == "respond":
         raise ValueError("respond completion 必须通过 persist_claimed_chat_turn 保存")
+    repository = chat_persistence_repository(db)
 
     def operation() -> CompletedInboundResponse:
         loaded = chat_recovery.load_private_request_journal(
-            db,
+            repository,
             key=key,
             request_sha256=request_sha256,
         )
@@ -403,7 +414,7 @@ def persist_private_claim_completion(
                 raise chat_recovery.PrivateRecoveryCorruptError(
                     "private request journal 已存在冲突 completion"
                 )
-            db.commit()
+            repository.commit()
             return existing
 
         completed_meta = safe_meta(
@@ -435,18 +446,18 @@ def persist_private_claim_completion(
             journal.content = str(journal_content)
         if journal_processed is not None:
             journal.processed = int(journal_processed)
-        db.commit()
+        repository.commit()
         return completion
 
     try:
         return run_sqlite_locked_retry(
             operation,
-            rollback=db.rollback,
+            rollback=repository.rollback,
             label="private_claim_completion",
             logger=logger,
         )
     except BaseException:
-        db.rollback()
+        repository.rollback()
         raise
 
 
@@ -469,18 +480,19 @@ def persist_chat_turn(
         assistant_processed=assistant_processed,
         timing_meta=timing_meta,
     )
+    repository = chat_persistence_repository(db)
 
     def operation() -> None:
         if prepared.is_silent:
-            db.add(SensitiveData(
+            repository.add_sensitive_data(
                 user_id=req.user_id,
                 session_id=req.session_id,
                 content=prepared.archive_user_content,
                 guardrail_status="silent",
                 sender_name=req.sender_name or "",
                 session_name=req.session_name or "",
-            ))
-        db.add(ChatLog(
+            )
+        repository.add_chat_log(
             user_id=req.user_id,
             session_id=req.session_id,
             role="user",
@@ -491,8 +503,8 @@ def persist_chat_turn(
             message_id=req.message_id,
             source_message_ids_json=prepared.source_ids_json,
             meta_json=json.dumps(prepared.user_meta, ensure_ascii=False),
-        ))
-        db.add(ChatLog(
+        )
+        repository.add_chat_log(
             user_id=req.user_id,
             session_id=req.session_id,
             role="assistant",
@@ -501,29 +513,29 @@ def persist_chat_turn(
             session_name=req.session_name or "",
             processed=prepared.assistant_processed_val,
             meta_json=json.dumps(prepared.assistant_chat_meta, ensure_ascii=False),
-        ))
-        db.add(ConversationTurn(
+        )
+        repository.add_conversation_turn(
             user_id=req.user_id,
             session_id=req.session_id,
             role="user",
             content=prepared.context_display_content,
             source_message_ids_json=prepared.source_ids_json,
             meta_json=json.dumps(prepared.user_meta, ensure_ascii=False),
-        ))
-        db.add(ConversationTurn(
+        )
+        repository.add_conversation_turn(
             user_id=req.user_id,
             session_id=req.session_id,
             role="assistant",
             content=prepared.turn_answer,
             meta_json=json.dumps(prepared.assistant_turn_meta, ensure_ascii=False),
-        ))
-        db.commit()
+        )
+        repository.commit()
 
     run_sqlite_locked_retry(
         operation,
-        rollback=db.rollback,
+        rollback=repository.rollback,
         label="chat_turn_persist",
         logger=logger,
     )
 
-    return _pending_chat_log_count(db, req.user_id)
+    return _pending_chat_log_count(repository, req.user_id)

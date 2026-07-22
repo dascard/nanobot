@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from core.database import User
+from core.db.models.chat import User
 
 
 class UserRepository:

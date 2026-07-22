@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -59,6 +60,10 @@ def _is_prompt_audit_failed(reply_meta: dict[str, Any] | None) -> bool:
     return (reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed"
 
 
+async def _resolve_maybe_awaitable(value: Any) -> Any:
+    return await value if inspect.isawaitable(value) else value
+
+
 async def finalize_non_streaming_chat_result(
     db: Any,
     context: ChatNonStreamingResultContext,
@@ -80,14 +85,16 @@ async def finalize_non_streaming_chat_result(
             str(_request_attr(req, "user_id")),
             context.empty_assistant_placeholder,
         )
-        callbacks.persist_chat_turn(
-            db,
-            context.persist_req,
-            context.empty_assistant_placeholder,
-            context.guardrail_status,
-            assistant_meta=callbacks.private_prompt_audit_failure_meta(),
-            assistant_processed=1,
-            timing_meta=context.private_timing_meta,
+        await _resolve_maybe_awaitable(
+            callbacks.persist_chat_turn(
+                db,
+                context.persist_req,
+                context.empty_assistant_placeholder,
+                context.guardrail_status,
+                assistant_meta=callbacks.private_prompt_audit_failure_meta(),
+                assistant_processed=1,
+                timing_meta=context.private_timing_meta,
+            )
         )
         return ChatNonStreamingResult(payload=None, prompt_audit_failed=True)
 
@@ -118,25 +125,29 @@ async def finalize_non_streaming_chat_result(
             reply_meta=private_reply_meta,
             guardrail_status=context.guardrail_status,
         )
-        claimed_result = callbacks.persist_claimed_chat_turn(
-            db,
-            context.persist_req,
-            answer,
-            context.guardrail_status,
-            key=context.claim_key,
-            request_sha256=context.request_sha256,
-            completion=completion,
-            timing_meta=context.private_timing_meta,
+        claimed_result = await _resolve_maybe_awaitable(
+            callbacks.persist_claimed_chat_turn(
+                db,
+                context.persist_req,
+                answer,
+                context.guardrail_status,
+                key=context.claim_key,
+                request_sha256=context.request_sha256,
+                completion=completion,
+                timing_meta=context.private_timing_meta,
+            )
         )
         pending = int(claimed_result.pending)
         completion = claimed_result.completion
     else:
-        pending = callbacks.persist_chat_turn(
-            db,
-            context.persist_req,
-            answer,
-            context.guardrail_status,
-            timing_meta=context.private_timing_meta,
+        pending = await _resolve_maybe_awaitable(
+            callbacks.persist_chat_turn(
+                db,
+                context.persist_req,
+                answer,
+                context.guardrail_status,
+                timing_meta=context.private_timing_meta,
+            )
         )
         completion = chat_response_contract.build_completed_inbound_response(
             outcome="respond",

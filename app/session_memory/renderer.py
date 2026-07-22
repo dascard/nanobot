@@ -6,7 +6,7 @@ from html import escape
 
 from app.session_memory.config import ROLLING_SUMMARY_MAX_CHARS
 from core.context_builder import sanitize_prompt_text
-from core.database import RollingSessionSummary
+from core.db.models.session_memory import RollingSessionSummary
 
 
 def render_rolling_summary_context(summary: RollingSessionSummary | None) -> str:

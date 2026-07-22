@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from clients.classifier_client import strip_think_blocks
+from core.model_provider.response_normalization import strip_think_blocks
 from core.proactive_diagnostics import (
     OutreachModelContractError,
     generation_failure_from_exception,

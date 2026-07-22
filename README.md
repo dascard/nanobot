@@ -126,7 +126,7 @@ RAG_LOCAL_RERANKER_MODEL=./models/bge-reranker-v2-m3
 可选 SQLite 并发参数：
 
 ```env
-SQLITE_BUSY_TIMEOUT_MS=30000
+SQLITE_BUSY_TIMEOUT_MS=5000
 SQLITE_LOCK_RETRY_ATTEMPTS=4
 SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS=0.05
 ```
@@ -150,9 +150,31 @@ WebUI 管理接口使用 `NANOBOT_ADMIN_TOKEN` 登录。
 
 ### 4. Docker 运行
 
+本地构建仍可使用兼容镜像名 `nanobot-runtime:latest`：
+
 ```bash
 docker compose up -d --build
 ```
+
+生产环境不从工作树现场构建，也不接受浮动 tag。先准备非 root 运行用户需要的
+bind mount 权限，再使用已由 CI 构建并固定 digest 的镜像：
+
+```bash
+sudo NANOBOT_RUNTIME_UID=10001 NANOBOT_RUNTIME_GID=10001 \
+  scripts/prepare-runtime-directories.sh
+
+export NANOBOT_RUNTIME_IMAGE='registry.example/nanobot@sha256:<64位摘要>'
+scripts/deploy-production.sh
+```
+
+生产覆盖文件 `docker-compose.prod.yml` 会移除本地 `build` 配置并强制校验 digest。
+四个固定服务均以非 root 用户运行，使用只读根文件系统、`cap_drop=ALL`、
+`no-new-privileges`、PID/CPU/内存限制和受限 tmpfs。服务端 `/api/v1/health`
+只表示进程存活，`/api/v1/ready` 才用于 Compose 与部署 readiness；worker 会等待
+服务端 readiness 通过。生产主机上的 `data/`、`models/`、`sentinel/` 必须预先存在，
+不得依赖 Docker 自动创建 root 所有的目录。
+已有部署如果存在其他 UID/GID 所有的数据库或模型文件，脚本会先失败并报告首个路径；
+完成停服和备份后，才可显式增加 `--fix-existing` 迁移所有权。
 
 `docker-compose.yml` 会同时启动独立的 `session-summary-worker` 和 `semantic-index-worker`。
 Compose 已为 Web 服务设置 `NANOBOT_SESSION_SUMMARY_WORKER_MODE=external`，因此不会再在
@@ -231,7 +253,7 @@ tmp/rag_benchmark/reports/
 
 默认 SQLite 连接会设置：
 
-- `PRAGMA busy_timeout`：默认 30000 ms，可用 `SQLITE_BUSY_TIMEOUT_MS` 调整。
+- `PRAGMA busy_timeout`：默认 5000 ms，可用 `SQLITE_BUSY_TIMEOUT_MS` 调整。
 - `PRAGMA journal_mode=WAL`：降低读写互相阻塞的概率。
 - `PRAGMA synchronous=NORMAL`：配合 WAL 降低写入开销。
 

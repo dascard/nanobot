@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.session_memory import config
-from core.database import ConversationTurn
+from core.db.models.chat import ConversationTurn
 from core.token_utils import estimate_tokens
 
 RAW_WINDOW_CANDIDATE_MIN_LIMIT = 200

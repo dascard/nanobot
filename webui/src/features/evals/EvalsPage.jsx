@@ -142,10 +142,13 @@ export function EvalsPage() {
   }, [loadTimingProposalReview])
 
   useEffect(() => {
-    if (tab === 'candidates') loadCandidates()
-    if (tab === 'trend') loadCandidateTrend()
-    if (tab === 'timingProposal') loadTimingProposal()
-    if (tab === 'runs') loadRuns()
+    const timer = window.setTimeout(() => {
+      if (tab === 'candidates') loadCandidates()
+      if (tab === 'trend') loadCandidateTrend()
+      if (tab === 'timingProposal') loadTimingProposal()
+      if (tab === 'runs') loadRuns()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [tab, loadCandidates, loadCandidateTrend, loadTimingProposal, loadRuns])
 
   useEffect(() => {

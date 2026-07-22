@@ -1206,7 +1206,7 @@ def test_legacy_empty_source_orphan_delete_uses_exact_item_ids(db_session):
         index_version="legacy:v1",
         source_revision="legacy-empty-source",
     )
-    job = enqueue_index_job(
+    enqueue_index_job(
         db_session,
         source_type="memory_digest",
         source_id="",

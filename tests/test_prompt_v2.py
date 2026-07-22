@@ -1047,11 +1047,11 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
         "system",
         "system",
         "system",
-        "system",
+        "user",
         "system",
         "user",
         "assistant",
-        "system",
+        "user",
         "system",
         "user",
     ]
@@ -1064,7 +1064,8 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
     assert "## 私聊行为" not in joined
     assert sum("<user_input>" in c for c in contents) == 1
     assert sum("[RuntimeTool]" in c for c in contents) == 1
-    assert sum("<persona_reference" in c for c in contents) == 1
+    assert sum('"section":"persona_reference"' in c for c in contents) == 1
+    assert not any("<persona_reference" in c for c in contents)
     assert "当前问题" in plan.current_user_content
     assert "当前问题" not in "\n".join(contents[:-1])
     serialized_plan = json.loads(json.dumps(plan.to_dict(), ensure_ascii=False))
@@ -1274,10 +1275,14 @@ async def test_prompt_v2_moves_group_memory_context_after_history_messages():
     contents = [str(m["content"]) for m in plan.messages]
     header_idx = next(i for i, c in enumerate(contents) if "<conversation_context>" in c)
     history_idx = next(i for i, c in enumerate(contents) if "UNIQUE_HISTORY_MESSAGE" in c)
-    memory_idx = next(i for i, c in enumerate(contents) if 'selected_count="1"' in c)
+    memory_idx = next(
+        i
+        for i, c in enumerate(contents)
+        if 'selected_count=\\"1\\"' in c
+    )
 
     assert header_idx < history_idx < memory_idx
-    assert sum('selected_count="1"' in c for c in contents) == 1
+    assert sum('selected_count=\\"1\\"' in c for c in contents) == 1
     assert "<group_memory_context" not in contents[header_idx]
     assert "[GroupProfileContext]" not in contents[memory_idx]
 
@@ -1541,7 +1546,6 @@ async def test_prompt_v2_compile_audit_rejects_renamed_singleton_node(
 @pytest.mark.asyncio
 async def test_prompt_v2_strict_audit_rejects_missing_policy_template(monkeypatch):
     from core.prompt_v2 import compiler
-    from core.prompt_v2.audit import PromptAuditError
     from core.prompt_v2.schema import PromptCompileRequest
 
     original_load_template = compiler.load_template
@@ -1553,24 +1557,11 @@ async def test_prompt_v2_strict_audit_rejects_missing_policy_template(monkeypatc
 
     monkeypatch.setattr(compiler, "load_template", load_template)
 
-    with pytest.raises(PromptAuditError) as exc:
+    with pytest.raises(FileNotFoundError, match="chat/branch_private"):
         await compiler.compile_prompt_plan(
             PromptCompileRequest(chat_type="private", platform="web", user_input="你好"),
             strict_audit=True,
         )
-
-    assert any(
-        "required flow section private_policy status must be emitted" in issue
-        for issue in exc.value.issues
-    )
-    section = next(
-        section
-        for section in exc.value.plan.flow_sections
-        if section["template_key"] == "chat/branch_private"
-    )
-    assert section["origin"] == "flow"
-    assert section["status"] == "missing_template"
-    assert section["message_indexes"] == []
 
 
 @pytest.mark.asyncio

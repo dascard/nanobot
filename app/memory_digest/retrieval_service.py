@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from core.database import MemoryDigest
+from core.db.models.session_memory import MemoryDigest
 from core.semantic.adapters import is_recallable_memory_digest_meta
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

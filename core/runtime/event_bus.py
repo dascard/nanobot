@@ -1,0 +1,114 @@
+"""RuntimeEvent 的进程内组合根与追踪上下文 Adapter。"""
+
+from __future__ import annotations
+
+import logging
+import threading
+from collections.abc import Mapping
+
+from core.runtime.event_registry import RUNTIME_EVENT_REGISTRY
+from core.runtime.events import (
+    RuntimeEvent,
+    RuntimeEventContext,
+    RuntimeEventEmitter,
+    RuntimeEventPhase,
+    RuntimeEventSink,
+)
+
+
+logger = logging.getLogger("nanobot.runtime.events")
+
+
+class LoggingRuntimeEventSink:
+    def emit(self, event: RuntimeEvent) -> None:
+        logger.info(
+            "runtime_event name=%s phase=%s domain=%s dropped=%d attributes=%s",
+            event.name,
+            event.phase,
+            event.domain,
+            event.dropped_attribute_count,
+            dict(event.attributes),
+            extra={
+                "trace_id": event.context.trace_id,
+                "run_id": event.context.run_id,
+                "tool_call_id": event.context.tool_call_id,
+                "runtime_event_id": event.event_id,
+            },
+        )
+
+
+_LOCK = threading.Lock()
+_EMITTER = RuntimeEventEmitter(
+    RUNTIME_EVENT_REGISTRY,
+    (LoggingRuntimeEventSink(),),
+)
+
+
+def install_runtime_event_sinks(
+    sinks: tuple[RuntimeEventSink, ...],
+) -> RuntimeEventEmitter:
+    """由组合根一次性替换 Sink；返回新的 emitter 便于测试保存引用。"""
+
+    global _EMITTER
+    emitter = RuntimeEventEmitter(RUNTIME_EVENT_REGISTRY, sinks)
+    with _LOCK:
+        _EMITTER = emitter
+    return emitter
+
+
+def get_runtime_event_emitter() -> RuntimeEventEmitter:
+    with _LOCK:
+        return _EMITTER
+
+
+def current_runtime_event_context() -> RuntimeEventContext:
+    from core.tracing_context import (
+        get_tool_trace_context,
+        get_trace_context,
+    )
+
+    trace_id, run_id = get_trace_context()
+    return RuntimeEventContext(
+        trace_id=trace_id,
+        run_id=run_id,
+        tool_call_id=get_tool_trace_context(),
+    )
+
+
+def emit_runtime_event(
+    name: str,
+    phase: RuntimeEventPhase,
+    *,
+    attributes: Mapping[str, object] | None = None,
+    context: RuntimeEventContext | None = None,
+) -> RuntimeEvent | None:
+    """业务边界的 fail-open 迁移入口；事件故障不得改变主业务结果。"""
+
+    try:
+        return get_runtime_event_emitter().emit(
+            name,
+            phase,
+            context=context or current_runtime_event_context(),
+            attributes=attributes,
+        )
+    except Exception:
+        logger.exception("RuntimeEvent 投递失败", extra={"event_name": name})
+        return None
+
+
+def emit_agent_lifecycle_event(event: object) -> None:
+    """把 AgentRuntime 合同事件映射到统一事件总线，避免反向耦合合同包。"""
+
+    previous = getattr(event, "previous_state", "")
+    current = getattr(event, "current_state", "")
+    emit_runtime_event(
+        "agent.lifecycle",
+        "state_changed",
+        attributes={
+            "runtime_id": str(getattr(event, "runtime_id", "") or ""),
+            "previous_state": str(getattr(previous, "value", previous) or ""),
+            "current_state": str(getattr(current, "value", current) or ""),
+            "sequence": int(getattr(event, "sequence", 0) or 0),
+            "reason_type": str(getattr(event, "reason", "") or ""),
+        },
+    )

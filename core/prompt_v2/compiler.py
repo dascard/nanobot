@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
 
 from core.prompt_v2.audit import PromptAuditError, audit_prompt_plan
@@ -21,6 +23,12 @@ from core.prompt_v2.schema import (
     PromptFlowSection,
     PromptFlowStatus,
     PromptPlan,
+)
+from core.prompt_v2.section_descriptors import (
+    PromptSectionDescriptor,
+    descriptor_for_node,
+    descriptors_for_ordered_nodes,
+    validate_descriptor_source,
 )
 from core.prompt_v2.section_renderer import (
     hash_section,
@@ -61,12 +69,58 @@ async def compile_prompt_plan(
     strict_audit: bool = True,
 ) -> PromptPlan:
     from core.prompt_v2.template_registry import runtime_template_dir
+    from core.runtime.event_bus import emit_runtime_event
 
-    with template_governance_read_lock(runtime_template_dir()):
-        return await _compile_prompt_plan_locked(
-            request,
-            strict_audit=strict_audit,
+    request_view = request if isinstance(request, PromptCompileRequest) else None
+    platform = (
+        request_view.normalized_platform
+        if request_view is not None
+        else str(request.get("platform") or "qq").strip().lower() or "qq"
+    )
+    chat_type = (
+        request_view.normalized_chat_type
+        if request_view is not None
+        else str(request.get("chat_type") or "private").strip().lower() or "private"
+    )
+    started = time.perf_counter()
+    emit_runtime_event(
+        "prompt.compile",
+        "started",
+        attributes={"platform": platform, "chat_type": chat_type},
+    )
+
+    try:
+        with template_governance_read_lock(runtime_template_dir()):
+            plan = await _compile_prompt_plan_locked(
+                request,
+                strict_audit=strict_audit,
+            )
+    except BaseException as exc:
+        emit_runtime_event(
+            "prompt.compile",
+            "failed",
+            attributes={
+                "platform": platform,
+                "chat_type": chat_type,
+                "latency_ms": (time.perf_counter() - started) * 1000,
+                "error_type": type(exc).__name__,
+            },
         )
+        raise
+    emit_runtime_event(
+        "prompt.compile",
+        "succeeded",
+        attributes={
+            "platform": platform,
+            "chat_type": chat_type,
+            "message_count": len(plan.messages),
+            "section_count": len(plan.flow_sections),
+            "tool_count": len(plan.tool_schemas),
+            "latency_ms": (time.perf_counter() - started) * 1000,
+            "request_sha256": plan.prompt_sha256,
+        },
+    )
+    return plan
 
 
 async def _compile_prompt_plan_locked(
@@ -113,6 +167,15 @@ async def _compile_prompt_plan_locked(
     current_user = build_current_user_event(request)
     flow_state = load_flow()
     ordered_nodes = ordered_nodes_for_chat(flow_state.flow, chat_type, platform=platform)
+    ordered_descriptors = descriptors_for_ordered_nodes(
+        flow_state.flow,
+        ordered_nodes,
+        chat_type,
+        platform=platform,
+    )
+    descriptors_by_node_id = {
+        descriptor.section_id: descriptor for descriptor in ordered_descriptors
+    }
     flow_sections: list[PromptFlowSection] = []
     warnings: list[str] = []
 
@@ -144,12 +207,37 @@ async def _compile_prompt_plan_locked(
     }
     current_user_flow_section: PromptFlowSection | None = None
 
-    def append_system(section_id: str, content: Any) -> list[int]:
+    def append_section(
+        section_id: str,
+        content: Any,
+        descriptor: PromptSectionDescriptor,
+    ) -> list[int]:
         text = str(content or "").strip()
         hash_section(section_hashes, section_id, content)
         if text:
             message_index = len(messages)
-            messages.append(system_message(text))
+            if descriptor.trust == "untrusted_data":
+                payload = json.dumps(
+                    {
+                        "section": section_id,
+                        "trust": descriptor.trust,
+                        "content": text,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).replace("<", "\\u003c").replace(">", "\\u003e")
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "<context_data_json>\n"
+                            f"{payload}\n"
+                            "</context_data_json>"
+                        ),
+                    }
+                )
+            else:
+                messages.append(system_message(text))
             return [message_index]
         return []
 
@@ -162,7 +250,18 @@ async def _compile_prompt_plan_locked(
         origin: PromptFlowOrigin = "flow",
         status: PromptFlowStatus,
         message_indexes: list[int] | None = None,
+        descriptor: PromptSectionDescriptor | None = None,
     ) -> PromptFlowSection:
+        resolved_descriptor = descriptor or descriptor_for_node(
+            {
+                "id": node_id,
+                "type": node_type,
+                "template_key": template_key,
+                "runtime_key": runtime_key,
+            }
+        )
+        metadata = resolved_descriptor.to_dict()
+        metadata.pop("section_id", None)
         return {
             "node_id": node_id,
             "node_type": node_type,
@@ -171,16 +270,20 @@ async def _compile_prompt_plan_locked(
             "origin": origin,
             "status": status,
             "message_indexes": list(message_indexes or []),
+            **metadata,
         }
 
     for node in ordered_nodes:
         node_id = str(node.get("id") or "").strip()
         node_type = str(node.get("type") or "").strip()
+        descriptor = descriptors_by_node_id.get(node_id) or descriptor_for_node(node)
         if node_type == "template":
             template_key = str(node.get("template_key") or "").strip()
             try:
                 template = load_template(template_key)
             except FileNotFoundError:
+                if descriptor.failure_policy == "fail_closed":
+                    raise
                 warnings.append(f"template node {node_id} missing template: {template_key}")
                 hash_section(section_hashes, node_id, "")
                 flow_sections.append(
@@ -189,15 +292,40 @@ async def _compile_prompt_plan_locked(
                         node_type=node_type,
                         template_key=template_key,
                         status="missing_template",
+                        descriptor=descriptor,
                     )
                 )
                 continue
-            rendered = render_scoped_template(template_key, template.body, template_values).strip()
+            try:
+                rendered = render_scoped_template(
+                    template_key,
+                    template.body,
+                    template_values,
+                ).strip()
+            except Exception:
+                if descriptor.failure_policy == "fail_closed":
+                    raise
+                warnings.append(f"template node {node_id} render failed: {template_key}")
+                hash_section(section_hashes, node_id, "")
+                flow_sections.append(
+                    section_metadata(
+                        node_id=node_id,
+                        node_type=node_type,
+                        template_key=template_key,
+                        status="missing_template",
+                        descriptor=descriptor,
+                    )
+                )
+                continue
             template_paths[node_id] = str(template.path)
             if template.resolution is None:
                 raise RuntimeError(f"Prompt 模板缺少来源解析记录: {template_key}")
+            validate_descriptor_source(
+                descriptor,
+                template.resolution.active_source,
+            )
             template_resolutions[node_id] = template.resolution.to_dict()
-            message_indexes = append_system(node_id, rendered)
+            message_indexes = append_section(node_id, rendered, descriptor)
             flow_sections.append(
                 section_metadata(
                     node_id=node_id,
@@ -205,6 +333,7 @@ async def _compile_prompt_plan_locked(
                     template_key=template_key,
                     status="emitted" if message_indexes else "empty",
                     message_indexes=message_indexes,
+                    descriptor=descriptor,
                 )
             )
             if node_id in {"group_policy", "private_policy"}:
@@ -222,6 +351,7 @@ async def _compile_prompt_plan_locked(
                     node_type=node_type,
                     runtime_key=runtime_key,
                     status="skipped_duplicate",
+                    descriptor=descriptor,
                 )
             )
             continue
@@ -236,7 +366,7 @@ async def _compile_prompt_plan_locked(
             hash_section(section_hashes, node_id, content)
             message_indexes = []
         else:
-            message_indexes = append_system(node_id, content)
+            message_indexes = append_section(node_id, content, descriptor)
         section = section_metadata(
             node_id=node_id,
             node_type=node_type,
@@ -247,6 +377,7 @@ async def _compile_prompt_plan_locked(
                 else "empty"
             ),
             message_indexes=message_indexes,
+            descriptor=descriptor,
         )
         flow_sections.append(section)
         if runtime_key == "current_user_event":
@@ -255,7 +386,18 @@ async def _compile_prompt_plan_locked(
     if "base_contract" not in section_hashes:
         hash_section(section_hashes, "base_contract", "")
     if "persona_reference" not in seen_runtime_keys:
-        message_indexes = append_system("persona_reference", persona_reference)
+        descriptor = descriptor_for_node(
+            {
+                "id": "persona_reference",
+                "type": "runtime",
+                "runtime_key": "persona_reference",
+            }
+        )
+        message_indexes = append_section(
+            "persona_reference",
+            persona_reference,
+            descriptor,
+        )
         flow_sections.append(
             section_metadata(
                 node_id="persona_reference",
@@ -264,11 +406,23 @@ async def _compile_prompt_plan_locked(
                 origin="fallback",
                 status="emitted" if message_indexes else "empty",
                 message_indexes=message_indexes,
+                descriptor=descriptor,
             )
         )
         warnings.append("flow missing persona_reference; compiler appended singleton runtime section")
     if "runtime_tool_prompt" not in seen_runtime_keys:
-        message_indexes = append_system("runtime_tool_prompt", runtime_tool_prompt)
+        descriptor = descriptor_for_node(
+            {
+                "id": "runtime_tool_prompt",
+                "type": "runtime",
+                "runtime_key": "runtime_tool_prompt",
+            }
+        )
+        message_indexes = append_section(
+            "runtime_tool_prompt",
+            runtime_tool_prompt,
+            descriptor,
+        )
         flow_sections.append(
             section_metadata(
                 node_id="runtime_tool_prompt",
@@ -277,6 +431,7 @@ async def _compile_prompt_plan_locked(
                 origin="fallback",
                 status="emitted" if message_indexes else "empty",
                 message_indexes=message_indexes,
+                descriptor=descriptor,
             )
         )
         warnings.append("flow missing runtime_tool_prompt; compiler appended singleton runtime section")

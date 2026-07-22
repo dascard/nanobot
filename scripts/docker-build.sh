@@ -47,8 +47,12 @@ else
   export GIT_DIRTY=null
 fi
 
-runtime_image="nanobot-runtime:latest"
+runtime_image="${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}"
 rollback_image="nanobot-runtime:rollback"
+if [[ "${runtime_image}" == *@sha256:* ]]; then
+  echo "digest 镜像由 scripts/deploy-production.sh 部署，本地构建入口不接受 digest 引用。" >&2
+  exit 2
+fi
 previous_image_id="$(docker image inspect "${runtime_image}" --format '{{.Id}}' 2>/dev/null || true)"
 previous_rollback_id="$(docker image inspect "${rollback_image}" --format '{{.Id}}' 2>/dev/null || true)"
 

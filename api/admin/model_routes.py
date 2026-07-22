@@ -462,17 +462,22 @@ def patch_model_catalog(
 # ── Stage Routes ──
 
 _STAGE_META = {
-    "main_chat":       {"key": "model.reply",              "field": "model",   "env": "LLM_MODEL_REPLY"},
-    "fast_chat":       {"key": "model.fast",               "field": "model",   "env": "LLM_MODEL_FAST"},
-    "smart_chat":      {"key": "model.smart",              "field": "model",   "env": "LLM_MODEL_SMART"},
-    "timing_gate":     {"key": "model.route.timing_gate",  "field": "api_url", "env": "CLASSIFIER_API_URL"},
-    "sticker_describe":{"key": "model.route.sticker_describe","field": "api_url","env": "IMAGE_SUMMARY_API_URL"},
+    "main_chat": {"key": "model.reply", "field": "model"},
+    "fast_chat": {"key": "model.fast", "field": "model"},
+    "smart_chat": {"key": "model.smart", "field": "model"},
+    "timing_gate": {"key": "model.route.timing_gate", "field": "api_url"},
+    "sticker_describe": {
+        "key": "model.route.sticker_describe",
+        "field": "api_url",
+    },
 }
 
 
 def _resolve_route_value(stage: str, db: Session) -> tuple[str, str, str]:
     """Return (value, source, is_overridden). source 准确反映值来源。"""
+    from core.config_registry import SETTING_DEFS
     from core.settings_service import settings
+
     meta = _STAGE_META[stage]
     key = meta["key"]
 
@@ -481,8 +486,8 @@ def _resolve_route_value(stage: str, db: Session) -> tuple[str, str, str]:
     if db_row and db_row.value is not None:
         return db_row.value, "db_override", True
 
-    # 没有 DB 覆盖，查 config 值
-    env_name = meta["env"]
+    # 没有 DB 覆盖，按 SettingSpec 解析；环境变量名也只从目录读取。
+    env_name = SETTING_DEFS[key].env_name
     val = settings.get(key)
     if val:
         return str(val), env_name, True

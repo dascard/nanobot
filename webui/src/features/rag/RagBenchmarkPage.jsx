@@ -194,12 +194,13 @@ function CaseEditor({ item, status, onClose, onSaved }) {
       },
     }
   }
-  let advancedJson = ''
-  try {
-    advancedJson = JSON.stringify(buildPayload(), null, 2)
-  } catch {
-    advancedJson = 'filters/meta JSON 无法解析'
-  }
+  const advancedJson = (() => {
+    try {
+      return JSON.stringify(buildPayload(), null, 2)
+    } catch {
+      return 'filters/meta JSON 无法解析'
+    }
+  })()
 
   const save = () => {
     let parsed
@@ -485,7 +486,10 @@ export function RagBenchmarkPage() {
     loadLatest()
   }, [loadStatus, loadLatest])
 
-  useEffect(() => { loadCases() }, [loadCases])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { loadCases() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadCases])
 
   const openCase = (item) => {
     api.get(`/rag/benchmark/cases/${encodeURIComponent(item.id)}`)

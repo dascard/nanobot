@@ -1436,9 +1436,10 @@ export function EffectivePromptPreviewPage() {
       .catch(e => alert(e.response?.data?.detail || '预览失败'))
       .finally(() => setLoading(false))
   }
+  const initialRunRef = useRef(run)
   useEffect(() => {
-    const id = setTimeout(run, 0)
-    return () => clearTimeout(id)
+    const timer = window.setTimeout(() => { initialRunRef.current() }, 0)
+    return () => window.clearTimeout(timer)
   }, [])
   return (
     <div>

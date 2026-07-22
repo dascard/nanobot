@@ -15,6 +15,7 @@ from core.prompt_v2.template_loader import (
     split_frontmatter_text,
 )
 from core.prompt_v2.template_registry import (
+    assert_template_editable,
     classify_template,
     first_existing_template_path,
     list_template_keys,
@@ -120,6 +121,13 @@ def _template_record(key: str, *, db=None) -> dict[str, Any]:
         "frontmatter": frontmatter,
         "task_contract": task_contract,
         "task_contract_status": task_contract_status,
+        "editable": classified.editable,
+        "runtime_effective": classified.runtime_effective,
+        "runtime_status": classified.runtime_status,
+        "owner_module": classified.owner_module,
+        "domain": classified.domain,
+        "source_precedence": list(classified.source_precedence),
+        "failure_policy": classified.failure_policy,
     }
 
 
@@ -179,6 +187,7 @@ def create_template(
     description: str = "",
 ) -> dict[str, Any]:
     key = resolve_template_key(template_key)
+    assert_template_editable(key)
     text = str(content or "")
     _validate_template_for_save(key, text)
     path = template_path_for(key, runtime=True)
@@ -214,6 +223,7 @@ def create_template(
 
 def save_template(template_key: str, content: str) -> dict[str, Any]:
     key = resolve_template_key(template_key)
+    assert_template_editable(key)
     text = str(content or "")
     _validate_template_for_save(key, text)
     path = template_path_for(key, runtime=True)

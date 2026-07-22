@@ -1,5 +1,33 @@
+import hashlib
+import json
+import threading
 import time
 from typing import Any
+
+
+_EVENT_STATE_LOCK = threading.Lock()
+_EVENT_TOOL_STATE: dict[str, tuple[str, int, str]] = {}
+
+
+def _payload_fingerprint(value: Any) -> tuple[int, str]:
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        text = repr(type(value))
+    encoded = text.encode("utf-8", errors="replace")
+    return len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
+def _tool_event_context(tool_call_id: str):
+    from core.runtime.events import RuntimeEventContext
+    from core.tracing_context import get_trace_context
+
+    trace_id, run_id = get_trace_context()
+    return RuntimeEventContext(
+        trace_id=trace_id,
+        run_id=run_id,
+        tool_call_id=tool_call_id,
+    )
 
 
 def begin_tool_trace(tool_name: str, args: Any) -> tuple[str, float]:
@@ -9,9 +37,34 @@ def begin_tool_trace(tool_name: str, args: Any) -> tuple[str, float]:
         from core.tracing_context import get_trace_context
 
         trace_id, run_id = get_trace_context()
-        return ToolTracer.start_tool_call(trace_id, run_id, tool_name, args), started
+        tool_call_id = ToolTracer.start_tool_call(
+            trace_id,
+            run_id,
+            tool_name,
+            args,
+        )
     except Exception:
         return "", started
+    args_bytes, args_sha256 = _payload_fingerprint(args)
+    with _EVENT_STATE_LOCK:
+        _EVENT_TOOL_STATE[tool_call_id] = (
+            str(tool_name or ""),
+            args_bytes,
+            args_sha256,
+        )
+    from core.runtime.event_bus import emit_runtime_event
+
+    emit_runtime_event(
+        "tool.execute",
+        "started",
+        context=_tool_event_context(tool_call_id),
+        attributes={
+            "tool_name": str(tool_name or ""),
+            "args_bytes": args_bytes,
+            "args_sha256": args_sha256,
+        },
+    )
+    return tool_call_id, started
 
 
 def finish_tool_trace(
@@ -24,6 +77,8 @@ def finish_tool_trace(
 ) -> None:
     if not tool_call_id:
         return
+    with _EVENT_STATE_LOCK:
+        event_state = _EVENT_TOOL_STATE.pop(tool_call_id, None)
     try:
         from core.tracing import ToolTracer
 
@@ -36,6 +91,26 @@ def finish_tool_trace(
         )
     except Exception:
         pass
+    if event_state is None:
+        return
+    tool_name, args_bytes, args_sha256 = event_state
+    result_bytes, result_sha256 = _payload_fingerprint(result)
+    from core.runtime.event_bus import emit_runtime_event
+
+    emit_runtime_event(
+        "tool.execute",
+        "succeeded" if status == "success" else "failed",
+        context=_tool_event_context(tool_call_id),
+        attributes={
+            "tool_name": tool_name,
+            "args_bytes": args_bytes,
+            "args_sha256": args_sha256,
+            "result_bytes": result_bytes,
+            "result_sha256": result_sha256,
+            "latency_ms": (time.time() - started) * 1000,
+            "error_type": "tool_error" if error else "",
+        },
+    )
 
 
 def install_executor_tracing(executor: Any) -> None:

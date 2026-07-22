@@ -8,8 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy.orm import Session
-
+from core.db import PersonaFactRepositoryPort, persona_fact_repository
 from core.time_utils import db_now_naive
 
 
@@ -95,8 +94,10 @@ def _evidence_weight(count: int) -> float:
 
 
 class PersonaRetrievalService:
-    def __init__(self, db: Session):
-        self.db = db
+    def __init__(self, repository: Any):
+        self.repository: PersonaFactRepositoryPort = persona_fact_repository(
+            repository
+        )
 
     def select(
         self,
@@ -107,17 +108,9 @@ class PersonaRetrievalService:
         max_items: int = DEFAULT_MAX_ITEMS,
         max_chars: int = DEFAULT_MAX_CHARS,
     ) -> PersonaSelection:
-        from core.database import PersonaFact
-
         recent_text = "\n".join(str(item.get("content") or "") for item in (recent_messages or []))
         query_text = f"{current_user_input}\n{recent_text}".strip()
-        rows = (
-            self.db.query(PersonaFact)
-            .filter(PersonaFact.user_id == user_id)
-            .order_by(PersonaFact.evidence_count.desc(), PersonaFact.last_seen.desc(), PersonaFact.id.asc())
-            .limit(120)
-            .all()
-        )
+        rows = self.repository.list_for_user(user_id, limit=120)
 
         selection = PersonaSelection()
         candidates: list[tuple[float, Any]] = []
