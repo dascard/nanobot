@@ -329,7 +329,11 @@ class LocalDockerBackend:
             },
             "log_config": {
                 "type": "local",
-                "config": {"max-size": "1m", "max-file": "1"},
+                "config": {
+                    "max-size": "1m",
+                    "max-file": "1",
+                    "compress": "false",
+                },
             },
         }
         if self.config.io_device_path:

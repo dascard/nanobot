@@ -96,6 +96,14 @@ def test_docker_backend_builds_only_fixed_security_parameters(tmp_path):
     assert kwargs["memswap_limit"] == 512 * 1024 * 1024
     assert kwargs["nano_cpus"] == 1_000_000_000
     assert "stop_timeout" not in kwargs
+    assert kwargs["log_config"] == {
+        "type": "local",
+        "config": {
+            "max-size": "1m",
+            "max-file": "1",
+            "compress": "false",
+        },
+    }
     assert set(mount["bind"] for mount in kwargs["volumes"].values()) == {
         "/workspace",
         "/inputs",
