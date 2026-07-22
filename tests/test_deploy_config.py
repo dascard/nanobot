@@ -353,6 +353,7 @@ def test_quality_gate_runs_full_backend_frontend_and_architecture_checks():
     assert "python -m ruff check" in workflow
     assert "npm run lint" in workflow
     assert "npm run build" in workflow
+    assert "cp .env.example .env" in workflow
     assert "docker compose -f docker-compose.yml config --quiet" in workflow
 
 

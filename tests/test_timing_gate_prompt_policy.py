@@ -20,9 +20,24 @@ def _assert_directed_to_other_softened_semantics(prompt: str) -> None:
     assert "结合上下文" in prompt
 
 
-def test_runtime_timing_gate_prompt_is_conservative_and_parser_aligned():
+def test_runtime_timing_gate_prompt_is_conservative_and_parser_aligned(
+    tmp_path,
+    monkeypatch,
+):
+    default_dir = Path("prompts.v2.default").resolve()
+    runtime_dir = tmp_path / "runtime"
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_TEMPLATE_STATE_DIR", str(state_dir))
+
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    result = init_prompt_v2_runtime_dir()
+
+    assert "tasks/timing_gate.md" in result["copied"]
     prompt = _strip_frontmatter(
-        Path("data/prompts_v2/tasks/timing_gate.md").read_text(encoding="utf-8")
+        (runtime_dir / "tasks" / "timing_gate.md").read_text(encoding="utf-8")
     )
 
     _assert_directed_to_other_softened_semantics(prompt)
