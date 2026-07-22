@@ -53,11 +53,10 @@ jobs:
       - name: 检查 Python 致命静态错误
         run: python -m ruff check --select E9,F63,F7,F82 .
 
-      - name: 准备 Compose 验收环境
-        run: cp .env.example .env
-
       - name: 校验 Compose
         run: |
+          cp .env.example .env
+          trap 'rm -f .env' EXIT
           docker compose -f docker-compose.yml config --quiet
           NANOBOT_RUNTIME_IMAGE="example.invalid/nanobot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
