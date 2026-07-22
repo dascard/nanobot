@@ -1558,6 +1558,7 @@ smoke_command() {
   install -d -m 0700 "${EVIDENCE_CACHE_ROOT}"
   log "运行真实 Docker 安全矩阵"
   env \
+    PYTHONDONTWRITEBYTECODE=1 \
     PATH="${smoke_dir}/.venv/bin:/usr/local/bin:/usr/bin:/bin" \
     XDG_CACHE_HOME="${EVIDENCE_CACHE_ROOT}" \
     "${smoke_dir}/scripts/sandbox-smoke-test.sh" "${SANDBOX_IMAGE}"

@@ -103,6 +103,7 @@ def test_production_smoke_uses_only_hashed_minimal_dependencies():
     assert "/usr/local/bin/uv pip sync" in smoke_body
     assert "--require-hashes" in smoke_body
     assert "--only-binary :all:" in smoke_body
+    assert "PYTHONDONTWRITEBYTECODE=1" in smoke_body
     for forbidden in (
         "pip install",
         "--upgrade pip",
