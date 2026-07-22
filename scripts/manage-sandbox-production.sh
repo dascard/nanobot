@@ -123,9 +123,10 @@ prepare-host 参数：
                              仅在构建前原地补足既有空 XFS 镜像的实际分配空间
 
 update-release 参数：
-  --release <40 位提交>      必须等于干净 checkout 和 origin/master
+  --release <40 位提交>      必须等于干净 checkout 且已发布到 origin/master
   [--version <镜像版本>]
-  [--reuse-built-image]     仅在 Smoke 前且镜像输入未变化时复用已构建镜像
+  [--reuse-built-image]     镜像输入未变化时复用已构建镜像
+  [--rerun-smoke]           配合复用镜像归档旧 Smoke 凭据并强制重新验证
 
 smoke 参数：
   --retry                    删除并重建本脚本固定命名的失败 Smoke worktree
@@ -511,8 +512,8 @@ configure_command() {
   repo_git ls-files --error-unmatch scripts/manage-sandbox-production.sh \
     >/dev/null 2>&1 \
     || die "本管理脚本尚未纳入 RELEASE"
-  [[ "$(repo_git rev-parse origin/master)" == "${RELEASE}" ]] \
-    || die "configure 要求 RELEASE 已发布到 origin/master"
+  repo_git merge-base --is-ancestor "${RELEASE}" origin/master \
+    || die "configure 要求 RELEASE 已发布且属于 origin/master 历史"
   [[ ! -e "${CONFIG_FILE}" ]] \
     || die "配置已存在：${CONFIG_FILE}；为防止阶段凭据错配，脚本拒绝直接覆盖"
   write_config
@@ -546,6 +547,9 @@ update_release_command() {
   local new_release=""
   local new_version=""
   local reuse_built_image=false
+  local rerun_smoke=false
+  local smoke_stage_present=false
+  local archived_smoke_stage=""
   local stage=""
 
   shift
@@ -563,6 +567,10 @@ update_release_command() {
         ;;
       --reuse-built-image)
         reuse_built_image=true
+        shift
+        ;;
+      --rerun-smoke)
+        rerun_smoke=true
         shift
         ;;
       -h|--help)
@@ -583,16 +591,26 @@ update_release_command() {
     || die "update-release 要求新 RELEASE 等于当前 HEAD"
   [[ -z "$(repo_git status --porcelain)" ]] \
     || die "生产 checkout 不干净；请先完成审查、测试、提交和推送"
-  [[ "$(repo_git rev-parse origin/master)" == "${new_release}" ]] \
-    || die "update-release 要求新 RELEASE 已发布到 origin/master"
+  repo_git merge-base --is-ancestor "${new_release}" origin/master \
+    || die "update-release 要求新 RELEASE 已发布且属于 origin/master 历史"
+  if [[ "${rerun_smoke}" == "true" \
+      && "${reuse_built_image}" != "true" ]]; then
+    die "--rerun-smoke 只能与 --reuse-built-image 同时使用"
+  fi
 
   if [[ "${reuse_built_image}" == "true" ]]; then
     require_stage image-built
-    for stage in smoke-passed control-plane-ready runtime-deployed; do
+    for stage in control-plane-ready runtime-deployed; do
       if stage_exists "${stage}"; then
         die "已存在后续阶段凭据 ${stage}，拒绝复用已构建镜像更新 RELEASE"
       fi
     done
+    if stage_exists smoke-passed; then
+      [[ "${rerun_smoke}" == "true" ]] \
+        || die "已存在后续阶段凭据 smoke-passed；如需更新 RELEASE，必须显式增加 --rerun-smoke 并重新验证"
+      assert_smoke_current
+      smoke_stage_present="true"
+    fi
     repo_git merge-base --is-ancestor "${previous_release}" "${new_release}" \
       || die "复用已构建镜像只允许更新到当前 RELEASE 的快进后代"
     if ! repo_git diff --quiet "${previous_release}" "${new_release}" -- \
@@ -605,6 +623,14 @@ update_release_command() {
     image_id_from_stage >/dev/null
   else
     assert_no_advanced_stages
+  fi
+
+  if [[ "${smoke_stage_present}" == "true" ]]; then
+    archived_smoke_stage="${STATE_DIR}/smoke-passed.superseded-${previous_release}-by-${new_release}"
+    [[ ! -e "${archived_smoke_stage}" \
+        && ! -L "${archived_smoke_stage}" ]] \
+      || die "旧 Smoke 阶段凭据归档目标已存在：${archived_smoke_stage}"
+    mv -- "${STATE_DIR}/smoke-passed" "${archived_smoke_stage}"
   fi
 
   RELEASE="${new_release}"
@@ -620,6 +646,10 @@ update_release_command() {
   if [[ "${reuse_built_image}" == "true" ]]; then
     log "Sandbox 镜像输入未变化；保留既有 VERSION、IMAGE ID 和 image-built 凭据"
     log "旧 RELEASE 的失败 Smoke worktree 保留为现场证据，未自动删除"
+  fi
+  if [[ -n "${archived_smoke_stage}" ]]; then
+    log "旧 Smoke 阶段凭据已归档：${archived_smoke_stage}"
+    log "新 RELEASE 必须重新运行真实 Docker Smoke"
   fi
   printf 'PREVIOUS_RELEASE=%s\n' "${previous_release}"
   printf 'PREVIOUS_VERSION=%s\n' "${previous_version}"

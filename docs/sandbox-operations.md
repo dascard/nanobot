@@ -120,6 +120,30 @@ sudo scripts/manage-sandbox-production.sh smoke
 和 `image-built` 凭据保持不变；旧 RELEASE 的失败 Smoke worktree 作为现场证据
 保留，不会自动删除。
 
+如果真实 Smoke 已通过、但控制面安装尚未通过，且修复提交仍未修改 Sandbox
+镜像输入，可以显式归档旧 Smoke 阶段凭据，并要求新 RELEASE 重新执行完整
+Smoke：
+
+~~~bash
+sudo scripts/manage-sandbox-production.sh update-release \
+  --release <修复提交的完整哈希> \
+  --reuse-built-image \
+  --rerun-smoke
+
+sudo scripts/manage-sandbox-production.sh prepare-host
+sudo scripts/manage-sandbox-production.sh smoke
+sudo scripts/manage-sandbox-production.sh install-control-plane
+~~~
+
+`--rerun-smoke` 只能与 `--reuse-built-image` 同时使用；已有
+`control-plane-ready` 或 `runtime-deployed` 时仍会失败关闭。脚本会先校验旧
+Smoke 证据与当前固定镜像一致，再将阶段凭据改名归档；不会删除原始证据目录，
+也不会把旧 Smoke 结果沿用到新 RELEASE。
+
+RELEASE 始终由完整提交哈希固定。`origin/master` 后续前进时，脚本只验证目标
+提交已经发布且仍属于该分支历史，不要求目标等于远端最新 tip，也不会把 RELEASE
+静默替换成新提交。生产 checkout 仍必须精确位于目标提交且保持干净。
+
 宿主硬上限只能在全部基础设施门禁通过后，由 root 修改 Nanobot Runtime 环境：
 
 ~~~text
