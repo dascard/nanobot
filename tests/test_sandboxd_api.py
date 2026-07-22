@@ -1,4 +1,5 @@
 import os
+import socket
 import stat
 from dataclasses import replace
 
@@ -124,6 +125,43 @@ def test_sandboxd_token_file_fails_closed_on_permissions_and_control_bytes(tmp_p
     authenticator.prepare_client_token()
     assert authenticator.read_token() == "t" * 64
     assert stat.S_IMODE(client_token.stat().st_mode) == 0o640
+
+
+def test_sandboxd_main_prebinds_exact_uds_permissions(tmp_path, monkeypatch):
+    import sandboxd.app as sandboxd_app
+    import uvicorn
+
+    _token, runtime = _runtime(tmp_path)
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        sandboxd_app.SandboxdConfig,
+        "from_env",
+        staticmethod(lambda: runtime.config),
+    )
+
+    def fake_run(app_reference, **kwargs):
+        observed["app_reference"] = app_reference
+        observed["uses_uds"] = "uds" in kwargs
+        listener_fd = kwargs["fd"]
+        with socket.fromfd(listener_fd, socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            observed["socket_path"] = sock.getsockname()
+        metadata = runtime.config.socket_path.lstat()
+        observed["socket_mode"] = stat.S_IMODE(metadata.st_mode)
+        observed["is_socket"] = stat.S_ISSOCK(metadata.st_mode)
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+
+    sandboxd_app.main()
+
+    assert observed == {
+        "app_reference": "sandboxd.app:app",
+        "uses_uds": False,
+        "socket_path": str(runtime.config.socket_path),
+        "socket_mode": 0o660,
+        "is_socket": True,
+    }
+    assert not runtime.config.socket_path.exists()
 
 
 def test_sandboxd_requires_bearer_and_supports_safe_file_round_trip(tmp_path):

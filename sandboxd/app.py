@@ -4,9 +4,11 @@ import hashlib
 import logging
 import os
 import secrets
+import socket
 import stat
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, Query, Request
@@ -637,27 +639,59 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
 app = create_app()
 
 
-def main() -> None:
-    import uvicorn
-
-    config = SandboxdConfig.from_env()
-    config.socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+def _open_secure_uds(socket_path: Path) -> socket.socket:
+    socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
     try:
-        metadata = config.socket_path.lstat()
+        metadata = socket_path.lstat()
     except FileNotFoundError:
         metadata = None
     if metadata is not None:
         if not stat.S_ISSOCK(metadata.st_mode):
             raise RuntimeError("sandboxd Socket 路径已被非 Socket 文件占用")
-        config.socket_path.unlink()
-    os.umask(0o117)
-    uvicorn.run(
-        "sandboxd.app:app",
-        uds=str(config.socket_path),
-        workers=1,
-        log_level=os.environ.get("LOG_LEVEL", "info").lower(),
-        access_log=False,
-    )
+        socket_path.unlink()
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    previous_umask = os.umask(0o117)
+    try:
+        listener.bind(str(socket_path))
+    except Exception:
+        listener.close()
+        raise
+    finally:
+        os.umask(previous_umask)
+
+    os.chmod(socket_path, 0o660)
+    metadata = socket_path.lstat()
+    if (
+        not stat.S_ISSOCK(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o660
+    ):
+        listener.close()
+        raise RuntimeError("sandboxd Socket 权限初始化失败")
+    return listener
+
+
+def main() -> None:
+    import uvicorn
+
+    config = SandboxdConfig.from_env()
+    listener = _open_secure_uds(config.socket_path)
+    try:
+        uvicorn.run(
+            "sandboxd.app:app",
+            fd=listener.fileno(),
+            workers=1,
+            log_level=os.environ.get("LOG_LEVEL", "info").lower(),
+            access_log=False,
+        )
+    finally:
+        listener.close()
+        try:
+            metadata = config.socket_path.lstat()
+        except FileNotFoundError:
+            metadata = None
+        if metadata is not None and stat.S_ISSOCK(metadata.st_mode):
+            config.socket_path.unlink()
 
 
 if __name__ == "__main__":

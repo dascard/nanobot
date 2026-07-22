@@ -101,3 +101,18 @@ def test_update_release_can_reuse_unchanged_image_before_smoke():
     assert "smoke-passed" in source
     assert "control-plane-ready" in source
     assert "runtime-deployed" in source
+
+
+def test_control_plane_probe_has_bounded_uds_startup_retry():
+    source = SCRIPT.read_text(encoding="utf-8")
+    probe_body = source.split("probe_sandboxd() {", 1)[1].split(
+        "\ninstall_control_plane_command() {",
+        1,
+    )[0]
+
+    assert "time.monotonic()" in probe_body
+    assert "FileNotFoundError" in probe_body
+    assert "ConnectionRefusedError" in probe_body
+    assert "socket.timeout" in probe_body
+    assert "b\" 503 \"" in probe_body
+    assert "time.sleep(0.1)" in probe_body

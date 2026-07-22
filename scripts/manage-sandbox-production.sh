@@ -1723,32 +1723,45 @@ EOF
 probe_sandboxd() {
   "${SANDBOXD_VENV}/bin/python" - <<'PY'
 import socket
+import time
 from pathlib import Path
 
 socket_path = "/run/nanobot-sandboxd/sandboxd.sock"
 token = Path("/etc/nanobot/sandboxd.token").read_bytes().strip()
+deadline = time.monotonic() + 30.0
 
 for path in ("/v1/healthz", "/v1/readyz"):
-    request = (
-        b"GET " + path.encode("ascii") + b" HTTP/1.1\r\n"
-        b"Host: sandboxd\r\n"
-        b"Authorization: Bearer " + token + b"\r\n"
-        b"Connection: close\r\n\r\n"
-    )
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.connect(socket_path)
-    client.sendall(request)
-    response = bytearray()
     while True:
-        chunk = client.recv(65536)
-        if not chunk:
+        request = (
+            b"GET " + path.encode("ascii") + b" HTTP/1.1\r\n"
+            b"Host: sandboxd\r\n"
+            b"Authorization: Bearer " + token + b"\r\n"
+            b"Connection: close\r\n\r\n"
+        )
+        first_line = b""
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(1.0)
+                client.connect(socket_path)
+                client.sendall(request)
+                response = bytearray()
+                while True:
+                    chunk = client.recv(65536)
+                    if not chunk:
+                        break
+                    response.extend(chunk)
+            first_line = bytes(response).split(b"\r\n", 1)[0]
+        except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+            pass
+
+        if b" 200 " in first_line:
+            print(path, first_line.decode("ascii", "replace"))
             break
-        response.extend(chunk)
-    client.close()
-    first_line = bytes(response).split(b"\r\n", 1)[0]
-    if b" 200 " not in first_line:
-        raise SystemExit(f"{path} failed: {first_line!r}")
-    print(path, first_line.decode("ascii", "replace"))
+        if first_line and b" 503 " not in first_line:
+            raise SystemExit(f"{path} failed: {first_line!r}")
+        if time.monotonic() >= deadline:
+            raise SystemExit(f"{path} did not become ready within 30 seconds")
+        time.sleep(0.1)
 PY
 }
 
