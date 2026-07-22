@@ -46,6 +46,15 @@ uv pip compile requirements-sandboxd.in \
   --custom-compile-command scripts/compile-requirements.sh \
   --output-file requirements-sandboxd.lock
 
+uv pip compile requirements-sandbox-smoke.in \
+  --python-version 3.11 \
+  --python-platform x86_64-manylinux_2_36 \
+  --generate-hashes \
+  --emit-index-url \
+  --emit-index-annotation \
+  --custom-compile-command scripts/compile-requirements.sh \
+  --output-file requirements-sandbox-smoke.lock
+
 # 新版 CPU wheel 在 uv 锁中带 +cpu，本身的公开版本在 pip 索引中不带该后缀。
 # 安装入口会从 CPU 专用索引单独安装 torch，因此锁文件统一保留公开版本号。
 sed -E -i 's/^(torch==[^+[:space:]]+)\+cpu$/\1/' \

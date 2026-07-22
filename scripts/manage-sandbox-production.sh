@@ -89,7 +89,7 @@ Nanobot Sandbox 生产管理脚本
 
 子命令：
   configure             保存设备、备份目标和镜像版本等非敏感参数
-  update-release        构建前更新已发布的精确提交与镜像版本
+  update-release        更新已发布的精确提交与镜像版本
   status                只读显示主机、控制面、镜像和阶段状态
   prepare-host          安装依赖、准备数据盘、目录和 AppArmor
   build-image           构建固定版本 Sandbox 镜像
@@ -125,6 +125,7 @@ prepare-host 参数：
 update-release 参数：
   --release <40 位提交>      必须等于干净 checkout 和 origin/master
   [--version <镜像版本>]
+  [--reuse-built-image]     仅在 Smoke 前且镜像输入未变化时复用已构建镜像
 
 smoke 参数：
   --retry                    删除并重建本脚本固定命名的失败 Smoke worktree
@@ -539,12 +540,13 @@ configure_command() {
 update_release_command() {
   require_root
   load_config
-  assert_no_advanced_stages
 
   local previous_release="${RELEASE}"
   local previous_version="${VERSION}"
   local new_release=""
   local new_version=""
+  local reuse_built_image=false
+  local stage=""
 
   shift
   while (( $# )); do
@@ -558,6 +560,10 @@ update_release_command() {
         [[ $# -ge 2 ]] || die "--version 缺少参数"
         new_version="$2"
         shift 2
+        ;;
+      --reuse-built-image)
+        reuse_built_image=true
+        shift
         ;;
       -h|--help)
         usage
@@ -580,12 +586,41 @@ update_release_command() {
   [[ "$(repo_git rev-parse origin/master)" == "${new_release}" ]] \
     || die "update-release 要求新 RELEASE 已发布到 origin/master"
 
+  if [[ "${reuse_built_image}" == "true" ]]; then
+    require_stage image-built
+    for stage in smoke-passed control-plane-ready runtime-deployed; do
+      if stage_exists "${stage}"; then
+        die "已存在后续阶段凭据 ${stage}，拒绝复用已构建镜像更新 RELEASE"
+      fi
+    done
+    repo_git merge-base --is-ancestor "${previous_release}" "${new_release}" \
+      || die "复用已构建镜像只允许更新到当前 RELEASE 的快进后代"
+    if ! repo_git diff --quiet "${previous_release}" "${new_release}" -- \
+        scripts/build-sandbox-image.sh \
+        docker/sandbox/python; then
+      die "Sandbox 镜像构建脚本或上下文已变化，必须重新构建，禁止复用"
+    fi
+    [[ -z "${new_version}" || "${new_version}" == "${previous_version}" ]] \
+      || die "复用已构建镜像时不得修改 VERSION"
+    image_id_from_stage >/dev/null
+  else
+    assert_no_advanced_stages
+  fi
+
   RELEASE="${new_release}"
-  VERSION="${new_version:-${new_release:0:7}-$(date +%Y%m%d)}"
+  if [[ "${reuse_built_image}" == "true" ]]; then
+    VERSION="${previous_version}"
+  else
+    VERSION="${new_version:-${new_release:0:7}-$(date +%Y%m%d)}"
+  fi
   validate_config_values
   write_config
 
   log "RELEASE 已受控更新；存储、备份、配额和 GID 配置保持不变"
+  if [[ "${reuse_built_image}" == "true" ]]; then
+    log "Sandbox 镜像输入未变化；保留既有 VERSION、IMAGE ID 和 image-built 凭据"
+    log "旧 RELEASE 的失败 Smoke worktree 保留为现场证据，未自动删除"
+  fi
   printf 'PREVIOUS_RELEASE=%s\n' "${previous_release}"
   printf 'PREVIOUS_VERSION=%s\n' "${previous_version}"
   printf 'RELEASE=%s\n' "${RELEASE}"
@@ -1470,7 +1505,6 @@ smoke_command() {
   image_id_from_stage >/dev/null
 
   local smoke_dir="/var/tmp/nanobot-sandbox-security-${RELEASE:0:7}"
-  local torch_requirement
   local evidence_dir
   local retry=false
 
@@ -1502,47 +1536,24 @@ smoke_command() {
 
   log "创建隔离 Smoke worktree"
   repo_git worktree add --detach "${smoke_dir}" "${RELEASE}"
-  run_as_deploy git -C "${smoke_dir}" submodule update --init --recursive
-  [[ "$(run_as_deploy git -C "${smoke_dir}/vendor/KohakuTerrarium" rev-parse HEAD)" \
-      == "6c2c5f1d059ac7f99379b0cddeea21da8e9b55c0" ]] \
-    || die "KT submodule 版本错误"
-  run_as_deploy bash "${smoke_dir}/scripts/apply_kohaku_patches.sh"
-  run_as_deploy bash "${smoke_dir}/scripts/apply_kohaku_patches.sh"
-  run_as_deploy git -C "${smoke_dir}/vendor/KohakuTerrarium" diff --check
 
-  log "安装独立 Smoke Python 3.11 环境"
+  log "安装最小化且哈希锁定的 Smoke Python 3.11 环境"
   run_as_deploy /usr/local/bin/uv venv \
-    --python 3.11.14 --seed "${smoke_dir}/.venv"
+    --no-project \
+    --python 3.11.14 \
+    "${smoke_dir}/.venv"
   run_as_deploy env \
     -u http_proxy -u https_proxy \
     -u HTTP_PROXY -u HTTPS_PROXY \
     -u all_proxy -u ALL_PROXY \
-    "${smoke_dir}/.venv/bin/python" -m pip install --upgrade pip
-
-  torch_requirement="$(sed -n '/^torch==/p' "${smoke_dir}/requirements-test.lock")"
-  [[ -n "${torch_requirement}" ]] || die "requirements-test.lock 缺少 torch"
-  run_as_deploy env \
-    -u http_proxy -u https_proxy \
-    -u HTTP_PROXY -u HTTPS_PROXY \
-    -u all_proxy -u ALL_PROXY \
-    "${smoke_dir}/.venv/bin/python" -m pip install \
-    --no-deps \
-    --index-url https://download.pytorch.org/whl/cpu \
-    "${torch_requirement}"
-  run_as_deploy env \
-    -u http_proxy -u https_proxy \
-    -u HTTP_PROXY -u HTTPS_PROXY \
-    -u all_proxy -u ALL_PROXY \
-    "${smoke_dir}/.venv/bin/python" -m pip install \
-    -r "${smoke_dir}/requirements-test.lock"
-  run_as_deploy env \
-    -u http_proxy -u https_proxy \
-    -u HTTP_PROXY -u HTTPS_PROXY \
-    -u all_proxy -u ALL_PROXY \
-    "${smoke_dir}/.venv/bin/python" -m pip install \
-    --no-deps "${smoke_dir}/vendor/KohakuTerrarium"
+    /usr/local/bin/uv pip sync \
+    --python "${smoke_dir}/.venv/bin/python" \
+    --require-hashes \
+    --only-binary :all: \
+    --strict \
+    "${smoke_dir}/requirements-sandbox-smoke.lock"
   run_as_deploy "${smoke_dir}/.venv/bin/python" -c \
-    'import torch; assert not torch.cuda.is_available()'
+    'import docker, pytest; assert docker.__version__ == "7.1.0"; assert pytest.__version__ == "9.1.1"'
 
   install -d -m 0700 "${EVIDENCE_CACHE_ROOT}"
   log "运行真实 Docker 安全矩阵"

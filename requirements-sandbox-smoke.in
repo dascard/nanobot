@@ -1,0 +1,3 @@
+# 真实 Docker Smoke 宿主测试器的最小依赖；不得引入 Nanobot 业务依赖。
+docker==7.1.0
+pytest==9.1.1

@@ -80,3 +80,24 @@ def test_production_script_guards_real_loopback_preallocation():
     assert "REPAIR LOOPBACK ALLOCATION" in source
     assert "update-release" in source
     assert "X-fstrim.notrim" in source
+
+
+def test_update_release_can_reuse_unchanged_image_before_smoke():
+    source = SCRIPT.read_text(encoding="utf-8")
+    help_result = subprocess.run(
+        [str(SCRIPT), "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert help_result.returncode == 0, help_result.stderr
+    assert "--reuse-built-image" in help_result.stdout
+    assert "repo_git merge-base --is-ancestor" in source
+    assert "scripts/build-sandbox-image.sh" in source
+    assert "docker/sandbox/python" in source
+    assert 'VERSION="${previous_version}"' in source
+    assert "smoke-passed" in source
+    assert "control-plane-ready" in source
+    assert "runtime-deployed" in source

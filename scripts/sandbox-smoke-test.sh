@@ -110,5 +110,6 @@ capture_state pre
 cd "${repo_root}"
 NANOBOT_RUN_DOCKER_TESTS=1 \
 NANOBOT_SANDBOX_TEST_IMAGE="${image_reference}" \
-python -m pytest tests/test_sandbox_security.py -v 2>&1 \
+python -m pytest --noconftest -c /dev/null \
+  tests/test_sandbox_security.py -v 2>&1 \
   | tee "${evidence_dir}/pytest.txt"

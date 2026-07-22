@@ -102,6 +102,24 @@ sudo scripts/manage-sandbox-production.sh prepare-host \
 用户 Workspace/Asset/runtime 内容、活动 Sandbox、运行中的 sandboxd、额外
 loop 关联或后续阶段凭据时都会失败关闭。
 
+如果 `image-built` 已完成，但真实 Smoke 在宿主测试依赖安装阶段失败，修复提交
+没有修改 `scripts/build-sandbox-image.sh` 或 `docker/sandbox/python/`，可以显式
+复用已经核验过的固定镜像：
+
+~~~bash
+sudo scripts/manage-sandbox-production.sh update-release \
+  --release <修复提交的完整哈希> \
+  --reuse-built-image
+
+sudo scripts/manage-sandbox-production.sh prepare-host
+sudo scripts/manage-sandbox-production.sh smoke
+~~~
+
+该入口要求新提交是旧 RELEASE 的快进后代，且 `smoke-passed`、
+`control-plane-ready`、`runtime-deployed` 均不存在。复用时 VERSION、IMAGE ID
+和 `image-built` 凭据保持不变；旧 RELEASE 的失败 Smoke worktree 作为现场证据
+保留，不会自动删除。
+
 宿主硬上限只能在全部基础设施门禁通过后，由 root 修改 Nanobot Runtime 环境：
 
 ~~~text
@@ -228,6 +246,11 @@ sudo scripts/manage-sandbox-production.sh runtime-cleanup --apply
 ~~~bash
 scripts/sandbox-smoke-test.sh nanobot-sandbox-python:<version>
 ~~~
+
+生产管理入口会在宿主机临时 worktree 中创建独立 Python 3.11 测试环境，
+仅按 `requirements-sandbox-smoke.lock` 安装带哈希的 pytest 与 Docker SDK
+依赖。该环境不是模型执行 Sandbox，也不得安装 Nanobot 完整测试依赖、
+KT、Torch 或执行未锁定的 pip 自升级。
 
 至少验证非 root、只读根、network=none、无 Docker Socket、cap drop、AppArmor、seccomp、CPU/内存/PID/tmpfs 限制、超时终止整个进程树、输出硬上限、Workspace 跨容器持久化、A/B Workspace 隔离，以及 reconciler 不触碰非 Nanobot 容器。
 

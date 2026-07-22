@@ -90,6 +90,90 @@ def test_operation_scripts_contain_no_global_prune_or_sudo_execution():
             assert re.search(pattern, content) is None, (script_name, pattern)
 
 
+def test_production_smoke_uses_only_hashed_minimal_dependencies():
+    manager = (
+        REPO_ROOT / "scripts" / "manage-sandbox-production.sh"
+    ).read_text(encoding="utf-8")
+    smoke_body = manager.split("smoke_command() {", 1)[1].split(
+        "\ninstall_release_tree() {",
+        1,
+    )[0]
+
+    assert "requirements-sandbox-smoke.lock" in smoke_body
+    assert "/usr/local/bin/uv pip sync" in smoke_body
+    assert "--require-hashes" in smoke_body
+    assert "--only-binary :all:" in smoke_body
+    for forbidden in (
+        "pip install",
+        "--upgrade pip",
+        "requirements-test.lock",
+        "torch",
+        "--seed",
+        "submodule update",
+        "apply_kohaku_patches.sh",
+        "vendor/KohakuTerrarium",
+    ):
+        assert forbidden not in smoke_body
+
+    smoke_input = (
+        REPO_ROOT / "requirements-sandbox-smoke.in"
+    ).read_text(encoding="utf-8")
+    declared = {
+        line.strip()
+        for line in smoke_input.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    assert declared == {"docker==7.1.0", "pytest==9.1.1"}
+
+    smoke_lock = (
+        REPO_ROOT / "requirements-sandbox-smoke.lock"
+    ).read_text(encoding="utf-8")
+    assert "--hash=sha256:" in smoke_lock
+    locked_packages = set(
+        re.findall(r"^([a-z0-9][a-z0-9._-]*)==", smoke_lock, re.MULTILINE)
+    )
+    assert locked_packages == {
+        "certifi",
+        "charset-normalizer",
+        "docker",
+        "idna",
+        "iniconfig",
+        "packaging",
+        "pluggy",
+        "pygments",
+        "pytest",
+        "requests",
+        "urllib3",
+    }
+    for forbidden_package in (
+        "fastapi",
+        "kohakuterrarium",
+        "numpy",
+        "pandas",
+        "pydantic",
+        "sentence-transformers",
+        "torch",
+        "transformers",
+        "uvicorn",
+    ):
+        assert re.search(
+            rf"^{re.escape(forbidden_package)}==",
+            smoke_lock,
+            re.MULTILINE,
+        ) is None
+
+    compile_script = (
+        REPO_ROOT / "scripts" / "compile-requirements.sh"
+    ).read_text(encoding="utf-8")
+    assert "uv pip compile requirements-sandbox-smoke.in" in compile_script
+    assert "--output-file requirements-sandbox-smoke.lock" in compile_script
+
+    smoke_runner = (
+        REPO_ROOT / "scripts" / "sandbox-smoke-test.sh"
+    ).read_text(encoding="utf-8")
+    assert "python -m pytest --noconftest -c /dev/null" in smoke_runner
+
+
 def test_runtime_cleanup_service_requires_one_time_maintenance_approval():
     service = (
         REPO_ROOT

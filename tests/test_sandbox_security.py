@@ -186,7 +186,7 @@ def test_real_docker_security_matrix(tmp_path):
     if not callable(getattr(docker, "from_env", None)):
         pytest.fail(
             "当前解释器未安装 Docker SDK；"
-            "请先安装 requirements-test.lock 或 requirements-sandboxd.lock",
+            "请先安装 requirements-sandbox-smoke.lock 或 requirements-test.lock",
         )
 
     image_reference = os.environ.get(
