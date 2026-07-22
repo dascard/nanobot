@@ -61,6 +61,11 @@ jobs:
           NANOBOT_RUNTIME_IMAGE="example.invalid/nanobot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
 
+      - name: 初始化 Prompt Runtime 验收副本
+        run: >-
+          python -c 'from core.prompt_v2.template_registry import
+          init_prompt_v2_runtime_dir; init_prompt_v2_runtime_dir()'
+
       - name: 运行完整测试
         run: python -m pytest tests/ -v
 

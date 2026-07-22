@@ -356,6 +356,8 @@ def test_quality_gate_runs_full_backend_frontend_and_architecture_checks():
     assert "cp .env.example .env" in workflow
     assert "trap 'rm -f .env' EXIT" in workflow
     assert "docker compose -f docker-compose.yml config --quiet" in workflow
+    assert "初始化 Prompt Runtime 验收副本" in workflow
+    assert "init_prompt_v2_runtime_dir()" in workflow
 
 
 def test_compose_workers_use_explicit_minimal_environment_allowlists():
