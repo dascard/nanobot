@@ -89,6 +89,7 @@ Nanobot Sandbox 生产管理脚本
 
 子命令：
   configure             保存设备、备份目标和镜像版本等非敏感参数
+  update-release        构建前更新已发布的精确提交与镜像版本
   status                只读显示主机、控制面、镜像和阶段状态
   prepare-host          安装依赖、准备数据盘、目录和 AppArmor
   build-image           构建固定版本 Sandbox 镜像
@@ -118,6 +119,12 @@ configure 参数：
 
 prepare-host 参数：
   --initialize-storage       首次初始化数据存储；仍需手工输入精确确认文本
+  --repair-loopback-allocation
+                             仅在构建前原地补足既有空 XFS 镜像的实际分配空间
+
+update-release 参数：
+  --release <40 位提交>      必须等于干净 checkout 和 origin/master
+  [--version <镜像版本>]
 
 smoke 参数：
   --retry                    删除并重建本脚本固定命名的失败 Smoke worktree
@@ -211,6 +218,19 @@ read_stage() {
   head -n 1 "${STATE_DIR}/$1"
 }
 
+assert_no_advanced_stages() {
+  local stage
+  for stage in \
+    image-built \
+    smoke-passed \
+    control-plane-ready \
+    runtime-deployed; do
+    if stage_exists "${stage}"; then
+      die "已存在后续阶段凭据 ${stage}，拒绝修改存储分配或 RELEASE"
+    fi
+  done
+}
+
 validate_release() {
   [[ "${RELEASE}" =~ ^[0-9a-f]{40}$ ]] || die "RELEASE 必须是 40 位小写提交哈希"
 }
@@ -219,6 +239,14 @@ validate_release_in_repo() {
   validate_release
   repo_git cat-file -e "${RELEASE}^{commit}" 2>/dev/null \
     || die "本地仓库不存在 RELEASE=${RELEASE}"
+}
+
+assert_release_checkout_current() {
+  validate_release_in_repo
+  [[ "$(repo_git rev-parse HEAD)" == "${RELEASE}" ]] \
+    || die "生产 checkout HEAD 与配置 RELEASE 不一致"
+  [[ -z "$(repo_git status --porcelain)" ]] \
+    || die "生产 checkout 不干净，拒绝执行生产阶段"
 }
 
 validate_config_values() {
@@ -508,6 +536,63 @@ configure_command() {
   printf '下一步：sudo %s prepare-host --initialize-storage\n' "$0"
 }
 
+update_release_command() {
+  require_root
+  load_config
+  assert_no_advanced_stages
+
+  local previous_release="${RELEASE}"
+  local previous_version="${VERSION}"
+  local new_release=""
+  local new_version=""
+
+  shift
+  while (( $# )); do
+    case "$1" in
+      --release)
+        [[ $# -ge 2 ]] || die "--release 缺少参数"
+        new_release="$2"
+        shift 2
+        ;;
+      --version)
+        [[ $# -ge 2 ]] || die "--version 缺少参数"
+        new_version="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        die "update-release 未知参数：$1"
+        ;;
+    esac
+  done
+
+  [[ "${new_release}" =~ ^[0-9a-f]{40}$ ]] \
+    || die "update-release 必须提供 40 位小写 --release"
+  repo_git cat-file -e "${new_release}^{commit}" 2>/dev/null \
+    || die "本地仓库不存在新 RELEASE=${new_release}"
+  [[ "$(repo_git rev-parse HEAD)" == "${new_release}" ]] \
+    || die "update-release 要求新 RELEASE 等于当前 HEAD"
+  [[ -z "$(repo_git status --porcelain)" ]] \
+    || die "生产 checkout 不干净；请先完成审查、测试、提交和推送"
+  [[ "$(repo_git rev-parse origin/master)" == "${new_release}" ]] \
+    || die "update-release 要求新 RELEASE 已发布到 origin/master"
+
+  RELEASE="${new_release}"
+  VERSION="${new_version:-${new_release:0:7}-$(date +%Y%m%d)}"
+  validate_config_values
+  write_config
+
+  log "RELEASE 已受控更新；存储、备份、配额和 GID 配置保持不变"
+  printf 'PREVIOUS_RELEASE=%s\n' "${previous_release}"
+  printf 'PREVIOUS_VERSION=%s\n' "${previous_version}"
+  printf 'RELEASE=%s\n' "${RELEASE}"
+  printf 'VERSION=%s\n' "${VERSION}"
+  printf '下一步：重新运行 sudo %s prepare-host；若状态报告稀疏，只能增加 --repair-loopback-allocation\n' "$0"
+}
+
 assert_data_device_not_root_chain() {
   local root_source
   local root_disks
@@ -630,6 +715,86 @@ append_fstab_line() {
   findmnt --verify --verbose
 }
 
+loopback_fstab_line() {
+  printf '%s %s xfs loop,nodev,nosuid,prjquota,X-fstrim.notrim 0 0\n' \
+    "${DATA_IMAGE}" "${DATA_ROOT}"
+}
+
+legacy_loopback_fstab_line() {
+  printf '%s %s xfs loop,nodev,nosuid,prjquota 0 0\n' \
+    "${DATA_IMAGE}" "${DATA_ROOT}"
+}
+
+assert_loopback_fstrim_excluded() {
+  local expected_line
+  local existing_line
+  expected_line="$(loopback_fstab_line)"
+  existing_line="$(awk -v target="${DATA_ROOT}" \
+    '$1 !~ /^#/ && $2 == target {print}' /etc/fstab)"
+  [[ "${existing_line}" == "${expected_line}" ]] \
+    || die "${DATA_ROOT} 未通过 X-fstrim.notrim 排除定时 TRIM"
+  if systemctl is-active --quiet fstrim.service; then
+    die "fstrim.service 正在运行，无法确认本轮未触碰 loopback 镜像"
+  fi
+}
+
+ensure_loopback_fstab_line() (
+  local expected_line
+  local legacy_line
+  local existing_line
+  local fstab_backup=""
+  local temporary=""
+
+  # 仅由 EXIT trap 间接调用。
+  # shellcheck disable=SC2317
+  cleanup_fstab_update() {
+    if [[ -n "${temporary}" && -f "${temporary}" \
+        && ! -L "${temporary}" ]]; then
+      rm -f -- "${temporary}"
+    fi
+  }
+  trap cleanup_fstab_update EXIT
+
+  [[ -f /etc/fstab && ! -L /etc/fstab ]] \
+    || die "/etc/fstab 必须是非符号链接普通文件"
+  expected_line="$(loopback_fstab_line)"
+  legacy_line="$(legacy_loopback_fstab_line)"
+  existing_line="$(awk -v target="${DATA_ROOT}" \
+    '$1 !~ /^#/ && $2 == target {print}' /etc/fstab)"
+  if systemctl is-active --quiet fstrim.service; then
+    die "fstrim.service 正在运行，拒绝修改或确认 loopback fstab 配置"
+  fi
+
+  if [[ -z "${existing_line}" ]]; then
+    append_fstab_line "${expected_line}"
+  elif [[ "${existing_line}" == "${expected_line}" ]]; then
+    findmnt --verify --verbose
+  elif [[ "${existing_line}" == "${legacy_line}" ]]; then
+    fstab_backup="/etc/fstab.pre-nanobot-sandbox-fstrim-$(date +%Y%m%dT%H%M%S)"
+    [[ ! -e "${fstab_backup}" ]] \
+      || die "fstab 备份路径已存在，拒绝覆盖：${fstab_backup}"
+    cp -a /etc/fstab "${fstab_backup}"
+    temporary="$(mktemp /etc/.fstab.nanobot-fstrim.XXXXXX)"
+    cp --attributes-only --preserve=all /etc/fstab "${temporary}"
+    awk -v old="${legacy_line}" -v replacement="${expected_line}" \
+      '$0 == old {$0 = replacement} {print}' /etc/fstab >"${temporary}"
+    [[ "$(awk -v target="${DATA_ROOT}" \
+        '$1 !~ /^#/ && $2 == target {print}' "${temporary}")" \
+        == "${expected_line}" ]] \
+      || die "无法生成排除定时 TRIM 的 fstab 配置"
+    findmnt --verify --verbose --tab-file "${temporary}"
+    mv -- "${temporary}" /etc/fstab
+    temporary=""
+    findmnt --verify --verbose
+    log "已将脚本生成的旧 loopback fstab 行迁移为 X-fstrim.notrim；备份：${fstab_backup}"
+  else
+    die "/etc/fstab 已存在其他 ${DATA_ROOT} 挂载配置，拒绝覆盖"
+  fi
+
+  assert_loopback_fstrim_excluded
+  trap - EXIT
+)
+
 prepare_block_data_mount() {
   local allow_format="$1"
   local current_source=""
@@ -687,13 +852,21 @@ prepare_block_data_mount() {
   fi
 }
 
-verify_loopback_image() {
+verify_loopback_image_metadata() {
   [[ -f "${DATA_IMAGE}" && ! -L "${DATA_IMAGE}" ]] \
     || die "loopback 镜像必须是非符号链接普通文件：${DATA_IMAGE}"
   [[ "$(stat -c '%u:%a' "${DATA_IMAGE}")" == "0:600" ]] \
     || die "loopback 镜像必须由 root 拥有且权限为 0600"
   [[ "$(stat -c '%s' "${DATA_IMAGE}")" == "${DATA_IMAGE_SIZE_BYTES}" ]] \
     || die "loopback 镜像容量与配置不一致"
+}
+
+verify_loopback_image() {
+  verify_loopback_image_metadata
+  if ! "${SCRIPT_DIR}/check-loopback-image-allocation.sh" \
+      "${DATA_IMAGE}" "${DATA_IMAGE_SIZE_BYTES}"; then
+    die "loopback 镜像未真实预分配，拒绝继续生产阶段"
+  fi
 }
 
 verify_loopback_mount() {
@@ -789,7 +962,7 @@ create_loopback_image() (
     losetup --detach "${loop_device}" || true
     die "loop 设备 backing file 校验失败"
   fi
-  if ! mkfs.xfs -L "${XFS_LABEL}" "${loop_device}"; then
+  if ! mkfs.xfs -K -L "${XFS_LABEL}" "${loop_device}"; then
     losetup --detach "${loop_device}" || true
     die "XFS 镜像格式化失败"
   fi
@@ -803,10 +976,174 @@ create_loopback_image() (
     die "无法安全释放临时 loop 设备"
   fi
   loop_device=""
+  if ! "${SCRIPT_DIR}/check-loopback-image-allocation.sh" \
+      "${temporary}" "${DATA_IMAGE_SIZE_BYTES}"; then
+    die "XFS 格式化后实际分配空间不足"
+  fi
   mv -- "${temporary}" "${DATA_IMAGE}"
   temporary=""
   mark_stage data-formatted \
     "mode=loopback|image=${DATA_IMAGE}|size=${DATA_IMAGE_SIZE_BYTES}|uuid=${data_uuid}"
+  trap - EXIT HUP INT TERM
+)
+
+repair_loopback_allocation() (
+  local confirmation=""
+  local active_sandboxes=""
+  local data_uuid=""
+  local expected_marker=""
+  local mount_source=""
+  local associated_loop=""
+  local probe_loop=""
+  local root_free=""
+  local allocated_blocks=""
+  local block_bytes=""
+  local actual_allocated_bytes=""
+  local missing_bytes=""
+  local required_free=""
+  local size_gib=""
+  local unexpected_entry=""
+  local required_path=""
+  local remount_required=false
+
+  # 仅由 EXIT trap 间接调用。
+  # shellcheck disable=SC2317
+  restore_loopback_mount() {
+    if [[ -n "${probe_loop}" ]] \
+      && losetup "${probe_loop}" >/dev/null 2>&1; then
+      losetup --detach "${probe_loop}" || true
+    fi
+    if [[ "${remount_required}" == "true" ]] \
+      && ! mountpoint -q "${DATA_ROOT}"; then
+      mount "${DATA_ROOT}" \
+        || warn "原地补充分配失败后未能恢复 ${DATA_ROOT} 挂载，请停止后续阶段并人工检查"
+    fi
+  }
+
+  trap restore_loopback_mount EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  [[ "${STORAGE_MODE}" == "loopback" ]] \
+    || die "--repair-loopback-allocation 仅适用于 loopback 模式"
+  assert_no_advanced_stages
+  verify_loopback_image_metadata
+  verify_loopback_mount
+  require_stage data-formatted
+  require_command fallocate
+  require_command losetup
+  require_command xfs_repair
+
+  mount_source="$(readlink -f "$(findmnt -n -o SOURCE "${DATA_ROOT}")")"
+  data_uuid="$(blkid -s UUID -o value "${mount_source}" 2>/dev/null || true)"
+  [[ -n "${data_uuid}" ]] || die "无法读取已挂载 loopback XFS UUID"
+  expected_marker="mode=loopback|image=${DATA_IMAGE}|size=${DATA_IMAGE_SIZE_BYTES}|uuid=${data_uuid}"
+  [[ "$(read_stage data-formatted)" == "${expected_marker}" ]] \
+    || die "既有 XFS 与 data-formatted 阶段凭据不匹配"
+
+  ensure_loopback_fstab_line
+
+  if systemctl is-active --quiet nanobot-sandboxd.service; then
+    die "sandboxd 正在运行，拒绝卸载 Sandbox 数据盘"
+  fi
+  active_sandboxes="$(docker ps \
+    --filter 'label=com.nanobot.sandbox=true' \
+    --filter 'label=com.nanobot.managed-by=sandboxd' \
+    --format '{{.Names}}')" \
+    || die "无法确认活动 Sandbox 容器"
+  [[ -z "${active_sandboxes}" ]] \
+    || die "仍有活动 Sandbox 容器，拒绝补充分配"
+
+  for required_path in \
+    "${DATA_ROOT}/workspaces" \
+    "${DATA_ROOT}/assets" \
+    "${DATA_ROOT}/assets/sha256" \
+    "${DATA_ROOT}/runtime"; do
+    [[ -d "${required_path}" && ! -L "${required_path}" ]] \
+      || die "空存储布局缺少受控目录：${required_path}"
+  done
+  unexpected_entry="$(find "${DATA_ROOT}" -xdev -mindepth 1 \
+    ! -path "${DATA_ROOT}/workspaces" \
+    ! -path "${DATA_ROOT}/assets" \
+    ! -path "${DATA_ROOT}/assets/sha256" \
+    ! -path "${DATA_ROOT}/runtime" \
+    -print -quit)" \
+    || die "无法检查 Sandbox 数据盘是否为空"
+  [[ -z "${unexpected_entry}" ]] \
+    || die "Sandbox 数据盘已包含受控空目录之外的内容，拒绝原地补充分配：${unexpected_entry}"
+
+  while IFS= read -r associated_loop; do
+    [[ -n "${associated_loop}" ]] || continue
+    [[ "$(readlink -f "${associated_loop}")" == "${mount_source}" ]] \
+      || die "镜像还关联了非当前挂载 loop 设备：${associated_loop}"
+  done < <(losetup --associated "${DATA_IMAGE}" --noheadings --output NAME)
+
+  allocated_blocks="$(stat -c '%b' "${DATA_IMAGE}")"
+  block_bytes="$(stat -c '%B' "${DATA_IMAGE}")"
+  actual_allocated_bytes=$((allocated_blocks * block_bytes))
+  if (( actual_allocated_bytes >= DATA_IMAGE_SIZE_BYTES )); then
+    verify_loopback_image
+    log "loopback 镜像已经完成真实预分配，无需修复"
+    trap - EXIT HUP INT TERM
+    return 0
+  fi
+
+  missing_bytes=$((DATA_IMAGE_SIZE_BYTES - actual_allocated_bytes))
+  root_free="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
+  required_free=$((missing_bytes + SYSTEM_MIN_FREE_BYTES + 20 * 1024 * 1024 * 1024))
+  (( root_free >= required_free )) \
+    || die "根分区空间不足：补充分配后无法同时保留 60 GiB 系统空间和 20 GiB 构建余量"
+
+  [[ -t 0 ]] || die "原地补充分配要求交互式 TTY"
+  size_gib=$((DATA_IMAGE_SIZE_BYTES / 1024 / 1024 / 1024))
+  printf '将卸载 %s，并为既有 XFS backing file 原地补足实际分配空间。\n' "${DATA_ROOT}"
+  printf '不会格式化、删除或重建文件系统。请输入：REPAIR LOOPBACK ALLOCATION %sGiB\n' "${size_gib}"
+  IFS= read -r confirmation
+  [[ "${confirmation}" == "REPAIR LOOPBACK ALLOCATION ${size_gib}GiB" ]] \
+    || die "loopback 分配修复确认不匹配，未写入"
+
+  sync -f "${DATA_ROOT}"
+  umount "${DATA_ROOT}"
+  remount_required=true
+
+  if losetup "${mount_source}" >/dev/null 2>&1; then
+    findmnt -rn -S "${mount_source}" | grep -q . \
+      && die "卸载后 loop 设备仍被其他挂载使用：${mount_source}"
+    losetup --detach "${mount_source}"
+  fi
+  if losetup --associated "${DATA_IMAGE}" --noheadings --output NAME \
+      | grep -q .; then
+    die "卸载后 backing file 仍被其他 loop 设备占用"
+  fi
+
+  if ! fallocate --keep-size --offset 0 \
+      --length "${DATA_IMAGE_SIZE_BYTES}" "${DATA_IMAGE}"; then
+    die "loopback 镜像原地补充分配失败"
+  fi
+  sync -f "${DATA_IMAGE}"
+  verify_loopback_image
+
+  if ! probe_loop="$(losetup --find --show --read-only "${DATA_IMAGE}")"; then
+    die "无法为修复后的镜像建立只读检查 loop 设备"
+  fi
+  [[ "$(blkid -s UUID -o value "${probe_loop}" 2>/dev/null || true)" \
+      == "${data_uuid}" ]] \
+    || die "补充分配后 XFS UUID 发生变化"
+  xfs_repair -n "${probe_loop}"
+  losetup --detach "${probe_loop}"
+  probe_loop=""
+
+  mount "${DATA_ROOT}"
+  remount_required=false
+  verify_loopback_mount
+  verify_loopback_image
+  [[ "$(blkid -s UUID -o value \
+      "$(findmnt -n -o SOURCE "${DATA_ROOT}")" 2>/dev/null || true)" \
+      == "${data_uuid}" ]] \
+    || die "重新挂载后的 XFS UUID 与修复前不一致"
+
+  log "loopback 镜像已原地补足实际分配空间，XFS UUID 与空目录布局保持不变"
   trap - EXIT HUP INT TERM
 )
 
@@ -816,7 +1153,6 @@ prepare_loopback_data_mount() {
   local expected_marker=""
   local probe_loop=""
   local mount_source=""
-  local fstab_line=""
 
   require_command fallocate
   require_command losetup
@@ -830,8 +1166,7 @@ prepare_loopback_data_mount() {
     expected_marker="mode=loopback|image=${DATA_IMAGE}|size=${DATA_IMAGE_SIZE_BYTES}|uuid=${data_uuid}"
     [[ "$(read_stage data-formatted)" == "${expected_marker}" ]] \
       || die "已挂载 loopback 镜像与本脚本阶段凭据不匹配"
-    fstab_line="${DATA_IMAGE} ${DATA_ROOT} xfs loop,nodev,nosuid,prjquota 0 0"
-    append_fstab_line "${fstab_line}"
+    ensure_loopback_fstab_line
   else
     if [[ ! -e "${DATA_IMAGE}" ]]; then
       [[ "${allow_format}" == "true" ]] \
@@ -854,8 +1189,7 @@ prepare_loopback_data_mount() {
       || die "现有 loopback 镜像与本脚本阶段凭据不匹配"
 
     ensure_data_mountpoint_empty
-    fstab_line="${DATA_IMAGE} ${DATA_ROOT} xfs loop,nodev,nosuid,prjquota 0 0"
-    append_fstab_line "${fstab_line}"
+    ensure_loopback_fstab_line
     mount "${DATA_ROOT}"
     verify_loopback_mount
   fi
@@ -934,15 +1268,20 @@ install_apparmor_profile() {
 prepare_host_command() {
   require_root
   load_config
-  validate_release_in_repo
+  assert_release_checkout_current
   assert_backup_target_policy
 
   local allow_format=false
+  local repair_allocation=false
   shift
   while (( $# )); do
     case "$1" in
       --initialize-storage)
         allow_format=true
+        shift
+        ;;
+      --repair-loopback-allocation)
+        repair_allocation=true
         shift
         ;;
       --format-data-device)
@@ -961,6 +1300,11 @@ prepare_host_command() {
     esac
   done
 
+  if [[ "${allow_format}" == "true" \
+      && "${repair_allocation}" == "true" ]]; then
+    die "--initialize-storage/--format-data-device 与 --repair-loopback-allocation 互斥"
+  fi
+
   log "安装宿主依赖"
   install_host_packages
 
@@ -972,6 +1316,11 @@ prepare_host_command() {
   fi
   [[ "$(getent group nanobot-sandboxd | cut -d: -f3)" == "${SANDBOXD_GID}" ]] \
     || die "nanobot-sandboxd 组 GID 与配置不一致"
+
+  if [[ "${repair_allocation}" == "true" ]]; then
+    log "原地补足既有空 loopback XFS 镜像的实际分配空间"
+    repair_loopback_allocation
+  fi
 
   log "准备 Sandbox 数据文件系统（${STORAGE_MODE}）"
   prepare_data_mount "${allow_format}"
@@ -1001,12 +1350,46 @@ check_build_disk_gate() {
     || die "根分区使用率达到 80%，停止镜像构建"
 }
 
+assert_prepared_storage_current() {
+  local free_bytes
+  local root_free
+
+  mountpoint -q "${DATA_ROOT}" || die "${DATA_ROOT} 尚未挂载"
+  if [[ "${STORAGE_MODE}" == "loopback" ]]; then
+    verify_loopback_image
+    verify_loopback_mount
+    assert_loopback_fstrim_excluded
+  else
+    [[ "$(readlink -f "$(findmnt -n -o SOURCE "${DATA_ROOT}")")" \
+        == "$(readlink -f "${DATA_DEVICE}")" ]] \
+      || die "Sandbox 数据盘与配置 DATA_DEVICE 不一致"
+  fi
+  "${REPO_ROOT}/scripts/check-sandbox-data-disk.sh" "${DATA_ROOT}"
+  free_bytes="$(df -B1 --output=avail "${DATA_ROOT}" | tail -n 1 | tr -d ' ')"
+  (( free_bytes >= DISK_MIN_FREE_BYTES )) \
+    || die "Sandbox 数据文件系统可用空间低于配置水位"
+  if [[ "${STORAGE_MODE}" == "loopback" ]]; then
+    root_free="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
+    (( root_free >= SYSTEM_MIN_FREE_BYTES )) \
+      || die "根文件系统可用空间低于 60 GiB"
+  fi
+}
+
+assert_host_prepared_current() {
+  local expected_marker
+  require_stage host-prepared
+  expected_marker="release=${RELEASE}|storage=${STORAGE_MODE}|source=$(findmnt -n -o SOURCE "${DATA_ROOT}")"
+  [[ "$(read_stage host-prepared)" == "${expected_marker}" ]] \
+    || die "host-prepared 阶段凭据与当前 RELEASE 或数据挂载不一致；请重新运行 prepare-host"
+}
+
 build_image_command() {
   require_no_extra_args "$@"
   require_root
   load_config
-  require_stage host-prepared
-  validate_release_in_repo
+  assert_release_checkout_current
+  assert_prepared_storage_current
+  assert_host_prepared_current
   check_build_disk_gate
 
   log "构建固定 Sandbox 镜像 ${SANDBOX_IMAGE}"
@@ -1080,9 +1463,10 @@ assert_runtime_current() {
 smoke_command() {
   require_root
   load_config
-  require_stage host-prepared
   require_stage image-built
-  validate_release_in_repo
+  assert_release_checkout_current
+  assert_prepared_storage_current
+  assert_host_prepared_current
   image_id_from_stage >/dev/null
 
   local smoke_dir="/var/tmp/nanobot-sandbox-security-${RELEASE:0:7}"
@@ -1360,9 +1744,10 @@ install_control_plane_command() {
   require_no_extra_args "$@"
   require_root
   load_config
-  require_stage host-prepared
   require_stage image-built
-  validate_release_in_repo
+  assert_release_checkout_current
+  assert_prepared_storage_current
+  assert_host_prepared_current
   image_id_from_stage >/dev/null
 
   log "安装只读发布树"
@@ -1661,20 +2046,16 @@ deploy_command() {
   require_no_extra_args "$@"
   require_root
   load_config
-  require_stage host-prepared
   require_stage image-built
   require_stage smoke-passed
   require_stage control-plane-ready
-  validate_release_in_repo
+  assert_release_checkout_current
+  assert_prepared_storage_current
+  assert_host_prepared_current
   assert_smoke_current
   assert_control_plane_current
   probe_sandboxd
   check_build_disk_gate
-
-  [[ "$(repo_git rev-parse HEAD)" == "${RELEASE}" ]] \
-    || die "生产 checkout HEAD 与配置 RELEASE 不一致"
-  [[ -z "$(repo_git status --porcelain)" ]] \
-    || die "生产 checkout 不干净，拒绝部署"
 
   log "写入 feature-off 配置与 Asset Token Secret"
   configure_application_env_off
@@ -1778,6 +2159,12 @@ enable_runtime_timer_command() {
 status_command() {
   require_no_extra_args "$@"
   require_root
+  local actual_allocated_bytes=""
+  local allocated_blocks=""
+  local allocation_status=""
+  local block_bytes=""
+  local fstrim_status=""
+  local loopback_mount_line=""
   printf '仓库：%s\n' "${REPO_ROOT}"
   printf '当前 HEAD：%s\n' "$(repo_git rev-parse HEAD 2>/dev/null || printf unknown)"
 
@@ -1790,6 +2177,30 @@ status_command() {
     if [[ "${STORAGE_MODE}" == "loopback" ]]; then
       printf 'XFS 镜像：%s GiB（固定路径）\n' \
         "$((DATA_IMAGE_SIZE_BYTES / 1024 / 1024 / 1024))"
+      if [[ -f "${DATA_IMAGE}" && ! -L "${DATA_IMAGE}" ]]; then
+        allocated_blocks="$(stat -c '%b' "${DATA_IMAGE}")"
+        block_bytes="$(stat -c '%B' "${DATA_IMAGE}")"
+        actual_allocated_bytes=$((allocated_blocks * block_bytes))
+        if "${SCRIPT_DIR}/check-loopback-image-allocation.sh" \
+            "${DATA_IMAGE}" "${DATA_IMAGE_SIZE_BYTES}" >/dev/null 2>&1; then
+          allocation_status="PASS"
+        else
+          allocation_status="BLOCKED"
+        fi
+        printf 'XFS 镜像实际分配：%s 字节（%s）\n' \
+          "${actual_allocated_bytes}" "${allocation_status}"
+      else
+        printf 'XFS 镜像实际分配：MISSING（BLOCKED）\n'
+      fi
+      loopback_mount_line="$(awk -v target="${DATA_ROOT}" \
+        '$1 !~ /^#/ && $2 == target {print}' /etc/fstab 2>/dev/null || true)"
+      if [[ "${loopback_mount_line}" == "$(loopback_fstab_line)" ]] \
+          && ! systemctl is-active --quiet fstrim.service; then
+        fstrim_status="PASS"
+      else
+        fstrim_status="BLOCKED"
+      fi
+      printf '定时 TRIM 排除：%s\n' "${fstrim_status}"
     fi
     printf '备份模式：%s\n' "${BACKUP_MODE}"
     printf '备份目标：%s\n' "${BACKUP_MOUNT}"
@@ -1873,6 +2284,9 @@ main() {
       ;;
     configure)
       configure_command "$@"
+      ;;
+    update-release)
+      update_release_command "$@"
       ;;
     status)
       status_command "$@"

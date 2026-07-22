@@ -69,3 +69,14 @@ def test_production_script_requires_explicit_local_same_disk_risk_marker():
     )
     assert 'BACKUP_MAX_BYTES_FIXED="17179869184"' in source
     assert "根文件系统最低保留空间不得低于 60 GiB" in source
+
+
+def test_production_script_guards_real_loopback_preallocation():
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'mkfs.xfs -K -L "${XFS_LABEL}" "${loop_device}"' in source
+    assert "check-loopback-image-allocation.sh" in source
+    assert "--repair-loopback-allocation" in source
+    assert "REPAIR LOOPBACK ALLOCATION" in source
+    assert "update-release" in source
+    assert "X-fstrim.notrim" in source

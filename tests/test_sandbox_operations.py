@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -13,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_NAMES = (
     "sandbox-smoke-test.sh",
     "check-sandbox-data-disk.sh",
+    "check-loopback-image-allocation.sh",
     "assign-sandbox-project-quota.sh",
     "cleanup-sandbox-runtime.sh",
     "sandbox-coordinated-backup.sh",
@@ -109,6 +111,45 @@ def test_storage_templates_require_project_quota_mount_options():
     assert " xfs defaults,nodev,nosuid,prjquota " in xfs
     assert " ext4 defaults,nodev,nosuid,prjquota " in ext4
     assert "mkfs.ext4 -O project" in ext4
+
+
+def test_loopback_allocation_gate_rejects_sparse_and_accepts_preallocated(
+    tmp_path,
+):
+    script = REPO_ROOT / "scripts" / "check-loopback-image-allocation.sh"
+    expected_bytes = 16 * 1024 * 1024
+    sparse_image = tmp_path / "sparse.xfs"
+    with sparse_image.open("wb") as file_handle:
+        file_handle.truncate(expected_bytes)
+
+    sparse_result = subprocess.run(
+        [str(script), str(sparse_image), str(expected_bytes)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert sparse_result.returncode == 1
+    assert "实际分配空间不足" in sparse_result.stderr
+
+    allocated_image = tmp_path / "allocated.xfs"
+    descriptor = os.open(allocated_image, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.posix_fallocate(descriptor, 0, expected_bytes)
+    finally:
+        os.close(descriptor)
+
+    allocated_result = subprocess.run(
+        [str(script), str(allocated_image), str(expected_bytes)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert allocated_result.returncode == 0, allocated_result.stderr
+    assert f"actual_allocated_bytes={expected_bytes}" in allocated_result.stdout
 
 
 def test_backup_and_rollback_docs_preserve_persistent_data():

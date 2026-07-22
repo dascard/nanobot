@@ -65,6 +65,43 @@ sudo scripts/manage-sandbox-production.sh configure \
 
 该模式固定单次协调备份上限为 16 GiB，并在备份前后强制保留至少 60 GiB 根分区可用空间。同盘备份仅用于逻辑回滚，不提供硬盘灾备；这些约束不放宽真实 Docker Smoke、AppArmor、seccomp、断网、权限或配额门禁。
 
+loopback 镜像必须同时满足逻辑大小和实际分配空间均为 16 GiB。脚本使用
+`mkfs.xfs -K` 禁止格式化阶段 discard 已预分配的 backing file 块，并在构建、
+Smoke、控制面安装、协调备份和部署前重复执行实际分配门禁。可用下列只读命令
+独立核对；返回 0 且 `actual_allocated_bytes` 不小于
+`17179869184` 才算通过：
+
+~~~bash
+scripts/check-loopback-image-allocation.sh \
+  /var/lib/nanobot-sandbox-storage/data.xfs \
+  17179869184
+~~~
+
+loop 设备会向上报告 discard 能力，宿主的周期性 `fstrim` 可能再次释放 backing
+file 的未用块。因此官方 fstab 行固定包含 `X-fstrim.notrim`；脚本只会把自己
+生成的旧精确行原子迁移到该配置，并保留 `/etc/fstab` 备份。发现其他同目标
+挂载行或正在运行的 `fstrim.service` 时拒绝迁移。
+
+如果旧版脚本已建立 XFS，但后续 `image-built` 等阶段尚未开始，且数据盘只含
+tmpfiles 创建的空目录，可以使用官方原地修复入口。先将修复提交发布到
+`origin/master`，在干净 checkout 上只更新 RELEASE；该操作保留既有存储、
+备份、配额和 GID 配置：
+
+~~~bash
+sudo scripts/manage-sandbox-production.sh update-release \
+  --release <修复提交的完整哈希> \
+  --version <修复提交短哈希>-<日期>
+
+sudo scripts/manage-sandbox-production.sh prepare-host \
+  --repair-loopback-allocation
+~~~
+
+修复入口要求交互输入精确确认文本，只会在卸载既有 XFS 后使用
+`fallocate --keep-size` 补足 backing file 的洞；它不格式化、不删除、不重建
+文件系统，并在重新挂载前核对 XFS UUID 和运行 `xfs_repair -n`。检测到任何
+用户 Workspace/Asset/runtime 内容、活动 Sandbox、运行中的 sandboxd、额外
+loop 关联或后续阶段凭据时都会失败关闭。
+
 宿主硬上限只能在全部基础设施门禁通过后，由 root 修改 Nanobot Runtime 环境：
 
 ~~~text

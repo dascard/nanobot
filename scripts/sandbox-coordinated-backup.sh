@@ -173,6 +173,9 @@ case "${backup_mode}" in
     [[ "$(stat -c '%s' "${local_same_disk_image}")" \
         == "${local_same_disk_image_bytes}" ]] \
       || die "local_same_disk loopback 镜像必须为 16 GiB"
+    "${script_dir}/check-loopback-image-allocation.sh" \
+      "${local_same_disk_image}" "${local_same_disk_image_bytes}" \
+      || die "local_same_disk loopback 镜像未真实预分配"
     ;;
 esac
 
