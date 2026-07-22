@@ -63,6 +63,8 @@ def _config(tmp_path):
 
 
 def test_docker_backend_builds_only_fixed_security_parameters(tmp_path):
+    from docker.models.containers import _create_container_args
+
     config = _config(tmp_path)
     backend = LocalDockerBackend(config, docker_client=_DockerClient())
     backend.workspace_files.layout.ensure_workspace(WORKSPACE_ID)
@@ -93,6 +95,7 @@ def test_docker_backend_builds_only_fixed_security_parameters(tmp_path):
     assert kwargs["mem_limit"] == 512 * 1024 * 1024
     assert kwargs["memswap_limit"] == 512 * 1024 * 1024
     assert kwargs["nano_cpus"] == 1_000_000_000
+    assert "stop_timeout" not in kwargs
     assert set(mount["bind"] for mount in kwargs["volumes"].values()) == {
         "/workspace",
         "/inputs",
@@ -106,6 +109,7 @@ def test_docker_backend_builds_only_fixed_security_parameters(tmp_path):
         RUN_LABEL: "sbxrun_test1",
     }
     assert runtime.exists()
+    _create_container_args({"version": "1.45", **kwargs})
 
 
 def test_ready_requires_exact_loaded_apparmor_profile(tmp_path, monkeypatch):

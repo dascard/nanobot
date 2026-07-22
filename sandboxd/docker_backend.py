@@ -331,7 +331,6 @@ class LocalDockerBackend:
                 "type": "local",
                 "config": {"max-size": "1m", "max-file": "1"},
             },
-            "stop_timeout": 2,
         }
         if self.config.io_device_path:
             kwargs["device_write_bps"] = [{
