@@ -13,6 +13,7 @@ profile nanobot-sandbox flags=(attach_disconnected,mediate_deleted) {
   /bin/** ixr,
   /usr/bin/** ixr,
   /usr/local/bin/python* ixr,
+  /usr/local/lib/libpython3.11.so.1.0 mr,
   /usr/local/lib/python3.11/** mr,
   /lib/** mr,
   /usr/lib/** mr,

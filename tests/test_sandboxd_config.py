@@ -62,3 +62,10 @@ def test_compose_only_mounts_sandboxd_socket_into_server():
     assert "/var/run/docker.sock" not in compose
     assert "/srv/nanobot" not in compose
     assert "/run/nanobot-sandboxd" not in workers
+
+
+def test_sandbox_apparmor_allows_pinned_python_runtime_and_denies_network():
+    profile = Path("deploy/apparmor/nanobot-sandbox").read_text()
+
+    assert "/usr/local/lib/libpython3.11.so.1.0 mr," in profile
+    assert "deny network," in profile

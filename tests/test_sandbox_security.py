@@ -239,14 +239,25 @@ test ! -e /var/run/docker.sock
 test ! -e /srv/nanobot
 python - <<'PY'
 import socket
-s = socket.socket()
-s.settimeout(0.2)
-assert s.connect_ex(("1.1.1.1", 53)) != 0
+try:
+    with socket.socket() as s:
+        s.settimeout(0.2)
+        assert s.connect_ex(("1.1.1.1", 53)) != 0
+except PermissionError:
+    print("NETWORK_DENIED_BY_POLICY")
+else:
+    print("NETWORK_UNREACHABLE")
 print("BASELINE_OK")
 PY
 """,
         )
-        assert baseline["data"]["termination_reason"] == "completed"
+        baseline_data = baseline["data"]
+        assert baseline_data["termination_reason"] == "completed", {
+            "exit_code": baseline_data.get("exit_code"),
+            "termination_reason": baseline_data.get("termination_reason"),
+            "stdout": baseline_data.get("stdout"),
+            "stderr": baseline_data.get("stderr"),
+        }
         assert "BASELINE_OK" in baseline["data"]["stdout"]
         assert recording_client.snapshots
         _assert_inspect_security(recording_client.snapshots[0])
