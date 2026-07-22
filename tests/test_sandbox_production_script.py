@@ -350,6 +350,20 @@ def test_control_plane_activates_new_release_only_after_preparation():
     assert "control-plane-rollback" in install_body
 
 
+def test_release_tree_normalizes_quota_helper_permissions():
+    source = SCRIPT.read_text(encoding="utf-8")
+    body = source.split("install_release_tree() {", 1)[1].split(
+        "\nactivate_release_tree() {",
+        1,
+    )[0]
+
+    assert '[[ -f "${quota_helper}" && ! -L "${quota_helper}" ]]' in body
+    assert 'chown root:root "${quota_helper}"' in body
+    assert 'chmod 0755 "${quota_helper}"' in body
+    assert 'stat -c \'%u:%g:%a\' "${quota_helper}"' in body
+    assert '== "0:0:755"' in body
+
+
 def test_deploy_migrates_runtime_identity_only_after_backup():
     source = SCRIPT.read_text(encoding="utf-8")
     deploy_body = source.split("deploy_command() {", 1)[1].split(

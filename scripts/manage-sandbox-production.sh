@@ -1774,6 +1774,7 @@ smoke_command() {
 
 install_release_tree() {
   local partial_dir
+  local quota_helper
   install -d -m 0755 /opt/nanobot-releases
   if [[ ! -e "${RELEASE_DIR}" ]]; then
     partial_dir="$(mktemp -d /opt/nanobot-releases/.nanobot-release.XXXXXX)"
@@ -1794,6 +1795,14 @@ install_release_tree() {
       && -f "${RELEASE_DIR}/requirements-sandboxd.lock" \
       && ! -L "${RELEASE_DIR}/requirements-sandboxd.lock" ]] \
     || die "发布树内容不完整：${RELEASE_DIR}"
+
+  quota_helper="${RELEASE_DIR}/scripts/assign-sandbox-project-quota.sh"
+  [[ -f "${quota_helper}" && ! -L "${quota_helper}" ]] \
+    || die "Workspace project quota helper 不是受管普通文件"
+  chown root:root "${quota_helper}"
+  chmod 0755 "${quota_helper}"
+  [[ "$(stat -c '%u:%g:%a' "${quota_helper}")" == "0:0:755" ]] \
+    || die "Workspace project quota helper 权限不安全"
 
   if [[ -e "${SERVER_RELEASE_LINK}" \
       && ! -L "${SERVER_RELEASE_LINK}" ]]; then
