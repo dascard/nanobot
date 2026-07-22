@@ -16,11 +16,13 @@ services:
         GIT_COMMIT_DATE: ${GIT_COMMIT_DATE:-}
         GIT_DIRTY: ${GIT_DIRTY:-null}
     container_name: nanobot-server
+    user: "${NANOBOT_RUNTIME_UID:-10001}:${NANOBOT_RUNTIME_GID:-10001}"
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
+      HOME: /home/nanobot
       NANOBOT_PUSH_TOKEN: ""
       NANOBOT_SESSION_SUMMARY_WORKER_MODE: external
       NANOBOT_SANDBOXD_SOCKET: /run/nanobot-sandboxd/sandboxd.sock
@@ -46,6 +48,7 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
       - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
+      - /home/nanobot/.kohakuterrarium:size=64m,mode=0700,uid=${NANOBOT_RUNTIME_UID:-10001},gid=${NANOBOT_RUNTIME_GID:-10001},nosuid,nodev,noexec
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8000/api/v1/ready"]
       interval: 10s
@@ -58,8 +61,10 @@ services:
   session-summary-worker:
     image: ${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}
     container_name: nanobot-session-summary-worker
+    user: "${NANOBOT_RUNTIME_UID:-10001}:${NANOBOT_RUNTIME_GID:-10001}"
     command: python -m workers.session_summary_worker --loop --interval 10
     environment:
+      HOME: /home/nanobot
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./data/nanobot.db}
       LOG_DIR: ${LOG_DIR:-./data}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -91,6 +96,7 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
       - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
+      - /home/nanobot/.kohakuterrarium:size=64m,mode=0700,uid=${NANOBOT_RUNTIME_UID:-10001},gid=${NANOBOT_RUNTIME_GID:-10001},nosuid,nodev,noexec
     healthcheck:
       test: ["CMD", "python", "-m", "core.runtime_health"]
       interval: 30s
@@ -103,8 +109,10 @@ services:
   outbound-delivery-worker:
     image: ${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}
     container_name: nanobot-outbound-delivery-worker
+    user: "${NANOBOT_RUNTIME_UID:-10001}:${NANOBOT_RUNTIME_GID:-10001}"
     command: python -m workers.outbound_delivery_worker --loop
     environment:
+      HOME: /home/nanobot
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./data/nanobot.db}
       LOG_DIR: ${LOG_DIR:-./data}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -135,6 +143,7 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
       - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
+      - /home/nanobot/.kohakuterrarium:size=64m,mode=0700,uid=${NANOBOT_RUNTIME_UID:-10001},gid=${NANOBOT_RUNTIME_GID:-10001},nosuid,nodev,noexec
     healthcheck:
       test: ["CMD", "python", "-m", "core.runtime_health"]
       interval: 30s
@@ -148,8 +157,10 @@ services:
   semantic-index-worker:
     image: ${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}
     container_name: nanobot-semantic-index-worker
+    user: "${NANOBOT_RUNTIME_UID:-10001}:${NANOBOT_RUNTIME_GID:-10001}"
     command: python -m workers.semantic_index_worker --loop --interval 10 --owner semantic-index-worker
     environment:
+      HOME: /home/nanobot
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./data/nanobot.db}
       LOG_DIR: ${LOG_DIR:-./data}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -174,6 +185,7 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
       - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
+      - /home/nanobot/.kohakuterrarium:size=64m,mode=0700,uid=${NANOBOT_RUNTIME_UID:-10001},gid=${NANOBOT_RUNTIME_GID:-10001},nosuid,nodev,noexec
     healthcheck:
       test: ["CMD", "python", "-m", "core.runtime_health"]
       interval: 30s

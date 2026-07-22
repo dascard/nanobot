@@ -292,6 +292,28 @@ def test_compose_services_apply_runtime_hardening_and_resource_limits():
         assert "healthcheck:" in block
 
 
+def test_compose_services_give_kt_a_bounded_ephemeral_home():
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    kt_home_tmpfs = (
+        "/home/nanobot/.kohakuterrarium:size=64m,mode=0700,"
+        "uid=${NANOBOT_RUNTIME_UID:-10001},"
+        "gid=${NANOBOT_RUNTIME_GID:-10001},nosuid,nodev,noexec"
+    )
+
+    for service_name in (
+        "nanobot-server",
+        "session-summary-worker",
+        "outbound-delivery-worker",
+        "semantic-index-worker",
+    ):
+        block = _service_block(compose, service_name)
+        assert (
+            'user: "${NANOBOT_RUNTIME_UID:-10001}:'
+            '${NANOBOT_RUNTIME_GID:-10001}"'
+        ) in block
+        assert kt_home_tmpfs in block
+
+
 def test_compose_workers_wait_for_server_readiness():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     server = _service_block(compose, "nanobot-server")
@@ -314,6 +336,18 @@ def test_runtime_image_uses_non_root_user():
     assert "ARG NANOBOT_UID=10001" in dockerfile
     assert "ARG NANOBOT_GID=10001" in dockerfile
     assert "USER nanobot:nanobot" in dockerfile
+
+
+def test_runtime_image_labels_the_exact_source_revision():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert 'LABEL org.opencontainers.image.revision="${GIT_FULL_COMMIT}"' in dockerfile
+
+
+def test_runtime_directory_preparer_is_executable():
+    script = Path("scripts/prepare-runtime-directories.sh")
+
+    assert os.access(script, os.X_OK)
 
 
 def test_runtime_mutable_paths_stay_under_data_or_temp(monkeypatch, tmp_path):
@@ -343,6 +377,163 @@ def test_production_deploy_requires_digest_and_never_builds_in_place():
     assert "prune" not in script
 
 
+def test_local_build_rolls_back_when_compose_recreate_fails(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    call_log = tmp_path / "docker.calls"
+    up_state = tmp_path / "compose-up.count"
+
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        """#!/usr/bin/env bash
+case "${1:-}" in
+  rev-parse)
+    if [[ "${2:-}" == "--short" ]]; then
+      printf 'abc1234\n'
+    elif [[ "${2:-}" == "--abbrev-ref" ]]; then
+      printf 'candidate\n'
+    else
+      printf '%040d\n' 1
+    fi
+    ;;
+  log) printf '2026-07-23T00:00:00+08:00\n' ;;
+  status) : ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG}"
+if [[ "${1:-} ${2:-}" == "image inspect" ]]; then
+  case "${3:-}" in
+    nanobot-runtime:latest) printf 'sha256:old-runtime\n' ;;
+    nanobot-runtime:rollback) printf 'sha256:older-runtime\n' ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+if [[ "${1:-} ${2:-}" == "image tag" ]]; then
+  exit 0
+fi
+if [[ "${1:-} ${2:-}" == "image rm" ]]; then
+  exit 0
+fi
+if [[ "${1:-} ${2:-}" == "compose build" ]]; then
+  exit 0
+fi
+if [[ "${1:-} ${2:-}" == "compose up" ]]; then
+  count=0
+  [[ ! -f "${FAKE_DOCKER_STATE}" ]] || count="$(cat "${FAKE_DOCKER_STATE}")"
+  count=$((count + 1))
+  printf '%s\n' "${count}" >"${FAKE_DOCKER_STATE}"
+  [[ "${count}" -gt 1 ]] || exit 42
+  exit 0
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_curl.chmod(0o755)
+
+    result = subprocess.run(
+        ["scripts/docker-build.sh", "nanobot-server"],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "FAKE_DOCKER_LOG": str(call_log),
+            "FAKE_DOCKER_STATE": str(up_state),
+            "HOME": str(tmp_path),
+            "LANG": "C.UTF-8",
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+            "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        },
+    )
+
+    assert result.returncode == 42
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    assert calls == [
+        "image inspect nanobot-runtime:latest --format {{.Id}}",
+        "image inspect nanobot-runtime:rollback --format {{.Id}}",
+        "image tag sha256:old-runtime nanobot-runtime:predeploy",
+        "image tag sha256:old-runtime nanobot-runtime:rollback",
+        "compose build nanobot-server",
+        "compose up -d --force-recreate nanobot-server",
+        "image tag nanobot-runtime:predeploy nanobot-runtime:latest",
+        "compose up -d --force-recreate nanobot-server",
+        "image tag sha256:old-runtime nanobot-runtime:rollback",
+        "image rm nanobot-runtime:predeploy",
+    ]
+    assert "已恢复部署前 Runtime" in result.stderr
+
+
+def test_local_build_preserves_current_runtime_when_build_fails(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    call_log = tmp_path / "docker.calls"
+
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG}"
+if [[ "${1:-} ${2:-}" == "image inspect" ]]; then
+  case "${3:-}" in
+    nanobot-runtime:latest) printf 'sha256:old-runtime\n' ;;
+    nanobot-runtime:rollback) printf 'sha256:older-runtime\n' ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+if [[ "${1:-} ${2:-}" == "image tag" ]]; then
+  exit 0
+fi
+if [[ "${1:-} ${2:-}" == "image rm" ]]; then
+  exit 0
+fi
+if [[ "${1:-} ${2:-}" == "compose build" ]]; then
+  exit 37
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    result = subprocess.run(
+        ["scripts/docker-build.sh", "nanobot-server"],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "FAKE_DOCKER_LOG": str(call_log),
+            "HOME": str(tmp_path),
+            "LANG": "C.UTF-8",
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+            "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        },
+    )
+
+    assert result.returncode == 37
+    assert call_log.read_text(encoding="utf-8").splitlines() == [
+        "image inspect nanobot-runtime:latest --format {{.Id}}",
+        "image inspect nanobot-runtime:rollback --format {{.Id}}",
+        "image tag sha256:old-runtime nanobot-runtime:predeploy",
+        "image tag sha256:old-runtime nanobot-runtime:rollback",
+        "compose build nanobot-server",
+        "image rm nanobot-runtime:predeploy",
+    ]
+
+
 def test_quality_gate_runs_full_backend_frontend_and_architecture_checks():
     workflow = Path(".github/workflows/quality-gate.yml").read_text(
         encoding="utf-8"
@@ -367,6 +558,7 @@ def test_compose_workers_use_explicit_minimal_environment_allowlists():
     outbound_worker = _service_block(compose, "outbound-delivery-worker")
     expected = {
         "session-summary-worker": {
+            "HOME",
             "DATABASE_URL",
             "LOG_DIR",
             "LOG_LEVEL",
@@ -381,6 +573,7 @@ def test_compose_workers_use_explicit_minimal_environment_allowlists():
             "NANOBOT_PROMPT_RUNTIME_DIR",
         },
         "semantic-index-worker": {
+            "HOME",
             "DATABASE_URL",
             "LOG_DIR",
             "LOG_LEVEL",
@@ -388,6 +581,7 @@ def test_compose_workers_use_explicit_minimal_environment_allowlists():
             "RAG_EMBEDDING_PROVIDER",
         },
         "outbound-delivery-worker": {
+            "HOME",
             "DATABASE_URL",
             "LOG_DIR",
             "LOG_LEVEL",

@@ -32,6 +32,8 @@ readonly LOOPBACK_IMAGE="${LOOPBACK_STORAGE_DIR}/data.xfs"
 readonly XFS_LABEL="nanobot-sbx"
 readonly LOCAL_SAME_DISK_RISK_MARKER="single_disk_logical_rollback_only"
 readonly BACKUP_MAX_BYTES_FIXED="17179869184"
+readonly RUNTIME_UID="10001"
+readonly RUNTIME_GID="10001"
 # 旧 /etc/nanobot/sandbox-projects.tsv 仅可由显式迁移工具读取；本脚本不再写入。
 
 readonly -a FIXED_SERVICES=(
@@ -47,6 +49,7 @@ readonly -a FIXED_CONTAINERS=(
   nanobot-semantic-index-worker
 )
 CURRENT_COMMAND="${1:-help}"
+ACTIVATED_FROM_RELEASE=""
 
 on_error() {
   local exit_code="$1"
@@ -131,6 +134,8 @@ update-release 参数：
   [--version <镜像版本>]
   [--reuse-built-image]     镜像输入未变化时复用已构建镜像
   [--rerun-smoke]           配合复用镜像归档旧 Smoke 凭据并强制重新验证
+  [--recover-failed-deploy] 仅在控制面就绪但 Runtime 未部署时，归档旧控制面凭据
+                            必须同时使用 --reuse-built-image --rerun-smoke
 
 promote-release 参数：
   不接受参数。仅在 runtime-deployed 完成且相同提交已进入 origin/master 后，
@@ -593,9 +598,11 @@ update_release_command() {
   local new_version=""
   local reuse_built_image=false
   local rerun_smoke=false
+  local recover_failed_deploy=false
   local smoke_stage_present=false
+  local control_plane_stage_present=false
   local archived_smoke_stage=""
-  local stage=""
+  local archived_control_plane_stage=""
 
   shift
   while (( $# )); do
@@ -623,6 +630,10 @@ update_release_command() {
         rerun_smoke=true
         shift
         ;;
+      --recover-failed-deploy)
+        recover_failed_deploy=true
+        shift
+        ;;
       -h|--help)
         usage
         return 0
@@ -646,14 +657,25 @@ update_release_command() {
       && "${reuse_built_image}" != "true" ]]; then
     die "--rerun-smoke 只能与 --reuse-built-image 同时使用"
   fi
+  if [[ "${recover_failed_deploy}" == "true" \
+      && ( "${reuse_built_image}" != "true" \
+        || "${rerun_smoke}" != "true" ) ]]; then
+    die "--recover-failed-deploy 必须同时使用 --reuse-built-image --rerun-smoke"
+  fi
 
   if [[ "${reuse_built_image}" == "true" ]]; then
     require_stage image-built
-    for stage in control-plane-ready runtime-deployed; do
-      if stage_exists "${stage}"; then
-        die "已存在后续阶段凭据 ${stage}，拒绝复用已构建镜像更新 RELEASE"
-      fi
-    done
+    if stage_exists runtime-deployed; then
+      die "已存在后续阶段凭据 runtime-deployed，拒绝复用已构建镜像更新 RELEASE"
+    fi
+    if stage_exists control-plane-ready; then
+      [[ "${recover_failed_deploy}" == "true" ]] \
+        || die "已存在后续阶段凭据 control-plane-ready，拒绝复用已构建镜像更新 RELEASE"
+      assert_control_plane_current
+      control_plane_stage_present=true
+    elif [[ "${recover_failed_deploy}" == "true" ]]; then
+      die "--recover-failed-deploy 要求存在 control-plane-ready 且不存在 runtime-deployed"
+    fi
     if stage_exists smoke-passed; then
       [[ "${rerun_smoke}" == "true" ]] \
         || die "已存在后续阶段凭据 smoke-passed；如需更新 RELEASE，必须显式增加 --rerun-smoke 并重新验证"
@@ -679,7 +701,18 @@ update_release_command() {
     [[ ! -e "${archived_smoke_stage}" \
         && ! -L "${archived_smoke_stage}" ]] \
       || die "旧 Smoke 阶段凭据归档目标已存在：${archived_smoke_stage}"
+  fi
+  if [[ "${control_plane_stage_present}" == "true" ]]; then
+    archived_control_plane_stage="${STATE_DIR}/control-plane-ready.superseded-${previous_release}-by-${new_release}"
+    [[ ! -e "${archived_control_plane_stage}" \
+        && ! -L "${archived_control_plane_stage}" ]] \
+      || die "旧控制面阶段凭据归档目标已存在：${archived_control_plane_stage}"
+  fi
+  if [[ -n "${archived_smoke_stage}" ]]; then
     mv -- "${STATE_DIR}/smoke-passed" "${archived_smoke_stage}"
+  fi
+  if [[ -n "${archived_control_plane_stage}" ]]; then
+    mv -- "${STATE_DIR}/control-plane-ready" "${archived_control_plane_stage}"
   fi
 
   RELEASE="${new_release}"
@@ -700,6 +733,10 @@ update_release_command() {
   if [[ -n "${archived_smoke_stage}" ]]; then
     log "旧 Smoke 阶段凭据已归档：${archived_smoke_stage}"
     log "新 RELEASE 必须重新运行真实 Docker Smoke"
+  fi
+  if [[ -n "${archived_control_plane_stage}" ]]; then
+    log "旧控制面阶段凭据已归档：${archived_control_plane_stage}"
+    log "新 RELEASE 必须重新安装并验收 sandboxd 控制面"
   fi
   printf 'PREVIOUS_RELEASE=%s\n' "${previous_release}"
   printf 'PREVIOUS_VERSION=%s\n' "${previous_version}"
@@ -1728,6 +1765,8 @@ activate_release_tree() {
   local link_parent
   local temporary_dir
 
+  ACTIVATED_FROM_RELEASE=""
+
   releases_root="$(dirname "${RELEASE_DIR}")"
   if [[ -L "${SERVER_RELEASE_LINK}" ]]; then
     current_target="$(readlink -f -- "${SERVER_RELEASE_LINK}" 2>/dev/null)" \
@@ -1752,6 +1791,7 @@ activate_release_tree() {
       || die "当前发布提交不在生产仓库中：${current_release}"
     repo_git merge-base --is-ancestor "${current_release}" "${RELEASE}" \
       || die "控制面发布树只允许快进切换"
+    ACTIVATED_FROM_RELEASE="${current_release}"
   elif [[ -e "${SERVER_RELEASE_LINK}" ]]; then
     die "${SERVER_RELEASE_LINK} 已存在且不是预期符号链接"
   fi
@@ -1965,6 +2005,10 @@ install_control_plane_command() {
   fi
   log "原子切换 sandboxd 只读发布树"
   activate_release_tree
+  if [[ -n "${ACTIVATED_FROM_RELEASE}" ]]; then
+    mark_stage control-plane-rollback \
+      "release=${ACTIVATED_FROM_RELEASE}"
+  fi
   systemctl enable nanobot-sandboxd.service
   systemctl restart nanobot-sandboxd.service
   systemctl is-active --quiet nanobot-sandboxd.service \
@@ -2016,6 +2060,8 @@ configure_application_env_off() {
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_EXEC_ENABLED false
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_GROUP_ENABLED false
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED false
+  upsert_env_value "${env_file}" NANOBOT_RUNTIME_UID "${RUNTIME_UID}"
+  upsert_env_value "${env_file}" NANOBOT_RUNTIME_GID "${RUNTIME_GID}"
   upsert_env_value "${env_file}" NANOBOT_SANDBOXD_GID "${SANDBOXD_GID}"
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_WORKSPACE_QUOTA_BYTES "${WORKSPACE_QUOTA_BYTES}"
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_ASSET_MAX_BYTES "${ASSET_MAX_BYTES}"
@@ -2103,6 +2149,24 @@ coordinated_backup() {
     die "协调备份失败"
   fi
   restart_fixed_containers
+}
+
+prepare_runtime_bind_mounts() {
+  log "停止 4 个固定 Nanobot 服务以迁移非 root Runtime 权限"
+  (cd "${REPO_ROOT}" && docker compose stop "${FIXED_SERVICES[@]}")
+  if ! env \
+    NANOBOT_RUNTIME_UID="${RUNTIME_UID}" \
+    NANOBOT_RUNTIME_GID="${RUNTIME_GID}" \
+    "${REPO_ROOT}/scripts/prepare-runtime-directories.sh" --fix-existing; then
+    warn "Runtime bind mount 权限迁移失败，正在恢复原固定容器"
+    restart_fixed_containers
+    die "Runtime bind mount 权限迁移失败"
+  fi
+  log "按部署账号 UID/GID 重建并恢复原固定服务"
+  (cd "${REPO_ROOT}" \
+    && docker compose up -d --force-recreate "${FIXED_SERVICES[@]}") \
+    || die "按新 Runtime UID/GID 恢复原固定服务失败"
+  wait_server_health || die "按新 Runtime UID/GID 恢复原固定服务后健康检查失败"
 }
 
 capture_nonfixed_containers() {
@@ -2223,6 +2287,99 @@ force_feature_flags_off() {
     || die "Sandbox 开关关闭或 sandboxd ready 状态不符合预期"
 }
 
+rollback_runtime_after_deploy_failure() {
+  local rollback_id
+  local current_id
+  rollback_id="$(docker image inspect nanobot-runtime:rollback \
+    --format '{{.Id}}' 2>/dev/null || true)"
+  [[ -n "${rollback_id}" ]] || {
+    warn "不存在 nanobot-runtime:rollback，无法自动恢复前一 Runtime"
+    return 1
+  }
+  current_id="$(docker image inspect nanobot-runtime:latest \
+    --format '{{.Id}}' 2>/dev/null || true)"
+  if [[ "${current_id}" == "${rollback_id}" ]] && wait_server_health; then
+    log "前一 Runtime 已由构建脚本恢复：${rollback_id}"
+    return 0
+  fi
+
+  log "恢复前一 Runtime 镜像与 4 个固定服务"
+  run_as_deploy docker image tag nanobot-runtime:rollback nanobot-runtime:latest
+  (cd "${REPO_ROOT}" \
+    && run_as_deploy docker compose up -d --force-recreate "${FIXED_SERVICES[@]}")
+  wait_server_health || {
+    warn "前一 Runtime 容器已恢复，但健康检查未通过"
+    return 1
+  }
+  log "前一 Runtime 恢复完成：${rollback_id}"
+}
+
+rollback_control_plane_after_deploy_failure() {
+  stage_exists control-plane-rollback || {
+    warn "不存在控制面回滚凭据，保留当前健康的 sandboxd"
+    return 1
+  }
+  local marker
+  local previous_release
+  local previous_dir
+  local link_parent
+  local temporary_dir
+  local archived_stage
+  marker="$(read_stage control-plane-rollback)"
+  previous_release="${marker#release=}"
+  [[ "${marker}" == "release=${previous_release}" \
+      && "${previous_release}" =~ ^[0-9a-f]{40}$ ]] || {
+    warn "控制面回滚凭据格式无效"
+    return 1
+  }
+  previous_dir="$(dirname "${RELEASE_DIR}")/${previous_release}"
+  [[ -d "${previous_dir}" && ! -L "${previous_dir}" \
+      && -f "${previous_dir}/.nanobot-release" \
+      && ! -L "${previous_dir}/.nanobot-release" \
+      && "$(cat "${previous_dir}/.nanobot-release")" == "${previous_release}" ]] \
+    || {
+      warn "控制面回滚发布树无效：${previous_dir}"
+      return 1
+    }
+  if docker ps \
+    --filter 'label=com.nanobot.sandbox=true' \
+    --filter 'label=com.nanobot.managed-by=sandboxd' \
+    --format '{{.Names}}' | grep -q .; then
+    warn "仍有活动 Sandbox 容器，拒绝回滚 sandboxd"
+    return 1
+  fi
+
+  log "回滚 sandboxd 只读发布树：${previous_release}"
+  link_parent="$(dirname "${SERVER_RELEASE_LINK}")"
+  temporary_dir="$(mktemp -d "${link_parent}/.nanobot-server-rollback.XXXXXX")"
+  ln -s -- "${previous_dir}" "${temporary_dir}/nanobot-server"
+  mv -Tf -- "${temporary_dir}/nanobot-server" "${SERVER_RELEASE_LINK}"
+  rmdir -- "${temporary_dir}"
+  systemctl restart nanobot-sandboxd.service
+  systemctl is-active --quiet nanobot-sandboxd.service || {
+    warn "sandboxd 回滚后未运行"
+    return 1
+  }
+  probe_sandboxd || {
+    warn "sandboxd 回滚后 health/ready 未通过"
+    return 1
+  }
+  if stage_exists control-plane-ready; then
+    archived_stage="${STATE_DIR}/control-plane-ready.failed-$(date -u +%Y%m%dT%H%M%SZ)"
+    mv -- "${STATE_DIR}/control-plane-ready" "${archived_stage}"
+  fi
+  log "sandboxd 已回滚：${previous_release}"
+}
+
+rollback_failed_deploy() {
+  (force_feature_flags_off) >/dev/null 2>&1 \
+    || warn "无法通过管理 API 二次确认 Sandbox 开关；.env 硬配置仍为 false"
+  rollback_runtime_after_deploy_failure \
+    || warn "Runtime 自动回滚未完成，需按回滚手册人工处置"
+  rollback_control_plane_after_deploy_failure \
+    || warn "sandboxd 自动回滚未执行或未完成"
+}
+
 deploy_command() {
   require_no_extra_args "$@"
   require_root
@@ -2249,26 +2406,38 @@ deploy_command() {
   log "执行协调备份"
   coordinated_backup
 
+  prepare_runtime_bind_mounts
+
   log "构建并重建 4 个 Nanobot 服务"
-  run_as_deploy env \
-    -u http_proxy -u https_proxy \
-    -u HTTP_PROXY -u HTTPS_PROXY \
-    -u all_proxy -u ALL_PROXY \
-    "${REPO_ROOT}/scripts/docker-build.sh" "${FIXED_SERVICES[@]}"
+  if ! run_as_deploy env \
+      -u http_proxy -u https_proxy \
+      -u HTTP_PROXY -u HTTPS_PROXY \
+      -u all_proxy -u ALL_PROXY \
+      "${REPO_ROOT}/scripts/docker-build.sh" \
+      --build-arg "NANOBOT_UID=${RUNTIME_UID}" \
+      --build-arg "NANOBOT_GID=${RUNTIME_GID}" \
+      "${FIXED_SERVICES[@]}"; then
+    rollback_failed_deploy
+    die "新版 Nanobot Runtime 构建或启动失败，已执行受控回滚"
+  fi
 
-  wait_server_health || die "新版 Nanobot Runtime 健康检查失败"
-  [[ "$(docker image inspect nanobot-runtime:latest \
-      --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
-      == "${RELEASE}" ]] \
-    || die "运行镜像提交哈希不正确"
-  docker exec nanobot-server python -c \
-    'import core.sandbox, sandboxd; print("SANDBOX_CODE=OK")'
+  if ! (
+    wait_server_health || die "新版 Nanobot Runtime 健康检查失败"
+    [[ "$(docker image inspect nanobot-runtime:latest \
+        --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
+        == "${RELEASE}" ]] \
+      || die "运行镜像提交哈希不正确"
+    docker exec nanobot-server python -c \
+      'import core.sandbox, sandboxd; print("SANDBOX_CODE=OK")'
 
-  validate_runtime_mount_boundaries
-  force_feature_flags_off
-  capture_nonfixed_containers "${post_file}"
-  if ! diff -u "${pre_file}" "${post_file}"; then
-    die "非 Nanobot 固定容器清单发生变化"
+    validate_runtime_mount_boundaries
+    force_feature_flags_off
+    capture_nonfixed_containers "${post_file}"
+    diff -u "${pre_file}" "${post_file}" \
+      || die "非 Nanobot 固定容器清单发生变化"
+  ); then
+    rollback_failed_deploy
+    die "新版 Nanobot Runtime 部署后门禁失败，已执行受控回滚"
   fi
 
   mark_stage runtime-deployed "release=${RELEASE}|flags=off"

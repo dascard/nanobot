@@ -45,6 +45,7 @@ load_config() {{ :; }}
 require_stage() {{ stage_exists "$1" || die "missing stage: $1"; }}
 stage_exists() {{ [[ -f "${{STATE_DIR}}/$1" && ! -L "${{STATE_DIR}}/$1" ]]; }}
 assert_smoke_current() {{ printf 'checked\n' >"${{SMOKE_CHECK}}"; }}
+assert_control_plane_current() {{ printf 'CONTROL_PLANE_CHECKED\n'; }}
 assert_no_advanced_stages() {{ die "unexpected non-reuse path"; }}
 image_id_from_stage() {{ printf 'sha256:%064d\n' 0; }}
 validate_config_values() {{ :; }}
@@ -343,6 +344,45 @@ def test_control_plane_activates_new_release_only_after_preparation():
     assert install_body.index("activate_release_tree") < install_body.index(
         "systemctl restart nanobot-sandboxd.service"
     )
+    assert "control-plane-rollback" in install_body
+
+
+def test_deploy_migrates_runtime_identity_only_after_backup():
+    source = SCRIPT.read_text(encoding="utf-8")
+    deploy_body = source.split("deploy_command() {", 1)[1].split(
+        "\nkill_switch_command() {",
+        1,
+    )[0]
+    prepare_body = source.split("prepare_runtime_bind_mounts() {", 1)[1].split(
+        "\ncapture_nonfixed_containers() {",
+        1,
+    )[0]
+
+    assert deploy_body.index("coordinated_backup") < deploy_body.index(
+        "prepare_runtime_bind_mounts"
+    )
+    assert deploy_body.index("prepare_runtime_bind_mounts") < deploy_body.index(
+        '"${REPO_ROOT}/scripts/docker-build.sh"'
+    )
+    assert 'readonly RUNTIME_UID="10001"' in source
+    assert 'readonly RUNTIME_GID="10001"' in source
+    assert 'NANOBOT_RUNTIME_UID="${RUNTIME_UID}"' in prepare_body
+    assert 'NANOBOT_RUNTIME_GID="${RUNTIME_GID}"' in prepare_body
+    assert 'runtime_user="$(deploy_user)"' not in prepare_body
+    assert "--fix-existing" in prepare_body
+    assert "docker compose up -d --force-recreate" in prepare_body
+
+
+def test_deploy_failure_rolls_back_runtime_and_control_plane():
+    source = SCRIPT.read_text(encoding="utf-8")
+    rollback_body = source.split("rollback_failed_deploy() {", 1)[1].split(
+        "\ndeploy_command() {",
+        1,
+    )[0]
+
+    assert "force_feature_flags_off" in rollback_body
+    assert "rollback_runtime_after_deploy_failure" in rollback_body
+    assert "rollback_control_plane_after_deploy_failure" in rollback_body
 
 
 def test_activate_release_tree_atomically_switches_managed_forward_release(tmp_path):
@@ -497,6 +537,75 @@ def test_update_release_rerun_smoke_refuses_completed_control_plane(tmp_path):
     assert result.returncode != 0
     assert "control-plane-ready" in result.stderr
     assert (state_dir / "smoke-passed").read_text(encoding="utf-8") == "smoke\n"
+    assert not config_capture.exists()
+    assert not smoke_check.exists()
+
+
+def test_update_release_recovers_control_plane_ready_before_runtime_deploy(tmp_path):
+    new_release = "2" * 40
+    previous_release = "1" * 40
+    result, state_dir, config_capture, smoke_check = _run_update_release_harness(
+        tmp_path,
+        "--release",
+        new_release,
+        "--reuse-built-image",
+        "--rerun-smoke",
+        "--recover-failed-deploy",
+        advanced_stage="control-plane-ready",
+    )
+
+    archived_smoke = state_dir / (
+        f"smoke-passed.superseded-{previous_release}-by-{new_release}"
+    )
+    archived_control_plane = state_dir / (
+        f"control-plane-ready.superseded-{previous_release}-by-{new_release}"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "CONTROL_PLANE_CHECKED" in result.stdout
+    assert not (state_dir / "smoke-passed").exists()
+    assert not (state_dir / "control-plane-ready").exists()
+    assert archived_smoke.read_text(encoding="utf-8") == "smoke\n"
+    assert archived_control_plane.read_text(encoding="utf-8") == "advanced\n"
+    assert smoke_check.read_text(encoding="utf-8") == "checked\n"
+    assert config_capture.read_text(encoding="utf-8") == (
+        f"{new_release}\norigin/master\nexisting-version\n"
+    )
+
+
+def test_update_release_recovery_refuses_completed_runtime(tmp_path):
+    new_release = "2" * 40
+    result, state_dir, config_capture, smoke_check = _run_update_release_harness(
+        tmp_path,
+        "--release",
+        new_release,
+        "--reuse-built-image",
+        "--rerun-smoke",
+        "--recover-failed-deploy",
+        advanced_stage="runtime-deployed",
+    )
+
+    assert result.returncode != 0
+    assert "runtime-deployed" in result.stderr
+    assert (state_dir / "runtime-deployed").exists()
+    assert (state_dir / "smoke-passed").exists()
+    assert not config_capture.exists()
+    assert not smoke_check.exists()
+
+
+def test_update_release_recovery_requires_control_plane_stage(tmp_path):
+    new_release = "2" * 40
+    result, state_dir, config_capture, smoke_check = _run_update_release_harness(
+        tmp_path,
+        "--release",
+        new_release,
+        "--reuse-built-image",
+        "--rerun-smoke",
+        "--recover-failed-deploy",
+    )
+
+    assert result.returncode != 0
+    assert "要求存在 control-plane-ready" in result.stderr
+    assert (state_dir / "smoke-passed").exists()
     assert not config_capture.exists()
     assert not smoke_check.exists()
 
