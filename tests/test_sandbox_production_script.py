@@ -13,6 +13,7 @@ def _run_update_release_harness(
     tmp_path: Path,
     *arguments: str,
     advanced_stage: str = "",
+    advanced_stages: tuple[str, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
     source = SCRIPT.read_text(encoding="utf-8")
     start = source.index("update_release_command() {")
@@ -23,8 +24,9 @@ def _run_update_release_harness(
     state_dir.mkdir()
     (state_dir / "image-built").write_text("image\n", encoding="utf-8")
     (state_dir / "smoke-passed").write_text("smoke\n", encoding="utf-8")
-    if advanced_stage:
-        (state_dir / advanced_stage).write_text("advanced\n", encoding="utf-8")
+    stages = (*((advanced_stage,) if advanced_stage else ()), *advanced_stages)
+    for stage in stages:
+        (state_dir / stage).write_text("advanced\n", encoding="utf-8")
     config_capture = tmp_path / "config.capture"
     smoke_check = tmp_path / "smoke.checked"
     previous_release = "1" * 40
@@ -46,6 +48,7 @@ require_stage() {{ stage_exists "$1" || die "missing stage: $1"; }}
 stage_exists() {{ [[ -f "${{STATE_DIR}}/$1" && ! -L "${{STATE_DIR}}/$1" ]]; }}
 assert_smoke_current() {{ printf 'checked\n' >"${{SMOKE_CHECK}}"; }}
 assert_control_plane_current() {{ printf 'CONTROL_PLANE_CHECKED\n'; }}
+assert_runtime_current() {{ printf 'RUNTIME_CHECKED\n'; }}
 assert_no_advanced_stages() {{ die "unexpected non-reuse path"; }}
 image_id_from_stage() {{ printf 'sha256:%064d\n' 0; }}
 validate_config_values() {{ :; }}
@@ -368,6 +371,7 @@ def test_deploy_migrates_runtime_identity_only_after_backup():
     assert 'readonly RUNTIME_GID="10001"' in source
     assert 'NANOBOT_RUNTIME_UID="${RUNTIME_UID}"' in prepare_body
     assert 'NANOBOT_RUNTIME_GID="${RUNTIME_GID}"' in prepare_body
+    assert 'NANOBOT_RUNTIME_HOST_READ_GID="${runtime_host_read_gid}"' in prepare_body
     assert 'runtime_user="$(deploy_user)"' not in prepare_body
     assert "--fix-existing" in prepare_body
     assert "docker compose up -d --force-recreate" in prepare_body
@@ -606,6 +610,54 @@ def test_update_release_recovery_requires_control_plane_stage(tmp_path):
     assert result.returncode != 0
     assert "要求存在 control-plane-ready" in result.stderr
     assert (state_dir / "smoke-passed").exists()
+    assert not config_capture.exists()
+    assert not smoke_check.exists()
+
+
+def test_update_release_upgrades_fully_deployed_candidate(tmp_path):
+    new_release = "2" * 40
+    previous_release = "1" * 40
+    result, state_dir, config_capture, smoke_check = _run_update_release_harness(
+        tmp_path,
+        "--release",
+        new_release,
+        "--reuse-built-image",
+        "--rerun-smoke",
+        "--upgrade-deployed-release",
+        advanced_stages=("control-plane-ready", "runtime-deployed"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    for stage in ("smoke-passed", "control-plane-ready", "runtime-deployed"):
+        archived = state_dir / (
+            f"{stage}.superseded-{previous_release}-by-{new_release}"
+        )
+        assert archived.read_text(encoding="utf-8") in {"smoke\n", "advanced\n"}
+        assert not (state_dir / stage).exists()
+    assert "CONTROL_PLANE_CHECKED" in result.stdout
+    assert "RUNTIME_CHECKED" in result.stdout
+    assert smoke_check.read_text(encoding="utf-8") == "checked\n"
+    assert config_capture.read_text(encoding="utf-8") == (
+        f"{new_release}\norigin/master\nexisting-version\n"
+    )
+
+
+def test_update_release_upgrade_requires_runtime_stage(tmp_path):
+    new_release = "2" * 40
+    result, state_dir, config_capture, smoke_check = _run_update_release_harness(
+        tmp_path,
+        "--release",
+        new_release,
+        "--reuse-built-image",
+        "--rerun-smoke",
+        "--upgrade-deployed-release",
+        advanced_stage="control-plane-ready",
+    )
+
+    assert result.returncode != 0
+    assert "要求存在 runtime-deployed" in result.stderr
+    assert (state_dir / "smoke-passed").exists()
+    assert (state_dir / "control-plane-ready").exists()
     assert not config_capture.exists()
     assert not smoke_check.exists()
 

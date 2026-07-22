@@ -350,6 +350,17 @@ def test_runtime_directory_preparer_is_executable():
     assert os.access(script, os.X_OK)
 
 
+def test_runtime_directory_preparer_preserves_host_read_audit_access():
+    script = Path("scripts/prepare-runtime-directories.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "NANOBOT_RUNTIME_HOST_READ_GID" in script
+    assert 'install -d -m 2750 -o "${runtime_uid}"' in script
+    assert "chmod -R g+rX-w,o-rwx data models sentinel" in script
+    assert "-type d -exec chmod g+s" in script
+
+
 def test_runtime_mutable_paths_stay_under_data_or_temp(monkeypatch, tmp_path):
     from core.runtime_paths import RuntimePaths
 

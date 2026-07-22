@@ -136,6 +136,9 @@ update-release 参数：
   [--rerun-smoke]           配合复用镜像归档旧 Smoke 凭据并强制重新验证
   [--recover-failed-deploy] 仅在控制面就绪但 Runtime 未部署时，归档旧控制面凭据
                             必须同时使用 --reuse-built-image --rerun-smoke
+  [--upgrade-deployed-release]
+                            仅在 Runtime 已部署且健康时，归档完整旧阶段凭据
+                            必须同时使用 --reuse-built-image --rerun-smoke
 
 promote-release 参数：
   不接受参数。仅在 runtime-deployed 完成且相同提交已进入 origin/master 后，
@@ -599,10 +602,13 @@ update_release_command() {
   local reuse_built_image=false
   local rerun_smoke=false
   local recover_failed_deploy=false
+  local upgrade_deployed_release=false
   local smoke_stage_present=false
   local control_plane_stage_present=false
+  local runtime_stage_present=false
   local archived_smoke_stage=""
   local archived_control_plane_stage=""
+  local archived_runtime_stage=""
 
   shift
   while (( $# )); do
@@ -634,6 +640,10 @@ update_release_command() {
         recover_failed_deploy=true
         shift
         ;;
+      --upgrade-deployed-release)
+        upgrade_deployed_release=true
+        shift
+        ;;
       -h|--help)
         usage
         return 0
@@ -662,25 +672,45 @@ update_release_command() {
         || "${rerun_smoke}" != "true" ) ]]; then
     die "--recover-failed-deploy 必须同时使用 --reuse-built-image --rerun-smoke"
   fi
+  if [[ "${upgrade_deployed_release}" == "true" \
+      && ( "${reuse_built_image}" != "true" \
+        || "${rerun_smoke}" != "true" ) ]]; then
+    die "--upgrade-deployed-release 必须同时使用 --reuse-built-image --rerun-smoke"
+  fi
+  if [[ "${recover_failed_deploy}" == "true" \
+      && "${upgrade_deployed_release}" == "true" ]]; then
+    die "--recover-failed-deploy 与 --upgrade-deployed-release 不能同时使用"
+  fi
 
   if [[ "${reuse_built_image}" == "true" ]]; then
     require_stage image-built
     if stage_exists runtime-deployed; then
-      die "已存在后续阶段凭据 runtime-deployed，拒绝复用已构建镜像更新 RELEASE"
+      [[ "${upgrade_deployed_release}" == "true" ]] \
+        || die "已存在后续阶段凭据 runtime-deployed，拒绝复用已构建镜像更新 RELEASE"
+      assert_runtime_current
+      runtime_stage_present=true
+    elif [[ "${upgrade_deployed_release}" == "true" ]]; then
+      die "--upgrade-deployed-release 要求存在 runtime-deployed"
     fi
     if stage_exists control-plane-ready; then
-      [[ "${recover_failed_deploy}" == "true" ]] \
+      [[ "${recover_failed_deploy}" == "true" \
+          || "${upgrade_deployed_release}" == "true" ]] \
         || die "已存在后续阶段凭据 control-plane-ready，拒绝复用已构建镜像更新 RELEASE"
       assert_control_plane_current
       control_plane_stage_present=true
     elif [[ "${recover_failed_deploy}" == "true" ]]; then
       die "--recover-failed-deploy 要求存在 control-plane-ready 且不存在 runtime-deployed"
+    elif [[ "${runtime_stage_present}" == "true" ]]; then
+      die "--upgrade-deployed-release 要求存在 control-plane-ready"
     fi
     if stage_exists smoke-passed; then
       [[ "${rerun_smoke}" == "true" ]] \
         || die "已存在后续阶段凭据 smoke-passed；如需更新 RELEASE，必须显式增加 --rerun-smoke 并重新验证"
       assert_smoke_current
       smoke_stage_present="true"
+    elif [[ "${recover_failed_deploy}" == "true" \
+        || "${upgrade_deployed_release}" == "true" ]]; then
+      die "恢复或升级已部署 RELEASE 要求存在 smoke-passed"
     fi
     repo_git merge-base --is-ancestor "${previous_release}" "${new_release}" \
       || die "复用已构建镜像只允许更新到当前 RELEASE 的快进后代"
@@ -708,11 +738,20 @@ update_release_command() {
         && ! -L "${archived_control_plane_stage}" ]] \
       || die "旧控制面阶段凭据归档目标已存在：${archived_control_plane_stage}"
   fi
+  if [[ "${runtime_stage_present}" == "true" ]]; then
+    archived_runtime_stage="${STATE_DIR}/runtime-deployed.superseded-${previous_release}-by-${new_release}"
+    [[ ! -e "${archived_runtime_stage}" \
+        && ! -L "${archived_runtime_stage}" ]] \
+      || die "旧 Runtime 阶段凭据归档目标已存在：${archived_runtime_stage}"
+  fi
   if [[ -n "${archived_smoke_stage}" ]]; then
     mv -- "${STATE_DIR}/smoke-passed" "${archived_smoke_stage}"
   fi
   if [[ -n "${archived_control_plane_stage}" ]]; then
     mv -- "${STATE_DIR}/control-plane-ready" "${archived_control_plane_stage}"
+  fi
+  if [[ -n "${archived_runtime_stage}" ]]; then
+    mv -- "${STATE_DIR}/runtime-deployed" "${archived_runtime_stage}"
   fi
 
   RELEASE="${new_release}"
@@ -737,6 +776,10 @@ update_release_command() {
   if [[ -n "${archived_control_plane_stage}" ]]; then
     log "旧控制面阶段凭据已归档：${archived_control_plane_stage}"
     log "新 RELEASE 必须重新安装并验收 sandboxd 控制面"
+  fi
+  if [[ -n "${archived_runtime_stage}" ]]; then
+    log "旧 Runtime 阶段凭据已归档：${archived_runtime_stage}"
+    log "新 RELEASE 必须重新执行官方 deploy，且 Sandbox 开关继续保持关闭"
   fi
   printf 'PREVIOUS_RELEASE=%s\n' "${previous_release}"
   printf 'PREVIOUS_VERSION=%s\n' "${previous_version}"
@@ -2152,11 +2195,14 @@ coordinated_backup() {
 }
 
 prepare_runtime_bind_mounts() {
+  local runtime_host_read_gid
+  runtime_host_read_gid="$(id -g "$(deploy_user)")"
   log "停止 4 个固定 Nanobot 服务以迁移非 root Runtime 权限"
   (cd "${REPO_ROOT}" && docker compose stop "${FIXED_SERVICES[@]}")
   if ! env \
     NANOBOT_RUNTIME_UID="${RUNTIME_UID}" \
     NANOBOT_RUNTIME_GID="${RUNTIME_GID}" \
+    NANOBOT_RUNTIME_HOST_READ_GID="${runtime_host_read_gid}" \
     "${REPO_ROOT}/scripts/prepare-runtime-directories.sh" --fix-existing; then
     warn "Runtime bind mount 权限迁移失败，正在恢复原固定容器"
     restart_fixed_containers
