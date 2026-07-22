@@ -152,6 +152,7 @@ def _assert_inspect_security(snapshot: dict) -> None:
     config = snapshot.get("Config") or {}
     mounts = snapshot.get("Mounts") or []
     destinations = {str(item.get("Destination") or "") for item in mounts}
+    tmpfs = host.get("Tmpfs") or {}
     security_opt = {str(item) for item in host.get("SecurityOpt") or []}
 
     assert config.get("User") == "10001:10001"
@@ -166,7 +167,8 @@ def _assert_inspect_security(snapshot: dict) -> None:
     assert "no-new-privileges" in security_opt
     assert "apparmor=nanobot-sandbox" in security_opt
     assert snapshot.get("AppArmorProfile") == "nanobot-sandbox"
-    assert destinations == {"/workspace", "/inputs", "/runtime", "/tmp"}
+    assert destinations == {"/workspace", "/inputs", "/runtime"}
+    assert set(tmpfs) == {"/tmp"}
     assert all(item.get("Destination") != "/var/run/docker.sock" for item in mounts)
     assert not host.get("Devices")
     assert not host.get("PortBindings")
@@ -174,8 +176,8 @@ def _assert_inspect_security(snapshot: dict) -> None:
     assert host.get("PidMode") in {"", None}
     assert host.get("IpcMode") == "private"
     assert host.get("UTSMode") in {"", None}
-    assert "size=134217728" in str((host.get("Tmpfs") or {}).get("/tmp"))
-    assert "noexec" in str((host.get("Tmpfs") or {}).get("/tmp"))
+    assert "size=134217728" in str(tmpfs["/tmp"])
+    assert "noexec" in str(tmpfs["/tmp"])
 
 
 def test_real_docker_security_matrix(tmp_path):

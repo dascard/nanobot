@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 
@@ -12,6 +13,7 @@ from sandboxd.docker_backend import (
 )
 from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError
 from sandboxd.output_limiter import OutputLimiter
+from sandboxd.filesystem import WorkspaceFileService
 from sandboxd.reconciler import OrphanReconciler
 
 
@@ -200,3 +202,87 @@ def test_output_limiter_tracks_full_counts_but_returns_bounded_text():
     assert snapshot.stdout_truncated is True
     assert snapshot.stderr_truncated is True
     assert snapshot.hard_limit_exceeded is True
+
+
+def test_execute_attaches_output_before_start_for_fast_container(
+    tmp_path,
+    monkeypatch,
+):
+    events = []
+
+    class FastContainer:
+        def __init__(self, kwargs):
+            self.name = kwargs["name"]
+            self.attrs = {
+                "Config": {"Labels": kwargs["labels"]},
+                "State": {"Running": False, "ExitCode": 0, "OOMKilled": False},
+            }
+            self.started = False
+            self.started_event = threading.Event()
+
+        def reload(self):
+            return None
+
+        def attach(self, **_kwargs):
+            events.append("attach")
+            if self.started:
+                return iter(())
+
+            def stream():
+                assert self.started_event.wait(timeout=2)
+                yield b"fast-output", None
+
+            return stream()
+
+        def start(self):
+            events.append("start")
+            self.started = True
+            self.started_event.set()
+
+        def remove(self, **_kwargs):
+            return None
+
+    class FastContainers:
+        def create(self, **kwargs):
+            return FastContainer(kwargs)
+
+    class FastDockerClient(_DockerClient):
+        def __init__(self):
+            super().__init__(containers=FastContainers())
+
+    class EmptyAssetFiles:
+        def __init__(self):
+            self.root = tmp_path / "inputs"
+            self.root.mkdir()
+
+        def stage_path(self, _workspace_id, _run_id):
+            return self.root
+
+        def cleanup_stage(self, _workspace_id, _run_id):
+            return None
+
+    monkeypatch.setattr(
+        WorkspaceFileService,
+        "_secure_workspace_directory",
+        staticmethod(lambda _path, _uid, _gid: None),
+    )
+    config = _config(tmp_path)
+    workspace_files = WorkspaceFileService(config)
+    workspace_files.layout.ensure_roots()
+    backend = LocalDockerBackend(
+        config,
+        docker_client=FastDockerClient(),
+        workspace_files=workspace_files,
+        asset_files=EmptyAssetFiles(),
+    )
+
+    result = backend.execute(
+        request_id="sbxreq_fast_output",
+        run_id="sbxrun_fast_output",
+        workspace_id=WORKSPACE_ID,
+        command="printf fast-output",
+    )
+
+    assert events[:2] == ["attach", "start"]
+    assert result["data"]["termination_reason"] == "completed"
+    assert result["data"]["stdout"] == "fast-output"

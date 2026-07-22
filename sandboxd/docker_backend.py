@@ -359,15 +359,13 @@ class LocalDockerBackend:
             pass
 
     @staticmethod
-    def _consume_output(container: Any, limiter: OutputLimiter) -> None:
+    def _consume_output(
+        container: Any,
+        stream: Any,
+        limiter: OutputLimiter,
+        failures: list[Exception],
+    ) -> None:
         try:
-            stream = container.attach(
-                stream=True,
-                logs=True,
-                stdout=True,
-                stderr=True,
-                demux=True,
-            )
             for item in stream:
                 if isinstance(item, tuple):
                     stdout, stderr = item
@@ -376,8 +374,8 @@ class LocalDockerBackend:
                 if limiter.feed(stdout, stderr):
                     LocalDockerBackend._safe_kill(container)
                     break
-        except Exception:
-            return
+        except Exception as exc:
+            failures.append(exc)
 
     @staticmethod
     def _stats(container: Any) -> tuple[int, int]:
@@ -522,6 +520,9 @@ class LocalDockerBackend:
                 raise
 
             container = None
+            output_stream = None
+            output_thread = None
+            output_failures: list[Exception] = []
             cancel_event = threading.Event()
             forced_reason = ""
             limiter = OutputLimiter(
@@ -564,6 +565,20 @@ class LocalDockerBackend:
                     running = dict(pending)
                     running.update({"status": "running", "started_at_unix": time.time()})
                     self.run_store.save(running)
+                    output_stream = container.attach(
+                        stream=True,
+                        logs=True,
+                        stdout=True,
+                        stderr=True,
+                        demux=True,
+                    )
+                    output_thread = threading.Thread(
+                        target=self._consume_output,
+                        args=(container, output_stream, limiter, output_failures),
+                        name=f"sandbox-output-{run_id}",
+                        daemon=True,
+                    )
+                    output_thread.start()
                     container.start()
                 except SandboxServiceError:
                     raise
@@ -575,16 +590,16 @@ class LocalDockerBackend:
                         stop=False,
                     ) from exc
 
-                output_thread = threading.Thread(
-                    target=self._consume_output,
-                    args=(container, limiter),
-                    name=f"sandbox-output-{run_id}",
-                    daemon=True,
-                )
-                output_thread.start()
                 deadline = time.monotonic() + timeout
                 next_usage_check = 0.0
                 while True:
+                    if output_failures:
+                        raise SandboxServiceError(
+                            SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                            "Sandbox 输出采集失败",
+                            retryable=True,
+                            stop=False,
+                        )
                     try:
                         container.reload()
                         running_state = bool(container.attrs.get("State", {}).get("Running"))
@@ -629,6 +644,13 @@ class LocalDockerBackend:
                     time.sleep(0.05)
 
                 output_thread.join(timeout=2)
+                if output_thread.is_alive() or output_failures:
+                    raise SandboxServiceError(
+                        SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                        "Sandbox 输出采集失败",
+                        retryable=True,
+                        stop=False,
+                    )
                 result_data = self._inspect_result(
                     container,
                     limiter=limiter,
@@ -675,6 +697,13 @@ class LocalDockerBackend:
                         container.remove(force=True, v=True)
                     except Exception:
                         pass
+                if output_stream is not None:
+                    try:
+                        output_stream.close()
+                    except Exception:
+                        pass
+                if output_thread is not None and output_thread.is_alive():
+                    output_thread.join(timeout=2)
                 self.asset_files.cleanup_stage(workspace_id, run_id)
                 if capacity_reserved:
                     self.workspace_files.release_run_capacity(run_id)
