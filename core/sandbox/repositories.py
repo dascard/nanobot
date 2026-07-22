@@ -59,17 +59,20 @@ class WorkspaceRepository:
         workspace_id: str,
         *,
         delta_bytes: int,
+        observed_used_bytes: int,
         accessed_at,
     ) -> int:
-        """在单条 SQL 中累加 sandboxd 返回的真实占用增量。"""
+        """在单条 SQL 中累加增量，并校验 sandboxd 的绝对观测未超配额。"""
 
         delta = int(delta_bytes)
+        observed = int(observed_used_bytes)
         result = self.db.execute(
             update(Workspace)
             .where(
                 Workspace.id == workspace_id,
                 Workspace.used_bytes + delta >= 0,
                 Workspace.used_bytes + delta <= Workspace.quota_bytes,
+                Workspace.quota_bytes >= observed,
             )
             .values(
                 used_bytes=Workspace.used_bytes + delta,

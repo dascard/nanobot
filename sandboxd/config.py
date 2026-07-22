@@ -21,6 +21,13 @@ class SandboxdConfig:
     socket_path: Path = Path("/run/nanobot-sandboxd/sandboxd.sock")
     token_file: Path = Path("/etc/nanobot/sandboxd.token")
     client_token_path: Path = Path("/run/nanobot-sandboxd/client.token")
+    admin_token_file: Path = Path("/etc/nanobot/sandboxd-admin.token")
+    admin_client_token_path: Path = Path(
+        "/run/nanobot-sandboxd/admin-client.token"
+    )
+    quota_helper_path: Path = Path(
+        "/opt/nanobot-server/scripts/assign-sandbox-project-quota.sh"
+    )
     docker_socket: str = "unix:///var/run/docker.sock"
     image_reference: str = ""
     image_allowlist: tuple[str, ...] = ()
@@ -70,6 +77,18 @@ class SandboxdConfig:
                 "NANOBOT_SANDBOXD_CLIENT_TOKEN_FILE",
                 "/run/nanobot-sandboxd/client.token",
             )),
+            admin_token_file=Path(os.environ.get(
+                "NANOBOT_SANDBOXD_ADMIN_TOKEN_FILE",
+                "/etc/nanobot/sandboxd-admin.token",
+            )),
+            admin_client_token_path=Path(os.environ.get(
+                "NANOBOT_SANDBOXD_ADMIN_CLIENT_TOKEN_FILE",
+                "/run/nanobot-sandboxd/admin-client.token",
+            )),
+            quota_helper_path=Path(os.environ.get(
+                "NANOBOT_SANDBOXD_QUOTA_HELPER",
+                "/opt/nanobot-server/scripts/assign-sandbox-project-quota.sh",
+            )),
             docker_socket=os.environ.get(
                 "NANOBOT_SANDBOXD_DOCKER_SOCKET",
                 "unix:///var/run/docker.sock",
@@ -114,6 +133,17 @@ class SandboxdConfig:
             raise ValueError("sandboxd 数据目录和 Socket 必须是绝对路径")
         if not self.token_file.is_absolute() or not self.client_token_path.is_absolute():
             raise ValueError("sandboxd Token 文件必须是绝对路径")
+        if (
+            not self.admin_token_file.is_absolute()
+            or not self.admin_client_token_path.is_absolute()
+            or not self.quota_helper_path.is_absolute()
+        ):
+            raise ValueError("sandboxd 管理凭据和 quota helper 必须是绝对路径")
+        if (
+            self.token_file == self.admin_token_file
+            or self.client_token_path == self.admin_client_token_path
+        ):
+            raise ValueError("sandboxd 普通凭据与管理凭据路径必须分离")
         if not self.image_reference or self.image_reference.endswith(":latest"):
             raise ValueError("必须配置非 latest 的 Sandbox 镜像")
         if not self.image_allowlist or any(

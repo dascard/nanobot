@@ -24,8 +24,19 @@ from core.db.models.session_memory import (
     SessionSummaryJob,
 )
 from core.db.models.scheduling import ScheduledTask
+from core.db.models.sandbox import (
+    Asset,
+    SandboxAccessGrant,
+    SandboxAdminOperation,
+    SandboxProjectSequence,
+    SandboxRun,
+    Workspace,
+    WorkspaceAsset,
+    WorkspaceQuotaBinding,
+)
 
 __all__ = [
+    "Asset",
     "ChatLog",
     "ChatDeliveryOutbox",
     "ConversationTurn",
@@ -47,6 +58,13 @@ __all__ = [
     "RollingSessionSummary",
     "SessionSummaryJob",
     "ScheduledTask",
+    "SandboxAccessGrant",
+    "SandboxAdminOperation",
+    "SandboxProjectSequence",
+    "SandboxRun",
     "SystemPrompt",
     "User",
+    "Workspace",
+    "WorkspaceAsset",
+    "WorkspaceQuotaBinding",
 ]

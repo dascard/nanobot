@@ -4,7 +4,11 @@ import httpx
 import pytest
 
 from core.sandbox.backend import FakeSandboxBackend, SandboxBackend
-from core.sandbox.client import HttpSandboxdBackend, _read_token_file
+from core.sandbox.client import (
+    HttpSandboxdAdminBackend,
+    HttpSandboxdBackend,
+    _read_token_file,
+)
 from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError
 
 
@@ -61,6 +65,86 @@ def test_http_backend_uses_bearer_and_never_puts_token_in_json(tmp_path):
     assert captured["authorization"] == f"Bearer {token}"
     assert captured["request_id"] == "req-1"
     assert token not in json.dumps(captured["body"])
+
+
+def test_admin_backend_uses_dedicated_workspace_ensure_endpoint(tmp_path):
+    token = "a" * 64
+    token_file = tmp_path / "admin-client.token"
+    token_file.write_text(token, encoding="ascii")
+    token_file.chmod(0o600)
+    captured = {}
+
+    def handler(request):
+        captured["path"] = request.url.path
+        captured["authorization"] = request.headers["authorization"]
+        captured["request_id"] = request.headers["x-nanobot-request-id"]
+        return httpx.Response(200, json={
+            "status": "success",
+            "summary": "Workspace 已创建",
+            "next_actions": [],
+            "artifacts": [],
+            "data": {},
+        })
+
+    backend = HttpSandboxdAdminBackend(
+        socket_path="/run/nanobot-sandboxd/sandboxd.sock",
+        token_file=str(token_file),
+        client=httpx.Client(
+            transport=httpx.MockTransport(handler),
+            base_url="http://sandboxd",
+        ),
+    )
+
+    backend.ensure_workspace(
+        "00000000-0000-0000-0000-000000000001",
+        request_id="admin-ensure-request-1",
+    )
+
+    assert captured == {
+        "path": "/v1/admin/workspaces/ensure",
+        "authorization": f"Bearer {token}",
+        "request_id": "admin-ensure-request-1",
+    }
+
+
+def test_admin_quota_request_uses_long_running_timeout_budget(tmp_path):
+    token_file = tmp_path / "admin-client.token"
+    token_file.write_text("a" * 64, encoding="ascii")
+    token_file.chmod(0o600)
+    captured = {}
+
+    def handler(request):
+        captured["path"] = request.url.path
+        captured["timeout"] = request.extensions.get("timeout", {})
+        return httpx.Response(200, json={
+            "status": "success",
+            "summary": "配额已应用",
+            "next_actions": [],
+            "artifacts": [],
+            "data": {},
+        })
+
+    backend = HttpSandboxdAdminBackend(
+        socket_path="/run/nanobot-sandboxd/sandboxd.sock",
+        token_file=str(token_file),
+        timeout_seconds=15,
+        run_timeout_seconds=165,
+        client=httpx.Client(
+            transport=httpx.MockTransport(handler),
+            base_url="http://sandboxd",
+        ),
+    )
+
+    backend.apply_workspace_quota({
+        "request_id": "admin-quota-request-1",
+        "workspace_id": "00000000-0000-0000-0000-000000000001",
+        "project_id": 10000,
+        "quota_bytes": 64 * 1024 * 1024,
+        "generation": 1,
+    })
+
+    assert captured["path"] == "/v1/admin/workspaces/quota/apply"
+    assert captured["timeout"]["read"] == 165
 
 
 def test_http_backend_maps_stable_error_without_exposing_transport(tmp_path):

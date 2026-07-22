@@ -134,83 +134,45 @@ def resolve_lightweight_default(tool_name: str, db=None) -> bool:
     return tool_name in _load_lightweight_set(db=db)
 
 
-def _sandbox_setting_enabled(key: str, *, db=None, default: bool = False) -> bool:
-    """读取 Sandbox 安全开关；请求级数据库会话优先于全局缓存。"""
-
-    if db is not None:
-        try:
-            from core.database import SystemSetting
-
-            row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-            if row is not None and row.value is not None:
-                return str(row.value).strip().lower() in {"1", "true", "yes", "on"}
-        except Exception:
-            pass
-    try:
-        from core.settings_service import settings
-
-        return settings.get_bool(key, default)
-    except Exception:
-        return bool(default)
-
-
-def _has_user_sandbox_allowlist(db, *, user_id: str, tool_name: str) -> bool:
-    """首期只把显式 user 级开启视为普通用户 allowlist。"""
-
-    if db is None or not user_id:
-        return False
-    try:
-        from core.database import ToolOverride
-
-        row = db.query(ToolOverride).filter(
-            ToolOverride.tool_name == tool_name,
-            ToolOverride.scope_type == "user",
-            ToolOverride.scope_id == user_id,
-            ToolOverride.enabled == 1,
-        ).first()
-        return row is not None
-    except Exception:
-        return False
-
-
 def _apply_sandbox_policy(
     enabled: dict[str, bool],
     disabled: dict[str, str],
     *,
     chat_type: str,
-    user_id: str,
+    platform: str,
+    session_id: str,
+    runtime_preset: str,
     db=None,
 ) -> None:
-    """最终 Sandbox 门禁，任何默认值或 ToolOverride 都不能绕过总开关。"""
+    """用唯一 session Policy 覆盖 Sandbox 工具，彻底退出 ToolOverride 链。"""
 
-    sandbox_enabled = _sandbox_setting_enabled("sandbox.enabled", db=db)
-    exec_enabled = _sandbox_setting_enabled("sandbox.exec_enabled", db=db)
-    group_enabled = _sandbox_setting_enabled("sandbox.group_enabled", db=db)
+    from core.sandbox.access_policy import SandboxAccessPolicy
+
+    policy = SandboxAccessPolicy(db)
 
     for tool_name in SANDBOX_TOOL_NAMES:
-        if not sandbox_enabled:
+        if runtime_preset in {"none", "research"}:
             enabled[tool_name] = False
-            disabled[tool_name] = "Sandbox 总开关未启用"
+            disabled[tool_name] = "当前运行时预设不允许 Sandbox 工具"
             continue
-        if tool_name == "sandbox_exec" and not exec_enabled:
+        if runtime_preset == "lightweight" and tool_name not in _load_lightweight_set(
+            db=db,
+        ):
             enabled[tool_name] = False
-            disabled[tool_name] = "Sandbox 执行能力未启用"
+            disabled[tool_name] = "运行时轻量预设"
             continue
-        if chat_type == "group" and not group_enabled:
-            enabled[tool_name] = False
-            disabled[tool_name] = "群聊 Workspace 未启用"
-            continue
-        authorized_identity = (
-            chat_type == "private_superuser"
-            or _has_user_sandbox_allowlist(
-                db,
-                user_id=user_id,
-                tool_name=tool_name,
-            )
+        decision = policy.evaluate(
+            tool_name,
+            platform=platform,
+            chat_type=chat_type,
+            session_id=session_id,
         )
-        if not authorized_identity:
+        enabled[tool_name] = decision.allowed
+        if decision.allowed:
+            disabled.pop(tool_name, None)
+        else:
             enabled[tool_name] = False
-            disabled[tool_name] = "仅限私聊超级用户或显式用户 allowlist"
+            disabled[tool_name] = decision.reason
 
 
 def resolve_effective_tools(
@@ -218,6 +180,7 @@ def resolve_effective_tools(
     group_id: str = "",
     user_id: str = "",
     platform: str = "",
+    session_id: str = "",
     runtime_preset: str = "full",
     db=None,
 ) -> tuple[dict[str, bool], dict[str, str]]:
@@ -227,9 +190,9 @@ def resolve_effective_tools(
     1. ToolDescriptor Registry 默认值 (private_default/group_default)
     2. force_enabled / force_disabled / force_disabled_group 初始硬约束
     3. 运行时预设 (none/lightweight/full)
-    4. ToolOverride 表 (scope_type=chat_type/platform/group/user)，显式覆盖可放开轻量预设
+    4. ToolOverride 表 (scope_type=chat_type/platform/group/user)，Sandbox 工具除外
     5. force_enabled / force_disabled / force_disabled_group 硬约束最终兜底
-    6. Sandbox 总开关、执行开关、群聊开关与首期身份 allowlist 最终门禁
+    6. Sandbox 硬上限、业务开关、canonical session grant 与硬配额最终门禁
 
     返回 (enabled: {tool_name: bool}, disabled_reasons: {tool_name: reason})
     """
@@ -290,6 +253,8 @@ def resolve_effective_tools(
             for row in sorted(rows, key=lambda r: {
                 "chat_type": 1, "platform": 2, "group": 3, "user": 4,
             }.get(r.scope_type, 9)):
+                if row.tool_name in SANDBOX_TOOL_NAMES:
+                    continue
                 descriptor = get_tool_descriptor(row.tool_name)
                 if descriptor is None or descriptor.framework_owned:
                     continue
@@ -339,7 +304,9 @@ def resolve_effective_tools(
         enabled,
         disabled,
         chat_type=chat_type,
-        user_id=user_id,
+        platform=platform,
+        session_id=session_id,
+        runtime_preset=runtime_preset,
         db=db,
     )
 

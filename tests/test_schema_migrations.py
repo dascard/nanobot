@@ -60,6 +60,10 @@ def test_schema_migrations_records_applied_versions():
         "assets",
         "workspace_assets",
         "sandbox_runs",
+        "sandbox_access_grants",
+        "workspace_quota_bindings",
+        "sandbox_admin_operations",
+        "sandbox_project_sequences",
     } <= set(inspector.get_table_names())
     rss_columns = [col["name"] for col in inspector.get_columns("rolling_session_summaries")]
     assert "covered_until_turn_id" in rss_columns
@@ -91,11 +95,60 @@ def test_schema_migrations_records_applied_versions():
         "stdout_bytes",
         "stderr_bytes",
     } <= sandbox_run_columns
+    grant_columns = {
+        column["name"]
+        for column in inspector.get_columns("sandbox_access_grants")
+    }
+    assert {
+        "chat_stream_id",
+        "platform",
+        "chat_type",
+        "external_session_id",
+        "workspace_id",
+        "capability_level",
+        "status",
+        "version",
+    } <= grant_columns
+    quota_columns = {
+        column["name"]
+        for column in inspector.get_columns("workspace_quota_bindings")
+    }
+    assert {
+        "workspace_id",
+        "project_id",
+        "desired_quota_bytes",
+        "applied_quota_bytes",
+        "status",
+        "generation",
+        "last_error_code",
+    } <= quota_columns
+    operation_columns = {
+        column["name"]
+        for column in inspector.get_columns("sandbox_admin_operations")
+    }
+    assert {
+        "operation_id",
+        "request_id",
+        "operation_type",
+        "chat_stream_id",
+        "workspace_id",
+        "desired_capability",
+        "expected_quota_generation",
+        "status",
+        "step",
+        "lease_token",
+        "lease_expires_at",
+        "next_attempt_at",
+    } <= operation_columns
 
     with engine.connect() as conn:
         rows = conn.execute(text("SELECT version FROM schema_migrations ORDER BY version")).fetchall()
+        project_sequence = conn.execute(text(
+            "SELECT next_value FROM sandbox_project_sequences WHERE name = 'workspace'"
+        )).scalar_one()
 
     assert [row[0] for row in rows] == sorted(version for version, _, _ in MIGRATIONS)
+    assert project_sequence == 10000
 
 
 def test_summary_model_safe_defaults_migration_is_exact_and_one_time():
@@ -914,3 +967,40 @@ def test_memory_cleanup_governance_adds_archive_state_and_run_ledger():
         )).one()
     assert row.status == "active"
     assert row.archive_meta_json == "{}"
+
+
+def test_sandbox_tool_override_migration_removes_only_sandbox_tools():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE tool_overrides ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "tool_name TEXT NOT NULL, "
+            "scope_type TEXT NOT NULL, "
+            "scope_id TEXT NOT NULL, "
+            "enabled BOOLEAN NOT NULL)"
+        ))
+        conn.execute(text(
+            "INSERT INTO tool_overrides(tool_name, scope_type, scope_id, enabled) "
+            "VALUES "
+            "('workspace_read', 'user', 'u1', 1), "
+            "('sandbox_exec', 'chat_type', 'private_superuser', 1), "
+            "('memory_query', 'user', 'u1', 1)"
+        ))
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT tool_name FROM tool_overrides ORDER BY tool_name"
+        )).scalars().all()
+        version_count = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE version = '20260722_sandbox_tool_overrides_retired'"
+        )).scalar_one()
+
+    assert rows == ["memory_query"]
+    assert version_count == 1

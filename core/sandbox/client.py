@@ -189,6 +189,38 @@ class HttpSandboxdBackend:
     def get_run(self, run_id: str) -> dict[str, Any]:
         return self._request("GET", f"/v1/runs/{run_id}")
 
+    def apply_workspace_quota(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        request_id = str(payload.get("request_id") or "")
+        return self._request(
+            "POST",
+            "/v1/admin/workspaces/quota/apply",
+            payload=payload,
+            request_id=request_id or None,
+            run_request=True,
+        )
+
+    def inspect_workspace_quota(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        request_id = str(payload.get("request_id") or "")
+        return self._request(
+            "POST",
+            "/v1/admin/workspaces/quota/inspect",
+            payload=payload,
+            request_id=request_id or None,
+            run_request=True,
+        )
+
+
+class HttpSandboxdAdminBackend(HttpSandboxdBackend):
+    """只由持久化管理 runner 使用的 sandboxd 管理端口适配器。"""
+
+    def ensure_workspace(self, workspace_id: str, *, request_id: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/v1/admin/workspaces/ensure",
+            payload={"workspace_id": workspace_id},
+            request_id=request_id,
+        )
+
 
 class AsyncSandboxdAssetClient:
     """Nanobot 不挂载数据目录，仅通过 UDS 流式代理大资产。"""

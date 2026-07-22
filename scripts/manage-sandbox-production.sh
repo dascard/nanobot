@@ -30,7 +30,7 @@ readonly DATA_ROOT="/srv/nanobot"
 readonly LOOPBACK_STORAGE_DIR="/var/lib/nanobot-sandbox-storage"
 readonly LOOPBACK_IMAGE="${LOOPBACK_STORAGE_DIR}/data.xfs"
 readonly XFS_LABEL="nanobot-sbx"
-readonly PROJECT_MAP="/etc/nanobot/sandbox-projects.tsv"
+# 旧 /etc/nanobot/sandbox-projects.tsv 仅可由显式迁移工具读取；本脚本不再写入。
 
 readonly -a FIXED_SERVICES=(
   nanobot-server
@@ -44,23 +44,6 @@ readonly -a FIXED_CONTAINERS=(
   nanobot-outbound-delivery-worker
   nanobot-semantic-index-worker
 )
-readonly -a WORKSPACE_TOOLS=(
-  workspace_list
-  workspace_read
-  workspace_search
-  workspace_write
-)
-readonly -a ASSET_TOOLS=(asset_import asset_publish)
-readonly -a ALL_SANDBOX_TOOLS=(
-  workspace_list
-  workspace_read
-  workspace_search
-  workspace_write
-  asset_import
-  asset_publish
-  sandbox_exec
-)
-
 CURRENT_COMMAND="${1:-help}"
 
 on_error() {
@@ -100,25 +83,22 @@ Nanobot Sandbox 生产管理脚本
   4. smoke
   5. install-control-plane
   6. deploy
-  7. provision-owner
-  8. enable-workspace
-  9. enable-assets       # Workspace 灰度稳定后
- 10. enable-exec         # Asset 与真实执行验收稳定后
+  7. 在 Web「Sandbox 管理」页按 canonical session 配置授权与配额
 
 子命令：
-  configure             保存设备、备份挂载点和首期 owner 等非敏感参数
+  configure             保存设备、备份挂载点和镜像版本等非敏感参数
   status                只读显示主机、控制面、镜像和阶段状态
   prepare-host          安装依赖、准备数据盘、目录和 AppArmor
   build-image           构建固定版本 Sandbox 镜像
   smoke                 运行不得跳过的真实 Docker 安全矩阵
   install-control-plane 安装 Python 3.11、sandboxd、Token、UDS 和 systemd 单元
   deploy                协调备份并部署新版 Nanobot Runtime，开关保持关闭
-  provision-owner       预建首期 Workspace 并配置 project quota
-  enable-workspace      只开放 4 个 Workspace 工具
-  enable-assets         追加开放 asset_import / asset_publish
-  enable-exec           最后开放 sandbox_exec
+  provision-owner       已停用；请使用 Web「Sandbox 管理」页
+  enable-workspace      已停用；请使用 Web「Sandbox 管理」页
+  enable-assets         已停用；请使用 Web「Sandbox 管理」页
+  enable-exec           已停用；请使用 Web「Sandbox 管理」页
   kill-switch           无损关闭 sandbox.enabled 与 sandbox.exec_enabled
-  disable-owner         关闭总开关并删除首期 owner 的 7 个 ToolOverride
+  disable-owner         已停用；请使用 kill-switch 和 Web 管理页
   runtime-cleanup       预览或执行 runtime TTL 清理
   enable-runtime-timer  在维护审批流程建立后启用每日 timer
 
@@ -127,11 +107,8 @@ configure 参数：
   --data-device <设备>       block 模式的独立空白分区或 LV，例如 /dev/sdb1
   --loopback-size-gib <整数> loopback 模式容量，16..32，默认 16
   --backup-mount <目录>      独立备份文件系统挂载点
-  --owner-id <QQ 用户 ID>   首期精确私聊 owner
-  [--platform qq]
   [--release <40 位提交>]
   [--version <镜像版本>]
-  [--project-id 10000]
   [--sandboxd-gid 10001]
 
 prepare-host 参数：
@@ -264,16 +241,8 @@ validate_config_values() {
   esac
   [[ "${BACKUP_MOUNT}" == /* ]] \
     || die "BACKUP_MOUNT 必须是绝对路径：${BACKUP_MOUNT}"
-  [[ "${SANDBOX_OWNER_ID}" =~ ^[0-9]{5,32}$ ]] \
-    || die "SANDBOX_OWNER_ID 必须是准确的 QQ 数字用户 ID"
-  [[ "${SANDBOX_PLATFORM}" =~ ^[0-9A-Za-z._-]{1,32}$ ]] \
-    || die "SANDBOX_PLATFORM 无效"
   [[ "${VERSION}" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ && "${VERSION}" != "latest" ]] \
     || die "VERSION 无效或使用了 latest"
-  [[ "${PROJECT_ID}" =~ ^[0-9]+$ ]] \
-    || die "PROJECT_ID 必须是整数"
-  (( PROJECT_ID >= 10000 && PROJECT_ID <= 2147483647 )) \
-    || die "PROJECT_ID 必须位于 10000..2147483647"
   [[ "${SANDBOXD_GID}" =~ ^[0-9]+$ ]] \
     || die "SANDBOXD_GID 必须是整数"
   (( SANDBOXD_GID >= 1 && SANDBOXD_GID <= 2147483647 )) \
@@ -302,11 +271,8 @@ load_config() {
   DATA_IMAGE_SIZE_BYTES="${DATA_IMAGE_SIZE_BYTES:-0}"
   SYSTEM_MIN_FREE_BYTES="${SYSTEM_MIN_FREE_BYTES:-64424509440}"
   : "${BACKUP_MOUNT:?}"
-  : "${SANDBOX_OWNER_ID:?}"
-  : "${SANDBOX_PLATFORM:?}"
   : "${RELEASE:?}"
   : "${VERSION:?}"
-  : "${PROJECT_ID:?}"
   : "${SANDBOXD_GID:?}"
   : "${WORKSPACE_QUOTA_BYTES:?}"
   : "${ASSET_MAX_BYTES:?}"
@@ -329,11 +295,8 @@ write_config() {
     printf 'DATA_IMAGE=%q\n' "${DATA_IMAGE}"
     printf 'DATA_IMAGE_SIZE_BYTES=%q\n' "${DATA_IMAGE_SIZE_BYTES}"
     printf 'BACKUP_MOUNT=%q\n' "${BACKUP_MOUNT}"
-    printf 'SANDBOX_OWNER_ID=%q\n' "${SANDBOX_OWNER_ID}"
-    printf 'SANDBOX_PLATFORM=%q\n' "${SANDBOX_PLATFORM}"
     printf 'RELEASE=%q\n' "${RELEASE}"
     printf 'VERSION=%q\n' "${VERSION}"
-    printf 'PROJECT_ID=%q\n' "${PROJECT_ID}"
     printf 'SANDBOXD_GID=%q\n' "${SANDBOXD_GID}"
     printf 'WORKSPACE_QUOTA_BYTES=%q\n' "${WORKSPACE_QUOTA_BYTES}"
     printf 'ASSET_MAX_BYTES=%q\n' "${ASSET_MAX_BYTES}"
@@ -354,11 +317,8 @@ configure_command() {
   local data_device=""
   local loopback_size_gib="16"
   local backup_mount=""
-  local owner_id=""
-  local platform="qq"
   local release
   local version=""
-  local project_id="10000"
   local sandboxd_gid="10001"
 
   release="$(repo_git rev-parse HEAD)"
@@ -386,16 +346,6 @@ configure_command() {
         backup_mount="$2"
         shift 2
         ;;
-      --owner-id)
-        [[ $# -ge 2 ]] || die "--owner-id 缺少参数"
-        owner_id="$2"
-        shift 2
-        ;;
-      --platform)
-        [[ $# -ge 2 ]] || die "--platform 缺少参数"
-        platform="$2"
-        shift 2
-        ;;
       --release)
         [[ $# -ge 2 ]] || die "--release 缺少参数"
         release="$2"
@@ -404,11 +354,6 @@ configure_command() {
       --version)
         [[ $# -ge 2 ]] || die "--version 缺少参数"
         version="$2"
-        shift 2
-        ;;
-      --project-id)
-        [[ $# -ge 2 ]] || die "--project-id 缺少参数"
-        project_id="$2"
         shift 2
         ;;
       --sandboxd-gid)
@@ -427,7 +372,6 @@ configure_command() {
   done
 
   [[ -n "${backup_mount}" ]] || die "必须提供 --backup-mount"
-  [[ -n "${owner_id}" ]] || die "必须提供 --owner-id"
   [[ -d "${backup_mount}" ]] || die "备份目录不存在：${backup_mount}"
   mountpoint -q "${backup_mount}" || die "备份目录本身必须是独立挂载点"
 
@@ -460,11 +404,8 @@ configure_command() {
       ;;
   esac
   BACKUP_MOUNT="$(realpath -e "${backup_mount}")"
-  SANDBOX_OWNER_ID="${owner_id}"
-  SANDBOX_PLATFORM="${platform}"
   RELEASE="${release}"
   VERSION="${version:-${release:0:7}-$(date +%Y%m%d)}"
-  PROJECT_ID="${project_id}"
   SANDBOXD_GID="${sandboxd_gid}"
   WORKSPACE_QUOTA_BYTES=2147483648
   ASSET_MAX_BYTES=536870912
@@ -500,7 +441,6 @@ configure_command() {
     printf 'DATA_IMAGE_SIZE_GIB=%s\n' "$((DATA_IMAGE_SIZE_BYTES / 1024 / 1024 / 1024))"
   fi
   printf 'BACKUP_MOUNT=%s\n' "${BACKUP_MOUNT}"
-  printf 'OWNER=已配置（不回显）\n'
   printf 'RELEASE=%s\n' "${RELEASE}"
   printf 'VERSION=%s\n' "${VERSION}"
   printf '下一步：sudo %s prepare-host --initialize-storage\n' "$0"
@@ -1033,13 +973,6 @@ assert_runtime_current() {
     || die "Runtime 部署凭据与当前 RELEASE 不匹配"
 }
 
-assert_owner_current() {
-  local marker
-  marker="$(read_stage owner-provisioned)"
-  [[ "${marker}" =~ ^owner=${SANDBOX_OWNER_ID}\|workspace=[0-9a-f-]{36}\|project=${PROJECT_ID}\|quota=${WORKSPACE_QUOTA_BYTES}$ ]] \
-    || die "owner 配额凭据与当前配置不匹配"
-}
-
 smoke_command() {
   require_root
   load_config
@@ -1240,6 +1173,18 @@ install_sandboxd_credentials_and_env() {
   chmod 0600 /etc/nanobot/sandboxd.token
   [[ "$(stat -c '%u:%a' /etc/nanobot/sandboxd.token)" == "0:600" ]] \
     || die "sandboxd Token 权限错误"
+  if [[ -e /etc/nanobot/sandboxd-admin.token \
+      && ( ! -f /etc/nanobot/sandboxd-admin.token \
+        || -L /etc/nanobot/sandboxd-admin.token ) ]]; then
+    die "sandboxd 管理 Token 路径不是普通文件"
+  fi
+  if [[ ! -e /etc/nanobot/sandboxd-admin.token ]]; then
+    (umask 077; openssl rand -hex 32 >/etc/nanobot/sandboxd-admin.token)
+  fi
+  chown root:root /etc/nanobot/sandboxd-admin.token
+  chmod 0600 /etc/nanobot/sandboxd-admin.token
+  [[ "$(stat -c '%u:%a' /etc/nanobot/sandboxd-admin.token)" == "0:600" ]] \
+    || die "sandboxd 管理 Token 权限错误"
 
   if [[ -e /etc/nanobot/sandboxd.env && -L /etc/nanobot/sandboxd.env ]]; then
     die "sandboxd 环境文件不得是符号链接"
@@ -1249,6 +1194,9 @@ NANOBOT_SANDBOX_DATA_ROOT=${DATA_ROOT}
 NANOBOT_SANDBOXD_SOCKET=/run/nanobot-sandboxd/sandboxd.sock
 NANOBOT_SANDBOXD_TOKEN_FILE=/etc/nanobot/sandboxd.token
 NANOBOT_SANDBOXD_CLIENT_TOKEN_FILE=/run/nanobot-sandboxd/client.token
+NANOBOT_SANDBOXD_ADMIN_TOKEN_FILE=/etc/nanobot/sandboxd-admin.token
+NANOBOT_SANDBOXD_ADMIN_CLIENT_TOKEN_FILE=/run/nanobot-sandboxd/admin-client.token
+NANOBOT_SANDBOXD_QUOTA_HELPER=/opt/nanobot-server/scripts/assign-sandbox-project-quota.sh
 NANOBOT_SANDBOXD_DOCKER_SOCKET=unix:///var/run/docker.sock
 NANOBOT_SANDBOX_IMAGE=${SANDBOX_IMAGE}
 NANOBOT_SANDBOX_IMAGE_ALLOWLIST=${image_id}
@@ -1356,6 +1304,9 @@ install_control_plane_command() {
   [[ "$(stat -c '%a:%G' /run/nanobot-sandboxd/client.token)" \
       == "640:nanobot-sandboxd" ]] \
     || die "sandboxd client Token 权限错误"
+  [[ "$(stat -c '%a:%G' /run/nanobot-sandboxd/admin-client.token)" \
+      == "640:nanobot-sandboxd" ]] \
+    || die "sandboxd 管理 client Token 权限错误"
   [[ "$(stat -c '%a:%G' /run/nanobot-sandboxd/sandboxd.sock)" \
       == "660:nanobot-sandboxd" ]] \
     || die "sandboxd UDS 权限错误"
@@ -1394,6 +1345,7 @@ configure_application_env_off() {
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_ENABLED false
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_EXEC_ENABLED false
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_GROUP_ENABLED false
+  upsert_env_value "${env_file}" NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED false
   upsert_env_value "${env_file}" NANOBOT_SANDBOXD_GID "${SANDBOXD_GID}"
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_WORKSPACE_QUOTA_BYTES "${WORKSPACE_QUOTA_BYTES}"
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_ASSET_MAX_BYTES "${ASSET_MAX_BYTES}"
@@ -1578,9 +1530,9 @@ force_feature_flags_off() {
   admin_api POST /settings/sandbox.sandboxd_socket/reset >/dev/null
   admin_api POST /settings/sandbox.sandboxd_token_file/reset >/dev/null
   admin_api POST /settings/sandbox.asset_token_secret/reset >/dev/null
-  set_setting sandbox.enabled false
-  set_setting sandbox.exec_enabled false
-  set_setting sandbox.group_enabled false
+  local feature_body
+  feature_body='{"enabled":false,"exec_enabled":false,"reason":"生产部署保持关闭"}'
+  admin_api PUT /sandbox/features "${feature_body}" >/dev/null
   set_setting sandbox.workspace_quota_bytes "${WORKSPACE_QUOTA_BYTES}"
   set_setting sandbox.asset_max_bytes "${ASSET_MAX_BYTES}"
   set_setting sandbox.total_quota_bytes "${TOTAL_QUOTA_BYTES}"
@@ -1653,451 +1605,7 @@ deploy_command() {
 
   mark_stage runtime-deployed "release=${RELEASE}|flags=off"
   log "Runtime 部署完成；三个 Sandbox 开关仍为关闭"
-  printf '下一步：sudo %s provision-owner\n' "$0"
-}
-
-provision_workspace() {
-  docker exec -i \
-    -e SANDBOX_OWNER_ID="${SANDBOX_OWNER_ID}" \
-    -e SANDBOX_PLATFORM="${SANDBOX_PLATFORM}" \
-    nanobot-server \
-    python - <<'PY'
-import os
-import secrets
-
-from core.database import SessionLocal
-from core.sandbox.client import HttpSandboxdBackend
-from core.sandbox.identity import Principal
-from core.sandbox.tool_service import workspace_policy_from_settings
-from core.sandbox.workspace_service import WorkspaceService
-
-db = SessionLocal()
-backend = HttpSandboxdBackend(
-    socket_path="/run/nanobot-sandboxd/sandboxd.sock",
-    token_file="/run/nanobot-sandboxd/client.token",
-)
-try:
-    principal = Principal(
-        platform=os.environ["SANDBOX_PLATFORM"],
-        owner_type="user",
-        owner_id=os.environ["SANDBOX_OWNER_ID"],
-    )
-    service = WorkspaceService(db, policy=workspace_policy_from_settings(db))
-    workspace = service.ensure_default(principal)
-    workspace_id = str(workspace.id)
-    backend.ensure_workspace(
-        workspace_id,
-        request_id="admin-provision-" + secrets.token_hex(8),
-    )
-    db.commit()
-    print(workspace_id)
-except Exception:
-    db.rollback()
-    raise
-finally:
-    backend.close()
-    db.close()
-PY
-}
-
-control_plane_exec_smoke() {
-  local workspace_id="$1"
-  docker exec -i \
-    -e SANDBOX_WORKSPACE_ID="${workspace_id}" \
-    -e SANDBOX_WORKSPACE_QUOTA_BYTES="${WORKSPACE_QUOTA_BYTES}" \
-    nanobot-server \
-    python - <<'PY'
-import os
-import secrets
-
-from core.sandbox.client import HttpSandboxdBackend
-
-backend = HttpSandboxdBackend(
-    socket_path="/run/nanobot-sandboxd/sandboxd.sock",
-    token_file="/run/nanobot-sandboxd/client.token",
-)
-suffix = secrets.token_hex(8)
-try:
-    response = backend.run({
-        "request_id": "sbxreq_admin_" + suffix,
-        "run_id": "sbxrun_admin_" + suffix,
-        "workspace_id": os.environ["SANDBOX_WORKSPACE_ID"],
-        "command": "printf SANDBOX_CONTROL_PLANE_OK",
-        "cwd": "",
-        "timeout_seconds": 20,
-        "quota_bytes": int(os.environ["SANDBOX_WORKSPACE_QUOTA_BYTES"]),
-    })
-    data = response.get("data") if isinstance(response.get("data"), dict) else {}
-    if data.get("termination_reason") != "completed":
-        raise RuntimeError("sandboxd control-plane smoke did not complete")
-    if data.get("stdout") != "SANDBOX_CONTROL_PLANE_OK":
-        raise RuntimeError("sandboxd control-plane smoke output mismatch")
-    print("SANDBOX_CONTROL_PLANE_SMOKE=OK")
-finally:
-    backend.close()
-PY
-}
-
-record_project_mapping() {
-  local workspace_id="$1"
-  local existing_line=""
-  local existing_project=""
-
-  if [[ -e "${PROJECT_MAP}" \
-      && ( ! -f "${PROJECT_MAP}" || -L "${PROJECT_MAP}" ) ]]; then
-    die "project ID 映射路径不是普通文件"
-  fi
-  if [[ -f "${PROJECT_MAP}" ]]; then
-    existing_line="$(awk -F '\t' -v owner="${SANDBOX_OWNER_ID}" \
-      '$1 == owner {print; exit}' "${PROJECT_MAP}")"
-    existing_project="$(awk -F '\t' -v project="${PROJECT_ID}" \
-      '$3 == project {print $2; exit}' "${PROJECT_MAP}")"
-    [[ -z "${existing_project}" || "${existing_project}" == "${workspace_id}" ]] \
-      || die "PROJECT_ID 已被其他 Workspace 使用"
-    if [[ -n "${existing_line}" ]]; then
-      [[ "${existing_line}" == "${SANDBOX_OWNER_ID}"$'\t'"${workspace_id}"$'\t'"${PROJECT_ID}"$'\t'"${WORKSPACE_QUOTA_BYTES}" ]] \
-        || die "owner 已存在但 Workspace/project/quota 映射不一致"
-      return 0
-    fi
-  fi
-
-  printf '%s\t%s\t%s\t%s\n' \
-    "${SANDBOX_OWNER_ID}" \
-    "${workspace_id}" \
-    "${PROJECT_ID}" \
-    "${WORKSPACE_QUOTA_BYTES}" >>"${PROJECT_MAP}"
-  chown root:root "${PROJECT_MAP}"
-  chmod 0600 "${PROJECT_MAP}"
-}
-
-provision_owner_command() {
-  require_no_extra_args "$@"
-  require_root
-  load_config
-  require_stage runtime-deployed
-  require_stage control-plane-ready
-  require_stage smoke-passed
-  assert_runtime_current
-  assert_control_plane_current
-  assert_smoke_current
-
-  local status
-  local workspace_id
-  status="$(admin_api GET /sandbox/status)"
-  jq -e '
-    .feature.enabled == false and
-    .feature.exec_enabled == false and
-    .feature.group_enabled == false and
-    .controller.ready.ok == true
-  ' <<<"${status}" >/dev/null \
-    || die "Workspace 预建要求三个开关关闭且 sandboxd ready"
-
-  workspace_id="$(provision_workspace | tail -n 1)"
-  [[ "${workspace_id}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
-    || die "Workspace ID 格式无效"
-
-  log "预览 Workspace project quota"
-  "${REPO_ROOT}/scripts/assign-sandbox-project-quota.sh" \
-    --workspace-id "${workspace_id}" \
-    --project-id "${PROJECT_ID}" \
-    --quota-bytes "${WORKSPACE_QUOTA_BYTES}"
-  log "应用 Workspace project quota"
-  "${REPO_ROOT}/scripts/assign-sandbox-project-quota.sh" \
-    --workspace-id "${workspace_id}" \
-    --project-id "${PROJECT_ID}" \
-    --quota-bytes "${WORKSPACE_QUOTA_BYTES}" \
-    --quiesced \
-    --apply
-  log "通过实际 sandboxd UDS 运行受限容器 Smoke"
-  control_plane_exec_smoke "${workspace_id}"
-  if docker ps \
-    --filter 'label=com.nanobot.sandbox=true' \
-    --filter 'label=com.nanobot.managed-by=sandboxd' \
-    --format '{{.Names}}' | grep -q .; then
-    die "控制面 Smoke 后仍有活动 Sandbox 容器"
-  fi
-  record_project_mapping "${workspace_id}"
-
-  mark_stage owner-provisioned \
-    "owner=${SANDBOX_OWNER_ID}|workspace=${workspace_id}|project=${PROJECT_ID}|quota=${WORKSPACE_QUOTA_BYTES}"
-  log "首期 owner Workspace 与 project quota 已配置"
-  printf '下一步：sudo %s enable-workspace\n' "$0"
-}
-
-apply_tool_override() {
-  local tool="$1"
-  local reason="$2"
-  local body
-  body="$(jq -nc \
-    --arg owner "${SANDBOX_OWNER_ID}" \
-    --arg reason "${reason}" \
-    '{scope_type:"user",scope_id:$owner,enabled:true,reason:$reason}')"
-  admin_api PUT "/tools/${tool}/override" "${body}" >/dev/null
-}
-
-disable_tool_override() {
-  local tool="$1"
-  local reason="$2"
-  local body
-  body="$(jq -nc \
-    --arg owner "${SANDBOX_OWNER_ID}" \
-    --arg reason "${reason}" \
-    '{scope_type:"user",scope_id:$owner,enabled:false,reason:$reason}')"
-  admin_api PUT "/tools/${tool}/override" "${body}" >/dev/null
-}
-
-close_feature_flags() {
-  local reason="$1"
-  local body
-  body="$(jq -nc --arg reason "${reason}" '{reason:$reason}')"
-  if ! admin_api POST /sandbox/kill-switch "${body}" >/dev/null; then
-    warn "管理端 kill switch 调用失败，请立即人工关闭 sandbox.enabled 与 sandbox.exec_enabled"
-  fi
-}
-
-assert_no_foreign_sandbox_overrides() {
-  local allowed_csv="$1"
-  docker exec \
-    -e SANDBOX_OWNER_ID="${SANDBOX_OWNER_ID}" \
-    -e SANDBOX_ALLOWED_TOOLS="${allowed_csv}" \
-    nanobot-server \
-    python -c '
-import os
-from core.database import SessionLocal, ToolOverride
-from core.tool_registry import SANDBOX_TOOL_NAMES
-
-owner = os.environ["SANDBOX_OWNER_ID"]
-allowed = {item for item in os.environ["SANDBOX_ALLOWED_TOOLS"].split(",") if item}
-db = SessionLocal()
-try:
-    rows = (
-        db.query(ToolOverride)
-        .filter(
-            ToolOverride.tool_name.in_(sorted(SANDBOX_TOOL_NAMES)),
-            ToolOverride.enabled == 1,
-        )
-        .all()
-    )
-    invalid = [
-        row for row in rows
-        if row.scope_type != "user"
-        or row.scope_id != owner
-        or row.tool_name not in allowed
-    ]
-    if invalid:
-        raise SystemExit(
-            f"发现 {len(invalid)} 条非首期 owner 或超阶段 Sandbox override"
-        )
-    print(f"SANDBOX_OVERRIDE_AUDIT=OK count={len(rows)}")
-finally:
-    db.close()
-'
-}
-
-assert_controller_ready() {
-  local status
-  status="$(admin_api GET /sandbox/status)"
-  jq -e '
-    .controller.health.ok == true and
-    .controller.ready.ok == true and
-    .controller.ready.docker == true and
-    .controller.ready.apparmor_profile == "nanobot-sandbox"
-  ' <<<"${status}" >/dev/null \
-    || die "sandboxd controller 未 ready"
-}
-
-owner_tool_status() {
-  local owner_uri
-  owner_uri="$(printf '%s' "${SANDBOX_OWNER_ID}" | jq -sRr @uri)"
-  admin_api GET \
-    "/tools?chat_type=private_superuser&user_id=${owner_uri}&platform=${SANDBOX_PLATFORM}&runtime_preset=full"
-}
-
-assert_owner_tool_policy() {
-  local phase="$1"
-  local payload
-  payload="$(owner_tool_status)"
-  case "${phase}" in
-    workspace)
-      jq -e '
-        def enabled($name):
-          ([.tools[] | select(.name == $name)] | first) as $tool
-          | $tool.configured_enabled == true
-            and $tool.runtime_effective == true
-            and $tool.registered == true;
-        def disabled($name):
-          ([.tools[] | select(.name == $name)] | first) as $tool
-          | $tool.configured_enabled == false
-            and $tool.runtime_effective == false;
-        enabled("workspace_list")
-        and enabled("workspace_read")
-        and enabled("workspace_search")
-        and enabled("workspace_write")
-        and disabled("asset_import")
-        and disabled("asset_publish")
-        and disabled("sandbox_exec")
-      ' <<<"${payload}" >/dev/null
-      ;;
-    assets)
-      jq -e '
-        def enabled($name):
-          ([.tools[] | select(.name == $name)] | first) as $tool
-          | $tool.configured_enabled == true
-            and $tool.runtime_effective == true
-            and $tool.registered == true;
-        def disabled($name):
-          ([.tools[] | select(.name == $name)] | first) as $tool
-          | $tool.configured_enabled == false
-            and $tool.runtime_effective == false;
-        enabled("workspace_list")
-        and enabled("workspace_read")
-        and enabled("workspace_search")
-        and enabled("workspace_write")
-        and enabled("asset_import")
-        and enabled("asset_publish")
-        and disabled("sandbox_exec")
-      ' <<<"${payload}" >/dev/null
-      ;;
-    exec)
-      jq -e '
-        def enabled($name):
-          ([.tools[] | select(.name == $name)] | first) as $tool
-          | $tool.configured_enabled == true
-            and $tool.runtime_effective == true
-            and $tool.registered == true;
-        enabled("workspace_list")
-        and enabled("workspace_read")
-        and enabled("workspace_search")
-        and enabled("workspace_write")
-        and enabled("asset_import")
-        and enabled("asset_publish")
-        and enabled("sandbox_exec")
-      ' <<<"${payload}" >/dev/null
-      ;;
-    *)
-      die "未知工具策略阶段：${phase}"
-      ;;
-  esac
-}
-
-enable_workspace_command() {
-  require_no_extra_args "$@"
-  require_root
-  load_config
-  require_stage owner-provisioned
-  require_stage smoke-passed
-  assert_owner_current
-  assert_runtime_current
-  assert_smoke_current
-  assert_controller_ready
-
-  set_setting sandbox.enabled false
-  set_setting sandbox.exec_enabled false
-  set_setting sandbox.group_enabled false
-  local tool
-  for tool in "${WORKSPACE_TOOLS[@]}"; do
-    apply_tool_override "${tool}" "Sandbox 首期私聊 Workspace 灰度"
-  done
-  for tool in "${ASSET_TOOLS[@]}" sandbox_exec; do
-    disable_tool_override "${tool}" "Workspace 阶段保持关闭"
-  done
-  assert_no_foreign_sandbox_overrides \
-    "workspace_list,workspace_read,workspace_search,workspace_write"
-  set_setting sandbox.exec_enabled false
-  set_setting sandbox.group_enabled false
-  set_setting sandbox.enabled true
-
-  local status
-  status="$(admin_api GET /sandbox/status)"
-  if ! jq -e '
-    .feature.enabled == true and
-    .feature.exec_enabled == false and
-    .feature.group_enabled == false and
-    .controller.ready.ok == true
-  ' <<<"${status}" >/dev/null \
-    || ! assert_owner_tool_policy workspace; then
-    close_feature_flags "Workspace 灰度验证失败，自动关闭"
-    die "Workspace 开关或工具实际策略不符合预期"
-  fi
-  mark_stage workspace-enabled "owner=${SANDBOX_OWNER_ID}"
-  log "已只为首期 owner 开放 4 个 Workspace 工具；执行与群聊仍关闭"
-}
-
-enable_assets_command() {
-  require_no_extra_args "$@"
-  require_root
-  load_config
-  require_stage workspace-enabled
-  assert_owner_current
-  assert_runtime_current
-  assert_controller_ready
-
-  set_setting sandbox.enabled false
-  set_setting sandbox.exec_enabled false
-  set_setting sandbox.group_enabled false
-  local tool
-  for tool in "${ASSET_TOOLS[@]}"; do
-    apply_tool_override "${tool}" "Sandbox 首期私聊 Asset 灰度"
-  done
-  disable_tool_override sandbox_exec "Asset 阶段保持执行关闭"
-  assert_no_foreign_sandbox_overrides \
-    "workspace_list,workspace_read,workspace_search,workspace_write,asset_import,asset_publish"
-  set_setting sandbox.enabled true
-  set_setting sandbox.exec_enabled false
-  set_setting sandbox.group_enabled false
-  local status
-  status="$(admin_api GET /sandbox/status)"
-  if ! jq -e '
-    .feature.enabled == true and
-    .feature.exec_enabled == false and
-    .feature.group_enabled == false and
-    .controller.ready.ok == true
-  ' <<<"${status}" >/dev/null \
-    || ! assert_owner_tool_policy assets; then
-    close_feature_flags "Asset 灰度验证失败，自动关闭"
-    die "Asset 开关或工具实际策略不符合预期"
-  fi
-  mark_stage assets-enabled "owner=${SANDBOX_OWNER_ID}"
-  log "已追加开放 Asset 工具；执行与群聊状态未放宽"
-}
-
-enable_exec_command() {
-  require_no_extra_args "$@"
-  require_root
-  load_config
-  require_stage assets-enabled
-  require_stage smoke-passed
-  assert_owner_current
-  assert_runtime_current
-  assert_smoke_current
-  assert_controller_ready
-
-  set_setting sandbox.enabled false
-  set_setting sandbox.exec_enabled false
-  set_setting sandbox.group_enabled false
-  disable_tool_override sandbox_exec "Exec 开启前置关闭"
-  set_setting sandbox.enabled true
-  set_setting sandbox.exec_enabled false
-  set_setting sandbox.group_enabled false
-  apply_tool_override sandbox_exec "Sandbox 首期私聊 Exec 灰度"
-  assert_no_foreign_sandbox_overrides \
-    "workspace_list,workspace_read,workspace_search,workspace_write,asset_import,asset_publish,sandbox_exec"
-  set_setting sandbox.exec_enabled true
-
-  local status
-  status="$(admin_api GET /sandbox/status)"
-  if ! jq -e '
-    .feature.enabled == true and
-    .feature.exec_enabled == true and
-    .feature.group_enabled == false and
-    .controller.ready.ok == true
-  ' <<<"${status}" >/dev/null \
-    || ! assert_owner_tool_policy exec; then
-    close_feature_flags "Exec 灰度验证失败，自动关闭"
-    die "Exec 开关或工具实际策略不符合预期"
-  fi
-  mark_stage exec-enabled "owner=${SANDBOX_OWNER_ID}"
-  log "已为首期 owner 开放 sandbox_exec；群聊仍关闭"
+  printf '下一步：保持宿主硬上限关闭；完成验收后从 Web「Sandbox 管理」页授权。\n'
 }
 
 kill_switch_command() {
@@ -2107,25 +1615,6 @@ kill_switch_command() {
   local body
   body="$(jq -nc --arg reason "${reason}" '{reason:$reason}')"
   admin_api POST /sandbox/kill-switch "${body}" | jq
-}
-
-disable_owner_command() {
-  require_no_extra_args "$@"
-  require_root
-  load_config
-  kill_switch_command kill-switch "管理员关闭首期 owner Sandbox"
-
-  local owner_uri
-  local tool
-  owner_uri="$(printf '%s' "${SANDBOX_OWNER_ID}" | jq -sRr @uri)"
-  for tool in "${ALL_SANDBOX_TOOLS[@]}"; do
-    if ! admin_api DELETE \
-      "/tools/${tool}/override?scope_type=user&scope_id=${owner_uri}" \
-      >/dev/null 2>&1; then
-      warn "${tool} override 不存在或删除失败，请在管理端复核"
-    fi
-  done
-  log "总开关已关闭，并已尝试删除首期 owner 的 7 个 override"
 }
 
 runtime_cleanup_command() {
@@ -2196,7 +1685,6 @@ status_command() {
       printf 'XFS 镜像：%s GiB（固定路径）\n' \
         "$((DATA_IMAGE_SIZE_BYTES / 1024 / 1024 / 1024))"
     fi
-    printf 'OWNER：已配置（不回显）\n'
   else
     printf '安装配置：未配置\n'
   fi
@@ -2251,17 +1739,17 @@ status_command() {
     image-built \
     smoke-passed \
     control-plane-ready \
-    runtime-deployed \
-    owner-provisioned \
-    workspace-enabled \
-    assets-enabled \
-    exec-enabled; do
+    runtime-deployed; do
     if stage_exists "${stage}"; then
       printf '  %-24s DONE\n' "${stage}"
     else
       printf '  %-24s PENDING\n' "${stage}"
     fi
   done
+}
+
+sandbox_web_management_required_command() {
+  die "该 owner/ToolOverride 命令已永久停止执行；请使用 Web「Sandbox 管理」页按 canonical session 管理授权与配额"
 }
 
 main() {
@@ -2292,22 +1780,22 @@ main() {
       deploy_command "$@"
       ;;
     provision-owner)
-      provision_owner_command "$@"
+      sandbox_web_management_required_command "$@"
       ;;
     enable-workspace)
-      enable_workspace_command "$@"
+      sandbox_web_management_required_command "$@"
       ;;
     enable-assets)
-      enable_assets_command "$@"
+      sandbox_web_management_required_command "$@"
       ;;
     enable-exec)
-      enable_exec_command "$@"
+      sandbox_web_management_required_command "$@"
       ;;
     kill-switch)
       kill_switch_command "$@"
       ;;
     disable-owner)
-      disable_owner_command "$@"
+      sandbox_web_management_required_command "$@"
       ;;
     runtime-cleanup)
       runtime_cleanup_command "$@"

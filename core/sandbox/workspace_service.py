@@ -92,7 +92,11 @@ class WorkspaceService:
         """
 
         observed = int(observed_used_bytes)
-        if observed < 0:
+        delta = int(delta_bytes)
+        # sandboxd 返回的是同一次串行 Workspace 变更的 before/after 差值。
+        # 数据库提交可能乱序，因此不能用 observed 覆盖投影或要求它等于本次
+        # SQL 更新结果；但 observed - delta 必须仍是合法的写入前占用。
+        if observed < 0 or observed - delta < 0:
             raise SandboxServiceError(
                 SandboxErrorCode.RUNTIME_UNAVAILABLE,
                 "Sandbox 控制面返回了无效空间核算结果",
@@ -101,7 +105,8 @@ class WorkspaceService:
             )
         changed = self.repository.add_usage_delta(
             workspace_id,
-            delta_bytes=int(delta_bytes),
+            delta_bytes=delta,
+            observed_used_bytes=observed,
             accessed_at=db_now_naive(),
         )
         if changed != 1:

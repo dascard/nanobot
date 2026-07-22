@@ -71,6 +71,39 @@ def test_workspace_usage_delta_atomically_rejects_out_of_bounds_projection(db_se
         )
     assert quota_error.value.code is SandboxErrorCode.RUNTIME_UNAVAILABLE
 
+
+@pytest.mark.parametrize(
+    ("delta_bytes", "observed_used_bytes"),
+    (
+        (1, 0),
+        (0, 101),
+    ),
+)
+def test_workspace_usage_delta_rejects_inconsistent_absolute_observation(
+    db_session,
+    delta_bytes,
+    observed_used_bytes,
+):
+    policy = WorkspacePolicy(
+        default_quota_bytes=100,
+        total_quota_bytes=1000,
+        disk_min_free_bytes=0,
+    )
+    service = WorkspaceService(db_session, policy=policy)
+    workspace = service.ensure_default(_principal("owner-A"))
+
+    with pytest.raises(SandboxServiceError) as raised:
+        service.record_usage_delta(
+            workspace.id,
+            delta_bytes=delta_bytes,
+            observed_used_bytes=observed_used_bytes,
+        )
+
+    assert raised.value.code is SandboxErrorCode.RUNTIME_UNAVAILABLE
+    db_session.expire_all()
+    assert db_session.get(type(workspace), workspace.id).used_bytes == 0
+
+
 def test_workspace_usage_delta_does_not_lose_stale_session_updates(db_session):
     policy = WorkspacePolicy(
         default_quota_bytes=100,

@@ -30,6 +30,16 @@ def test_sandboxd_config_requires_digest_allowlist_and_non_latest_image(tmp_path
         _config(tmp_path, image_allowlist=("nanobot-sandbox-python:test",)).validated()
     with pytest.raises(ValueError):
         _config(tmp_path, apparmor_profile="unconfined").validated()
+    with pytest.raises(ValueError):
+        _config(
+            tmp_path,
+            admin_token_file=tmp_path / "sandboxd.token",
+        ).validated()
+    with pytest.raises(ValueError):
+        _config(
+            tmp_path,
+            admin_client_token_path=tmp_path / "run" / "client.token",
+        ).validated()
 
 
 def test_systemd_unit_limits_surface_and_does_not_start_tcp_listener():

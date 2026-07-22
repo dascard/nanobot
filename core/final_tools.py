@@ -21,6 +21,7 @@ def resolve_final_tools(
     group_id: str = "",
     user_id: str = "",
     platform: str = "",
+    session_id: str = "",
     runtime_preset: str = "full",
     db: Any = None,
 ) -> FinalToolSet:
@@ -33,6 +34,7 @@ def resolve_final_tools(
         group_id=group_id,
         user_id=user_id,
         platform=platform,
+        session_id=session_id,
         runtime_preset=runtime_preset,
         db=db,
     )

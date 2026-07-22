@@ -5,82 +5,117 @@
 必须协调备份：
 
 - Nanobot SQLite 数据库；
-- `/srv/nanobot/workspaces/`；
-- `/srv/nanobot/assets/` 中已完成的不可变 blob。
+- /srv/nanobot/workspaces/；
+- /srv/nanobot/assets/ 中已完成的不可变 blob。
+
+数据库备份必须包含并保持一致：
+
+- workspaces、assets、workspace_assets、sandbox_runs；
+- sandbox_access_grants；
+- workspace_quota_bindings；
+- sandbox_admin_operations；
+- sandbox_project_sequences；
+- schema_migrations。
 
 明确不备份：
 
-- `/srv/nanobot/runtime/`；
-- 单次运行的 `/inputs` staging；
-- `assets/sha256/.tmp/` 未完成上传；
-- 一次性 Sandbox 容器及其 writable layer。
+- /srv/nanobot/runtime/；
+- 单次运行的 /inputs staging；
+- assets/sha256/.tmp/ 未完成上传；
+- 一次性 Sandbox 容器及其 writable layer；
+- 旧 sandbox-projects.tsv 作为活动配置。
 
-数据库保存 Workspace、Asset 授权关系，文件系统保存实际内容，两者必须来自同一个
-停止写入的维护窗口。仅备份其中一侧不能视为可恢复备份。
+数据库保存 canonical session 授权、Workspace/Asset 关系、project ID 和 quota generation；文件系统保存实际内容。只备份其中一侧不能视为可恢复备份。
 
 ## 2. 创建协调备份
 
-1. 调用管理端 kill switch，确认两个 Sandbox feature flag 均为关闭。
-2. 取消或等待所有 Sandbox 运行结束，确认没有 `nanobot-sbx-*` 活动容器。
-3. 停止当前 Compose 项目的全部固定服务，避免聊天、上传、任务 Worker 继续写库。
-4. 停止 sandboxd；保留 `/srv/nanobot` 和数据库，不运行任何 prune。
-5. 在独立备份挂载点上预览并执行：
+1. 调用 kill switch，确认 sandbox.enabled 与 sandbox.exec_enabled 均为 false。
+2. 由 root 同时关闭 infrastructure_enable_allowed。
+3. 取消或等待所有 Sandbox 运行结束，确认没有 nanobot-sbx-* 活动容器。
+4. 等待 running 管理 operation 结束；记录 pending/retry_wait 项。
+5. 停止当前 Compose 项目的固定服务，避免聊天、上传和 Worker 继续写库。
+6. 停止 sandboxd；保留 /srv/nanobot 和数据库，不运行任何 prune。
+7. 在独立备份挂载点执行：
 
-```bash
+~~~bash
 scripts/sandbox-coordinated-backup.sh \
   --database /opt/nanobot-server/nanobot.db \
   --data-root /srv/nanobot \
   --destination /mnt/nanobot-backup \
   --quiesced \
   --apply
-```
+~~~
 
-脚本会再次确认当前 Compose 服务和临时 Sandbox 容器均未运行，使用 SQLite backup
-API 创建数据库副本，分别归档 workspaces/assets，并生成 `manifest.sha256`。目标
-必须是不同于数据盘的独立挂载点；已有同名目录不会被覆盖。失败时保留
-`.partial` 目录供人工核查，不自动递归删除。
+脚本使用 SQLite backup API 创建数据库副本，分别归档 workspaces/assets，并生成 manifest.sha256。目标必须位于不同于数据盘的独立挂载点；已有同名目录不会覆盖。失败时保留 .partial 供人工核查，不自动递归删除。
 
-6. 执行 `sha256sum -c manifest.sha256`，把结果、备份目录、源/目标设备与时间写入
-   变更记录。
-7. 重启 sandboxd 和固定服务，但继续保持 feature flag 关闭，完成健康检查后再按
-   灰度流程恢复。
+8. 执行 sha256sum -c manifest.sha256。
+9. 记录备份目录、源/目标设备、数据库 schema migration 版本、最大 project ID、Workspace/Asset/grant 数量和时间。
+10. 重启服务后仍保持三道开关关闭，完成健康检查再按灰度流程恢复。
 
 ## 3. 恢复前验证
 
-恢复必须先在非生产宿主演练。至少验证：
+恢复必须先在非生产宿主演练：
 
-```bash
+~~~bash
 cd <备份目录>
 sha256sum -c manifest.sha256
 sqlite3 nanobot.db 'PRAGMA quick_check;'
 tar -tf workspaces.tar >/dev/null
 tar -tf assets.tar >/dev/null
-```
+~~~
 
-检查归档中没有绝对路径、`..` 路径、runtime 或输入 staging。备份介质和恢复暂存
-目录不得对 Nanobot/Sandbox 容器开放写权限。
+还应查询：
+
+- schema_migrations 包含 Sandbox 控制面和 ToolOverride 退役迁移；
+- workspace_quota_bindings 的 project_id 唯一；
+- sandbox_project_sequences.next_value 大于所有已分配 project ID；
+- 每个 grant 的 workspace_id 存在；
+- 每个 workspace_assets 链接的 Workspace 和 Asset 均存在；
+- 每个 Workspace 的 used_bytes 不超过 desired quota。
+
+归档中不得包含绝对路径、..、runtime、input staging、Token、数据库外副本或宿主密钥。
 
 ## 4. 恢复步骤
 
-1. 保持 kill switch 关闭，停止固定服务与 sandboxd，记录现有数据库和数据盘状态。
-2. 挂载一块空的、已启用 project quota 的恢复数据盘；不要覆盖原盘。
-3. 在空暂存目录中校验哈希后解包，保留 UID/GID、ACL 和 xattr。
-4. 恢复 SQLite 数据库到新的目标文件；不要直接覆盖仍被进程打开的数据库。
-5. 核对数据库中的 Workspace 数量、Asset 哈希/大小与文件系统清单。
-6. 按 project ID 映射重新应用每个 Workspace 的硬配额，并运行数据盘门禁。
-7. 使用只读工具检查 A/B owner 隔离、Asset 授权和 Workspace 持久化。
-8. 切换挂载/数据库指向，启动 sandboxd，确认 `readyz` 和真实 Docker Smoke 通过。
-9. 仅向一个私聊超级用户恢复工作区工具，再单独恢复 `sandbox_exec`。
+1. 保持宿主硬上限和两个业务开关关闭，停止固定服务与 sandboxd。
+2. 记录现有数据库和数据盘状态；不要覆盖原盘。
+3. 挂载一块空的、已启用 project quota 的恢复数据盘。
+4. 在空暂存目录中校验哈希后解包，保留 UID/GID、ACL 和 xattr。
+5. 恢复 SQLite 数据库到新的目标文件，不直接覆盖仍被进程打开的数据库。
+6. 核对数据库中的 Workspace、Asset、grant 和 blob 数量与大小。
+7. 启动 sandboxd 和 Nanobot，但继续保持 infrastructure_enable_allowed=false。
+8. 对每个 Workspace 从 Web 重新提交当前 desired quota，或调用相同管理 API 生成 set_quota operation。
+9. 等待所有 quota operation succeeded，确认宿主 project ID、generation、desired 与 applied 一致。
+10. 运行数据盘门禁、A/B session 隔离和真实 Docker Smoke。
+11. 只对一个私聊 canonical session 恢复 Workspace 能力，再依次恢复 Assets 与 Exec。
+12. 全部验收后才允许 root 打开宿主硬上限，并按灰度手册开启业务开关。
 
-原数据盘和原数据库至少保留到恢复演练及一个完整观察周期结束。恢复失败时切回原
-只读保留副本；不得通过删除新增表、Workspace 或 Asset 来“回滚”。
+恢复数据库中的 applied 状态只能说明备份时旧数据盘已应用，不能证明新数据盘已应用。必须在硬上限关闭期间重新提交并确认配额，禁止直接信任旧 applied 值启用工具。
 
-## 5. 恢复验收证据
+## 5. 旧 TSV 的处理
 
-- `manifest.sha256` 全部通过；
-- SQLite `quick_check` 为 `ok`；
-- Workspace/Asset 数量与大小核对；
-- A/B owner 隔离和 Asset 授权测试；
-- project quota、磁盘水位、AppArmor/seccomp 和 Docker inspect；
+如备份来自旧版本，可先保留 /etc/nanobot/sandbox-projects.tsv 作为证据，再使用 scripts/migrate-sandbox-project-map.py 完整预检和一次性迁移。
+
+迁移结果初始为 pending、applied_quota_bytes=0，且不会创建 session grant。迁移完成后：
+
+- 数据库成为 project ID 和 quota 唯一事实源；
+- 将 sandbox_project_sequences 推进到最大 project ID 加一；
+- TSV 设为只读归档，不再由部署脚本写入；
+- 后续授权全部从 Web 按 canonical session 操作。
+
+## 6. 恢复验收证据
+
+必须保存：
+
+- manifest.sha256 全部通过；
+- SQLite quick_check 为 ok；
+- schema migration 版本和关键表计数；
+- Workspace/Asset 文件数量与大小核对；
+- canonical session A/B 隔离和 Asset 授权；
+- project ID 唯一性、quota generation、desired/applied 一致性；
+- 数据盘水位、AppArmor、seccomp 和 Docker inspect；
+- 无 Docker Socket、无网络、非 root、只读根和资源限制；
 - 容器重建后的 Workspace 持久化；
-- kill switch 和无损回滚演练记录。
+- operation 重启恢复、kill switch 和数据无损回滚演练。
+
+原数据盘、原数据库和备份至少保留到恢复演练及一个完整观察周期结束。恢复失败时切回原只读副本，不得通过删除新增表、grant、Workspace 或 Asset 来“回滚”。

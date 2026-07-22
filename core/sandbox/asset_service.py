@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from core.database import Asset, WorkspaceAsset
+from core.database import Asset, Workspace, WorkspaceAsset
 from core.sandbox.asset_store import (
     LocalAssetStore,
     asset_runtime_error,
@@ -89,6 +89,22 @@ class AssetService:
         logical_name: str,
     ) -> tuple[Asset, WorkspaceAsset]:
         workspace = self.workspace_service.current(principal)
+        return self.register_published_for_workspace(
+            workspace.id,
+            published,
+            logical_name=logical_name,
+        )
+
+    def register_published_for_workspace(
+        self,
+        workspace_id: str,
+        published: PublishedAsset,
+        *,
+        logical_name: str,
+    ) -> tuple[Asset, WorkspaceAsset]:
+        """为已经由 SandboxAccessPolicy 授权的 Workspace 注册资产。"""
+
+        workspace = self._require_workspace(workspace_id)
         sha256 = validate_sha256(published.sha256)
         size_bytes = int(published.size_bytes)
         if size_bytes < 0 or size_bytes > self.max_asset_bytes:
@@ -169,6 +185,14 @@ class AssetService:
         sha256: str,
     ) -> tuple[WorkspaceAsset, Asset]:
         workspace = self.workspace_service.current(principal)
+        return self.require_authorized_for_workspace(workspace.id, sha256)
+
+    def require_authorized_for_workspace(
+        self,
+        workspace_id: str,
+        sha256: str,
+    ) -> tuple[WorkspaceAsset, Asset]:
+        workspace = self._require_workspace(workspace_id)
         normalized = validate_sha256(sha256)
         authorized = self.link_repository.get_authorized(workspace.id, normalized)
         if authorized is None:
@@ -191,10 +215,33 @@ class AssetService:
                 SandboxErrorCode.ASSET_NOT_AUTHORIZED,
                 "资产不存在或当前 Workspace 无权访问",
             )
+        workspace = self.workspace_service.current(principal)
+        return self.import_authorized_ref_for_workspace(
+            workspace.id,
+            source_ref,
+            logical_name=logical_name,
+        )
+
+    def import_authorized_ref_for_workspace(
+        self,
+        workspace_id: str,
+        source_ref: str,
+        *,
+        logical_name: str,
+    ) -> tuple[Asset, WorkspaceAsset]:
+        prefix = "asset://sha256/"
+        if not str(source_ref).startswith(prefix):
+            raise SandboxServiceError(
+                SandboxErrorCode.ASSET_NOT_AUTHORIZED,
+                "资产不存在或当前 Workspace 无权访问",
+            )
         sha256 = validate_sha256(str(source_ref)[len(prefix):])
-        _source_link, asset = self.require_authorized(principal, sha256)
-        return self.register_published(
-            principal,
+        _source_link, asset = self.require_authorized_for_workspace(
+            workspace_id,
+            sha256,
+        )
+        return self.register_published_for_workspace(
+            workspace_id,
             PublishedAsset(
                 sha256=asset.sha256,
                 size_bytes=int(asset.size_bytes),
@@ -203,3 +250,12 @@ class AssetService:
             ),
             logical_name=logical_name,
         )
+
+    def _require_workspace(self, workspace_id: str) -> Workspace:
+        workspace = self.db.get(Workspace, str(workspace_id or ""))
+        if workspace is None or workspace.status != "active":
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "当前会话没有可用的 Workspace",
+            )
+        return workspace

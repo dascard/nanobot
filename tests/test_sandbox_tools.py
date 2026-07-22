@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -24,6 +25,21 @@ def test_sandbox_tool_implementation_is_owned_by_kt_adapter_layer():
 IMAGE_ID = "sha256:" + "a" * 64
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_infrastructure_ceiling(monkeypatch):
+    from core.settings_service import settings
+
+    monkeypatch.setenv(
+        "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
+        "true",
+    )
+    settings.invalidate()
+    try:
+        yield
+    finally:
+        settings.invalidate()
+
+
 def _set_setting(db, key: str, value: object) -> None:
     from core.database import SystemSetting
 
@@ -31,9 +47,50 @@ def _set_setting(db, key: str, value: object) -> None:
 
 
 def _enable_sandbox(db, *, exec_enabled: bool = False) -> None:
+    from core.database import (
+        SandboxAccessGrant,
+        Workspace,
+        WorkspaceQuotaBinding,
+    )
+
     _set_setting(db, "sandbox.enabled", True)
     _set_setting(db, "sandbox.exec_enabled", exec_enabled)
     _set_setting(db, "sandbox.asset_token_secret", "s" * 32)
+    grant_id = str(uuid4())
+    workspace_id = str(uuid4())
+    quota_bytes = 2 * 1024 * 1024 * 1024
+    db.add(Workspace(
+        id=workspace_id,
+        platform="qq",
+        owner_type="user",
+        owner_id=grant_id,
+        name="default",
+        status="active",
+        quota_bytes=quota_bytes,
+        used_bytes=0,
+    ))
+    db.flush()
+    db.add_all([
+        WorkspaceQuotaBinding(
+            workspace_id=workspace_id,
+            project_id=10000,
+            desired_quota_bytes=quota_bytes,
+            applied_quota_bytes=quota_bytes,
+            status="applied",
+            generation=1,
+        ),
+        SandboxAccessGrant(
+            id=grant_id,
+            chat_stream_id="qq:super-1:private",
+            platform="qq",
+            chat_type="private",
+            external_session_id="super-1",
+            workspace_id=workspace_id,
+            capability_level="exec",
+            status="active",
+            version=1,
+        ),
+    ])
     db.commit()
 
 
@@ -70,6 +127,7 @@ def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
         chat_type="private_superuser",
         user_id="root",
         platform="qq",
+        session_id="private_super-1",
         runtime_preset="full",
         db=db_session,
     )
@@ -80,6 +138,7 @@ def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
         chat_type="private_superuser",
         user_id="root",
         platform="qq",
+        session_id="private_super-1",
         runtime_preset="full",
         db=db_session,
     )
@@ -95,6 +154,7 @@ def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
         chat_type="private_superuser",
         user_id="root",
         platform="qq",
+        session_id="private_super-1",
         runtime_preset="full",
         db=db_session,
     )
@@ -104,6 +164,7 @@ def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
         chat_type="private",
         user_id="user-1",
         platform="qq",
+        session_id="private_user-1",
         runtime_preset="full",
         db=db_session,
     )
@@ -121,11 +182,11 @@ def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
         chat_type="private",
         user_id="user-1",
         platform="qq",
+        session_id="private_user-1",
         runtime_preset="full",
         db=db_session,
     )
-    assert "workspace_read" in allowlisted.sent_tool_names
-    assert not (SANDBOX_TOOL_NAMES - {"workspace_read"}) & allowlisted.sent_tool_names
+    assert not SANDBOX_TOOL_NAMES & allowlisted.sent_tool_names
 
 
 def test_sandbox_schemas_are_strict_and_have_no_background_or_identity_fields():
@@ -453,8 +514,8 @@ def test_asset_publish_registers_authorized_immutable_reference(db_session):
     assert body["data"]["reply_token"] == (
         f"[asset_download:{body['data']['transport_token']}]"
     )
-    assert body["data"]["recipient_type"] == "user"
-    assert body["data"]["recipient_id"] == "super-1"
+    assert body["data"]["recipient_type"] == "session"
+    assert body["data"]["recipient_id"] == "qq:super-1:private"
     assert body["data"]["expires_at"] > 0
     assert body["artifacts"][0]["transport_token"] == body["data"]["transport_token"]
     assert body["artifacts"][0]["reply_token"] == body["data"]["reply_token"]

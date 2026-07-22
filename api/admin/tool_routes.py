@@ -103,7 +103,7 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
     except Exception as e:
         logger.warning("[Tools] registry probe failed: %s", e, exc_info=True)
 
-    from core.tool_registry import list_user_tool_descriptors
+    from core.tool_registry import SANDBOX_TOOL_NAMES, list_user_tool_descriptors
     from core.runtime_tool_service import (
         normalize_tool_chat_type,
         normalize_tool_platform,
@@ -199,6 +199,7 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             "disabled_reason": configured_disabled.get(name, ""),
             "registered": registered,
             "is_subagent": is_subagent,
+            "sandbox_managed": name in SANDBOX_TOOL_NAMES,
         })
     bridge_count = 0
     try:
@@ -478,11 +479,14 @@ def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
                          _auth=Depends(verify_admin)):
     """更新工具默认值——写入 SystemSetting。"""
     from core.tool_registry import get_tool_def
+    from core.tool_registry import SANDBOX_TOOL_NAMES
     from core.settings_service import settings
 
     td = get_tool_def(tool_name)
     if not td:
         raise HTTPException(404, f"unknown tool: {tool_name}")
+    if tool_name in SANDBOX_TOOL_NAMES:
+        raise HTTPException(409, "Sandbox 工具由专用 Sandbox 管理页控制")
     if td.force_disabled:
         raise HTTPException(400, f"{tool_name} is force_disabled, cannot change defaults")
 
@@ -541,12 +545,14 @@ def set_tool_override(tool_name: str, body: ToolOverrideBody,
                       request: Request, db: Session = Depends(get_db),
                       _auth=Depends(verify_admin)):
     """设置工具作用域覆盖——upsert ToolOverride。"""
-    from core.tool_registry import get_tool_def
+    from core.tool_registry import SANDBOX_TOOL_NAMES, get_tool_def
     from core.database import ToolOverride
     from core.runtime_tool_service import normalize_tool_platform
 
     scope_type = str(body.scope_type or "").strip().lower()
     scope_id = str(body.scope_id or "").strip()
+    if tool_name in SANDBOX_TOOL_NAMES:
+        raise HTTPException(409, "Sandbox 工具不接受通用 ToolOverride")
     if scope_type not in {"group", "user", "chat_type", "platform"}:
         raise HTTPException(400, "scope_type must be group/user/chat_type/platform")
     if scope_type == "chat_type" and scope_id not in {"private", "private_superuser", "group"}:
@@ -591,8 +597,11 @@ def delete_tool_override(tool_name: str, request: Request, scope_type: str = "",
                          _auth=Depends(verify_admin)):
     """删除工具作用域覆盖。"""
     from core.database import ToolOverride
+    from core.tool_registry import SANDBOX_TOOL_NAMES
     from core.runtime_tool_service import normalize_tool_platform
     scope_type = str(scope_type or "").strip().lower()
+    if tool_name in SANDBOX_TOOL_NAMES:
+        raise HTTPException(409, "Sandbox 工具不接受通用 ToolOverride")
     scope_id = str(scope_id or "").strip()
     if scope_type == "platform":
         scope_id = normalize_tool_platform(scope_id)

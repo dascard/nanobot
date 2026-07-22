@@ -14,8 +14,7 @@ from sqlalchemy.orm import Session
 from api.common_auth import verify_token
 from core.asset_tokens import AssetTokenError, signer_from_settings
 from core.asset_transport import build_asset_reply_token
-from core.database import Asset, get_db
-from core.identity import is_super_user_id
+from core.database import Asset, Workspace, WorkspaceAsset, get_db
 from core.sandbox.asset_service import AssetService
 from core.sandbox.asset_store import safe_media_type
 from core.sandbox.client import AsyncSandboxdAssetClient
@@ -27,7 +26,7 @@ from core.sandbox.contracts import (
 )
 from core.sandbox.paths import validate_relative_path, validate_sha256
 from core.sandbox.tool_service import (
-    authorize_sandbox_principal,
+    authorize_sandbox_access,
     resolve_sandbox_setting,
     workspace_policy_from_settings,
 )
@@ -71,15 +70,14 @@ def _runtime_context(
     chat_type: str,
     user_id: str,
     group_id: str,
+    session_id: str,
 ) -> dict[str, object]:
-    is_superuser = chat_type == "private" and is_super_user_id(user_id)
     return {
         "platform": platform,
         "chat_type": chat_type,
-        "runtime_chat_type": "private_superuser" if is_superuser else chat_type,
-        "is_super_user": is_superuser,
         "user_id": user_id,
         "group_id": group_id,
+        "session_id": session_id,
     }
 
 
@@ -120,6 +118,7 @@ async def upload_asset(
     request: Request,
     user_id: Annotated[str, Query(min_length=1, max_length=255)],
     logical_name: Annotated[str, Query(min_length=1, max_length=512)],
+    session_id: Annotated[str, Query(min_length=1, max_length=255)],
     platform: Annotated[str, Query(min_length=1, max_length=32)] = "qq",
     chat_type: Annotated[Literal["private", "group"], Query()] = "private",
     group_id: Annotated[str, Query(max_length=255)] = "",
@@ -133,8 +132,9 @@ async def upload_asset(
             chat_type=chat_type,
             user_id=user_id,
             group_id=group_id,
+            session_id=session_id,
         )
-        principal, _runtime = authorize_sandbox_principal(
+        access, _runtime = authorize_sandbox_access(
             db,
             "asset_import",
             context,
@@ -145,7 +145,12 @@ async def upload_asset(
             db,
             policy=workspace_policy_from_settings(db),
         )
-        workspace = workspace_service.ensure_default(principal)
+        workspace = db.get(Workspace, access.workspace_id)
+        if workspace is None or workspace.status != "active":
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "当前会话没有可用的 Workspace",
+            )
         max_asset_bytes = int(resolve_sandbox_setting(db, "sandbox.asset_max_bytes"))
         raw_length = str(request.headers.get("content-length") or "").strip()
         try:
@@ -199,15 +204,15 @@ async def upload_asset(
             workspace_service=workspace_service,
             max_asset_bytes=max_asset_bytes,
         )
-        asset, link = asset_service.register_published(
-            principal,
+        asset, link = asset_service.register_published_for_workspace(
+            workspace.id,
             published,
             logical_name=normalized_name,
         )
         transport_token = signer.issue(
             asset.sha256,
-            recipient_type=principal.owner_type,
-            recipient_id=principal.owner_id,
+            recipient_type="session",
+            recipient_id=str(access.identity.chat_stream_id),
         )
         claims = signer.verify(transport_token)
         reply_token = build_asset_reply_token(transport_token)
@@ -249,8 +254,8 @@ async def upload_asset(
 async def download_asset(
     sha256: str,
     token: Annotated[str, Query(min_length=1, max_length=8192)],
-    recipient_type: Annotated[Literal["user", "group"], Query()],
-    recipient_id: Annotated[str, Query(min_length=1, max_length=255)],
+    recipient_type: Annotated[Literal["session"], Query()],
+    recipient_id: Annotated[str, Query(min_length=1, max_length=512)],
     range_header: Annotated[str, Header(alias="Range", max_length=128)] = "",
     db: Session = Depends(get_db),
 ):
@@ -267,6 +272,26 @@ async def download_asset(
         asset = db.get(Asset, digest)
         if asset is None:
             raise AssetTokenError("资产不存在")
+        from core.sandbox.access_policy import SandboxAccessPolicy
+
+        decision = SandboxAccessPolicy(db).evaluate(
+            "asset_import",
+            platform=recipient_id.split(":", 1)[0],
+            chat_type="private",
+            session_id=recipient_id,
+        )
+        if not decision.allowed:
+            raise AssetTokenError("资产授权已失效")
+        authorized = (
+            db.query(WorkspaceAsset.id)
+            .filter(
+                WorkspaceAsset.workspace_id == decision.workspace_id,
+                WorkspaceAsset.asset_sha256 == digest,
+            )
+            .first()
+        )
+        if authorized is None:
+            raise AssetTokenError("资产授权已失效")
     except (AssetTokenError, SandboxServiceError):
         raise HTTPException(404, "资产不存在或下载凭据无效") from None
 

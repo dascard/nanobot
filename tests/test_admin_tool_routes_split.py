@@ -134,3 +134,33 @@ def test_admin_tool_routes_do_not_import_parent_admin_routes_or_sync_awaitable()
     assert "import api.admin_routes" not in source
     assert "asyncio.run" not in source
     assert "run_awaitable_sync" not in source
+
+
+def test_generic_tool_routes_cannot_mutate_sandbox_authorization(client, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "split-token")
+    headers = {"Authorization": "Bearer split-token"}
+
+    default_update = client.put(
+        "/api/v1/admin/tools/workspace_read",
+        headers=headers,
+        json={"private_default": True},
+    )
+    override_update = client.put(
+        "/api/v1/admin/tools/workspace_read/override",
+        headers=headers,
+        json={
+            "scope_type": "user",
+            "scope_id": "10001",
+            "enabled": True,
+            "reason": "不得生效",
+        },
+    )
+    override_delete = client.delete(
+        "/api/v1/admin/tools/workspace_read/override",
+        headers=headers,
+        params={"scope_type": "user", "scope_id": "10001"},
+    )
+
+    assert default_update.status_code == 409
+    assert override_update.status_code == 409
+    assert override_delete.status_code == 409

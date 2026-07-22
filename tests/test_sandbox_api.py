@@ -7,7 +7,15 @@ from fastapi.testclient import TestClient
 
 from api import asset_routes, routes
 from api.common_auth import verify_token
-from core.database import Asset, SystemSetting, Workspace, WorkspaceAsset, get_db
+from core.database import (
+    Asset,
+    SandboxAccessGrant,
+    SystemSetting,
+    Workspace,
+    WorkspaceAsset,
+    WorkspaceQuotaBinding,
+    get_db,
+)
 from core.sandbox.client import AsyncSandboxdAssetClient
 from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError, success_result
 from core.sandbox.paths import SandboxStorageLayout
@@ -16,6 +24,20 @@ from core.sandbox.paths import SandboxStorageLayout
 ASSET_CONTENT = b"streamed-asset-content"
 ASSET_SHA256 = hashlib.sha256(ASSET_CONTENT).hexdigest()
 WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
+GRANT_ID = "00000000-0000-4000-8000-000000000001"
+SESSION_ID = "asset-session"
+CHAT_STREAM_ID = f"qq:{SESSION_ID}:private"
+
+
+@pytest.fixture(autouse=True)
+def _reset_sandbox_settings_cache():
+    from core.settings_service import settings
+
+    settings.invalidate()
+    try:
+        yield
+    finally:
+        settings.invalidate()
 
 
 def _asset_settings(db_session):
@@ -32,6 +54,38 @@ def _asset_settings(db_session):
     }
     for key, value in values.items():
         db_session.add(SystemSetting(key=key, value=value))
+    db_session.add(Workspace(
+        id=WORKSPACE_ID,
+        platform="qq",
+        owner_type="user",
+        owner_id=GRANT_ID,
+        name="default",
+        status="active",
+        quota_bytes=2 * 1024 * 1024 * 1024,
+        used_bytes=0,
+    ))
+    db_session.flush()
+    db_session.add_all([
+        WorkspaceQuotaBinding(
+            workspace_id=WORKSPACE_ID,
+            project_id=10000,
+            desired_quota_bytes=2 * 1024 * 1024 * 1024,
+            applied_quota_bytes=2 * 1024 * 1024 * 1024,
+            status="applied",
+            generation=1,
+        ),
+        SandboxAccessGrant(
+            id=GRANT_ID,
+            chat_stream_id=CHAT_STREAM_ID,
+            platform="qq",
+            chat_type="private",
+            external_session_id=SESSION_ID,
+            workspace_id=WORKSPACE_ID,
+            capability_level="assets",
+            status="active",
+            version=1,
+        ),
+    ])
     db_session.commit()
 
 
@@ -141,6 +195,8 @@ class _FakeAssetClient:
 
 
 def _asset_api_client(db_session, monkeypatch, fake_client, *, bearer_override=True):
+    from core.settings_service import settings
+
     app = FastAPI()
     app.include_router(asset_routes.router, prefix="/api/v1")
 
@@ -150,7 +206,11 @@ def _asset_api_client(db_session, monkeypatch, fake_client, *, bearer_override=T
     app.dependency_overrides[get_db] = override_get_db
     if bearer_override:
         app.dependency_overrides[verify_token] = lambda: None
-    monkeypatch.setattr(asset_routes, "is_super_user_id", lambda _user_id: True)
+    monkeypatch.setenv(
+        "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
+        "true",
+    )
+    settings.invalidate()
     monkeypatch.setattr(asset_routes, "_asset_client", lambda _db: fake_client)
     return TestClient(app)
 
@@ -325,6 +385,7 @@ def test_external_asset_api_uploads_registers_authorization_and_streams_download
         "/api/v1/assets/upload",
         params={
             "user_id": "10001",
+            "session_id": f"private_{SESSION_ID}",
             "logical_name": "inputs/report.txt",
             "platform": "qq",
             "chat_type": "private",
@@ -337,8 +398,8 @@ def test_external_asset_api_uploads_registers_authorization_and_streams_download
     payload = upload.json()["data"]
     assert payload["source_ref"] == f"asset://sha256/{ASSET_SHA256}"
     assert payload["logical_name"] == "inputs/report.txt"
-    assert payload["recipient_type"] == "user"
-    assert payload["recipient_id"] == "10001"
+    assert payload["recipient_type"] == "session"
+    assert payload["recipient_id"] == CHAT_STREAM_ID
     assert payload["transport_token"]
     assert payload["reply_token"] == (
         f"[asset_download:{payload['transport_token']}]"
@@ -349,15 +410,16 @@ def test_external_asset_api_uploads_registers_authorization_and_streams_download
     workspace = db_session.query(Workspace).one()
     asset = db_session.query(Asset).one()
     link = db_session.query(WorkspaceAsset).one()
-    assert workspace.owner_id == "10001"
+    assert workspace.id == WORKSPACE_ID
+    assert workspace.owner_id == GRANT_ID
     assert asset.sha256 == ASSET_SHA256
     assert link.workspace_id == workspace.id
     assert link.asset_sha256 == asset.sha256
 
     download_params = {
         "token": payload["transport_token"],
-        "recipient_type": "user",
-        "recipient_id": "10001",
+        "recipient_type": "session",
+        "recipient_id": CHAT_STREAM_ID,
     }
     download = client.get(
         f"/api/v1/assets/{ASSET_SHA256}/download",
@@ -380,7 +442,7 @@ def test_external_asset_api_uploads_registers_authorization_and_streams_download
 
     wrong_recipient = client.get(
         f"/api/v1/assets/{ASSET_SHA256}/download",
-        params={**download_params, "recipient_id": "10002"},
+        params={**download_params, "recipient_id": "qq:other:private"},
     )
     wrong_asset = client.get(
         f"/api/v1/assets/{'f' * 64}/download",
@@ -411,6 +473,7 @@ def test_external_asset_api_preserves_416_and_requires_trusted_bearer(
     )
     params = {
         "user_id": "10001",
+        "session_id": f"private_{SESSION_ID}",
         "logical_name": "input.txt",
         "platform": "qq",
         "chat_type": "private",
@@ -439,8 +502,8 @@ def test_external_asset_api_preserves_416_and_requires_trusted_bearer(
         f"/api/v1/assets/{ASSET_SHA256}/download",
         params={
             "token": payload["transport_token"],
-            "recipient_type": "user",
-            "recipient_id": "10001",
+            "recipient_type": "session",
+            "recipient_id": CHAT_STREAM_ID,
         },
         headers={"Range": "bytes=999-1000"},
     )
@@ -466,6 +529,7 @@ def test_external_asset_api_rejects_oversized_content_length_before_upstream(
         "/api/v1/assets/upload",
         params={
             "user_id": "10001",
+            "session_id": f"private_{SESSION_ID}",
             "logical_name": "large.bin",
         },
         headers={"Content-Length": "1025"},

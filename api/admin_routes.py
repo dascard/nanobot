@@ -608,7 +608,15 @@ def list_settings(_auth=Depends(verify_admin)):
             "category": defn.category, "description": defn.description,
             "restart_required": defn.restart_required,
             "dangerous": defn.dangerous, "sensitive": defn.sensitive,
-            "readonly": defn.key == "database.url","min_value": defn.min_value, "max_value": defn.max_value,
+            "readonly": (
+                not defn.database_override_allowed
+                or key in {
+                    "sandbox.enabled",
+                    "sandbox.exec_enabled",
+                    "sandbox.group_enabled",
+                }
+            ),
+            "min_value": defn.min_value, "max_value": defn.max_value,
         })
     return {"settings": result, "version": settings.version}
 
@@ -623,8 +631,14 @@ def update_setting(key: str, body: dict, request: Request, db: Session = Depends
     defn = SETTING_DEFS.get(key)
     if not defn:
         raise HTTPException(400, f"Unknown setting: {key}")
-    if defn.restart_required and defn.key == "database.url":
-        raise HTTPException(400, "database.url is read-only, change via env var")
+    if not defn.database_override_allowed:
+        raise HTTPException(400, f"{key} is read-only, change via env var")
+    if key in {
+        "sandbox.enabled",
+        "sandbox.exec_enabled",
+        "sandbox.group_enabled",
+    }:
+        raise HTTPException(400, "Sandbox 开关只能通过专用管理页修改")
     raw_value = body.get("value")
     if raw_value is None:
         raise HTTPException(400, "Missing 'value'")
@@ -681,6 +695,14 @@ def reset_setting(key: str, request: Request, db: Session = Depends(get_db),
     defn = SETTING_DEFS.get(key)
     if not defn:
         raise HTTPException(400, f"Unknown setting: {key}")
+    if not defn.database_override_allowed:
+        raise HTTPException(400, f"{key} is read-only, change via env var")
+    if key in {
+        "sandbox.enabled",
+        "sandbox.exec_enabled",
+        "sandbox.group_enabled",
+    }:
+        raise HTTPException(400, "Sandbox 开关只能通过专用管理页修改")
     keys_to_reset = {key}
     alias = LEGACY_SETTING_ALIASES.get(key)
     if alias is not None:

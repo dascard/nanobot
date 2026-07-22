@@ -1822,6 +1822,7 @@ class NanobotBridge:
                     group_id=group_id,
                     user_id=user_id,
                     platform=platform,
+                    session_id=session_id,
                     runtime_preset=runtime_preset,
                     db=uow.db,
                 )

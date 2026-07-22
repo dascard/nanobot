@@ -28,6 +28,11 @@ from core.proactive.runtime_identity import (
     start_proactive_runtime,
     stop_proactive_runtime,
 )
+from core.sandbox.admin_operations import (
+    SandboxAdminOperationRunner,
+    start_sandbox_admin_operations,
+    stop_sandbox_admin_operations,
+)
 
 from bootstrap.network_check import run_startup_network_check
 from bootstrap.model_runtime import start_model_runtime, stop_model_runtime
@@ -95,6 +100,7 @@ async def lifespan(app: Any):
     sqlite_maintenance: SQLiteMaintenanceWorker | None = None
     retrieval_executor: RerankerExecutorPort | None = None
     proactive_runtime_started = False
+    sandbox_admin_runner: SandboxAdminOperationRunner | None = None
 
     logger.info("Starting Nanobot Server Gateway...")
     mark_starting(testing=testing)
@@ -105,6 +111,7 @@ async def lifespan(app: Any):
     try:
         init_db()
         logger.info("Database initialized.")
+        sandbox_admin_runner = start_sandbox_admin_operations(testing=testing)
         sqlite_maintenance = start_sqlite_maintenance()
         validate_sandbox_asset_token_config()
         run_provider_migration()
@@ -135,6 +142,7 @@ async def lifespan(app: Any):
         logger.info("Shutting down Nanobot Server Gateway...")
         if scheduler_handles is not None:
             scheduler_handles.stop_all()
+        stop_sandbox_admin_operations(sandbox_admin_runner)
         if proactive_runtime_started:
             stop_proactive_runtime()
         if model_runtime_started:

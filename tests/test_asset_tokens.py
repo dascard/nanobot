@@ -15,6 +15,7 @@ from core.asset_transport import (
 
 ASSET_SHA256 = "a" * 64
 SECRET = "s" * 32
+SESSION_ID = "qq:10001:private"
 
 
 def _decode_payload(token: str) -> dict:
@@ -28,42 +29,38 @@ def test_asset_token_binds_asset_recipient_and_expiry():
 
     token = signer.issue(
         ASSET_SHA256,
-        recipient_type="user",
-        recipient_id="10001",
+        recipient_type="session",
+        recipient_id=SESSION_ID,
         now=1_000,
     )
     claims = signer.verify(
         token,
-        recipient_type="user",
-        recipient_id="10001",
+        recipient_type="session",
+        recipient_id=SESSION_ID,
         now=1_299,
     )
 
     assert claims.asset_sha256 == ASSET_SHA256
-    assert claims.recipient_type == "user"
-    assert claims.recipient_id == "10001"
+    assert claims.recipient_type == "session"
+    assert claims.recipient_id == SESSION_ID
     assert claims.expires_at == 1_300
     assert _decode_payload(token)["exp"] == 1_300
 
 
-@pytest.mark.parametrize(
-    ("recipient_type", "recipient_id"),
-    [("group", "10001"), ("user", "other")],
-)
-def test_asset_token_rejects_recipient_mismatch(recipient_type, recipient_id):
+def test_asset_token_rejects_recipient_mismatch():
     signer = AssetTokenSigner(SECRET)
     token = signer.issue(
         ASSET_SHA256,
-        recipient_type="user",
-        recipient_id="10001",
+        recipient_type="session",
+        recipient_id=SESSION_ID,
         now=1_000,
     )
 
     with pytest.raises(AssetTokenError, match="收件人不匹配"):
         signer.verify(
             token,
-            recipient_type=recipient_type,
-            recipient_id=recipient_id,
+            recipient_type="session",
+            recipient_id="qq:other:private",
             now=1_001,
         )
 
@@ -72,8 +69,8 @@ def test_asset_token_rejects_tampering_and_exact_expiry_boundary():
     signer = AssetTokenSigner(SECRET, default_ttl_seconds=60)
     token = signer.issue(
         ASSET_SHA256,
-        recipient_type="user",
-        recipient_id="10001",
+        recipient_type="session",
+        recipient_id=SESSION_ID,
         now=1_000,
     )
     encoded, signature = token.split(".", 1)
@@ -110,14 +107,14 @@ def test_asset_token_rejects_weak_secret_invalid_hash_and_zero_ttl():
     with pytest.raises(AssetTokenError, match="资源无效"):
         signer.issue(
             "not-a-hash",
-            recipient_type="user",
-            recipient_id="10001",
+            recipient_type="session",
+            recipient_id=SESSION_ID,
         )
     with pytest.raises(AssetTokenError, match="有效期配置无效"):
         signer.issue(
             ASSET_SHA256,
-            recipient_type="user",
-            recipient_id="10001",
+            recipient_type="session",
+            recipient_id=SESSION_ID,
             ttl_seconds=0,
         )
 
@@ -126,8 +123,8 @@ def test_asset_reply_token_expands_only_at_transport_boundary():
     signer = AssetTokenSigner(SECRET)
     transport_token = signer.issue(
         ASSET_SHA256,
-        recipient_type="user",
-        recipient_id="10001",
+        recipient_type="session",
+        recipient_id=SESSION_ID,
     )
     reply_token = build_asset_reply_token(transport_token)
 
@@ -143,8 +140,8 @@ def test_asset_reply_token_expands_only_at_transport_boundary():
     assert parsed.path == f"/base/api/v1/assets/{ASSET_SHA256}/download"
     assert query == {
         "token": [transport_token],
-        "recipient_type": ["user"],
-        "recipient_id": ["10001"],
+        "recipient_type": ["session"],
+        "recipient_id": [SESSION_ID],
     }
     assert expand_asset_download_refs_in_content(
         f"下载：{reply_token}",
@@ -157,8 +154,8 @@ def test_asset_reply_token_hides_credential_when_transport_config_is_invalid():
     signer = AssetTokenSigner(SECRET)
     transport_token = signer.issue(
         ASSET_SHA256,
-        recipient_type="user",
-        recipient_id="10001",
+        recipient_type="session",
+        recipient_id=SESSION_ID,
     )
     reply_token = build_asset_reply_token(transport_token)
 

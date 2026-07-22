@@ -175,6 +175,7 @@ def build_tool_plan(
     group_id: str = "",
     user_id: str = "",
     platform: str = "",
+    session_id: str = "",
     runtime_preset: str = "full",
     db: Any = None,
 ) -> ToolPlan:
@@ -183,6 +184,7 @@ def build_tool_plan(
         group_id=group_id,
         user_id=user_id,
         platform=platform,
+        session_id=session_id,
         runtime_preset=runtime_preset,
         db=db,
     )

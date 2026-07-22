@@ -2170,6 +2170,189 @@ def _sandbox_storage_tables(conn: Any, engine: Any, db_path: str | None) -> None
     ])
 
 
+def _sandbox_control_plane_tables(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """创建按会话授权、硬配额绑定与可恢复管理操作表。"""
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS sandbox_access_grants ("
+        "id VARCHAR(36) PRIMARY KEY, "
+        "chat_stream_id VARCHAR(512) NOT NULL UNIQUE, "
+        "platform VARCHAR(32) NOT NULL, "
+        "chat_type VARCHAR(16) NOT NULL, "
+        "external_session_id VARCHAR(255) NOT NULL, "
+        "workspace_id VARCHAR(36), "
+        "capability_level VARCHAR(16) NOT NULL DEFAULT 'off', "
+        "status VARCHAR(16) NOT NULL DEFAULT 'disabled', "
+        "version INTEGER NOT NULL DEFAULT 1, "
+        "reason TEXT NOT NULL DEFAULT '', "
+        "created_by VARCHAR(128) NOT NULL DEFAULT '', "
+        "updated_by VARCHAR(128) NOT NULL DEFAULT '', "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT fk_sandbox_access_grant_workspace "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT, "
+        "CONSTRAINT ck_sandbox_access_grant_chat_type "
+        "CHECK (chat_type IN ('private', 'group')), "
+        "CONSTRAINT ck_sandbox_access_grant_capability "
+        "CHECK (capability_level IN ('off', 'workspace', 'assets', 'exec')), "
+        "CONSTRAINT ck_sandbox_access_grant_status "
+        "CHECK (status IN ('provisioning', 'active', 'disabled', 'error')), "
+        "CONSTRAINT ck_sandbox_access_grant_version CHECK (version >= 1), "
+        "CONSTRAINT uq_sandbox_access_grant_external_session "
+        "UNIQUE (platform, chat_type, external_session_id)"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS workspace_quota_bindings ("
+        "workspace_id VARCHAR(36) PRIMARY KEY, "
+        "project_id INTEGER NOT NULL UNIQUE, "
+        "desired_quota_bytes INTEGER NOT NULL, "
+        "applied_quota_bytes INTEGER NOT NULL DEFAULT 0, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
+        "generation INTEGER NOT NULL DEFAULT 1, "
+        "last_error_code VARCHAR(64) NOT NULL DEFAULT '', "
+        "last_error_summary VARCHAR(255) NOT NULL DEFAULT '', "
+        "last_applied_at DATETIME, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT fk_workspace_quota_binding_workspace "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE, "
+        "CONSTRAINT ck_workspace_quota_project_id CHECK (project_id >= 10000), "
+        "CONSTRAINT ck_workspace_quota_desired_positive "
+        "CHECK (desired_quota_bytes > 0), "
+        "CONSTRAINT ck_workspace_quota_applied_nonnegative "
+        "CHECK (applied_quota_bytes >= 0), "
+        "CONSTRAINT ck_workspace_quota_status "
+        "CHECK (status IN ('pending', 'applying', 'applied', 'error')), "
+        "CONSTRAINT ck_workspace_quota_generation CHECK (generation >= 1)"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS sandbox_admin_operations ("
+        "operation_id VARCHAR(64) PRIMARY KEY, "
+        "request_id VARCHAR(64) NOT NULL UNIQUE, "
+        "operation_type VARCHAR(32) NOT NULL, "
+        "chat_stream_id VARCHAR(512) NOT NULL DEFAULT '', "
+        "workspace_id VARCHAR(36), "
+        "desired_capability VARCHAR(16) NOT NULL DEFAULT '', "
+        "previous_capability VARCHAR(16) NOT NULL DEFAULT '', "
+        "desired_quota_bytes INTEGER NOT NULL DEFAULT 0, "
+        "expected_grant_version INTEGER, "
+        "expected_quota_generation INTEGER, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
+        "step VARCHAR(64) NOT NULL DEFAULT 'queued', "
+        "attempt_count INTEGER NOT NULL DEFAULT 0, "
+        "max_attempts INTEGER NOT NULL DEFAULT 5, "
+        "locked_by VARCHAR(128) NOT NULL DEFAULT '', "
+        "lease_token VARCHAR(64) NOT NULL DEFAULT '', "
+        "lease_expires_at DATETIME, "
+        "next_attempt_at DATETIME, "
+        "error_code VARCHAR(64) NOT NULL DEFAULT '', "
+        "error_summary VARCHAR(255) NOT NULL DEFAULT '', "
+        "reason VARCHAR(255) NOT NULL DEFAULT '', "
+        "created_by VARCHAR(128) NOT NULL DEFAULT '', "
+        "started_at DATETIME, "
+        "finished_at DATETIME, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT fk_sandbox_admin_operation_workspace "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT, "
+        "CONSTRAINT ck_sandbox_admin_operation_type "
+        "CHECK (operation_type IN "
+        "('set_access', 'set_quota', 'bind_workspace', 'import_quota')), "
+        "CONSTRAINT ck_sandbox_admin_operation_status "
+        "CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')), "
+        "CONSTRAINT ck_sandbox_admin_desired_capability "
+        "CHECK (desired_capability IN ('', 'off', 'workspace', 'assets', 'exec')), "
+        "CONSTRAINT ck_sandbox_admin_previous_capability "
+        "CHECK (previous_capability IN ('', 'off', 'workspace', 'assets', 'exec')), "
+        "CONSTRAINT ck_sandbox_admin_desired_quota "
+        "CHECK (desired_quota_bytes >= 0), "
+        "CONSTRAINT ck_sandbox_admin_attempt_count CHECK (attempt_count >= 0), "
+        "CONSTRAINT ck_sandbox_admin_max_attempts CHECK (max_attempts >= 1)"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS sandbox_project_sequences ("
+        "name VARCHAR(32) PRIMARY KEY, "
+        "next_value INTEGER NOT NULL DEFAULT 10000, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT ck_sandbox_project_sequence_value CHECK (next_value >= 10000)"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_sandbox_access_grants_chat_stream_id "
+        "ON sandbox_access_grants(chat_stream_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_access_grants_workspace_id "
+        "ON sandbox_access_grants(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_access_grant_platform_type "
+        "ON sandbox_access_grants(platform, chat_type)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_workspace_quota_bindings_project_id "
+        "ON workspace_quota_bindings(project_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_sandbox_admin_operations_request_id "
+        "ON sandbox_admin_operations(request_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_admin_operations_workspace_id "
+        "ON sandbox_admin_operations(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_admin_operation_status_retry "
+        "ON sandbox_admin_operations(status, next_attempt_at)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_admin_operation_session_created "
+        "ON sandbox_admin_operations(chat_stream_id, created_at)",
+    ])
+
+
+def _sandbox_project_sequence_seed(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """以独立数据迁移初始化 project ID 序列。"""
+
+    conn.execute(
+        text(
+            "INSERT INTO sandbox_project_sequences(name, next_value) "
+            "SELECT :name, :next_value "
+            "WHERE NOT EXISTS ("
+            "SELECT 1 FROM sandbox_project_sequences WHERE name = :name"
+            ")"
+        ),
+        {"name": "workspace", "next_value": 10000},
+    )
+
+
+def _sandbox_tool_overrides_retired(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """删除旧 Sandbox ToolOverride，授权只由会话 grant 决定。"""
+
+    if "tool_overrides" not in _table_names(conn):
+        return
+    sandbox_tools = (
+        "workspace_list",
+        "workspace_read",
+        "workspace_search",
+        "workspace_write",
+        "asset_import",
+        "asset_publish",
+        "sandbox_exec",
+    )
+    placeholders = ", ".join(
+        f":sandbox_tool_{index}" for index in range(len(sandbox_tools))
+    )
+    conn.execute(
+        text(f"DELETE FROM tool_overrides WHERE tool_name IN ({placeholders})"),
+        {
+            f"sandbox_tool_{index}": tool_name
+            for index, tool_name in enumerate(sandbox_tools)
+        },
+    )
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -2263,6 +2446,21 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "20260720_sandbox_storage_tables",
         "sandbox workspace asset and run tables",
         _sandbox_storage_tables,
+    ),
+    (
+        "20260722_sandbox_control_plane_tables",
+        "sandbox session grants quota bindings and admin operations",
+        _sandbox_control_plane_tables,
+    ),
+    (
+        "20260722_sandbox_project_sequence_seed",
+        "initialize sandbox project id sequence",
+        _sandbox_project_sequence_seed,
+    ),
+    (
+        "20260722_sandbox_tool_overrides_retired",
+        "retire sandbox tool overrides",
+        _sandbox_tool_overrides_retired,
     ),
 ]
 

@@ -48,9 +48,9 @@ def _recipient(recipient_type: Any, recipient_id: Any) -> tuple[str, str]:
     normalized_type = str(recipient_type or "").strip().lower()
     normalized_id = str(recipient_id or "").strip()
     if (
-        normalized_type not in {"user", "group"}
+        normalized_type != "session"
         or not normalized_id
-        or len(normalized_id) > 255
+        or len(normalized_id) > 512
         or "\x00" in normalized_id
     ):
         raise AssetTokenError("资产 Token 收件人无效")

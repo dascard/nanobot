@@ -312,6 +312,52 @@ class SettingsService:
             origin="caller_default",
         )
 
+    def get_resolved_for_session(
+        self,
+        db,
+        key: str,
+        default=None,
+    ) -> ResolvedSetting:
+        """使用调用方 Session 解析单项设置，不跨越其事务边界。"""
+
+        defn = self._definitions.get(key)
+        if defn is None:
+            row = db.get(SystemSetting, key)
+            if row is not None and row.value is not None:
+                return ResolvedSetting(
+                    key=key,
+                    value=row.value,
+                    source="database",
+                    origin=f"system_settings:{key}",
+                    precedence_index=0,
+                )
+            return ResolvedSetting(
+                key=key,
+                value=default,
+                source="default",
+                origin="caller_default",
+            )
+
+        row_map: dict[str, object] = {}
+        database_sources = {"database", "legacy_database"}
+        if database_sources.intersection(defn.source_precedence):
+            keys = {key}
+            alias = LEGACY_SETTING_ALIASES.get(key)
+            if alias is not None:
+                keys.add(alias.key)
+            rows = (
+                db.query(SystemSetting)
+                .filter(SystemSetting.key.in_(keys))
+                .all()
+            )
+            row_map = {row.key: row for row in rows if row.value is not None}
+        return self._resolve_with_database(key, defn, row_map)
+
+    def get_for_session(self, db, key: str, default=None):
+        """返回调用方事务快照中的设置值。"""
+
+        return self.get_resolved_for_session(db, key, default).value
+
     def get(self, key: str, default=None):
         resolved = self._load_all().get(key)
         return resolved.value if resolved is not None else default

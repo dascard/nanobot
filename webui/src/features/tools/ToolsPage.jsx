@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { NavLink } from 'react-router-dom'
 
 import { api } from '../../api'
 import { Badge, Card } from '../../components/ui'
@@ -113,7 +114,12 @@ export function ToolsPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-2">工具管理</h1>
-      <p className="text-slate-500 text-sm mb-4">管理工具配置：默认模板决定基础权限，轻量预设用于运行时自动降档，指定覆盖用于具体群聊或私聊用户。</p>
+      <p className="text-slate-500 text-sm mb-2">管理通用工具配置：默认模板决定基础权限，轻量预设用于运行时自动降档，指定覆盖用于具体群聊或私聊用户。</p>
+      <p className="mb-4 text-xs text-amber-300">
+        七个 Sandbox 工具不接受默认模板或 ToolOverride 授权，统一由
+        <NavLink to="/sandbox" className="mx-1 underline decoration-amber-500/50 hover:text-amber-200">Sandbox 管理</NavLink>
+        按 canonical session 控制。
+      </p>
       <div className="flex gap-2 mb-6 border-b border-slate-800 pb-2">
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{t.label}</button>
@@ -217,6 +223,7 @@ export function ToolsPage() {
           </tr></thead>
           <tbody>
             {tools.map(t => {
+              const isSandboxManaged = t.sandbox_managed === true
               const isForced = overrideScope === 'group' && t.force_disabled_group
               const isLocked = t.force_enabled
               const isSubagent = t.is_subagent
@@ -241,10 +248,10 @@ export function ToolsPage() {
                   {tab === 'defaults' && (
                     <td className="py-2 px-2">
                       <button onClick={() => !t.force_enabled && !(templateKey === 'group_default' && t.force_disabled_group) && toggleDefault(t, templateKey)}
-                        disabled={t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)}
-                        title={templateKey === 'lightweight_default' ? '运行时自动降档会使用这套轻量工具预设' : activeTemplate.help}
-                        className={`px-2 py-1 rounded text-xs ${t[templateKey] ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${(t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)) ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                        {t[templateKey] ? 'ON' : 'OFF'}
+                        disabled={isSandboxManaged || t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)}
+                        title={isSandboxManaged ? '由 Sandbox 管理页按 canonical session 控制' : templateKey === 'lightweight_default' ? '运行时自动降档会使用这套轻量工具预设' : activeTemplate.help}
+                        className={`px-2 py-1 rounded text-xs ${t[templateKey] ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${(isSandboxManaged || t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)) ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        {isSandboxManaged ? '专用管理' : t[templateKey] ? 'ON' : 'OFF'}
                       </button>
                       {templateKey === 'group_default' && t.force_disabled_group && <span className="ml-2 text-xs text-slate-500">群聊强制禁用</span>}
                     </td>
@@ -254,7 +261,8 @@ export function ToolsPage() {
                       {isForced && <span className="text-xs text-slate-500">群聊强制禁用</span>}
                       {isLocked && <span className="text-xs text-emerald-400">强制启用</span>}
                       {isSubagent && <span className="text-xs text-purple-400">subagent（运行时禁用有限）</span>}
-                      {!isForced && !isLocked && !isSubagent && (
+                      {isSandboxManaged && <NavLink to="/sandbox" className="text-xs text-amber-300 underline">由 Sandbox 管理页控制</NavLink>}
+                      {!isSandboxManaged && !isForced && !isLocked && !isSubagent && (
                         <select value={overrideValue}
                           onChange={e => { const v = e.target.value; if (v === 'inherit') clearOverride(t); else setOverride(t, v === 'enabled') }}
                           disabled={!overrideReady}

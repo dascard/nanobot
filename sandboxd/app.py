@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import os
+import secrets
 import stat
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
@@ -22,6 +23,7 @@ from sandboxd.auth import TokenAuthenticator
 from sandboxd.config import SandboxdConfig
 from sandboxd.docker_backend import LocalDockerBackend
 from sandboxd.filesystem import AssetFileService, WorkspaceFileService
+from sandboxd.quota import ProjectQuotaManager
 from sandboxd.reconciler import OrphanReconciler
 from core.sandbox.paths import SafeWorkspaceFilesystem, validate_sha256, validate_workspace_id
 
@@ -130,6 +132,13 @@ class EmptyRequest(StrictModel):
     pass
 
 
+class WorkspaceQuotaRequest(WorkspaceRequest):
+    request_id: str = Field(min_length=8, max_length=64, pattern=r"^[!-~]+$")
+    project_id: int = Field(ge=10000, le=2_147_483_647)
+    quota_bytes: int = Field(ge=1024 * 1024, le=1024 * 1024 * 1024 * 1024)
+    generation: int = Field(ge=1, le=2_147_483_647)
+
+
 @dataclass
 class SandboxRuntime:
     config: SandboxdConfig
@@ -137,6 +146,8 @@ class SandboxRuntime:
     workspace_files: WorkspaceFileService
     asset_files: AssetFileService
     docker_backend: LocalDockerBackend
+    admin_authenticator: TokenAuthenticator | None = None
+    quota_manager: ProjectQuotaManager | None = None
 
     @classmethod
     def build(cls, config: SandboxdConfig) -> "SandboxRuntime":
@@ -154,6 +165,14 @@ class SandboxRuntime:
                 config,
                 workspace_files=workspace_files,
                 asset_files=asset_files,
+            ),
+            admin_authenticator=TokenAuthenticator(
+                config.admin_token_file,
+                config.admin_client_token_path,
+            ),
+            quota_manager=ProjectQuotaManager(
+                data_root=config.data_root,
+                helper_path=config.quota_helper_path,
             ),
         )
 
@@ -224,7 +243,17 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
         current = runtime
         if current is None:
             current = SandboxRuntime.build(SandboxdConfig.from_env())
+        if (
+            current.admin_authenticator is not None
+            and secrets.compare_digest(
+                current.authenticator.read_token(),
+                current.admin_authenticator.read_token(),
+            )
+        ):
+            raise RuntimeError("sandboxd 普通 Token 与管理 Token 必须不同")
         current.authenticator.prepare_client_token()
+        if current.admin_authenticator is not None:
+            current.admin_authenticator.prepare_client_token()
         current.workspace_files.layout.ensure_roots()
         try:
             result = OrphanReconciler(current.docker_backend.client).reconcile()
@@ -282,6 +311,23 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
 
     RuntimeDependency = Annotated[SandboxRuntime, Depends(authorized)]
 
+    def admin_authorized(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SandboxRuntime:
+        current: SandboxRuntime = app.state.runtime
+        authenticator = current.admin_authenticator
+        if (
+            authenticator is None
+            or not authenticator.verify_authorization(authorization)
+        ):
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd 管理接口鉴权失败",
+            )
+        return current
+
+    AdminRuntimeDependency = Annotated[SandboxRuntime, Depends(admin_authorized)]
+
     @app.get("/v1/healthz")
     def healthz(_runtime: RuntimeDependency):
         return success_result("sandboxd 进程健康", data={"service": "sandboxd"})
@@ -297,6 +343,58 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
     def ensure_workspace(body: WorkspaceRequest, current: RuntimeDependency):
         data = current.workspace_files.ensure_workspace(body.workspace_id)
         return success_result("Workspace 目录已就绪", data=data)
+
+    @app.post("/v1/admin/workspaces/ensure")
+    def admin_ensure_workspace(
+        body: WorkspaceRequest,
+        current: AdminRuntimeDependency,
+    ):
+        data = current.workspace_files.ensure_workspace(body.workspace_id)
+        return success_result("Workspace 目录已就绪", data=data)
+
+    @app.post("/v1/admin/workspaces/quota/apply")
+    def apply_workspace_quota(
+        body: WorkspaceQuotaRequest,
+        current: AdminRuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.quota_manager is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd quota 请求幂等标识无效",
+            )
+        data = current.quota_manager.apply(
+            workspace_id=body.workspace_id,
+            project_id=body.project_id,
+            quota_bytes=body.quota_bytes,
+            generation=body.generation,
+        )
+        return success_result("Workspace project quota 已应用", data=data)
+
+    @app.post("/v1/admin/workspaces/quota/inspect")
+    def inspect_workspace_quota(
+        body: WorkspaceQuotaRequest,
+        current: AdminRuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.quota_manager is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd quota 请求幂等标识无效",
+            )
+        data = current.quota_manager.inspect(
+            workspace_id=body.workspace_id,
+            project_id=body.project_id,
+            quota_bytes=body.quota_bytes,
+            generation=body.generation,
+        )
+        return success_result("Workspace project quota 检查完成", data=data)
 
     @app.post("/v1/files/list")
     def list_files(body: FileListRequest, current: RuntimeDependency):

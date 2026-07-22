@@ -47,6 +47,7 @@ import { ModelRepliesTab } from './features/logs/ModelRepliesTab'
 import { ModelsPage } from './features/models/ModelsPage'
 import { PromptV2TemplatesPage, EffectivePromptPreviewPage } from './features/prompt/PromptPages'
 import { ReplyEvalPage } from './features/reply-eval/ReplyEvalPage'
+import { SandboxPage } from './features/sandbox/SandboxPage'
 import { ToolsPage } from './features/tools/ToolsPage'
 import { EvalsPage } from './features/evals/EvalsPage'
 import { GeneratedImagesPage } from './features/generated-images/GeneratedImagesPage'
@@ -190,6 +191,7 @@ const NAV_SECTIONS = [
       { to: '/models', label: '模型', icon: Bot },
       { to: '/web-search', label: '搜索 API', icon: Search },
       { to: '/tools', label: '工具管理', icon: Wrench },
+      { to: '/sandbox', label: 'Sandbox 管理', icon: Shield },
       { to: '/evals', label: 'Eval 评测', icon: BarChart3 },
     ],
   },
@@ -2884,6 +2886,7 @@ export default function App() {
           <Route path="/stickers/duplicates" element={<StickerDedupPage />} />
           <Route path="/blocks" element={<BlocksPage />} />
           <Route path="/tools" element={<ToolsPage />} />
+          <Route path="/sandbox" element={<SandboxPage />} />
           <Route path="/configs" element={<SessionConfigsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/memory" element={<MemoryPage />} />

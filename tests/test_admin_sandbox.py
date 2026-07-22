@@ -9,10 +9,14 @@ from api.admin.common import verify_admin
 from core.database import (
     AdminAuditLog,
     Asset,
+    ChatLog,
+    SandboxAccessGrant,
+    SandboxAdminOperation,
     SandboxRun,
     SystemSetting,
     Workspace,
     WorkspaceAsset,
+    WorkspaceQuotaBinding,
     get_db,
 )
 from core.sandbox.contracts import success_result
@@ -161,9 +165,11 @@ def test_admin_sandbox_status_reports_safe_health_usage_and_runs(
     assert response.status_code == 200
     payload = response.json()
     assert payload["feature"] == {
+        "infrastructure_enable_allowed": False,
         "enabled": True,
         "exec_enabled": True,
         "group_enabled": False,
+        "group_enabled_editable": False,
     }
     assert payload["controller"]["health"]["ok"] is True
     assert payload["controller"]["ready"]["disk_used_percent"] == 21.5
@@ -174,6 +180,11 @@ def test_admin_sandbox_status_reports_safe_health_usage_and_runs(
         "asset_count": 1,
         "asset_physical_bytes": 4321,
         "asset_link_count": 1,
+    }
+    assert payload["limits"] == {
+        "workspace_default_quota_bytes": 2 * 1024 * 1024 * 1024,
+        "asset_max_bytes": 512 * 1024 * 1024,
+        "total_quota_bytes": 10 * 1024 * 1024 * 1024,
     }
     assert [item["run_id"] for item in payload["current_runs"]] == [
         "sbxrun_running"
@@ -282,3 +293,165 @@ def test_admin_sandbox_routes_require_admin_bearer(
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
     assert len(backends) == 1
+
+
+def test_admin_sandbox_feature_enable_respects_host_hard_ceiling(
+    db_session,
+    monkeypatch,
+):
+    from core.settings_service import settings
+
+    _settings(db_session)
+    db_session.commit()
+    backends = []
+    client = _client(db_session, monkeypatch, backends)
+
+    monkeypatch.setenv(
+        "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
+        "false",
+    )
+    settings.invalidate()
+    blocked = client.put(
+        "/api/v1/admin/sandbox/features",
+        json={"enabled": True, "exec_enabled": False, "reason": "尝试启用"},
+    )
+    assert blocked.status_code == 409
+
+    monkeypatch.setenv(
+        "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
+        "true",
+    )
+    settings.invalidate()
+    accepted = client.put(
+        "/api/v1/admin/sandbox/features",
+        json={"enabled": True, "exec_enabled": False, "reason": "灰度启用"},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["feature"] == {
+        "infrastructure_enable_allowed": True,
+        "enabled": True,
+        "exec_enabled": False,
+        "group_enabled": False,
+    }
+    assert db_session.get(SystemSetting, "sandbox.group_enabled").value == "false"
+    settings.invalidate()
+
+
+def test_admin_sandbox_lists_only_real_private_sessions_and_enqueues_one_request(
+    db_session,
+    monkeypatch,
+):
+    _settings(db_session)
+    db_session.add_all([
+        ChatLog(
+            user_id="user-a",
+            session_id="private_session-a",
+            sender_name="会话甲",
+            role="user",
+            content="私聊",
+            meta_json='{"platform":"qq","chat_type":"private"}',
+        ),
+        ChatLog(
+            user_id="user-a",
+            session_id="group_7788",
+            sender_name="群成员",
+            role="user",
+            content="群聊",
+            meta_json='{"platform":"qq","chat_type":"group"}',
+        ),
+    ])
+    db_session.commit()
+    backends = []
+    client = _client(db_session, monkeypatch, backends)
+
+    sessions = client.get("/api/v1/admin/sandbox/sessions")
+    assert sessions.status_code == 200
+    assert [item["chat_stream_id"] for item in sessions.json()["items"]] == [
+        "qq:session-a:private",
+    ]
+    assert sessions.json()["items"][0]["actor_user_id"] == "user-a"
+
+    request = {
+        "request_id": "api-access-request-0001",
+        "platform": "qq",
+        "chat_type": "private",
+        "session_id": "private_session-a",
+        "capability": "workspace",
+        "quota_bytes": 64 * 1024 * 1024,
+        "reason": "Web 聚合保存",
+    }
+    first = client.post(
+        "/api/v1/admin/sandbox/access-grants",
+        json=request,
+    )
+    repeated = client.post(
+        "/api/v1/admin/sandbox/access-grants",
+        json=request,
+    )
+
+    assert first.status_code == 202
+    assert first.json()["created"] is True
+    assert repeated.status_code == 202
+    assert repeated.json()["created"] is False
+    assert db_session.query(SandboxAdminOperation).count() == 1
+    grant = db_session.query(SandboxAccessGrant).one()
+    binding = db_session.query(WorkspaceQuotaBinding).one()
+    assert grant.chat_stream_id == "qq:session-a:private"
+    assert grant.capability_level == "off"
+    assert grant.status == "provisioning"
+    assert binding.project_id == 10000
+    assert binding.status == "pending"
+
+    operation_id = first.json()["operation"]["operation_id"]
+    operation = client.get(
+        f"/api/v1/admin/sandbox/operations/{operation_id}",
+    )
+    assert operation.status_code == 200
+    assert operation.json()["operation"]["status"] == "pending"
+    assert operation.json()["operation"]["expected_quota_generation"] == 1
+
+
+def test_admin_sandbox_quota_change_is_async_and_audited(
+    db_session,
+    monkeypatch,
+):
+    _settings(db_session)
+    db_session.commit()
+    backends = []
+    client = _client(db_session, monkeypatch, backends)
+    created = client.post(
+        "/api/v1/admin/sandbox/access-grants",
+        json={
+            "request_id": "quota-access-request-1",
+            "session_id": "private_quota-session",
+            "capability": "workspace",
+            "quota_bytes": 64 * 1024 * 1024,
+        },
+    )
+    workspace_id = created.json()["operation"]["workspace_id"]
+
+    changed = client.post(
+        f"/api/v1/admin/sandbox/workspaces/{workspace_id}/quota",
+        json={
+            "request_id": "quota-change-request-1",
+            "quota_bytes": 96 * 1024 * 1024,
+            "reason": "扩容测试",
+        },
+    )
+
+    assert changed.status_code == 202
+    assert changed.json()["operation"]["status"] == "pending"
+    binding = db_session.get(WorkspaceQuotaBinding, workspace_id)
+    assert binding.desired_quota_bytes == 96 * 1024 * 1024
+    assert binding.applied_quota_bytes == 0
+    assert binding.generation == 2
+    audit = db_session.query(AdminAuditLog).filter_by(
+        action="sandbox_quota_enqueue",
+    ).one()
+    assert audit.target_id == workspace_id
+
+    audit_response = client.get("/api/v1/admin/sandbox/audit-logs")
+    assert audit_response.status_code == 200
+    assert "sandbox_quota_enqueue" in {
+        item["action"] for item in audit_response.json()["items"]
+    }

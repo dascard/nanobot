@@ -37,6 +37,16 @@ class SandboxBackend(Protocol):
 
     def get_run(self, run_id: str) -> dict[str, Any]: ...
 
+    def apply_workspace_quota(
+        self,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]: ...
+
+    def inspect_workspace_quota(
+        self,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]: ...
+
 
 class FakeSandboxBackend:
     """不依赖 Docker 的单元测试后端。"""
@@ -97,3 +107,9 @@ class FakeSandboxBackend:
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         return self._call("get_run", {"run_id": run_id})
+
+    def apply_workspace_quota(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._call("apply_workspace_quota", payload)
+
+    def inspect_workspace_quota(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._call("inspect_workspace_quota", payload)
