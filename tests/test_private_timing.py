@@ -6,19 +6,19 @@ import pytest
 @pytest.mark.parametrize(
     ("text", "is_superuser", "expected"),
     [
-        ("我是不是超级用户?", True, ("short", "lightweight", "superuser_query")),
-        ("这件事靠谱吗?", True, ("short", "lightweight", "superuser_query")),
-        ("为什么今天这么累?", True, ("short", "lightweight", "superuser_query")),
-        ("怎么了?", True, ("short", "lightweight", "superuser_query")),
-        ("如何保持好心情?", True, ("short", "lightweight", "superuser_query")),
-        ("能不能聊会儿?", True, ("short", "lightweight", "superuser_query")),
+        ("我是不是超级用户?", True, ("short", "full", "superuser_query")),
+        ("这件事靠谱吗?", True, ("short", "full", "superuser_query")),
+        ("为什么今天这么累?", True, ("short", "full", "superuser_query")),
+        ("怎么了?", True, ("short", "full", "superuser_query")),
+        ("如何保持好心情?", True, ("short", "full", "superuser_query")),
+        ("能不能聊会儿?", True, ("short", "full", "superuser_query")),
         (
             "为什么最近总觉得很累\n我已经连续好几天睡不好而且白天也没精神还一直提不起劲做任何事情",
             True,
-            ("short", "lightweight", "superuser_query"),
+            ("short", "full", "superuser_query"),
         ),
-        ("你是谁?", True, ("casual", "none", "identity_probe")),
-        ("你能做什么?", True, ("casual", "none", "check_capability")),
+        ("你是谁?", True, ("casual", "full", "identity_probe")),
+        ("你能做什么?", True, ("casual", "full", "check_capability")),
         ("请审查这段代码并给出修复方案", True, ("serious", "full", "superuser_task")),
         ("为什么这个 Traceback 会出现", True, ("serious", "full", "superuser_task")),
         ("给我今日的 AI 日报", True, ("serious", "full", "daily_request")),
@@ -26,15 +26,15 @@ import pytest
         ("来份 AI 简报", True, ("serious", "full", "daily_request")),
         ("总结今天的 AI 日报", True, ("serious", "full", "daily_request")),
         ("帮我看下最新 AI 新闻", True, ("serious", "full", "daily_request")),
-        ("今日新闻真离谱", True, ("short", "lightweight", "superuser_query")),
-        ("他刚给我发了今天的新闻", True, ("short", "lightweight", "superuser_query")),
-        ("我已经整理完本周日报", True, ("short", "lightweight", "superuser_query")),
-        ("请审查这段代码并给出修复方案", False, ("short", "lightweight", "specific_task")),
-        ("给我今日的 AI 日报", False, ("casual", "none", "daily_request_casual")),
-        ("帮我看下最新 AI 新闻", False, ("casual", "none", "daily_request_casual")),
+        ("今日新闻真离谱", True, ("short", "full", "superuser_query")),
+        ("他刚给我发了今天的新闻", True, ("short", "full", "superuser_query")),
+        ("我已经整理完本周日报", True, ("short", "full", "superuser_query")),
+        ("请审查这段代码并给出修复方案", False, ("short", "full", "specific_task")),
+        ("给我今日的 AI 日报", False, ("casual", "full", "daily_request_casual")),
+        ("帮我看下最新 AI 新闻", False, ("casual", "full", "daily_request_casual")),
     ],
 )
-def test_infer_effort_applies_superuser_as_permission_ceiling_only(
+def test_infer_effort_does_not_route_tools_from_message_text(
     text,
     is_superuser,
     expected,
@@ -61,7 +61,7 @@ async def test_private_task_request_uses_shared_scoring_without_classifier():
     assert decision.timing_scoring["stage"] == "rule_shortcut"
     assert decision.timing_scoring["signals"]["sub_signals"]["is_private"] is True
     assert decision.effort == "short"
-    assert decision.runtime_preset == "lightweight"
+    assert decision.runtime_preset == "full"
 
 
 @pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def test_private_classifier_failure_result_uses_zero_confidence_rule_fallb
 
 
 @pytest.mark.asyncio
-async def test_private_image_only_wait_keeps_lightweight_runtime_for_final_processing():
+async def test_private_image_only_wait_keeps_web_configured_tools_for_final_processing():
     from core.private_timing import PrivateTimingGate
 
     gate = PrivateTimingGate()
@@ -136,7 +136,7 @@ async def test_private_image_only_wait_keeps_lightweight_runtime_for_final_proce
 
     assert decision.action == "wait"
     assert decision.raw_label == "scoring_rule_shortcut"
-    assert decision.runtime_preset == "lightweight"
+    assert decision.runtime_preset == "full"
     assert decision.effort == "short"
     assert decision.timing_scoring["stage"] == "rule_shortcut"
     assert decision.timing_scoring["signals"]["sub_signals"]["w_file"] == 0.45

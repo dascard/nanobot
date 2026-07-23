@@ -774,7 +774,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
         key="tool.lightweight_set", env_name="",
         default='["reply","no_reply","image_summary","image_generation","sticker_search"]',
         value_type="str",
-        category="tool", description="自动降档轻量预设允许的工具列表（JSON数组）",
+        category="tool", description="显式 lightweight 兼容预设；普通聊天不自动使用（JSON数组）",
     ),
     "sandbox.enabled": SettingDef(
         key="sandbox.enabled", env_name="NANOBOT_SANDBOX_ENABLED",

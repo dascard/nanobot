@@ -332,3 +332,12 @@ def test_tools_page_exposes_platform_scope_controls():
     assert "指定平台" in source
     assert "platform:" in source
     assert "scope_type: 'platform'" in source or 'scope_type: \"platform\"' in source
+
+
+def test_tools_page_does_not_advertise_text_based_runtime_downgrade():
+    source = TOOLS_JS.read_text(encoding="utf-8")
+
+    assert "普通聊天不会根据消息文本自动裁剪工具" in source
+    assert "不会按消息内容切换" in source
+    assert "运行时自动降档" not in source
+    assert "lightweight_default" not in source

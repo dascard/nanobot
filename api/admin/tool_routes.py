@@ -93,7 +93,7 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
                      user_id: str = "", platform: str = "qq",
                      runtime_preset: str = "full",
                      db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    """列出所有工具配置状态，并可预览指定运行时预设下的可用性。"""
+    """列出所有工具配置状态，并兼容预览显式运行时预设。"""
     # registry probe: 无 child bridge 时自动创建一个用于探测
     try:
         from server import app as _app
@@ -527,7 +527,7 @@ def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
             lightweight_set.discard(tool_name)
         value = json.dumps(sorted(lightweight_set), ensure_ascii=False)
         if not row:
-            row = SystemSetting(key=key, value=value, description="自动降档轻量工具预设")
+            row = SystemSetting(key=key, value=value, description="显式 lightweight 兼容预设")
             db.add(row)
         else:
             row.value = value

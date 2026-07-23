@@ -125,7 +125,7 @@ def _load_lightweight_set(db=None) -> set[str]:
 
 
 def resolve_lightweight_default(tool_name: str, db=None) -> bool:
-    """读取自动降档轻量预设中的工具启用状态。"""
+    """读取显式 lightweight 兼容预设中的工具启用状态。"""
     td = get_tool_def(tool_name)
     if td and td.force_disabled:
         return False

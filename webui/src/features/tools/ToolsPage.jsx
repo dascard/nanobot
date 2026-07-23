@@ -13,9 +13,8 @@ export function ToolsPage() {
   ]
   const templates = [
     { key: 'private_default', label: '普通私聊', chatType: 'private', help: '普通私聊的基础工具模板' },
-    { key: 'private_superuser_default', label: '私聊 superuser', chatType: 'private_superuser', help: 'superuser 私聊的基础工具模板' },
+    { key: 'private_superuser_default', label: '超级用户私聊', chatType: 'private_superuser', help: '已识别为超级用户的私聊基础模板；不会按消息内容切换' },
     { key: 'group_default', label: '群聊', chatType: 'group', help: '群聊的基础工具模板' },
-    { key: 'lightweight_default', label: '轻量预设', chatType: 'group', help: '运行时自动降档时使用的轻量工具集合' },
   ]
   const platformOptions = [
     { key: 'qq', label: 'QQ' },
@@ -114,7 +113,7 @@ export function ToolsPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-2">工具管理</h1>
-      <p className="text-slate-500 text-sm mb-2">管理通用工具配置：默认模板决定基础权限，轻量预设用于运行时自动降档，指定覆盖用于具体群聊或私聊用户。</p>
+      <p className="text-slate-500 text-sm mb-2">管理通用工具配置：普通聊天不会根据消息文本自动裁剪工具，默认模板和指定覆盖共同决定实际工具集合。</p>
       <p className="mb-4 text-xs text-amber-300">
         七个 Sandbox 工具不接受默认模板或 ToolOverride 授权，统一由
         <NavLink to="/sandbox" className="mx-1 underline decoration-amber-500/50 hover:text-amber-200">Sandbox 管理</NavLink>
@@ -249,7 +248,7 @@ export function ToolsPage() {
                     <td className="py-2 px-2">
                       <button onClick={() => !t.force_enabled && !(templateKey === 'group_default' && t.force_disabled_group) && toggleDefault(t, templateKey)}
                         disabled={isSandboxManaged || t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)}
-                        title={isSandboxManaged ? '由 Sandbox 管理页按 canonical session 控制' : templateKey === 'lightweight_default' ? '运行时自动降档会使用这套轻量工具预设' : activeTemplate.help}
+                        title={isSandboxManaged ? '由 Sandbox 管理页按 canonical session 控制' : activeTemplate.help}
                         className={`px-2 py-1 rounded text-xs ${t[templateKey] ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${(isSandboxManaged || t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)) ? 'opacity-50 cursor-not-allowed' : ''}`}>
                         {isSandboxManaged ? '专用管理' : t[templateKey] ? 'ON' : 'OFF'}
                       </button>

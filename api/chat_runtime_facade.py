@@ -48,7 +48,8 @@ def _private_decision_payload(decision: Any | None) -> dict[str, Any] | None:
         "action": _decision_attr(decision, "action"),
         "complexity": _decision_attr(decision, "complexity"),
         "effort": _decision_attr(decision, "effort"),
-        "runtime_preset": _decision_attr(decision, "runtime_preset"),
+        # 普通聊天工具只接受 Web 配置；不再透传文本分类产生的工具预设。
+        "runtime_preset": "full",
         "reason": _decision_attr(decision, "reason"),
     }
 
@@ -83,19 +84,17 @@ def build_chat_runtime_payload(
     else:
         enriched_query = f"<user_input>\n{safe_user_input}\n</user_input>"
 
-    default_runtime_preset = "full" if runtime_input.is_group else "lightweight"
     decision = runtime_input.private_decision
     if decision is None:
         complexity = 3
         effort_constraint = ""
-        runtime_preset = default_runtime_preset
     else:
         complexity = _decision_attr(decision, "complexity", 3) or 3
         effort_constraint = get_effort_constraint(_decision_attr(decision, "effort")) or ""
-        runtime_preset = (
-            _decision_attr(decision, "runtime_preset", default_runtime_preset)
-            or default_runtime_preset
-        )
+
+    # full 的语义是完整应用 Web 默认模板和指定覆盖，并非强制启用所有工具。
+    # Timing Gate 仍可决定是否回复与 effort，但不得再按消息文本裁剪工具。
+    runtime_preset = "full"
 
     bridge_meta = {
         "chat_type": "group" if runtime_input.is_group else "private",

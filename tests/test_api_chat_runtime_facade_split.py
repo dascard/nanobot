@@ -107,11 +107,11 @@ def test_build_chat_runtime_payload_preserves_private_metadata_contract():
             "action": "reply",
             "complexity": 5,
             "effort": "high",
-            "runtime_preset": "lightweight",
+            "runtime_preset": "full",
             "reason": "测试原因",
         },
         "effort_constraint": "constraint:high",
-        "runtime_preset": "lightweight",
+        "runtime_preset": "full",
     }
     assert payload.prompt_budget["safe_user_input_chars"] == len("用户原始问题 files=1")
     assert payload.prompt_budget["enriched_query_chars"] == len(payload.enriched_query)
@@ -138,7 +138,7 @@ def test_build_chat_runtime_payload_defaults_group_without_private_decision_to_f
     assert payload.bridge_meta["runtime_preset"] == "full"
 
 
-def test_build_chat_runtime_payload_defaults_private_without_decision_to_lightweight():
+def test_build_chat_runtime_payload_defaults_private_without_decision_to_web_configuration():
     from api.chat_runtime_facade import build_chat_runtime_payload
 
     payload = build_chat_runtime_payload(
@@ -151,7 +151,7 @@ def test_build_chat_runtime_payload_defaults_private_without_decision_to_lightwe
 
     assert payload.bridge_meta["chat_type"] == "private"
     assert payload.bridge_meta["private_decision"] is None
-    assert payload.bridge_meta["runtime_preset"] == "lightweight"
+    assert payload.bridge_meta["runtime_preset"] == "full"
 
 
 @pytest.mark.parametrize(
@@ -166,7 +166,7 @@ def test_build_chat_runtime_payload_defaults_private_without_decision_to_lightwe
         _Decision(runtime_preset=""),
     ],
 )
-def test_build_chat_runtime_payload_defaults_missing_private_preset_to_lightweight(decision):
+def test_build_chat_runtime_payload_ignores_private_text_routing_preset(decision):
     from api.chat_runtime_facade import build_chat_runtime_payload
 
     payload = build_chat_runtime_payload(
@@ -177,7 +177,7 @@ def test_build_chat_runtime_payload_defaults_missing_private_preset_to_lightweig
         get_effort_constraint=_effort,
     )
 
-    assert payload.bridge_meta["runtime_preset"] == "lightweight"
+    assert payload.bridge_meta["runtime_preset"] == "full"
 
 
 def test_build_chat_runtime_payload_preserves_guardrail_injection_prompt():

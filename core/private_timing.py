@@ -1,4 +1,4 @@
-"""私聊三态分类 Gate——先判断对话意图，再决定 effort + runtime_preset。"""
+"""私聊三态分类 Gate——只判断回复时机与回复力度。"""
 
 import logging
 import re
@@ -9,6 +9,10 @@ from core.timing_score import TimingDecision, TimingModelHint, decide_timing
 from core.model_provider.decision_runtime import classify_private_decision
 
 logger = logging.getLogger("nanobot.private_timing")
+
+# 普通聊天的工具集合由 Web 默认模板和指定覆盖统一管理。Timing Gate 不能再根据
+# 消息文本缩减工具；这里保留 runtime_preset 字段仅用于兼容既有运行时契约。
+_WEB_CONFIGURED_TOOL_PRESET = "full"
 
 _NO_REPLY_SET = {"嗯", "哦", "ok", "OK", "Ok", "收到", "好", "好的", "哈哈", "草", "。。", "…", "..."}
 _WAIT_MARKERS = ("等下", "等等", "我发你", "我发图", "还有", "就是然后", "这个是", "你看这个")
@@ -117,31 +121,30 @@ def _has_inline_material(text: str) -> bool:
 def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]:
     t = text.strip()
     if any(w in t for w in _IDENTITY_PROBE_WORDS):
-        return "casual", "none", "identity_probe"
+        return "casual", _WEB_CONFIGURED_TOOL_PRESET, "identity_probe"
     if any(w in t for w in _CHECK_CAPABILITY_WORDS):
-        return "casual", "none", "check_capability"
+        return "casual", _WEB_CONFIGURED_TOOL_PRESET, "check_capability"
     if any(w in t for w in _IS_BOT_WORDS) and len(t) < 30:
-        return "casual", "none", "is_bot_probe"
+        return "casual", _WEB_CONFIGURED_TOOL_PRESET, "is_bot_probe"
     if any(w in t for w in _PERSONAL_PROBE_WORDS):
-        return "casual", "none", "personal_probe"
+        return "casual", _WEB_CONFIGURED_TOOL_PRESET, "personal_probe"
     if any(w in t for w in _TOO_BROAD_WORDS):
-        return "casual", "none", "too_broad"
+        return "casual", _WEB_CONFIGURED_TOOL_PRESET, "too_broad"
     if _looks_daily_request(t):
         if is_superuser:
-            return "serious", "full", "daily_request"
-        return "casual", "none", "daily_request_casual"
+            return "serious", _WEB_CONFIGURED_TOOL_PRESET, "daily_request"
+        return "casual", _WEB_CONFIGURED_TOOL_PRESET, "daily_request_casual"
     if any(w in t for w in _MISSING_MATERIAL_WORDS) and not _looks_task_request(t):
         if _has_inline_material(t):
-            return "short", "lightweight", "specific_task"
-        return "casual", "none", "missing_material"
+            return "short", _WEB_CONFIGURED_TOOL_PRESET, "specific_task"
+        return "casual", _WEB_CONFIGURED_TOOL_PRESET, "missing_material"
     if _looks_task_request(t):
-        # 超级用户只定义权限上限，不能让每一轮请求自动扩大到完整工具集。
         if is_superuser:
-            return "serious", "full", "superuser_task"
-        return "short", "lightweight", "specific_task"
+            return "serious", _WEB_CONFIGURED_TOOL_PRESET, "superuser_task"
+        return "short", _WEB_CONFIGURED_TOOL_PRESET, "specific_task"
     if is_superuser:
-        return "short", "lightweight", "superuser_query"
-    return "short", "lightweight", "general_query"
+        return "short", _WEB_CONFIGURED_TOOL_PRESET, "superuser_query"
+    return "short", _WEB_CONFIGURED_TOOL_PRESET, "general_query"
 
 
 @dataclass
@@ -152,13 +155,14 @@ class PrivateDecision:
     raw_label: str = ""
     complexity: int = 0
     effort: str = "short"       # "ignore" | "casual" | "short" | "serious"
-    runtime_preset: str = "lightweight"  # "none" | "lightweight" | "full"
+    # 兼容字段；普通聊天固定为 full，表示应用 Web 工具配置，而不是强开所有工具。
+    runtime_preset: str = _WEB_CONFIGURED_TOOL_PRESET
     timing_scoring: dict | None = None
 
 
 @dataclass
 class PrivateTimingGate:
-    """先判对话意图，再决定 effort + runtime_preset。"""
+    """判断私聊回复时机与 effort；不参与工具集合选择。"""
 
     classifier: object | None = None
     stats: dict = field(default_factory=lambda: {"no_reply": 0, "wait": 0, "reply_now": 0, "total": 0})
@@ -197,7 +201,7 @@ class PrivateTimingGate:
                           user_id, timing_scoring=asdict(scoring))
         if has_files and not text:
             self.stats["reply_now"] += 1
-            return _log_d("reply_now", "image_only", 0.95, "rule_image_only", "short", "lightweight",
+            return _log_d("reply_now", "image_only", 0.95, "rule_image_only", "short", _WEB_CONFIGURED_TOOL_PRESET,
                           user_id, complexity=3, timing_scoring=asdict(scoring))
 
         effort, runtime_preset, intent = _infer_effort(text, is_superuser)
@@ -273,7 +277,7 @@ class PrivateTimingGate:
             reason = intent
         elif action == "wait":
             effort = "short"
-            runtime_preset = "lightweight"
+            runtime_preset = _WEB_CONFIGURED_TOOL_PRESET
             complexity = 0
             reason = scoring.reason
         else:

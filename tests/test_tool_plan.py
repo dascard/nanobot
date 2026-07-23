@@ -190,7 +190,7 @@ def test_tool_plan_exposes_memory_query_by_default_and_can_disable(db_session):
     assert "memory_query：测试禁用" in disabled_plan.runtime_tool_prompt
 
 
-def test_superuser_tool_plan_follows_request_preset_instead_of_identity(db_session):
+def test_superuser_tool_plan_uses_web_configuration_for_all_request_text(db_session):
     from core.private_timing import _infer_effort
     from core.tool_plan import build_tool_plan
 
@@ -201,9 +201,8 @@ def test_superuser_tool_plan_follows_request_preset_instead_of_identity(db_sessi
         db=db_session,
     )
 
-    assert simple_preset == "lightweight"
-    assert not {"bash", "edit", "write"} & simple_plan.sent_tool_names
-    assert {"reply", "no_reply"} <= simple_plan.sent_tool_names
+    assert simple_preset == "full"
+    assert "ai_daily" in simple_plan.sent_tool_names
 
     _, task_preset, _ = _infer_effort(
         "请审查这段代码并给出修复方案",
@@ -227,6 +226,8 @@ def test_superuser_tool_plan_follows_request_preset_instead_of_identity(db_sessi
 
     assert daily_preset == "full"
     assert "ai_daily" in daily_plan.sent_tool_names
+    assert simple_plan.sent_tool_names == task_plan.sent_tool_names
+    assert task_plan.sent_tool_names == daily_plan.sent_tool_names
 
 
 def test_platform_override_precedence_between_chat_type_group_and_user(db_session):
