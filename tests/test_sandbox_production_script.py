@@ -49,6 +49,7 @@ stage_exists() {{ [[ -f "${{STATE_DIR}}/$1" && ! -L "${{STATE_DIR}}/$1" ]]; }}
 assert_smoke_current() {{ printf 'checked\n' >"${{SMOKE_CHECK}}"; }}
 assert_control_plane_current() {{ printf 'CONTROL_PLANE_CHECKED\n'; }}
 assert_runtime_current() {{ printf 'RUNTIME_CHECKED\n'; }}
+runtime_release_from_stage() {{ printf '%s\n' "${{RELEASE}}"; }}
 assert_no_advanced_stages() {{ die "unexpected non-reuse path"; }}
 image_id_from_stage() {{ printf 'sha256:%064d\n' 0; }}
 validate_config_values() {{ :; }}
@@ -145,6 +146,106 @@ promote_release_command promote-release "$@"
         check=False,
     )
     return result, config_capture, runtime_marker
+
+
+def _run_runtime_release_validation_harness(
+    tmp_path: Path,
+    *,
+    control_plane_changed: bool = False,
+    runtime_flags: str = "off",
+) -> subprocess.CompletedProcess[str]:
+    source = SCRIPT.read_text(encoding="utf-8")
+    start = source.index("runtime_release_from_stage() {")
+    end = source.index("\nsmoke_command() {", start)
+    functions = source[start:end]
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    current_release = "1" * 40
+    target_release = "2" * 40
+    (state_dir / "runtime-deployed").write_text(
+        f"release={current_release}|flags={runtime_flags}\n",
+        encoding="utf-8",
+    )
+    harness = f"""
+set -Eeuo pipefail
+STATE_DIR={shlex.quote(str(state_dir))}
+TARGET_RELEASE={target_release}
+TARGET_REF=origin/release-candidates/sandbox-control-plane
+CONTROL_PLANE_CHANGED={"true" if control_plane_changed else "false"}
+SANDBOX_CONTROL_PLANE_PATHS=(core/sandbox sandboxd docker/sandbox)
+require_stage() {{ [[ -f "${{STATE_DIR}}/$1" ]] || die "missing stage: $1"; }}
+read_stage() {{ require_stage "$1"; head -n 1 "${{STATE_DIR}}/$1"; }}
+assert_release_published() {{ printf 'PUBLISHED %s %s\n' "$1" "$2"; }}
+die() {{ printf '%s\n' "$*" >&2; exit 1; }}
+repo_git() {{
+  case "$1" in
+    cat-file) return 0 ;;
+    rev-parse) printf '%s\n' "${{TARGET_RELEASE}}"; return 0 ;;
+    status) return 0 ;;
+    merge-base) return 0 ;;
+    diff)
+      if [[ "${{CONTROL_PLANE_CHANGED}}" == "true" ]]; then
+        printf 'sandboxd/app.py\n'
+      fi
+      return 0
+      ;;
+  esac
+  die "unexpected repo_git call: $*"
+}}
+docker() {{
+  if [[ "$1 $2 $3" == "image inspect nanobot-runtime:latest" ]]; then
+    printf '%s\n' "${{TARGET_RELEASE}}"
+    return 0
+  fi
+  die "unexpected docker call: $*"
+}}
+{functions}
+validate_runtime_release_target "${{TARGET_RELEASE}}" "${{TARGET_REF}}"
+"""
+    return subprocess.run(
+        ["bash", "-c", harness],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _run_runtime_marker_harness(
+    tmp_path: Path,
+    *,
+    marker_release: str,
+    running_release: str,
+    flags: str,
+) -> subprocess.CompletedProcess[str]:
+    source = SCRIPT.read_text(encoding="utf-8")
+    start = source.index("runtime_release_from_stage() {")
+    end = source.index("\nvalidate_runtime_release_target() {", start)
+    functions = source[start:end]
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "runtime-deployed").write_text(
+        f"release={marker_release}|flags={flags}\n",
+        encoding="utf-8",
+    )
+    harness = f"""
+set -Eeuo pipefail
+STATE_DIR={shlex.quote(str(state_dir))}
+RUNNING_RELEASE={running_release}
+require_stage() {{ [[ -f "${{STATE_DIR}}/$1" ]] || die "missing stage: $1"; }}
+read_stage() {{ require_stage "$1"; head -n 1 "${{STATE_DIR}}/$1"; }}
+die() {{ printf '%s\n' "$*" >&2; exit 1; }}
+docker() {{ printf '%s\n' "${{RUNNING_RELEASE}}"; }}
+{functions}
+assert_runtime_current
+"""
+    return subprocess.run(
+        ["bash", "-c", harness],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def _run_activate_release_tree_harness(
@@ -297,6 +398,86 @@ def test_update_release_can_reuse_unchanged_image_before_smoke():
     assert "runtime-deployed" in source
 
 
+def test_runtime_only_deploy_reuses_control_plane_and_preserves_feature_state():
+    source = SCRIPT.read_text(encoding="utf-8")
+    help_result = subprocess.run(
+        [str(SCRIPT), "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    runtime_body = source.split("deploy_runtime_command() {", 1)[1].split(
+        "\nkill_switch_command() {",
+        1,
+    )[0]
+    shared_body = source.split("deploy_runtime_release() {", 1)[1].split(
+        "\ndeploy_command() {",
+        1,
+    )[0]
+
+    assert help_result.returncode == 0, help_result.stderr
+    assert "deploy-runtime" in help_result.stdout
+    assert "--release <40 位提交>" in help_result.stdout
+    assert "assert_smoke_current" in runtime_body
+    assert "assert_control_plane_current" in runtime_body
+    assert "validate_runtime_release_target" in runtime_body
+    assert "build_image_command" not in runtime_body
+    assert "smoke_command" not in runtime_body
+    assert "install_control_plane_command" not in runtime_body
+    assert "sandbox_feature_snapshot" in shared_body
+    assert "assert_sandbox_feature_snapshot" in shared_body
+    assert "configure_application_env_off" in shared_body
+    assert 'if [[ "${feature_policy}" == "off" ]]' in shared_body
+    assert "rollback_runtime_only_deploy" in shared_body
+    assert "rollback_control_plane_after_deploy_failure" not in shared_body
+
+
+def test_runtime_only_release_gate_accepts_runtime_fast_forward(tmp_path):
+    result = _run_runtime_release_validation_harness(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "PUBLISHED" in result.stdout
+
+
+def test_runtime_only_release_gate_rejects_control_plane_change(tmp_path):
+    result = _run_runtime_release_validation_harness(
+        tmp_path,
+        control_plane_changed=True,
+    )
+
+    assert result.returncode != 0
+    assert "sandboxd/app.py" in result.stderr
+    assert "需要完整 Sandbox 验收" in result.stderr
+
+
+def test_runtime_marker_can_track_release_independently_from_control_plane(
+    tmp_path,
+):
+    release = "8" * 40
+    result = _run_runtime_marker_harness(
+        tmp_path,
+        marker_release=release,
+        running_release=release,
+        flags="preserved",
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_runtime_marker_rejects_unknown_feature_policy(tmp_path):
+    release = "8" * 40
+    result = _run_runtime_marker_harness(
+        tmp_path,
+        marker_release=release,
+        running_release=release,
+        flags="unknown",
+    )
+
+    assert result.returncode != 0
+    assert "Runtime 部署凭据格式无效" in result.stderr
+
+
 def test_release_gate_accepts_only_master_or_explicit_candidate_ref():
     source = SCRIPT.read_text(encoding="utf-8")
 
@@ -366,8 +547,8 @@ def test_release_tree_normalizes_quota_helper_permissions():
 
 def test_deploy_migrates_runtime_identity_only_after_backup():
     source = SCRIPT.read_text(encoding="utf-8")
-    deploy_body = source.split("deploy_command() {", 1)[1].split(
-        "\nkill_switch_command() {",
+    deploy_body = source.split("deploy_runtime_release() {", 1)[1].split(
+        "\ndeploy_command() {",
         1,
     )[0]
     prepare_body = source.split("prepare_runtime_bind_mounts() {", 1)[1].split(
