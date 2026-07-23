@@ -6,12 +6,14 @@ import asyncio
 import logging
 from typing import Any
 
+from core.runtime_paths import RUNTIME_PATHS
+
 logger = logging.getLogger("nanobot.registry")
 
 MODEL_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "models.json")
 
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+_DATA_DIR = os.fspath(RUNTIME_PATHS.data_dir / "model_registry")
 _FAILURE_STATE_PATH = os.path.join(_DATA_DIR, "model_failures.json")
 _RUNTIME_STATE_PATH = os.path.join(_DATA_DIR, "runtime_state.json")
 UNKNOWN_MODEL_COST = 999.0

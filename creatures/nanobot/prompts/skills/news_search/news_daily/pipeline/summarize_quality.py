@@ -1,5 +1,6 @@
 """Quality 模式 LLM 摘要——基于 Light Evidence Cards 生成日报 JSON。"""
 
+from collections.abc import Callable
 import json
 import logging
 import re
@@ -109,32 +110,29 @@ def _extract_json(raw: str) -> str:
     return m.group(0) if m else raw
 
 
-def summarize_quality(cards: list[dict], fallback: dict) -> dict:
+def summarize_quality(
+    cards: list[dict],
+    fallback: dict,
+    *,
+    model_call: Callable[..., object] | None = None,
+) -> dict:
     """调用 LLM 生成 quality 日报 JSON。失败返回 fallback。"""
     prompt = build_quality_prompt(cards)
 
     try:
-        from clients.new_api_client import NewAPIClient
-        from config import NEW_API_KEY, NEW_API_BASE_URL
-        from core.async_bridge import run_awaitable_sync
+        from core.llm_trace_context import llm_trace_scope
+        from core.model_provider.route_runtime import call_model_route_response
 
-        async def _call():
-            client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=20)
-            from core.llm_trace_context import llm_trace_scope
-            with llm_trace_scope(source="news_daily.summarize_quality"):
-                resp = await client.chat_completion(
-                    messages=[
-                        {"role": "system", "content": get_quality_system_prompt()},
-                        {"role": "user", "content": prompt},
-                    ],
-                    model_tier="fast", temperature=0.1,
-                    manual_model="deepseek-v4-flash", max_tokens=3200,
-                )
-            if isinstance(resp, dict) and "choices" in resp:
-                return resp["choices"][0]["message"]["content"]
-            return ""
-
-        raw = run_awaitable_sync(_call())
+        caller = model_call or call_model_route_response
+        with llm_trace_scope(source="news_daily.summarize_quality"):
+            response = caller(
+                route_key="news_daily_quality",
+                messages=[
+                    {"role": "system", "content": get_quality_system_prompt()},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+        raw = str(getattr(response, "content", "") or "")
 
         if not raw:
             logger.warning("[quality] LLM returned empty, using fallback")

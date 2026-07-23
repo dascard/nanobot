@@ -965,14 +965,15 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
 }
 
-_OUTREACH_ROUTE_DEFAULTS = {
+_REPLY_INHERITED_ROUTE_DEFAULTS = {
     "timing_proactive": {"timeout": 30, "temperature": 0.0, "max_tokens": 65536},
     "outreach_extract": {"timeout": 30, "temperature": 0.0, "max_tokens": 65536},
     "outreach_judge": {"timeout": 45, "temperature": 0.0, "max_tokens": 65536},
     "outreach_generate": {"timeout": 60, "temperature": 0.7, "max_tokens": 65536},
+    "news_daily_quality": {"timeout": 20, "temperature": 0.1, "max_tokens": 3200},
 }
 
-for _route_key, _route_defaults in _OUTREACH_ROUTE_DEFAULTS.items():
+for _route_key, _route_defaults in _REPLY_INHERITED_ROUTE_DEFAULTS.items():
     SETTING_DEFS.setdefault(
         f"model.route.{_route_key}",
         SettingDef(
@@ -1027,7 +1028,7 @@ for _route_key, _route_defaults in _OUTREACH_ROUTE_DEFAULTS.items():
         SettingDef(
             key=f"model.route.{_route_key}.enable_thinking",
             env_name="",
-            default="true",
+            default="false" if _route_key == "news_daily_quality" else "true",
             value_type="str",
             category="model",
             description=f"{_route_key} thinking 模式: auto/true/false",

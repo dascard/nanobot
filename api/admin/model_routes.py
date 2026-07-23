@@ -563,6 +563,7 @@ _CLASSIFIER_ROUTE_KEYS = {
     "outreach_extract",
     "outreach_judge",
     "outreach_generate",
+    "news_daily_quality",
     "private_decision",
     "classifier_legacy",
     "sticker_describe",

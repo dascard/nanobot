@@ -13,6 +13,7 @@ ROUTE_METADATA: dict[str, dict] = {
     "outreach_extract":   {"type": "classifier", "label": "主动外呼话题提炼"},
     "outreach_judge":     {"type": "classifier", "label": "主动外呼决策"},
     "outreach_generate":  {"type": "classifier", "label": "主动外呼生成"},
+    "news_daily_quality": {"type": "task",       "label": "AI 日报质量摘要"},
     "private_decision":   {"type": "classifier", "label": "私聊决策分类器"},
     "classifier_legacy":  {"type": "classifier", "label": "旧分类器"},
     "sticker_describe":   {"type": "vision",     "label": "表情包打标"},

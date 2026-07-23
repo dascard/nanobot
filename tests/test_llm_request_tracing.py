@@ -1558,45 +1558,35 @@ def test_ai_daily_simple_llm_sets_ai_daily_source(monkeypatch):
 
 def test_news_daily_quality_sets_dedicated_source(monkeypatch):
     from core.llm_trace_context import get_llm_trace_vars
+    from core.model_provider.contracts import ModelProviderResponse
     from creatures.nanobot.prompts.skills.news_search.news_daily.pipeline import summarize_quality
 
     seen = []
 
-    async def fake_chat_completion(self, **kwargs):
-        seen.append(get_llm_trace_vars())
-        return {
-            "choices": [
+    def fake_model_call(**kwargs):
+        seen.append((get_llm_trace_vars(), kwargs))
+        return ModelProviderResponse(
+            content=json.dumps(
                 {
-                    "message": {
-                        "content": json.dumps(
-                            {
-                                "title": "日报",
-                                "subtitle": "摘要",
-                                "verdict": "可用",
-                                "top_story": {
-                                    "title": "头条",
-                                    "what_happened": "发生了事",
-                                    "why_it_matters": "有影响",
-                                    "source_ids": [1],
-                                    "confidence": "high",
-                                },
-                                "highlights": [],
-                                "details": [],
-                                "watchlist": [],
-                                "missing_info": [],
-                                "closing": "完",
-                            },
-                            ensure_ascii=False,
-                        )
-                    }
-                }
-            ]
-        }
-
-    monkeypatch.setattr(
-        "clients.new_api_client.NewAPIClient.chat_completion",
-        fake_chat_completion,
-    )
+                    "title": "日报",
+                    "subtitle": "摘要",
+                    "verdict": "可用",
+                    "top_story": {
+                        "title": "头条",
+                        "what_happened": "发生了事",
+                        "why_it_matters": "有影响",
+                        "source_ids": [1],
+                        "confidence": "high",
+                    },
+                    "highlights": [],
+                    "details": [],
+                    "watchlist": [],
+                    "missing_info": [],
+                    "closing": "完",
+                },
+                ensure_ascii=False,
+            ),
+        )
 
     result = summarize_quality.summarize_quality(
         [
@@ -1610,8 +1600,11 @@ def test_news_daily_quality_sets_dedicated_source(monkeypatch):
             }
         ],
         {"title": "fallback"},
+        model_call=fake_model_call,
     )
 
     assert result["title"] == "日报"
     assert seen
-    assert seen[0][2] == "news_daily.summarize_quality"
+    assert seen[0][0][2] == "news_daily.summarize_quality"
+    assert seen[0][1]["route_key"] == "news_daily_quality"
+    assert set(seen[0][1]) == {"route_key", "messages"}

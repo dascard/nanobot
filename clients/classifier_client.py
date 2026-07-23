@@ -35,6 +35,10 @@ _OUTREACH_ROUTE_KEYS = {
     "outreach_judge",
     "outreach_generate",
 }
+_REPLY_INHERITED_ROUTE_KEYS = {
+    *_OUTREACH_ROUTE_KEYS,
+    "news_daily_quality",
+}
 
 _MODEL_SETTING_KEYS = {
     "reply": "model.reply",
@@ -140,7 +144,7 @@ def _resolve_classifier_route(route_key: str) -> dict:
 
     返回 {provider, base_url, api_key, model, timeout, temperature, max_tokens}。
     子路由（private_decision / classifier_legacy）空配置时继承 timing_gate 的完整配置；
-    主动外呼/主动发言 Judge（timing_proactive）继承主回复模型 reply 的完整配置，
+    主动外呼与日报摘要路由继承主回复模型 reply 的完整配置，
     字段级覆盖（如 private_decision.max_tokens=120）在继承后叠加。
     """
 
@@ -155,10 +159,10 @@ def _resolve_classifier_route(route_key: str) -> dict:
         "enable_thinking": "auto",
     }
 
-    # 私聊/旧分类器子路由继承 timing_gate；主动外呼 Judge 跟随主回复模型。
+    # 私聊/旧分类器子路由继承 timing_gate；生成型任务跟随主回复模型。
     if route_key in ("private_decision", "classifier_legacy"):
         base = _resolve_classifier_route("timing_gate")
-    elif route_key in _OUTREACH_ROUTE_KEYS:
+    elif route_key in _REPLY_INHERITED_ROUTE_KEYS:
         base = _resolve_classifier_route("reply")
     else:
         base = dict(defaults)
@@ -186,7 +190,7 @@ def _resolve_classifier_route(route_key: str) -> dict:
         base["model"] = str(v)
     for k in ("timeout", "temperature", "max_tokens"):
         route_default = None
-        if route_key in _OUTREACH_ROUTE_KEYS:
+        if route_key in _REPLY_INHERITED_ROUTE_KEYS:
             from core.config_registry import SETTING_DEFS
 
             defn = SETTING_DEFS.get(f"{prefix}.{k}")
@@ -200,8 +204,14 @@ def _resolve_classifier_route(route_key: str) -> dict:
 
     enable_thinking_key = f"{prefix}.enable_thinking"
     enable_thinking = _get_setting_value(enable_thinking_key, "")
-    if route_key in _OUTREACH_ROUTE_KEYS:
-        base["enable_thinking"] = normalize_enable_thinking(enable_thinking or "true")
+    if route_key in _REPLY_INHERITED_ROUTE_KEYS:
+        from core.config_registry import SETTING_DEFS
+
+        defn = SETTING_DEFS.get(enable_thinking_key)
+        route_default = defn.default if defn is not None else "auto"
+        base["enable_thinking"] = normalize_enable_thinking(
+            enable_thinking or route_default
+        )
     elif _setting_is_explicit(enable_thinking_key, enable_thinking):
         base["enable_thinking"] = normalize_enable_thinking(enable_thinking)
 
@@ -332,6 +342,7 @@ def call_model_route_response(
     default_source = {
         "timing_gate": "classifier.timing_gate",
         "private_decision": "classifier.private_decision",
+        "news_daily_quality": "news_daily.summarize_quality",
     }.get(route_key, f"classifier.{route_key}" if route_key else "classifier")
     response = provider.complete(
         ModelProviderRequest(
@@ -586,8 +597,16 @@ def resolve_model_route(route_key: str) -> dict:
     }
 
     # 继承信息（非 timing_gate 的 classifier routes）
-    if route_key in ("private_decision", "classifier_legacy", *_OUTREACH_ROUTE_KEYS):
-        inherited_from = "reply" if route_key in _OUTREACH_ROUTE_KEYS else "timing_gate"
+    if route_key in (
+        "private_decision",
+        "classifier_legacy",
+        *_REPLY_INHERITED_ROUTE_KEYS,
+    ):
+        inherited_from = (
+            "reply"
+            if route_key in _REPLY_INHERITED_ROUTE_KEYS
+            else "timing_gate"
+        )
         parent = resolve_model_route(inherited_from)
         overrides = {}
         for k in ("max_tokens", "timeout", "temperature", "model", "provider_id", "enable_thinking"):
@@ -679,7 +698,7 @@ def build_route_references() -> list[dict]:
     seen: set[str] = set()
     for rk in (
         "reply", "fast", "smart", "timing_gate", "private_decision",
-        "classifier_legacy", "sticker_describe", *_OUTREACH_ROUTE_KEYS,
+        "classifier_legacy", "sticker_describe", *_REPLY_INHERITED_ROUTE_KEYS,
     ):
         r = resolve_model_route(rk)
         m = r.get("model", "")
