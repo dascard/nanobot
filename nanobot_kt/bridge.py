@@ -26,6 +26,7 @@ from nanobot_kt.output import BufferedOutput
 from nanobot_kt.request_scope import BridgeRequestScope
 from nanobot_kt.image_pipeline import prepare_image_parts
 from nanobot_kt.reply_contract import RichTerminalOutput
+from nanobot_kt.message_adapter import MessageContractBridgeMixin
 from nanobot_kt.model_attempts import (
     AttemptOutcome,
     classify_attempt_outcome,
@@ -51,7 +52,6 @@ from core.agent_runtime import (
 )
 from core.llm_sdk_tracing import install_openai_chat_completion_tracer
 from core.session_guidance import resolve_session_guidance
-
 from config import (
     NEW_API_KEY,
     NEW_API_BASE_URL,
@@ -256,6 +256,7 @@ class BridgeTraceFinalizer:
     run_meta: dict[str, Any]
     started_at: float
     now: Any
+    correlation_tokens: Any = None
     final_tools_token: Any = None
     tool_plan_token: Any = None
     closed: bool = False
@@ -327,6 +328,16 @@ class BridgeTraceFinalizer:
                 reset_current_final_tools(final_tools_token)
 
             run_step("reset_final_tools", reset_final_tools)
+        if self.correlation_tokens is not None:
+            correlation_tokens = self.correlation_tokens
+            self.correlation_tokens = None
+
+            def reset_correlation() -> None:
+                from core.tracing_context import reset_runtime_correlation
+
+                reset_runtime_correlation(correlation_tokens)
+
+            run_step("reset_correlation", reset_correlation)
         if self.trace_tokens is not None:
             trace_tokens = self.trace_tokens
             self.trace_tokens = None
@@ -339,7 +350,7 @@ class BridgeTraceFinalizer:
             run_step("reset_trace", reset_trace)
 
 
-class NanobotBridge:
+class NanobotBridge(MessageContractBridgeMixin):
     """
     Wraps a KT Agent for use as a request/response handler.
 
@@ -413,6 +424,14 @@ class NanobotBridge:
         """Initialize the KT agent from creature config."""
         logger.info(f"Loading KT agent from {self.creature_path}")
         config = load_agent_config(self.creature_path)
+        from nanobot_kt.tool_registration_adapter import (
+            apply_tool_registration_projection,
+        )
+
+        tool_projection = apply_tool_registration_projection(config)
+        from core.tool_schema_preview import validate_registered_tool_schemas
+
+        validate_registered_tool_schemas()
         self._disable_config_prompt(config)
         config.include_tools_in_prompt = False
         config.include_hints_in_prompt = False
@@ -452,6 +471,16 @@ class NanobotBridge:
         )
 
         tools_list = list(self._runtime.list_tool_names())
+        from nanobot_kt.tool_registration_adapter import (
+            build_tool_registry_runtime_info,
+        )
+
+        self._tool_registry_info = build_tool_registry_runtime_info(
+            tools_list,
+            tool_projection,
+            # 测试可注入最小 Fake Agent；真实 KT 必须严格匹配冻结快照。
+            strict=self._agent.__class__ is Agent,
+        )
         if not tools_list:
             logger.warning(
                 "[ToolRegistry] KT tool list empty; registry type=%s",
@@ -462,41 +491,6 @@ class NanobotBridge:
         logger.info(
             f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}"
         )
-
-        # 工具注册表一致性检查
-        try:
-            from core.tool_registry import list_tool_descriptors
-
-            kt_tools = set(tools_list)
-            descriptors = {
-                descriptor.name: descriptor
-                for descriptor in list_tool_descriptors()
-            }
-            meta_tools = set(descriptors)
-            # subagent 不在 KT registry._tools 中，跳过
-            missing_meta = kt_tools - meta_tools
-            missing_kt = {
-                t
-                for t in meta_tools - kt_tools
-                if descriptors[t].availability_policy != "force_disabled"
-            }
-            if missing_meta:
-                logger.warning(
-                    "[ToolRegistry] KT tools missing metadata: %s", sorted(missing_meta)
-                )
-            if missing_kt:
-                logger.warning(
-                    "[ToolRegistry] Descriptor Registry has tools not loaded by KT: %s",
-                    sorted(missing_kt),
-                )
-            self._tool_registry_info = {
-                "kt_loaded": sorted(kt_tools),
-                "missing_meta": sorted(missing_meta),
-                "missing_kt": sorted(missing_kt),
-            }
-        except Exception as e:
-            logger.warning("[ToolRegistry] consistency check failed: %s", e)
-            self._tool_registry_info = {}
 
     def _strip_framework_prompt_from_conversation(self) -> None:
         """清理 KT 聚合器自动追加的 framework prompt 段落。"""
@@ -758,8 +752,6 @@ class NanobotBridge:
             is_group=context.is_group,
             is_super_user=context.is_super_user is True,
             group_profile_context=str(meta.get("group_profile_context") or ""),
-            expression_context=str(meta.get("expression_context") or ""),
-            jargon_context=str(meta.get("jargon_context") or ""),
             tool_schemas=tool_schemas,
             debug={"context_debug": meta.get("context_debug") or {}},
             audit_failure_policy=self._prompt_v2_audit_failure_policy(),
@@ -1762,10 +1754,16 @@ class NanobotBridge:
                 meta=run_meta,
             )
             trace_tokens = set_trace_context(trace_id, run_handle.run_id)
+            from core.tracing_context import set_runtime_correlation
+            correlation_tokens = set_runtime_correlation(
+                request_id=str(meta.get("message_id") or run_handle.run_id),
+                session_id=session_id,
+            )
             trace_finalizer = BridgeTraceFinalizer(
                 bridge=self,
                 run_id=run_handle.run_id,
                 trace_tokens=trace_tokens,
+                correlation_tokens=correlation_tokens,
                 run_meta=run_meta,
                 started_at=t_start,
                 now=_time.time,
@@ -2435,7 +2433,7 @@ class BridgeUnavailableError(RuntimeError):
     """Bridge 尚未就绪或已进入关闭流程。"""
 
 
-class NanobotBridgePool:
+class NanobotBridgePool(MessageContractBridgeMixin):
     """按会话隔离 KT Agent，避免全局单例锁阻塞不同用户。"""
 
     def __init__(self, creature_path: str = "creatures/nanobot"):

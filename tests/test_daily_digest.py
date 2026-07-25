@@ -343,7 +343,10 @@ def test_generate_task_message_uses_kt_agent(monkeypatch):
             calls["metadata"] = metadata or {}
             return "<article class=\"news-brief\"><h1>今日 AI 日报</h1></article>"
 
-    monkeypatch.setattr("nanobot_kt.bridge.NanobotBridge", FakeBridge)
+    monkeypatch.setattr(
+        "core.agent_runtime.gateway.create_isolated_agent_gateway",
+        FakeBridge,
+    )
     task = ScheduledTask(
         id=7,
         name="AI日报",
@@ -380,7 +383,10 @@ def test_generate_task_message_uses_group_session_for_group_target(monkeypatch):
             calls["metadata"] = metadata or {}
             return "ok"
 
-    monkeypatch.setattr("nanobot_kt.bridge.NanobotBridge", FakeBridge)
+    monkeypatch.setattr(
+        "core.agent_runtime.gateway.create_isolated_agent_gateway",
+        FakeBridge,
+    )
     task = ScheduledTask(
         id=8,
         name="群日报",
@@ -418,7 +424,10 @@ def test_generate_task_message_reraises_after_cleanup_with_safe_log(
         async def handle_message(self, *_args, **_kwargs):
             raise error
 
-    monkeypatch.setattr("nanobot_kt.bridge.NanobotBridge", FakeBridge)
+    monkeypatch.setattr(
+        "core.agent_runtime.gateway.create_isolated_agent_gateway",
+        FakeBridge,
+    )
     caplog.set_level(logging.ERROR, logger="nanobot.daily_digest")
     task = ScheduledTask(
         id=9,

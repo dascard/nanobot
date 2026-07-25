@@ -7,21 +7,47 @@ from core.database import ChatLog, Persona
 from fastapi import BackgroundTasks
 
 
+def _private_decision(
+    *,
+    action: str = "reply_now",
+    effort: str = "short",
+    intent: str = "other",
+    response_mode: str | None = None,
+    reason_code: str = "unit_test",
+    timing_scoring: dict | None = None,
+):
+    from core.private_timing import PrivateDecision
+    from core.private_timing_contracts import complexity_for_effort
+
+    resolved_mode = response_mode or (
+        "agent" if action == "reply_now" else "none"
+    )
+    return PrivateDecision(
+        action=action,
+        effort=effort,
+        intent=intent,
+        response_mode=resolved_mode,
+        confidence=1.0,
+        parse_quality="schema_valid",
+        error_type=None,
+        conflicting_signals=(),
+        material_state="none",
+        reason_code=reason_code,
+        contract_version="private_decision_v2",
+        task_run_id="taskrun_unit_test",
+        complexity=complexity_for_effort(effort, action=action),
+        timing_scoring=timing_scoring,
+        policy_mode="active",
+        policy_source="unit_test",
+    )
+
+
 def _fast_private_reply(monkeypatch):
     """让私聊 /chat 测试只验证路由逻辑，不等待真实私聊 gate/缓冲窗口。"""
-    from core.private_timing import PrivateDecision
 
     class FastPrivateGate:
         async def classify(self, *args, **kwargs):
-            return PrivateDecision(
-                "reply_now",
-                "unit_test",
-                1.0,
-                "unit_test",
-                complexity=5,
-                effort="short",
-                runtime_preset="lightweight",
-            )
+            return _private_decision()
 
     class FastGuardrail:
         def classify(self, *args, **kwargs):
@@ -968,18 +994,10 @@ async def test_stream_disconnect_prompt_v2_audit_failure_is_no_send(db_session, 
 
 
 def test_proxy_chat_persists_private_timing_scoring_meta(client, db_session, monkeypatch):
-    from core.private_timing import PrivateDecision
-
     class Gate:
         async def classify(self, *args, **kwargs):
-            return PrivateDecision(
-                "reply_now",
-                "unit_test_reason",
-                1.0,
-                "unit_test_raw",
-                complexity=5,
-                effort="short",
-                runtime_preset="lightweight",
+            return _private_decision(
+                reason_code="unit_test_reason",
                 timing_scoring={
                     "stage": "rule_shortcut",
                     "action": "continue",
@@ -1028,17 +1046,11 @@ def test_proxy_chat_persists_private_timing_scoring_meta(client, db_session, mon
 
 
 def test_proxy_chat_no_reply_persists_private_timing_scoring_meta(client, db_session, monkeypatch):
-    from core.private_timing import PrivateDecision
-
     class Gate:
         async def classify(self, *args, **kwargs):
-            return PrivateDecision(
-                "no_reply",
-                "ambient_ack",
-                1.0,
-                "rule_ack",
-                effort="ignore",
-                runtime_preset="none",
+            return _private_decision(
+                action="no_reply",
+                reason_code="ambient_ack",
                 timing_scoring={"stage": "rule_shortcut", "action": "no_reply"},
             )
 
@@ -1064,7 +1076,10 @@ def test_proxy_chat_no_reply_persists_private_timing_scoring_meta(client, db_ses
     )
     assert len(rows) == 2
     assert json.loads(rows[0].meta_json)["timing_gate"]["scoring"]["action"] == "no_reply"
-    assert json.loads(rows[1].meta_json)["timing_gate"]["reason"] == "ambient_ack"
+    assert (
+        json.loads(rows[1].meta_json)["timing_gate"]["reason_code"]
+        == "ambient_ack"
+    )
 
 
 @pytest.mark.asyncio
@@ -1099,11 +1114,21 @@ async def test_private_buffer_silent_releases_waiters(db_session, monkeypatch):
             fake_now["value"] = max(fake_now["value"], start + _delay)
         await real_sleep(0)
 
-    from core.private_timing import PrivateTimingGate, PrivateDecision
+    from core.private_timing import PrivateTimingGate
     import core.private_timing as _pt
     _gate = PrivateTimingGate()
-    async def _fake_classify(text, *, user_id="", has_files=False):
-        return PrivateDecision("wait", "mock", 1.0, "mock")
+    async def _fake_classify(
+        text,
+        *,
+        user_id="",
+        session_id="",
+        has_files=False,
+    ):
+        return _private_decision(
+            action="wait",
+            intent="wait_for_more",
+            reason_code="mock",
+        )
     _gate.classify = _fake_classify
     _pt._gate = _gate
     monkeypatch.setattr("api.routes.get_guardrail", lambda: DummyGuardrail())
@@ -1397,8 +1422,6 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
 async def test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer(db_session, monkeypatch):
     import asyncio
     from api.routes import ChatProxyRequest, proxy_chat, _private_buffers
-    from core.private_timing import PrivateDecision
-
     _private_buffers.clear()
 
     class DummyGuardrail:
@@ -1407,7 +1430,10 @@ async def test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer(db
 
     class WaitPrivateGate:
         async def classify(self, *args, **kwargs):
-            return PrivateDecision("wait", "unit_test", 1.0, "unit_test")
+            return _private_decision(
+                action="wait",
+                intent="wait_for_more",
+            )
 
     fake_now = {"value": 0.0}
     sleep_started = asyncio.Event()

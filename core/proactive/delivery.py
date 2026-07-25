@@ -17,7 +17,8 @@ from core.db.models.proactive import (
     ProactiveOutreachLease,
     ProactiveOutreachLog,
 )
-from core.message_envelope import build_chat_response_envelope
+from core.message_envelope import is_html_reply
+from core.message_transport_adapters import render_chat_json
 from core.model_provider.response_normalization import strip_think_blocks
 from core.outbound.contracts import OUTBOUND_PROTOCOL_VERSION
 from core.outbound.control import lock_outbound_source_control
@@ -58,6 +59,13 @@ from core.proactive.runtime_support import (
 )
 from core.proactive.runtime_identity import get_proactive_process_identity
 from core.proactive.serialization import grounding_json as _grounding_json
+from foundation.identity import RecipientIdentity
+from foundation.message_contract import (
+    MessageAction,
+    OutboundMessageContract,
+    TextContent,
+    TextFormat,
+)
 
 
 logger = logging.getLogger("nanobot.proactive.delivery")
@@ -381,9 +389,27 @@ async def _enqueue_outreach_outbox(
             destination_fingerprint = (
                 proactive_outreach_destination_fingerprint(user_id)
             )
-            envelope = build_chat_response_envelope(
+            outbound_message = OutboundMessageContract(
+                action=MessageAction.REPLY,
+                recipient=RecipientIdentity(
+                    platform="qq",
+                    recipient_type="user",
+                    recipient_id=user_id,
+                ),
+                parts=(
+                    TextContent(
+                        cleaned_message,
+                        format=(
+                            TextFormat.HTML
+                            if is_html_reply(cleaned_message)
+                            else TextFormat.PLAIN
+                        ),
+                    ),
+                ),
+            )
+            envelope = render_chat_json(
+                outbound_message,
                 status="ok",
-                answer=cleaned_message,
                 meta={
                     "platform": "qq",
                     "chat_type": "private",

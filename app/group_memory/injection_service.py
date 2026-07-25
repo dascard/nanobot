@@ -11,12 +11,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from core.db import group_memory_repository
 from core.group_runtime.ids import (
     normalize_group_session_id,
     normalize_group_stream_id,
     raw_group_id,
 )
-from core.time_utils import db_now_naive
+from core.group_learning.prompt_injection import (
+    build_group_memory_prompt_revision,
+)
 
 from app.group_memory.renderer import render_group_memory_context
 from app.group_memory.retrieval_service import (
@@ -25,7 +28,10 @@ from app.group_memory.retrieval_service import (
 )
 
 
-GROUP_MEMORY_RAG_CACHE: dict[str, tuple[float, GroupMemoryInjectionResult]] = {}
+GROUP_MEMORY_RAG_CACHE: dict[
+    str,
+    tuple[float, str, GroupMemoryInjectionResult],
+] = {}
 GROUP_MEMORY_RAG_CACHE_TTL_SECONDS = 120
 
 
@@ -50,6 +56,7 @@ def group_memory_config_ids(group_id: str) -> list[str]:
 class GroupMemoryInjectionService:
     def __init__(self, db: Session):
         self.db = db
+        self.repository = group_memory_repository(db)
 
     def build_context(
         self,
@@ -63,19 +70,15 @@ class GroupMemoryInjectionService:
         rag_timeout_ms: int = 1200,
         allow_model_calls: bool = True,
     ) -> GroupMemoryInjectionResult:
-        from core.database import ChatStreamConfig
+        from app.group_memory.query_service import (
+            GroupMemoryQueryService,
+        )
 
         session_id = normalize_group_session_id(group_id)
         cfg_ids = group_memory_config_ids(group_id)
-        cfg_rows = (
-            self.db.query(ChatStreamConfig)
-            .filter(ChatStreamConfig.chat_stream_id.in_(cfg_ids))
-            .all()
-            if cfg_ids else None
-        )
-        rows_by_id = {row.chat_stream_id: row for row in (cfg_rows or [])}
-        cfg = next((rows_by_id[candidate] for candidate in cfg_ids if candidate in rows_by_id), None)
-        mode = (cfg.group_profile_mode or "off") if cfg else "off"
+        mode = GroupMemoryQueryService(
+            self.repository
+        ).get_profile_mode(cfg_ids)
         debug: dict[str, Any] = {
             "group_profile_mode": mode,
             "group_memory_injected": False,
@@ -97,29 +100,58 @@ class GroupMemoryInjectionService:
             debug["group_memory_skipped"].append({"reason": "empty_query_context"})
             return GroupMemoryInjectionResult(debug=debug)
 
-        cache_key = _cache_key(session_id, current_user_input, recent_messages or [])
-        debug["cache_key"] = cache_key
         from core.semantic.provider_factory import (
             get_rag_runtime_config,
             get_reranker_provider,
         )
 
         runtime = get_rag_runtime_config("group_memory")
+        cache_key = _cache_key(
+            session_id,
+            current_user_input,
+            recent_messages or [],
+            mode=mode,
+            max_items=max_items,
+            max_chars=max_chars,
+            allow_model_calls=allow_model_calls,
+            reranker_enabled=(
+                runtime.enabled and runtime.reranker_enabled
+            ),
+            allow_degraded=runtime.allow_degraded,
+        )
+        debug["cache_key"] = cache_key
         if runtime.enabled and runtime.reranker_enabled and not allow_model_calls:
             debug["group_memory_skipped"].append({
                 "reason": "model_calls_forbidden",
             })
             debug["model_dependent_retrieval_skipped"] = True
             return GroupMemoryInjectionResult(debug=debug)
+        prompt_revision = ""
         if not record_injection:
+            revision_rows = GroupMemoryQueryService(
+                self.repository
+            ).list_memories(
+                session_id,
+                limit=100_000,
+            ).memories
+            prompt_revision = build_group_memory_prompt_revision(
+                list(revision_rows)
+            )
+            debug["prompt_revision"] = prompt_revision
             cached = GROUP_MEMORY_RAG_CACHE.get(cache_key)
-            if cached and cached[0] > time.monotonic():
-                cached_result = copy.deepcopy(cached[1])
+            if (
+                cached
+                and cached[0] > time.monotonic()
+                and cached[1] == prompt_revision
+            ):
+                cached_result = copy.deepcopy(cached[2])
                 cached_result.debug["cache_hit"] = True
                 cached_result.debug["model_calls_allowed"] = bool(
                     allow_model_calls
                 )
                 return cached_result
+            if cached:
+                GROUP_MEMORY_RAG_CACHE.pop(cache_key, None)
 
         started = time.perf_counter()
         reranker_provider = get_reranker_provider() if runtime.enabled and runtime.reranker_enabled else None
@@ -130,7 +162,7 @@ class GroupMemoryInjectionService:
             return GroupMemoryInjectionResult(debug=debug)
         try:
             selection = GroupMemoryRetrievalService(
-                self.db,
+                self.repository,
                 reranker_provider=reranker_provider,
                 reranker_timeout_ms=rag_timeout_ms,
             ).select(
@@ -178,6 +210,7 @@ class GroupMemoryInjectionService:
             if not record_injection:
                 GROUP_MEMORY_RAG_CACHE[cache_key] = (
                     time.monotonic() + GROUP_MEMORY_RAG_CACHE_TTL_SECONDS,
+                    prompt_revision,
                     result,
                 )
             return result
@@ -191,6 +224,7 @@ class GroupMemoryInjectionService:
         if not record_injection:
             GROUP_MEMORY_RAG_CACHE[cache_key] = (
                 time.monotonic() + GROUP_MEMORY_RAG_CACHE_TTL_SECONDS,
+                prompt_revision,
                 result,
             )
         return result
@@ -210,25 +244,36 @@ def record_group_memory_injected(db: Session, selected_ids: list[int]) -> int:
             ids.append(value)
     if not ids:
         return 0
-    from core.database import GroupMemory
+    from app.group_memory.command_service import (
+        GroupMemoryCommandService,
+    )
 
-    now = db_now_naive()
-    rows = db.query(GroupMemory).filter(GroupMemory.id.in_(ids)).all()
-    for row in rows:
-        row.last_injected_at = now
-        row.injected_count = int(row.injected_count or 0) + 1
-    db.flush()
-    return len(rows)
+    return GroupMemoryCommandService(
+        group_memory_repository(db)
+    ).record_injected(ids)
 
 
 def _cache_key(
     group_id: str,
     current_user_input: str,
     recent_messages: list[dict[str, Any]],
+    *,
+    mode: str,
+    max_items: int,
+    max_chars: int,
+    allow_model_calls: bool,
+    reranker_enabled: bool,
+    allow_degraded: bool,
 ) -> str:
     payload = {
         "group_id": group_id,
         "current_user_input": current_user_input or "",
+        "mode": str(mode or ""),
+        "max_items": max(1, int(max_items)),
+        "max_chars": max(0, int(max_chars)),
+        "allow_model_calls": bool(allow_model_calls),
+        "reranker_enabled": bool(reranker_enabled),
+        "allow_degraded": bool(allow_degraded),
         "recent_messages": [
             {
                 "sender": str(item.get("sender_name") or item.get("user_id") or ""),

@@ -69,6 +69,34 @@ def test_unreviewed_memory_automation_is_disabled_by_default():
     assert SETTING_DEFS["group_memory.injection_enabled"].default is False
 
 
+def test_private_timing_v2_settings_are_default_off_and_cross_validated():
+    from core.config_registry import SETTING_DEFS
+    from core.settings_specs import validate_setting_values
+
+    expected = {
+        "private_timing.rollout.default_mode": ("disabled", "str"),
+        "private_timing.rollout.session_modes": ("{}", "str"),
+        "private_timing.rollout.active_allowed": (False, "bool"),
+        "private_timing.decision_confidence_threshold": (0.70, "float"),
+        "private_timing.template_confidence_threshold": (0.85, "float"),
+    }
+    for key, (default, value_type) in expected.items():
+        descriptor = SETTING_DEFS[key]
+        assert descriptor.default == default
+        assert descriptor.value_type == value_type
+        assert descriptor.owner_module == "core.private_timing_policy"
+
+    values = {
+        key: descriptor.default
+        for key, descriptor in SETTING_DEFS.items()
+    }
+    validate_setting_values(SETTING_DEFS, values)
+    values["private_timing.decision_confidence_threshold"] = 0.9
+    values["private_timing.template_confidence_threshold"] = 0.8
+    with pytest.raises(ValueError, match="不能大于"):
+        validate_setting_values(SETTING_DEFS, values)
+
+
 def test_summary_routes_disable_thinking_by_default():
     from core.config_registry import SETTING_DEFS
 

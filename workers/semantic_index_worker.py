@@ -217,8 +217,7 @@ def process_semantic_index_job(
         embeddings, embedding_error = _embedding_bytes_by_sub_id(chunks, embedding_provider)
         renewed = heartbeat_job(
             db,
-            job_id=lease.job_id,
-            lease_token=lease.lease_token,
+            lease=lease,
             lease_seconds=lease_seconds,
         )
         if renewed is None:
@@ -269,8 +268,7 @@ def process_semantic_index_job(
         db.rollback()
         return fail_job(
             db,
-            job_id=lease.job_id,
-            lease_token=lease.lease_token,
+            lease=lease,
             error=_safe_worker_error(
                 exc,
                 prefix="semantic_index_permanent_error",
@@ -281,8 +279,7 @@ def process_semantic_index_job(
         db.rollback()
         return fail_job(
             db,
-            job_id=lease.job_id,
-            lease_token=lease.lease_token,
+            lease=lease,
             error=_safe_worker_error(
                 exc,
                 prefix="semantic_index_worker_error",
@@ -343,16 +340,27 @@ def run_forever(
 
 
 def main(argv: list[str] | None = None) -> int:
+    from core.database import init_db
+    from core.telemetry.runtime import (
+        start_telemetry_runtime,
+        stop_telemetry_runtime,
+    )
+
     parser = argparse.ArgumentParser(description="Semantic index worker")
     parser.add_argument("--loop", action="store_true", help="持续消费 semantic_index_jobs")
     parser.add_argument("--interval", type=float, default=10.0, help="空轮询间隔秒数")
     parser.add_argument("--owner", default="semantic-index-worker", help="worker owner id")
     args = parser.parse_args(argv)
-    if args.loop:
-        run_forever(worker_id=args.owner, interval_seconds=args.interval)
-    else:
-        run_once(worker_id=args.owner)
-    return 0
+    init_db()
+    telemetry_handle = start_telemetry_runtime()
+    try:
+        if args.loop:
+            run_forever(worker_id=args.owner, interval_seconds=args.interval)
+        else:
+            run_once(worker_id=args.owner)
+        return 0
+    finally:
+        stop_telemetry_runtime(telemetry_handle)
 
 
 if __name__ == "__main__":

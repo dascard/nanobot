@@ -2,43 +2,39 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.admin.common import audit_request, verify_admin
-from core.database import ChatStreamConfig, get_db
+from api.admin.contract_models import (
+    GroupMemoryExtractRequest,
+    GroupMemoryExtractResponse,
+    GroupMemoryInjectionConfigRequest,
+    GroupMemoryInjectionConfigResponse,
+    GroupMemoryInjectionPreviewRequest,
+    GroupMemoryInjectionPreviewResponse,
+    GroupMemoryListResponse,
+    GroupMemoryOverviewResponse,
+    GroupMemoryUpdateRequest,
+    GroupMemoryUpdateResponse,
+)
+from api.endpoint_contracts import standard_error_responses
+from core.db import (
+    get_db,
+    group_memory_record_to_dict,
+    group_memory_repository,
+)
 
 router = APIRouter(tags=["admin-group-memory"])
 
 
-class GroupMemoryExtractRequest(BaseModel):
-    window_hours: int = Field(default=24, ge=0, le=720)
-    instructions: str = ""
-
-
-class GroupMemoryInjectionConfigRequest(BaseModel):
-    group_profile_mode: Literal["off", "preview", "on"] = "on"
-
-
-class GroupMemoryInjectionPreviewRequest(BaseModel):
-    user_input: str = ""
-    max_items: int = Field(default=10, ge=1, le=30)
-    max_chars: int = Field(default=1200, ge=200, le=4000)
-
-
-class GroupMemoryUpdateRequest(BaseModel):
-    content: str | None = None
-    status: Literal["review", "active", "disabled", "archived", "rejected"] | None = None
-    inject_policy: Literal["auto", "manual_only", "never"] | None = None
-    disabled_reason: str | None = None
-    rejected_reason: str | None = None
-
-
-@router.get("/groups/{group_id:path}/memories")
+@router.get(
+    "/groups/{group_id:path}/memories",
+    operation_id="adminGroupMemoriesListLegacy",
+    response_model=GroupMemoryListResponse,
+    responses=standard_error_responses(401, 422),
+    deprecated=True,
+)
 def group_memories_list(
     group_id: str,
     memory_type: str = "",
@@ -50,53 +46,62 @@ def group_memories_list(
 
 
 def _group_memory_row_dict(r) -> dict:
-    return {
-        "id": r.id, "group_id": r.group_id,
-        "memory_type": r.memory_type, "content": r.content,
-        "content_hash": r.content_hash or "",
-        "cluster_key": r.cluster_key or "",
-        "confidence": r.confidence, "evidence_count": r.evidence_count,
-        "decay_score": r.decay_score,
-        "first_seen": r.first_seen.strftime("%Y-%m-%d") if r.first_seen else "",
-        "last_seen": r.last_seen.strftime("%Y-%m-%d") if r.last_seen else "",
-        "updated_at": r.updated_at.strftime("%Y-%m-%d %H:%M") if r.updated_at else "",
-        "status": r.status, "source": r.source or "group_analysis",
-        "inject_policy": getattr(r, "inject_policy", "auto") or "auto",
-        "disabled_reason": getattr(r, "disabled_reason", "") or "",
-        "rejected_reason": getattr(r, "rejected_reason", "") or "",
-        "merged_into_id": getattr(r, "merged_into_id", None),
-        "last_injected_at": r.last_injected_at.strftime("%Y-%m-%d %H:%M") if getattr(r, "last_injected_at", None) else "",
-        "injected_count": getattr(r, "injected_count", 0) or 0,
-        "evidence_log_ids_json": r.evidence_log_ids_json,
-    }
+    return dict(group_memory_record_to_dict(r))
 
 
 def _group_memories_payload(db: Session, group_id: str, memory_type: str = "") -> dict:
-    from core.database import GroupMemory
-    from core.group_runtime.ids import normalize_group_session_id
+    from app.group_memory.query_service import (
+        GroupMemoryQueryService,
+    )
 
-    norm = normalize_group_session_id(group_id)
-    q = db.query(GroupMemory).filter(GroupMemory.group_id == norm)
-    if memory_type:
-        q = q.filter(GroupMemory.memory_type == memory_type)
-    rows = q.order_by(GroupMemory.confidence.desc(), GroupMemory.last_seen.desc()).limit(100).all()
-    return {"group_id": norm, "total": len(rows), "memories": [_group_memory_row_dict(r) for r in rows]}
+    result = GroupMemoryQueryService(
+        group_memory_repository(db)
+    ).list_memories(
+        group_id,
+        platform="qq",
+        memory_type=memory_type,
+        limit=100,
+    )
+    return {
+        "group_id": result.group_id,
+        "chat_stream_id": result.chat_stream_id,
+        "total": result.total,
+        "memories": [
+            _group_memory_row_dict(row)
+            for row in result.memories
+        ],
+    }
 
 
-@router.get("/group-memories/overview")
+@router.get(
+    "/group-memories/overview",
+    operation_id="adminGroupMemoryOverview",
+    response_model=GroupMemoryOverviewResponse,
+    responses=standard_error_responses(401, 422),
+)
 def group_memories_overview(
     limit: int = 300,
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
     """群体记忆覆盖概览——列出有群聊日志或已有记忆的群。"""
-    from app.group_memory.extraction_service import build_group_memory_overview
+    from app.group_memory.query_service import GroupMemoryQueryService
 
-    items = build_group_memory_overview(db, limit=limit)
-    return {"total": len(items), "items": items}
+    items = GroupMemoryQueryService(
+        group_memory_repository(db)
+    ).build_overview(limit=limit)
+    return {
+        "total": len(items),
+        "items": [item.to_dict() for item in items],
+    }
 
 
-@router.get("/group-memories/{group_id:path}/items")
+@router.get(
+    "/group-memories/{group_id:path}/items",
+    operation_id="adminGroupMemoryItems",
+    response_model=GroupMemoryListResponse,
+    responses=standard_error_responses(401, 422),
+)
 def group_memory_items(
     group_id: str,
     memory_type: str = "",
@@ -107,7 +112,20 @@ def group_memory_items(
     return _group_memories_payload(db, group_id, memory_type)
 
 
-@router.post("/group-memories/{group_id:path}/extract")
+@router.post(
+    "/group-memories/{group_id:path}/extract",
+    operation_id="adminGroupMemoryExtract",
+    response_model=GroupMemoryExtractResponse,
+    responses=standard_error_responses(
+        400,
+        401,
+        404,
+        409,
+        422,
+        500,
+        502,
+    ),
+)
 async def group_memory_extract_alias(
     group_id: str,
     body: GroupMemoryExtractRequest,
@@ -119,7 +137,12 @@ async def group_memory_extract_alias(
     return await _extract_group_memories_response(group_id, body, request, db)
 
 
-@router.put("/group-memories/{group_id:path}/injection-config")
+@router.put(
+    "/group-memories/{group_id:path}/injection-config",
+    operation_id="adminGroupMemoryInjectionConfig",
+    response_model=GroupMemoryInjectionConfigResponse,
+    responses=standard_error_responses(401, 422),
+)
 def group_memory_injection_config(
     group_id: str,
     body: GroupMemoryInjectionConfigRequest,
@@ -128,16 +151,20 @@ def group_memory_injection_config(
     _auth=Depends(verify_admin),
 ):
     """开启/关闭群体记忆注入；写入 canonical qq:<raw>:group 配置。"""
-    from app.group_memory.injection_service import group_memory_config_ids
+    from app.group_memory.command_service import (
+        GroupMemoryCommandService,
+    )
+    from app.group_memory.injection_service import (
+        group_memory_config_ids,
+    )
 
     chat_stream_id = group_memory_config_ids(group_id)[0]
-    row = db.query(ChatStreamConfig).filter(ChatStreamConfig.chat_stream_id == chat_stream_id).first()
-    if not row:
-        row = ChatStreamConfig(chat_stream_id=chat_stream_id)
-        db.add(row)
-        db.flush()
-    row.group_profile_mode = body.group_profile_mode
-    db.commit()
+    row = GroupMemoryCommandService(
+        group_memory_repository(db)
+    ).set_injection_mode(
+        chat_stream_id=chat_stream_id,
+        mode=body.group_profile_mode,
+    )
     audit_request(
         db,
         request,
@@ -154,7 +181,12 @@ def group_memory_injection_config(
     }
 
 
-@router.post("/group-memories/{group_id:path}/injection-preview")
+@router.post(
+    "/group-memories/{group_id:path}/injection-preview",
+    operation_id="adminGroupMemoryInjectionPreview",
+    response_model=GroupMemoryInjectionPreviewResponse,
+    responses=standard_error_responses(401, 422),
+)
 def group_memory_injection_preview(
     group_id: str,
     body: GroupMemoryInjectionPreviewRequest,
@@ -184,7 +216,18 @@ def group_memory_injection_preview(
     }
 
 
-@router.patch("/group-memories/items/{memory_id}")
+@router.patch(
+    "/group-memories/items/{memory_id}",
+    operation_id="adminGroupMemoryUpdateItem",
+    response_model=GroupMemoryUpdateResponse,
+    responses=standard_error_responses(
+        400,
+        401,
+        404,
+        409,
+        422,
+    ),
+)
 def group_memory_update_item(
     memory_id: int,
     body: GroupMemoryUpdateRequest,
@@ -193,40 +236,49 @@ def group_memory_update_item(
     _auth=Depends(verify_admin),
 ):
     """编辑群体记忆治理字段。"""
-    from core.database import GroupMemory
-    from core.group_memory import _cluster_key, _content_hash
+    from app.group_memory.command_service import (
+        GroupMemoryCommandService,
+        GroupMemoryDuplicate,
+        GroupMemoryNotFound,
+    )
 
-    row = db.query(GroupMemory).filter(GroupMemory.id == memory_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="group memory not found")
-    updates: dict = {}
-    if body.content is not None:
-        content = str(body.content).strip()
-        if not content:
-            raise HTTPException(status_code=400, detail="content is empty")
-        content_hash = _content_hash(content)
-        duplicate = db.query(GroupMemory).filter(
-            GroupMemory.id != row.id,
-            GroupMemory.group_id == row.group_id,
-            GroupMemory.memory_type == row.memory_type,
-            GroupMemory.content_hash == content_hash,
-        ).first()
-        if duplicate:
-            raise HTTPException(status_code=409, detail="已有相同记忆，可合并或归档")
-        row.content = content
-        row.content_hash = content_hash
-        row.cluster_key = _cluster_key(content)
-        updates["content"] = content
-    for field in ("status", "inject_policy", "disabled_reason", "rejected_reason"):
-        value = getattr(body, field)
-        if value is not None:
-            setattr(row, field, value)
-            updates[field] = value
     try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="已有相同记忆，可合并或归档") from exc
+        row = GroupMemoryCommandService(
+            group_memory_repository(db)
+        ).update_memory(
+            memory_id,
+            content=body.content,
+            status=body.status,
+            inject_policy=body.inject_policy,
+            disabled_reason=body.disabled_reason,
+            rejected_reason=body.rejected_reason,
+        )
+    except GroupMemoryNotFound as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+    except GroupMemoryDuplicate as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+    updates = {
+        field: value
+        for field in (
+            "content",
+            "status",
+            "inject_policy",
+            "disabled_reason",
+            "rejected_reason",
+        )
+        if (value := getattr(body, field)) is not None
+    }
     audit_request(
         db,
         request,
@@ -235,7 +287,10 @@ def group_memory_update_item(
         str(memory_id),
         updates,
     )
-    return {"ok": True, "memory": _group_memory_row_dict(row)}
+    return {
+        "ok": True,
+        "memory": _group_memory_row_dict(row),
+    }
 
 
 async def _extract_group_memories_response(
@@ -252,11 +307,16 @@ async def _extract_group_memories_response(
             group_id,
             window_hours=body.window_hours,
             instructions=body.instructions,
+            aspects=body.aspects,
         )
     except extraction_service.GroupMemoryGroupNotFound as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except extraction_service.GroupMemoryInsufficientData as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except extraction_service.GroupMemoryLearningDisabled as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except extraction_service.GroupMemoryLearningFailed as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
     audit_request(
         db,
         request,
@@ -270,7 +330,21 @@ async def _extract_group_memories_response(
     return payload
 
 
-@router.post("/groups/{group_id:path}/memories/extract")
+@router.post(
+    "/groups/{group_id:path}/memories/extract",
+    operation_id="adminGroupMemoriesExtractLegacy",
+    response_model=GroupMemoryExtractResponse,
+    responses=standard_error_responses(
+        400,
+        401,
+        404,
+        409,
+        422,
+        500,
+        502,
+    ),
+    deprecated=True,
+)
 async def group_memories_extract(
     group_id: str,
     body: GroupMemoryExtractRequest,

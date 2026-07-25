@@ -18,6 +18,7 @@ def test_python310_compatible_datetime_utc_usage():
         ".pytest_cache",
         ".qoder",
         ".ruff_cache",
+        ".tmp",
         ".tox",
         ".venv",
         "__pycache__",

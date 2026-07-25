@@ -156,18 +156,46 @@ WebUI 管理接口使用 `NANOBOT_ADMIN_TOKEN` 登录。
 docker compose up -d --build
 ```
 
-生产环境不从工作树现场构建，也不接受浮动 tag。先准备非 root 运行用户需要的
-bind mount 权限，再使用已由 CI 构建并固定 digest 的镜像：
+生产环境不从工作树现场构建，也不接受浮动 tag。CI 在镜像推送后必须先生成
+`ArtifactManifest` 和 `ReleaseManifest`；Manifest 会绑定源码／KT 提交、依赖与
+Prompt Hash、Schema migration head、SBOM、验证结果和 OCI digest。以下示例假定
+SBOM 与验证结果已经由 CI 写入 `data/release-evidence/`：
 
 ```bash
 sudo NANOBOT_RUNTIME_UID=10001 NANOBOT_RUNTIME_GID=10001 \
   scripts/prepare-runtime-directories.sh
 
 export NANOBOT_RUNTIME_IMAGE='registry.example/nanobot@sha256:<64位摘要>'
+export NANOBOT_RUNTIME_IMAGE_ID='sha256:<64位镜像配置摘要>'
+
+python scripts/build_release_manifest.py artifact \
+  --profile nanobot-runtime \
+  --input python_lock=requirements-prod.lock \
+  --input web_lock=webui/package-lock.json \
+  --input prompt_defaults=prompts.v2.default \
+  --image-reference "${NANOBOT_RUNTIME_IMAGE}" \
+  --image-id "${NANOBOT_RUNTIME_IMAGE_ID}" \
+  --sbom-file data/release-evidence/nanobot-runtime.spdx.json \
+  --dependency-manifest-file requirements-prod.lock \
+  --verification-suite backend-full \
+  --verification-suite frontend-lint-build \
+  --verification-results data/release-evidence/verification-results.json \
+  --output data/release-evidence/runtime-artifact.json
+
+python scripts/build_release_manifest.py release \
+  --artifact data/release-evidence/runtime-artifact.json \
+  --output data/release-evidence/release.json
+
+export NANOBOT_RELEASE_MANIFEST='data/release-evidence/release.json'
 scripts/deploy-production.sh
 ```
 
 生产覆盖文件 `docker-compose.prod.yml` 会移除本地 `build` 配置并强制校验 digest。
+部署入口会先核对 Manifest 与镜像，再把四个固定服务作为不可拆分单元切换；任一
+worker、readiness、Runtime revision 或 Schema migration head 验证失败时，会把
+四个服务全部恢复到前一镜像。`data/release-state/` 保存
+`current.json`、`pending.json`、`rollback.json` 和历史 ReleaseManifest，用于中断
+恢复；它不保存环境变量、Token 或业务正文。
 四个固定服务均以非 root 用户运行，使用只读根文件系统、`cap_drop=ALL`、
 `no-new-privileges`、PID/CPU/内存限制和受限 tmpfs。服务端 `/api/v1/health`
 只表示进程存活，`/api/v1/ready` 才用于 Compose 与部署 readiness；worker 会等待

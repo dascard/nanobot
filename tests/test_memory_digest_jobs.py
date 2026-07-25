@@ -1164,6 +1164,47 @@ def test_memory_digest_job_heartbeat_renews_only_current_fencing_token(
         )
 
 
+def test_memory_digest_job_lease_checks_worker_and_attempt_generation(
+    db_session,
+):
+    from app.memory_digest.jobs import (
+        MemoryDigestJobLeaseLost,
+        claim_memory_digest_job,
+        heartbeat_memory_digest_job,
+        memory_digest_source_snapshot,
+    )
+    from core.database import MemoryDigestJob
+
+    source = _log(content="同 token 也必须校验 worker 和 attempt")
+    db_session.add(source)
+    db_session.commit()
+    snapshot = memory_digest_source_snapshot(
+        session_id="digest-session",
+        digest_date="2026-07-18",
+        logs=[source],
+    )
+    started_at = datetime(2026, 7, 18, 12, 0, 0)
+    claim = claim_memory_digest_job(
+        db_session,
+        snapshot,
+        worker_id="same-worker",
+        lease_seconds=60,
+        now=started_at,
+    )
+
+    job = db_session.get(MemoryDigestJob, claim.job_id)
+    job.attempt_count = int(job.attempt_count) + 1
+    db_session.commit()
+
+    with pytest.raises(MemoryDigestJobLeaseLost):
+        heartbeat_memory_digest_job(
+            db_session,
+            claim,
+            lease_seconds=60,
+            now=started_at + timedelta(seconds=1),
+        )
+
+
 def test_expired_lease_respects_retry_budget_but_force_can_reclaim(
     db_session,
 ):

@@ -13,12 +13,17 @@ from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from core.model_provider.contracts import ModelProviderResponse
+from core.model_provider.route_registry import resolve_model_route_key
 
 
 class RouteModelRuntimeState(StrEnum):
     NEW = "new"
     RUNNING = "running"
     STOPPED = "stopped"
+
+
+class RouteModelRuntimeUnavailableError(RuntimeError):
+    """路由模型组合根尚未启动、已停止或未安装 Adapter。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +41,11 @@ class RouteModelRequest:
         route_key = str(self.route_key or "").strip()
         if not route_key:
             raise ValueError("route_key 不能为空")
-        object.__setattr__(self, "route_key", route_key)
+        object.__setattr__(
+            self,
+            "route_key",
+            resolve_model_route_key(route_key),
+        )
         object.__setattr__(
             self,
             "messages",
@@ -87,10 +96,14 @@ class RouteModelRuntime:
     def complete(self, request: RouteModelRequest) -> ModelProviderResponse:
         with self._lock:
             if self._state is not RouteModelRuntimeState.RUNNING:
-                raise RuntimeError("模型路由运行时尚未启动或已经停止")
+                raise RouteModelRuntimeUnavailableError(
+                    "模型路由运行时尚未启动或已经停止"
+                )
             port = self._port
         if port is None:
-            raise RuntimeError("模型路由 Adapter 未配置")
+            raise RouteModelRuntimeUnavailableError(
+                "模型路由 Adapter 未配置"
+            )
         response = port.complete_route(request)
         if not isinstance(response, ModelProviderResponse):
             raise TypeError("模型路由 Adapter 返回了无效响应合同")
@@ -149,6 +162,7 @@ __all__ = [
     "RouteModelRequest",
     "RouteModelRuntime",
     "RouteModelRuntimeState",
+    "RouteModelRuntimeUnavailableError",
     "call_model_route_response",
     "route_model_runtime_status",
     "start_route_model_runtime",

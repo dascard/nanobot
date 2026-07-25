@@ -1,0 +1,297 @@
+{
+  "schema_version": 1,
+  "private_policy": [
+    {
+      "id": "disabled_without_model",
+      "mode": "disabled",
+      "without_model": true
+    },
+    {
+      "id": "observation_no_reply_proposal",
+      "mode": "observation",
+      "model_result": {
+        "action": "no_reply",
+        "effort": "short",
+        "intent": "transport_only",
+        "response_mode": "none",
+        "confidence": 0.97,
+        "material_state": "transport_only",
+        "reason_code": "no_conversation_intent"
+      }
+    },
+    {
+      "id": "active_agent",
+      "mode": "active",
+      "model_result": {
+        "effort": "serious",
+        "intent": "specific_task",
+        "confidence": 0.94,
+        "material_state": "provided",
+        "reason_code": "material_provided"
+      }
+    },
+    {
+      "id": "active_low_confidence",
+      "mode": "active",
+      "model_result": {
+        "confidence": 0.4
+      }
+    },
+    {
+      "id": "active_template",
+      "mode": "active",
+      "model_result": {
+        "effort": "casual",
+        "intent": "identity_probe",
+        "response_mode": "template",
+        "confidence": 0.95,
+        "reason_code": "casual_exchange"
+      }
+    },
+    {
+      "id": "active_no_reply",
+      "mode": "active",
+      "model_result": {
+        "action": "no_reply",
+        "effort": "short",
+        "intent": "transport_only",
+        "response_mode": "none",
+        "confidence": 0.96,
+        "material_state": "transport_only",
+        "reason_code": "no_conversation_intent"
+      }
+    },
+    {
+      "id": "active_failure_fallback",
+      "mode": "active",
+      "model_result": {
+        "confidence": 0.0,
+        "parse_quality": "invalid",
+        "error_type": "invalid_json"
+      }
+    }
+  ],
+  "timing_decisions": [
+    {
+      "id": "private_ack",
+      "text": "嗯",
+      "is_group": false,
+      "is_private": true
+    },
+    {
+      "id": "private_task",
+      "text": "帮我总结一下",
+      "is_group": false,
+      "is_private": true
+    },
+    {
+      "id": "private_wait",
+      "text": "等一下，我后面还有",
+      "is_group": false,
+      "is_private": true
+    },
+    {
+      "id": "group_at_bot",
+      "text": "帮我看看这个问题",
+      "is_group": true,
+      "is_private": false,
+      "is_at_bot": true
+    },
+    {
+      "id": "group_other_bot",
+      "text": "自动播报消息",
+      "is_group": true,
+      "is_private": false,
+      "is_other_bot": true
+    }
+  ],
+  "news_texts": [
+    {
+      "id": "model_release",
+      "title": "OpenAI 发布 GPT-5：推理能力与 API 全面升级",
+      "summary": "新模型在多项 benchmark 中提升，并开放 API。",
+      "source_name": "openai_news"
+    },
+    {
+      "id": "medical_non_ai",
+      "title": "New clinical study improves patient sleep",
+      "summary": "A hospital reports a new treatment result.",
+      "source_name": "techcrunch_ai"
+    },
+    {
+      "id": "chinese_weather",
+      "title": "今天天气真好",
+      "summary": "适合出门散步。",
+      "source_name": "other"
+    }
+  ],
+  "group_clean_messages": [
+    {
+      "id": "command",
+      "content": "/group_analysis"
+    },
+    {
+      "id": "url_only",
+      "content": "https://example.com"
+    },
+    {
+      "id": "checkin",
+      "content": "[Alice]: 签到"
+    },
+    {
+      "id": "normal",
+      "content": "[Alice]: 正常聊天内容"
+    }
+  ],
+  "group_windows": [
+    {
+      "id": "hours",
+      "instructions": "只看最近6小时"
+    },
+    {
+      "id": "days",
+      "instructions": "最近2天"
+    },
+    {
+      "id": "all",
+      "instructions": "看全部历史"
+    },
+    {
+      "id": "unspecified",
+      "instructions": "随便看看"
+    }
+  ],
+  "sandbox_paths": [
+    {
+      "id": "nested_file",
+      "path": "reports/summary.csv",
+      "allow_empty": false
+    },
+    {
+      "id": "empty_root",
+      "path": "",
+      "allow_empty": true
+    },
+    {
+      "id": "parent_escape",
+      "path": "../secret",
+      "allow_empty": false
+    },
+    {
+      "id": "absolute",
+      "path": "/etc/passwd",
+      "allow_empty": false
+    },
+    {
+      "id": "windows_separator",
+      "path": "reports\\secret.txt",
+      "allow_empty": false
+    }
+  ],
+  "admin_table_views": [
+    {
+      "id": "sensitive_table",
+      "view_id": "sensitive_data"
+    },
+    {
+      "id": "users",
+      "view_id": "users"
+    },
+    {
+      "id": "llm_logs",
+      "view_id": "llm_api_request_logs",
+      "must_not_expose": [
+        "headers_json",
+        "request_json",
+        "response_json",
+        "message_sources_json"
+      ]
+    }
+  ],
+  "publication_text": [
+    {
+      "id": "verified_url",
+      "text": "参考 https://example.com/report",
+      "sources": [
+        {
+          "url": "https://example.com/report"
+        }
+      ]
+    },
+    {
+      "id": "unverified_url",
+      "text": "参考 https://evil.example/report",
+      "sources": [
+        {
+          "url": "https://example.com/report"
+        }
+      ]
+    },
+    {
+      "id": "dangerous_scheme",
+      "text": "参考 javascript:alert(1)",
+      "sources": []
+    },
+    {
+      "id": "outbound_control",
+      "text": "[CQ:image,file=https://example.com/a.png]",
+      "sources": []
+    }
+  ],
+  "qq_messages": [
+    {
+      "id": "plain_text",
+      "messages": [
+        {
+          "type": "text",
+          "text": "普通回复"
+        }
+      ]
+    },
+    {
+      "id": "untrusted_file_cq",
+      "messages": [
+        {
+          "type": "text",
+          "text": "下载：[CQ:file,file=/etc/passwd]"
+        }
+      ]
+    },
+    {
+      "id": "structured_image",
+      "messages": [
+        {
+          "type": "image",
+          "url": "https://example.com/a[1]&x.png"
+        }
+      ]
+    }
+  ],
+  "prompt_nodes": [
+    {
+      "id": "canonical_identity",
+      "node": {
+        "id": "identity_context",
+        "type": "template",
+        "template_key": "chat/identity_context"
+      }
+    },
+    {
+      "id": "unknown_extension",
+      "node": {
+        "id": "third_party_context",
+        "type": "template",
+        "template_key": "extensions/third_party"
+      }
+    },
+    {
+      "id": "authority_escalation",
+      "node": {
+        "id": "third_party_context",
+        "type": "template",
+        "template_key": "extensions/third_party",
+        "authority": "platform_security"
+      }
+    }
+  ]
+}

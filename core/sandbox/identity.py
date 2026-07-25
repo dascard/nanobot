@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
+from foundation.identity import Principal
 from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError
 
 
 OwnerType = Literal["user", "group", "project"]
-
-
-@dataclass(frozen=True)
-class Principal:
-    platform: str
-    owner_type: OwnerType
-    owner_id: str
 
 
 def _required_identity(value: Any, field: str) -> str:

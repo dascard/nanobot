@@ -309,12 +309,14 @@ def test_effective_tool_schema_preview_uses_real_descriptions():
         "python_sandbox": True,
         "schedule_task": True,
         "memory_read": True,
+        "memory_query": True,
     })
     by_name = {item["function"]["name"]: item["function"] for item in schemas}
 
     assert "当前用户画像" in by_name["persona_update"]["description"]
     assert "schema 无参数" in by_name["persona_update"]["description"]
-    assert "硬禁用" in by_name["python_sandbox"]["description"]
+    assert "python_sandbox" not in by_name
+    assert "memory_read" not in by_name
     assert "Asia/Shanghai" in by_name["schedule_task"]["parameters"]["properties"]["cron_expr"]["description"]
     assert by_name["schedule_task"]["parameters"]["properties"]["target_type"]["enum"] == ["private", "group"]
-    assert by_name["memory_read"]["parameters"]["properties"]["run_in_background"]
+    assert by_name["memory_query"]["parameters"]["properties"]["run_in_background"]

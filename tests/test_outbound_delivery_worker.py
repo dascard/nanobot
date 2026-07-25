@@ -118,6 +118,27 @@ def _work_result(
     )
 
 
+@pytest.mark.parametrize(
+    ("category", "expected"),
+    [
+        ("success", ""),
+        ("transient", "delivery.transient"),
+        ("ambiguous", "delivery.ambiguous"),
+        ("endpoint", "delivery.permanent_failure"),
+        ("destination", "delivery.permanent_failure"),
+        ("payload", "delivery.permanent_failure"),
+        ("payload_contract", "delivery.permanent_failure"),
+    ],
+)
+def test_delivery_outcome_has_stable_telemetry_failure_code(
+    category,
+    expected,
+):
+    from core.outbound_delivery_service import _delivery_failure_code
+
+    assert _delivery_failure_code(category) == expected
+
+
 @pytest.mark.asyncio
 async def test_worker_runs_normal_and_both_legacy_lanes_with_shared_dependencies(
     monkeypatch,
@@ -1105,7 +1126,20 @@ async def test_independent_worker_never_claims_legacy_direct_leaf(
 @pytest.mark.asyncio
 async def test_invalid_persisted_envelope_opens_contract_circuit_before_send(
     outbound_factory,
+    monkeypatch,
 ):
+    from core import outbound_delivery_service
+
+    emitted = []
+
+    def capture_event(name, phase, **kwargs):
+        emitted.append((name, phase, kwargs))
+
+    monkeypatch.setattr(
+        outbound_delivery_service,
+        "emit_runtime_event",
+        capture_event,
+    )
     outbox_id = _seed_queued_outbox(
         outbound_factory,
         payload={"content": "旧版未声明格式"},
@@ -1127,6 +1161,10 @@ async def test_invalid_persisted_envelope_opens_contract_circuit_before_send(
     assert outbox.last_error_type == "delivery_contract_invalid"
     assert run.status == "blocked"
     assert [row.status for row in attempts] == ["permanent_failure"]
+    assert emitted[-1][0:2] == ("delivery.attempt", "failed")
+    assert emitted[-1][2]["attributes"]["failure_code"] == (
+        "delivery.contract_invalid"
+    )
     with outbound_factory() as db:
         circuit = db.query(OutboundDeliveryCircuit).one()
         assert circuit.scope_type == "payload_contract"

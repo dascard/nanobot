@@ -30,6 +30,23 @@ class PromptFlowSection(TypedDict):
     source_precedence: NotRequired[list[str]]
     editable: NotRequired[bool]
     failure_policy: NotRequired[str]
+    contribution_id: NotRequired[str]
+    kind: NotRequired[str]
+    input_contract: NotRequired[str]
+    output_contract: NotRequired[str]
+    priority: NotRequired[int]
+    before: NotRequired[list[str]]
+    after: NotRequired[list[str]]
+    platforms: NotRequired[list[str]]
+    chat_types: NotRequired[list[str]]
+    required_variables: NotRequired[list[str]]
+    multiplicity: NotRequired[str]
+    renderer_id: NotRequired[str]
+    sensitive_trace_policy: NotRequired[str]
+    trusted_builtin: NotRequired[bool]
+    protected_invariants: NotRequired[list[str]]
+    active_source: NotRequired[str]
+    contribution_generation: NotRequired[int]
 
 
 @dataclass(frozen=True)
@@ -121,8 +138,6 @@ class PromptCompileRequest:
     history_header: str = ""
     history_messages: list[dict[str, Any]] = field(default_factory=list)
     group_profile_context: str = ""
-    expression_context: str = ""
-    jargon_context: str = ""
     runtime_tool_prompt: str = ""
     effort_constraint: str = ""
     tool_schemas: list[dict[str, Any]] = field(default_factory=list)

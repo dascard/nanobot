@@ -7,15 +7,15 @@ from email.utils import parsedate_to_datetime
 
 from core.tool_contracts.ai_daily import AI_DAILY_TIMEZONE
 
-from .config import OFFICIAL_SOURCES, SOURCE_QUALITY, STOP_WORDS, TOPIC_KEYWORDS, KNOWN_ENTITIES
+from .config import (
+    KNOWN_ENTITIES,
+    OFFICIAL_DOMAINS,
+    OFFICIAL_SOURCES,
+    SOURCE_QUALITY,
+    STOP_WORDS,
+    TOPIC_KEYWORDS,
+)
 from .models import Article
-
-_OFFICIAL_DOMAINS = {
-    "openai.com", "anthropic.com", "deepmind.google",
-    "mistral.ai", "deepseek.com", "qwen.ai", "kimi.com",
-    "moonshot.cn", "x.ai", "nvidia.com", "cohere.com",
-    "meta.com", "ai.meta.com",
-}
 
 _MONTHS = {
     "jan": 1,
@@ -102,7 +102,7 @@ def parse_date(raw: str) -> datetime | None:
 
 def _is_official(source_name: str, domain: str) -> bool:
     sn = source_name.strip().lower().replace(" ", "_")
-    return sn in OFFICIAL_SOURCES or domain.lower() in _OFFICIAL_DOMAINS
+    return sn in OFFICIAL_SOURCES or domain.lower() in OFFICIAL_DOMAINS
 
 
 def _norm_key(text: str) -> str:

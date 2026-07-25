@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "prompt_contract",
+      "paths": [
+        "core/prompt_v2/variables.py",
+        "prompts.v2.default/chat/system.md"
+      ]
+    },
+    {
+      "id": "sandbox_security",
+      "paths": [
+        "core/sandbox/backend.py",
+        "sandboxd/docker_backend.py",
+        "deploy/apparmor/nanobot-sandbox"
+      ]
+    },
+    {
+      "id": "web_feature",
+      "paths": [
+        "webui/src/App.jsx",
+        "webui/package-lock.json"
+      ]
+    },
+    {
+      "id": "schema_migration",
+      "paths": [
+        "core/db/models/chat.py",
+        "core/schema_migrations.py"
+      ]
+    },
+    {
+      "id": "documentation_only",
+      "paths": [
+        "docs/architecture/admin-db-query-migration-matrix.md"
+      ]
+    },
+    {
+      "id": "evaluation_only",
+      "paths": [
+        "evals/run.py",
+        "test_prompt.py"
+      ]
+    },
+    {
+      "id": "sentinel_runtime_resource",
+      "paths": [
+        "sentinel/config.json"
+      ]
+    },
+    {
+      "id": "news_source_resource",
+      "paths": [
+        "resources/news/news_sources.v1.json"
+      ]
+    },
+    {
+      "id": "root_engineering_config",
+      "paths": [
+        "commitlint.config.js",
+        "package-lock.json"
+      ]
+    },
+    {
+      "id": "atomic_release_pipeline",
+      "paths": [
+        "core/release/artifacts.py",
+        "scripts/build_release_manifest.py",
+        "scripts/deploy_release.py"
+      ]
+    }
+  ]
+}

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
+from core.tool_registration import TOOL_REGISTRATION_REGISTRY
 from core.tool_schema_preview import build_effective_tool_schemas
 
 
@@ -91,6 +92,8 @@ class ToolPlan:
     executable_tool_names: frozenset[str]
     runtime_tool_prompt: str
     sha256: str
+    registration_generation: int
+    registration_sha256: str
     hidden_framework_tool_names: frozenset[str] = field(default_factory=lambda: frozenset({"skill"}))
 
     @property
@@ -150,6 +153,9 @@ class ToolPlan:
         )
         executable_names = frozenset(sent_names)
         runtime_prompt = build_runtime_tool_prompt(enabled_map, disabled_map, chat_type)
+        registration_snapshot = (
+            TOOL_REGISTRATION_REGISTRY.registry_snapshot
+        )
         sha256 = _stable_sha256({
             "enabled": enabled_map,
             "disabled": disabled_map,
@@ -157,6 +163,8 @@ class ToolPlan:
             "sent_tool_schemas": list(sent_schemas),
             "executable_tool_names": sorted(executable_names),
             "runtime_tool_prompt": runtime_prompt,
+            "registration_generation": registration_snapshot.generation,
+            "registration_sha256": registration_snapshot.sha256,
         })
         return cls(
             enabled=enabled_map,
@@ -166,6 +174,8 @@ class ToolPlan:
             executable_tool_names=executable_names,
             runtime_tool_prompt=runtime_prompt,
             sha256=sha256,
+            registration_generation=registration_snapshot.generation,
+            registration_sha256=registration_snapshot.sha256,
         )
 
 

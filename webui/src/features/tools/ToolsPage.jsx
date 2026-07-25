@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 
-import { api } from '../../api'
+import {
+  deleteToolOverride,
+  listAuditLogs,
+  listTools,
+  listToolTargets,
+  setToolOverride,
+  updateToolDefaults,
+} from '../../api/generated/adminClient'
 import { Badge, Card } from '../../components/ui'
 
 // ── Tools ──
@@ -39,34 +46,40 @@ export function ToolsPage() {
   const activeTemplate = templates.find(t => t.key === templateKey) || templates[0]
   const load = useCallback(() => {
     const isUserOverride = tab === 'overrides' && overrideScope === 'user'
-    api.get('/tools', {
-      params: {
-        chat_type: tab === 'defaults' ? activeTemplate.chatType : isUserOverride ? 'private' : 'group',
-        platform: platform,
-        group_id: tab === 'overrides' && overrideScope === 'group' ? targetId : '',
-        user_id: isUserOverride ? targetId : '',
-      },
-    }).then(r => {
-      setTools(r.data.tools || [])
-      setRegInfo(r.data.registry_info || null)
-      setRegAvail(r.data.registry_available)
-      setRegEmpty(r.data.registry_empty)
-      setBridgeCt(r.data.bridge_count || 0)
+    listTools({
+      chat_type: tab === 'defaults' ? activeTemplate.chatType : isUserOverride ? 'private' : 'group',
+      platform,
+      group_id: tab === 'overrides' && overrideScope === 'group' ? targetId : '',
+      user_id: isUserOverride ? targetId : '',
+    }).then(data => {
+      setTools(data.tools || [])
+      setRegInfo(data.registry_info || null)
+      setRegAvail(data.registry_available)
+      setRegEmpty(data.registry_empty)
+      setBridgeCt(data.bridge_count || 0)
     })
   }, [tab, overrideScope, targetId, activeTemplate.chatType, platform])
   const loadTargets = useCallback(() => {
     if (tab !== 'overrides') return
-    api.get('/tools/targets', {
-      params: { scope_type: overrideScope, search: targetSearch, limit: 50 },
-    }).then(r => setTargetOptions(r.data.items || []))
+    listToolTargets({
+      scope_type: overrideScope,
+      search: targetSearch,
+      limit: 50,
+    }).then(data => setTargetOptions(data.items || []))
   }, [tab, overrideScope, targetSearch])
-  const loadAudit = useCallback(() => api.get('/audit-logs', { params: { target_type: 'tool', limit: 50 } }).then(r => setAuditLogs(r.data.items || [])), [])
+  const loadAudit = useCallback(() => listAuditLogs({
+    target_type: 'tool',
+    limit: 50,
+  }).then(data => setAuditLogs(data.items || [])), [])
   useEffect(() => { if (tab === 'audit') loadAudit(); else load() }, [tab, load, loadAudit])
   useEffect(() => { loadTargets() }, [loadTargets])
 
   const toggleDefault = (t, field) => {
     const val = !t[field]
-    api.put(`/tools/${t.name}`, { [field]: val }).then(load)
+    updateToolDefaults({
+      tool_name: t.name,
+      body: { [field]: val },
+    }).then(load)
   }
 
   const scopeForTab = () => {
@@ -87,13 +100,19 @@ export function ToolsPage() {
   const setOverride = (t, enabled) => {
     const scope = scopeForTab()
     if (!scope) return
-    api.put(`/tools/${t.name}/override`, { ...scope, enabled, reason: '' }).then(load)
+    setToolOverride({
+      tool_name: t.name,
+      body: { ...scope, enabled, reason: '' },
+    }).then(load)
   }
 
   const clearOverride = (t) => {
     const scope = scopeForTab()
     if (!scope) return
-    api.delete(`/tools/${t.name}/override`, { params: scope }).then(load)
+    deleteToolOverride({
+      tool_name: t.name,
+      ...scope,
+    }).then(load)
   }
   const selectTarget = (target) => {
     if (overrideScope === 'platform') {

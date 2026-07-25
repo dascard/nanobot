@@ -3,7 +3,8 @@
 约定：
   ChatLog.session_id       -> group_123456
   ConversationTurn.session -> group_123456
-  GroupMemory.group_id     -> group_123456
+  GroupMemory.chat_stream  -> qq:123456:group
+  GroupMemory.group_id     -> group_123456（兼容投影）
   ChatStreamConfig.id      -> qq:123456:group (stream_id)
   ExpressionMemory.stream  -> qq:123456:group (stream_id)
   JargonMemory.stream      -> qq:123456:group (stream_id)
@@ -17,12 +18,11 @@ def normalize_group_session_id(group_id: str) -> str:
     raw = str(group_id or "").strip()
     if not raw:
         return ""
-    if raw.startswith("group_"):
-        return raw
-    if raw.startswith("qq:") and raw.endswith(":group"):
-        raw = raw.removeprefix("qq:").removesuffix(":group")
-        return f"group_{raw}"
-    return f"group_{raw}"
+    return resolve_chat_stream_identity(
+        platform="qq",
+        chat_type="group",
+        session_id=raw,
+    ).legacy_runtime_session_id
 
 
 def normalize_group_stream_id(group_id: str) -> str:
@@ -39,4 +39,11 @@ def normalize_group_stream_id(group_id: str) -> str:
 
 def raw_group_id(group_id: str) -> str:
     """从任意群号格式提取纯数字 ID。"""
-    return normalize_group_session_id(group_id).removeprefix("group_")
+    raw = str(group_id or "").strip()
+    if not raw:
+        return ""
+    return resolve_chat_stream_identity(
+        platform="qq",
+        chat_type="group",
+        session_id=raw,
+    ).external_session_id

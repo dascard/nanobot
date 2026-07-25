@@ -411,14 +411,21 @@ def _persona_fact_reliable(db: Session, row: PersonaFact, evidence: dict[str, An
     return found == set(ids)
 
 
-def _group_aliases(group_id: str) -> set[str]:
-    value = str(group_id or "").strip()
-    result = {value}
-    if value.startswith("group_"):
-        result.add(value.removeprefix("group_"))
-    elif value.isdigit():
-        result.add(f"group_{value}")
-    return {item for item in result if item}
+def _group_aliases(row: GroupMemory) -> set[str]:
+    from core.chat_stream_identity import (
+        identity_storage_aliases,
+        parse_compatibility_chat_stream_identity,
+    )
+
+    identity = parse_compatibility_chat_stream_identity(
+        str(row.chat_stream_id or row.group_id or ""),
+    )
+    if identity is None or identity.chat_type != "group":
+        return set()
+    return set(identity_storage_aliases(
+        identity,
+        include_raw_group_id=True,
+    ))
 
 
 def _group_evidence_reliable(
@@ -429,7 +436,7 @@ def _group_evidence_reliable(
     ids = evidence["ids"]
     if not ids or evidence["non_integer"]:
         return False
-    aliases = _group_aliases(row.group_id)
+    aliases = _group_aliases(row)
     found: set[int] = set()
     for part in _chunks(ids):
         found.update(

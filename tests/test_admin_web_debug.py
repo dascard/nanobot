@@ -44,7 +44,11 @@ def test_db_page_contains_grouped_search_pagination_and_preview_ui():
     page_source = Path("webui/src/App.jsx").read_text(encoding="utf-8")
 
     assert "groups" in page_source
-    assert "tableSearch" in page_source
+    assert "viewSearch" in page_source
+    assert "api.get('/db/views')" in page_source
+    assert "api.post(`/db/views/${encodeURIComponent(viewId)}/rows`" in page_source
+    assert "cursorHistory" in page_source
+    assert "filterValues" in page_source
     assert "page" in page_source
     assert "limit" in page_source
     assert "上一页" in page_source

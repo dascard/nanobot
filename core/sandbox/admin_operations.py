@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Callable
 
 from sqlalchemy import or_, update
@@ -46,7 +46,8 @@ class ClaimedSandboxOperation:
     attempt_count: int
     max_attempts: int
     worker_id: str
-    lease_token: str
+    lease_token: str = field(repr=False)
+    lease_expires_at: datetime
 
 
 class SandboxOperationLeaseLost(RuntimeError):
@@ -60,6 +61,10 @@ def _claim_operation(
     lease_seconds: int,
 ) -> ClaimedSandboxOperation | None:
     now = db_now_naive()
+    normalized_worker = str(worker_id or "").strip()
+    if not normalized_worker or len(normalized_worker) > 128:
+        raise ValueError("worker_id 必须是 1-128 字符")
+    expires_at = lease_deadline(now, lease_seconds)
     candidate = (
         db.query(SandboxAdminOperation)
         .filter(
@@ -109,9 +114,9 @@ def _claim_operation(
             status="running",
             step="claimed",
             attempt_count=SandboxAdminOperation.attempt_count + 1,
-            locked_by=worker_id,
+            locked_by=normalized_worker,
             lease_token=token,
-            lease_expires_at=lease_deadline(now, lease_seconds),
+            lease_expires_at=expires_at,
             next_attempt_at=None,
             started_at=SandboxAdminOperation.started_at if candidate.started_at else now,
             updated_at=now,
@@ -145,17 +150,25 @@ def _claim_operation(
         request_id=str(row.request_id),
         attempt_count=int(row.attempt_count or 0),
         max_attempts=int(row.max_attempts or 0),
-        worker_id=worker_id,
+        worker_id=normalized_worker,
         lease_token=token,
+        lease_expires_at=expires_at,
     )
 
 
-def _lease_filter(claim: ClaimedSandboxOperation):
+def _lease_filter(
+    claim: ClaimedSandboxOperation,
+    *,
+    now: datetime,
+):
     return (
         SandboxAdminOperation.operation_id == claim.operation_id,
         SandboxAdminOperation.status == "running",
         SandboxAdminOperation.locked_by == claim.worker_id,
         SandboxAdminOperation.lease_token == claim.lease_token,
+        SandboxAdminOperation.attempt_count == claim.attempt_count,
+        SandboxAdminOperation.lease_expires_at.is_not(None),
+        SandboxAdminOperation.lease_expires_at > now,
     )
 
 
@@ -176,7 +189,7 @@ def _mark_applying(db: Session, claim: ClaimedSandboxOperation) -> WorkspaceQuot
             raise SandboxOperationLeaseLost
     operation_changed = db.execute(
         update(SandboxAdminOperation)
-        .where(*_lease_filter(claim))
+        .where(*_lease_filter(claim, now=now))
         .values(step="applying_quota", updated_at=now)
     )
     if int(operation_changed.rowcount or 0) != 1:
@@ -210,7 +223,7 @@ def _settle_success(db: Session, claim: ClaimedSandboxOperation) -> None:
     now = db_now_naive()
     changed = db.execute(
         update(SandboxAdminOperation)
-        .where(*_lease_filter(claim))
+        .where(*_lease_filter(claim, now=now))
         .values(
             status="succeeded",
             step="completed",
@@ -273,7 +286,7 @@ def _settle_superseded(db: Session, claim: ClaimedSandboxOperation) -> None:
     now = db_now_naive()
     changed = db.execute(
         update(SandboxAdminOperation)
-        .where(*_lease_filter(claim))
+        .where(*_lease_filter(claim, now=now))
         .values(
             status="cancelled",
             step="superseded",
@@ -306,7 +319,7 @@ def _settle_failure(
     delay_seconds = min(300, 2 ** max(0, claim.attempt_count - 1))
     changed = db.execute(
         update(SandboxAdminOperation)
-        .where(*_lease_filter(claim))
+        .where(*_lease_filter(claim, now=now))
         .values(
             status="pending" if retry else "failed",
             step="retry_wait" if retry else "failed",

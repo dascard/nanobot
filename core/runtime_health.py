@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from core.agent_runtime.gateway import agent_runtime_binding_state
 from core.database import run_session_phase
 
 
@@ -59,14 +60,8 @@ def readiness_snapshot() -> dict[str, Any]:
     bridge_state = "skipped_testing"
     if not state.testing:
         try:
-            from nanobot_kt.bridge import (
-                BridgeLifecycleState,
-                get_bridge_lifecycle_state,
-            )
-
-            current = get_bridge_lifecycle_state()
-            bridge_state = current.value
-            checks["bridge"] = current is BridgeLifecycleState.RUNNING
+            bridge_state = agent_runtime_binding_state()
+            checks["bridge"] = bridge_state == "running"
         except Exception:
             bridge_state = "unavailable"
             checks["bridge"] = False

@@ -64,6 +64,7 @@ _MEMORY_DIGEST_VARIABLES: tuple[VariableDef, ...] = (
 
 _CLASSIFIER_TASK_VARIABLES: tuple[VariableDef, ...] = (
     VariableDef("message", "classifier_task", "待判定消息", "ping"),
+    VariableDef("has_files", "classifier_task", "当前消息是否带附件", "false"),
     VariableDef("system_prompt", "classifier_task", "调用方旧系统提示", "只输出 JSON"),
     VariableDef("pending_text", "classifier_task", "待判定群聊文本", "ping"),
     VariableDef("recent_context", "classifier_task", "近期上下文", "上一句"),
@@ -88,6 +89,13 @@ def _scoped_variables(scope: str) -> tuple[VariableDef, ...]:
     if normalized in {
         "tasks/classifier_legacy",
         "tasks/private_decision",
+        "tasks/news_daily_quality",
+        "tasks/news_relevance_review",
+        "tasks/group_analysis_topics",
+        "tasks/group_analysis_titles",
+        "tasks/group_analysis_quotes",
+        "tasks/group_analysis_quality",
+        "tasks/group_memory_learning",
         "tasks/timing_gate",
         "tasks/timing_proactive",
         "tasks/outreach_extract",

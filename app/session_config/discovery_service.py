@@ -12,6 +12,7 @@ from core.chat_stream_identity import (
     ChatStreamIdentity,
     ChatStreamIdentityError,
     canonicalize_legacy_chat_stream_id,
+    parse_compatibility_chat_stream_identity,
     parse_canonical_chat_stream_id,
     resolve_chat_stream_identity,
 )
@@ -80,9 +81,7 @@ def _safe_json_object(raw: Any) -> dict[str, Any]:
 
 
 def _raw_identity_status(raw: str) -> IdentityStatus:
-    if ":" in raw or raw.startswith(("group_", "private_")):
-        return "invalid"
-    return "unresolved"
+    return "invalid" if ":" in raw else "unresolved"
 
 
 def _set_session_name(builder: _DiscoveryBuilder, name: Any, source: str) -> None:
@@ -345,15 +344,20 @@ def _discover_conversation_turns(
 
 
 def _discover_legacy_users(db: Any, builders: dict[str, _DiscoveryBuilder]) -> None:
-    rows = db.query(User.id, User.name).filter(User.id.like("group_%")).all()
+    rows = db.query(User.id, User.name).all()
     for session_id, session_name in rows:
-        _add_known_session(
+        identity = parse_compatibility_chat_stream_identity(
+            str(session_id or ""),
+            legacy_platform="qq",
+        )
+        if identity is None or identity.chat_type != "group":
+            continue
+        _add_identity(
             builders,
-            session_id,
-            platform="qq",
-            chat_type="group",
+            identity,
             source="user",
             session_name=session_name,
+            runtime_session_id=session_id,
         )
 
 

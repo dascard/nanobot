@@ -85,19 +85,6 @@ def _extract_known_facts(item) -> list[str]:
     return facts
 
 
-_WHY_MATTERS_BY_GROUP = {
-    "core_provider": "厂商动态，直接影响开发者选型和 API 使用",
-    "core_platform": "平台生态变化，影响开源模型和工具链",
-    "ai_media": "行业趋势信号，反映市场方向和竞争格局",
-    "curated": "信息密度高，综合多方报道提炼关键变化",
-}
-
-
-def _infer_why_matters(item) -> str:
-    group = getattr(item, 'source_group', '')
-    return _WHY_MATTERS_BY_GROUP.get(group, "AI 行业动态")
-
-
 def build_light_evidence_cards(items: list[NewsItem]) -> list[dict]:
     cards = []
     for idx, item in enumerate(items, start=1):
@@ -120,6 +107,6 @@ def build_light_evidence_cards(items: list[NewsItem]) -> list[dict]:
             "related_text": trim_text(item.summary or item.title, 400),
             "detail_text": trim_text(item.detail_text, 1200),
             "known_facts": _extract_known_facts(item),
-            "why_it_matters_hint": _infer_why_matters(item),
+            "why_it_matters_hint": "",
         })
     return cards

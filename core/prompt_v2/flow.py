@@ -47,7 +47,7 @@ DEFAULT_FLOW: dict[str, Any] = {
         {"id": "persona_reference", "type": "runtime", "label": "system: persona_reference", "runtime_key": "persona_reference"},
         {"id": "conversation_context_header", "type": "runtime", "label": "system: conversation_context_header", "runtime_key": "conversation_context_header"},
         {"id": "history_messages", "type": "runtime", "label": "history: messages", "runtime_key": "history_messages"},
-        {"id": "group_context", "type": "runtime", "label": "system: group profile / expression / jargon", "runtime_key": "group_context", "chat_types": ["group"]},
+        {"id": "group_context", "type": "runtime", "label": "system: governed group memory", "runtime_key": "group_context", "chat_types": ["group"]},
         {"id": "effort_constraint", "type": "runtime", "label": "system: effort_constraint", "runtime_key": "effort_constraint", "optional": True},
         {"id": "runtime_tool_prompt", "type": "runtime", "label": "system: runtime_tool_prompt", "runtime_key": "runtime_tool_prompt"},
         {"id": "current_user_event", "type": "runtime", "label": "user: current_user_input", "runtime_key": "current_user_event"},
@@ -259,6 +259,15 @@ def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
         try:
             validate_node_descriptor_declaration(node)
         except PromptSectionDescriptorError as exc:
+            raise PromptFlowError(str(exc)) from exc
+        from core.prompt_v2.contribution_registry import (
+            PromptContributionError,
+            validate_node_contribution_declaration,
+        )
+
+        try:
+            validate_node_contribution_declaration(node)
+        except PromptContributionError as exc:
             raise PromptFlowError(str(exc)) from exc
         chat_types = _normalize_chat_types(node, label=f"node {node_id}")
         if chat_types:

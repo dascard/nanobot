@@ -14,6 +14,13 @@ from core.runtime.events import (
     RuntimeEventPhase,
     RuntimeEventSink,
 )
+from core.runtime.extensions import (
+    RuntimeExtensionKind,
+    RuntimeFailurePolicy,
+    RuntimeHookDescriptor,
+    RuntimeObserverBinding,
+    RuntimeObserverDispatcher,
+)
 
 
 logger = logging.getLogger("nanobot.runtime.events")
@@ -29,18 +36,67 @@ class LoggingRuntimeEventSink:
             event.dropped_attribute_count,
             dict(event.attributes),
             extra={
+                "request_id": event.context.request_id,
+                "session_id": event.context.session_id,
+                "turn_id": event.context.turn_id,
                 "trace_id": event.context.trace_id,
                 "run_id": event.context.run_id,
+                "task_id": event.context.task_id,
+                "task_run_id": event.context.task_run_id,
+                "job_id": event.context.job_id,
                 "tool_call_id": event.context.tool_call_id,
+                "delivery_id": event.context.delivery_id,
+                "parent_job_id": event.context.parent_job_id,
                 "runtime_event_id": event.event_id,
+                "runtime_event_registry_generation": (
+                    event.provenance.registry_generation
+                ),
+                "runtime_event_registry_sha256": (
+                    event.provenance.registry_sha256
+                ),
+                "runtime_event_module_id": event.provenance.module_id,
+                "runtime_event_module_version": (
+                    event.provenance.module_version
+                ),
+                "runtime_artifact_revision": (
+                    event.provenance.artifact_revision
+                ),
             },
         )
+
+
+class _LoggingRuntimeEventObserver:
+    def __init__(self) -> None:
+        self._sink = LoggingRuntimeEventSink()
+
+    def observe(self, event: object) -> None:
+        if not isinstance(event, RuntimeEvent):
+            raise TypeError("Logging Observer 只接受 RuntimeEvent")
+        self._sink.emit(event)
+
+
+LOGGING_RUNTIME_EVENT_OBSERVER_DESCRIPTOR = RuntimeHookDescriptor(
+    hook_id="runtime.logging",
+    kind=RuntimeExtensionKind.OBSERVER,
+    owner_module="runtime.agent",
+    domain="runtime",
+    input_contract="runtime.event.v1",
+    output_contract="none",
+    priority=100,
+    failure_policy=RuntimeFailurePolicy.FAIL_OPEN,
+    trusted_builtin=True,
+)
 
 
 _LOCK = threading.Lock()
 _EMITTER = RuntimeEventEmitter(
     RUNTIME_EVENT_REGISTRY,
-    (LoggingRuntimeEventSink(),),
+    observer_dispatcher=RuntimeObserverDispatcher((
+        RuntimeObserverBinding(
+            LOGGING_RUNTIME_EVENT_OBSERVER_DESCRIPTOR,
+            _LoggingRuntimeEventObserver(),
+        ),
+    )),
 )
 
 
@@ -62,17 +118,9 @@ def get_runtime_event_emitter() -> RuntimeEventEmitter:
 
 
 def current_runtime_event_context() -> RuntimeEventContext:
-    from core.tracing_context import (
-        get_tool_trace_context,
-        get_trace_context,
-    )
+    from core.tracing_context import get_runtime_correlation
 
-    trace_id, run_id = get_trace_context()
-    return RuntimeEventContext(
-        trace_id=trace_id,
-        run_id=run_id,
-        tool_call_id=get_tool_trace_context(),
-    )
+    return get_runtime_correlation()
 
 
 def emit_runtime_event(

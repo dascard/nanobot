@@ -176,6 +176,7 @@ def test_bridge_build_prompt_runtime_input_maps_v2_alias_to_prompt(monkeypatch):
                 "character_name": "七濑",
                 "bot_aliases": ["bot", ""],
                 "group_profile_context": "群画像",
+                # 旧字段即使仍由上游透传，也不能进入 Prompt DTO。
                 "expression_context": "表达",
                 "jargon_context": "黑话",
                 "context_debug": {"group_memory_injected": True},
@@ -199,8 +200,8 @@ def test_bridge_build_prompt_runtime_input_maps_v2_alias_to_prompt(monkeypatch):
     assert prompt_input.runtime_tool_prompt == "工具提示"
     assert prompt_input.tool_schemas == [_wire_tool_schema("reply")]
     assert prompt_input.group_profile_context == "群画像"
-    assert prompt_input.expression_context == "表达"
-    assert prompt_input.jargon_context == "黑话"
+    assert not hasattr(prompt_input, "expression_context")
+    assert not hasattr(prompt_input, "jargon_context")
     assert prompt_input.debug == {"context_debug": {"group_memory_injected": True}}
     assert prompt_input.audit_failure_policy == "fail_fast"
 

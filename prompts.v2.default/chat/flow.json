@@ -12,7 +12,7 @@
     {"id": "persona_reference", "type": "runtime", "label": "system: persona_reference", "runtime_key": "persona_reference"},
     {"id": "conversation_context_header", "type": "runtime", "label": "system: conversation_context_header", "runtime_key": "conversation_context_header"},
     {"id": "history_messages", "type": "runtime", "label": "history: messages", "runtime_key": "history_messages"},
-    {"id": "group_context", "type": "runtime", "label": "system: group profile / expression / jargon", "runtime_key": "group_context", "chat_types": ["group"]},
+    {"id": "group_context", "type": "runtime", "label": "system: governed group memory", "runtime_key": "group_context", "chat_types": ["group"]},
     {"id": "effort_constraint", "type": "runtime", "label": "system: effort_constraint", "runtime_key": "effort_constraint", "optional": true},
     {"id": "runtime_tool_prompt", "type": "runtime", "label": "system: runtime_tool_prompt", "runtime_key": "runtime_tool_prompt"},
     {"id": "current_user_event", "type": "runtime", "label": "user: current_user_input", "runtime_key": "current_user_event"}

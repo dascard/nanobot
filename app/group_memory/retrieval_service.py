@@ -13,9 +13,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping
 
-from sqlalchemy.orm import Session
-
-from core.group_runtime.ids import normalize_group_session_id
+from core.db import (
+    GroupMemoryQueryRepositoryPort,
+    group_memory_repository,
+)
+from core.group_memory import (
+    group_memory_compatibility_projection,
+    resolve_group_memory_identity,
+)
+from core.group_learning.prompt_injection import (
+    evaluate_group_memory_prompt_injection,
+)
 from core.retrieval import (
     AllowAllCitationPolicy,
     ManagedRerankerExecutor,
@@ -36,23 +44,18 @@ from core.time_utils import db_now_naive
 TYPE_LIMITS = {
     "style": 2,
     "topic": 3,
-    "preference": 2,
-    "relationship": 2,
-    "event": 2,
+    "expression": 3,
     "slang": 2,
 }
 TYPE_PRIOR = {
     "style": 0.80,
     "topic": 0.75,
-    "preference": 0.65,
-    "relationship": 0.45,
-    "event": 0.45,
+    "expression": 0.65,
     "slang": 0.40,
 }
-STRICT_RELEVANCE_TYPES = {"relationship", "event", "slang"}
+STRICT_RELEVANCE_TYPES = {"slang"}
 DEFAULT_MIN_RELEVANCE = 0.05
 STRICT_MIN_RELEVANCE = 0.18
-AUTO_INJECT_MEMORY_TYPES = {"topic", "preference"}
 
 
 class GroupMemoryRerankerTimeout(TimeoutError):
@@ -87,22 +90,6 @@ class _GroupMemoryCandidate:
     memory_type: str
     relevance: float
     components: Mapping[str, Any]
-
-
-def _safe_evidence_ids(raw: str) -> list[int]:
-    try:
-        value = json.loads(raw or "[]")
-    except Exception:
-        return []
-    if not isinstance(value, list):
-        return []
-    result: list[int] = []
-    for item in value:
-        try:
-            result.append(int(item))
-        except (TypeError, ValueError):
-            continue
-    return result
 
 
 def _safe_meta(raw: str | None) -> dict[str, Any]:
@@ -150,7 +137,7 @@ def _evidence_weight(count: int) -> float:
 class GroupMemoryRetrievalService:
     def __init__(
         self,
-        db: Session,
+        repository,
         *,
         reranker_provider: Any = None,
         min_reranker: float = 0.55,
@@ -158,7 +145,9 @@ class GroupMemoryRetrievalService:
         reranker_timeout_ms: int | None = None,
         reranker_executor: RerankerExecutorPort | None = None,
     ):
-        self.db = db
+        self.repository: GroupMemoryQueryRepositoryPort = (
+            group_memory_repository(repository)
+        )
         self.reranker_provider = reranker_provider
         self.min_reranker = float(min_reranker)
         self.max_sql_candidates = int(max_sql_candidates)
@@ -173,12 +162,17 @@ class GroupMemoryRetrievalService:
         self,
         *,
         group_id: str,
+        platform: str = "qq",
         current_user_input: str = "",
         recent_messages: list[dict[str, Any]] | None = None,
         max_items: int = 10,
         max_chars: int = 1200,
     ) -> GroupMemorySelection:
-        norm = normalize_group_session_id(group_id)
+        identity = resolve_group_memory_identity(
+            group_id,
+            platform=platform,
+        )
+        projection = group_memory_compatibility_projection(identity)
         recent_text = "\n".join(
             str(item.get("content") or "") for item in (recent_messages or [])
         )
@@ -188,7 +182,9 @@ class GroupMemoryRetrievalService:
             limit=max(1, int(max_items)),
             options={
                 "domain": "group_memory",
-                "group_id": norm,
+                "group_id": projection,
+                "chat_stream_id": identity.chat_stream_id,
+                "platform": identity.platform,
                 "max_chars": int(max_chars),
             },
         )
@@ -302,24 +298,8 @@ class GroupMemoryRetrievalService:
         return len(render_group_memory_context(group_id, rows)) > int(max_chars)
 
     def _skip_reason(self, row: Any) -> str:
-        if str(getattr(row, "status", "") or "") != "active":
-            return "inactive_status"
-        policy = str(getattr(row, "inject_policy", "") or "auto")
-        if policy == "manual_only":
-            return "manual_only"
-        if policy == "never":
-            return "never"
-        if policy != "auto":
-            return "invalid_policy"
-        if str(getattr(row, "memory_type", "") or "") not in AUTO_INJECT_MEMORY_TYPES:
-            return "subjective_type_requires_review"
-        if float(getattr(row, "confidence", 0) or 0) < 0.55:
-            return "low_confidence"
-        if float(getattr(row, "decay_score", 0) or 0) < 0.3:
-            return "low_decay"
-        if not _safe_evidence_ids(getattr(row, "evidence_log_ids_json", "") or ""):
-            return "no_evidence"
-        return ""
+        decision = evaluate_group_memory_prompt_injection(row)
+        return "" if decision.eligible else decision.reason_code
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,24 +307,26 @@ class _GroupMemoryCandidateSource:
     service: GroupMemoryRetrievalService
 
     def recall(self, request: RetrievalRequest) -> _GroupMemoryRecall:
-        from core.database import GroupMemory
+        from app.group_memory.query_service import (
+            GroupMemoryQueryService,
+        )
 
         group_id = str(request.options.get("group_id") or "")
-        rows = (
-            self.service.db.query(GroupMemory)
-            .filter(GroupMemory.group_id == group_id)
-            .order_by(
-                GroupMemory.confidence.desc(),
-                GroupMemory.last_seen.desc(),
-                GroupMemory.id.asc(),
-            )
-            .limit(max(1, self.service.max_sql_candidates))
-            .all()
+        identity = resolve_group_memory_identity(
+            str(request.options.get("chat_stream_id") or ""),
+            platform=str(request.options.get("platform") or "qq"),
+        )
+        result = GroupMemoryQueryService(
+            self.service.repository
+        ).list_memories(
+            identity.chat_stream_id,
+            platform=identity.platform,
+            limit=max(1, self.service.max_sql_candidates),
         )
         return _GroupMemoryRecall(
             group_id=group_id,
             query_text=request.query,
-            rows=tuple(rows),
+            rows=result.memories,
         )
 
 

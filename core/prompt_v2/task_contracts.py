@@ -6,6 +6,19 @@ from dataclasses import asdict, dataclass
 from types import MappingProxyType
 from typing import Any, Literal
 
+from jsonschema import Draft202012Validator
+
+from core.private_timing_contracts import (
+    PRIVATE_ACTION_VALUES,
+    PRIVATE_CONFLICT_SIGNAL_VALUES,
+    PRIVATE_DECISION_CONTRACT_VERSION,
+    PRIVATE_EFFORT_VALUES,
+    PRIVATE_INTENT_VALUES,
+    PRIVATE_MATERIAL_STATE_VALUES,
+    PRIVATE_MODEL_REASON_CODE_VALUES,
+    PRIVATE_RESPONSE_MODE_VALUES,
+)
+from core.registry import RegistryBuilder, RegistrySnapshot
 from core.prompt_v2.template_registry import resolve_template_key
 from core.prompt_v2.variables import (
     is_empty_task_call_value,
@@ -35,6 +48,17 @@ class TaskContractError(ValueError):
 
 class TaskOutputContractError(ValueError):
     """模型输出无法通过任务输出契约。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "schema_invalid",
+        diagnostics: tuple[dict[str, str], ...] = (),
+    ) -> None:
+        self.code = str(code or "schema_invalid")
+        self.diagnostics = tuple(dict(item) for item in diagnostics)
+        super().__init__(message)
 
 
 class TaskCallValueError(TaskContractError):
@@ -76,6 +100,27 @@ class TaskInvocationSpec:
     output_parser_owner: str
 
 
+@dataclass(frozen=True, slots=True)
+class TaskContractRegistryEntry:
+    task_key: str
+    payload_json: str
+
+    @property
+    def registry_namespace(self) -> str:
+        return "task_contract"
+
+    @property
+    def registry_id(self) -> str:
+        return self.task_key
+
+    @property
+    def registry_dependencies(self) -> tuple[str, ...]:
+        return ()
+
+    def registry_payload(self) -> dict[str, Any]:
+        return json.loads(self.payload_json)
+
+
 class TaskContractRegistry:
     """构造后即冻结的后台任务合同注册表。"""
 
@@ -88,10 +133,32 @@ class TaskContractRegistry:
                 )
             registered[contract.task_key] = contract
         self._contracts = MappingProxyType(registered)
+        builder = RegistryBuilder[TaskContractRegistryEntry](
+            "task_contract"
+        )
+        for task_key in sorted(registered):
+            builder.register(
+                TaskContractRegistryEntry(
+                    task_key=task_key,
+                    payload_json=json.dumps(
+                        registered[task_key].to_dict(),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+            )
+        self._registry_snapshot = builder.freeze()
 
     @property
     def frozen(self) -> bool:
         return True
+
+    @property
+    def registry_snapshot(
+        self,
+    ) -> RegistrySnapshot[TaskContractRegistryEntry]:
+        return self._registry_snapshot
 
     def get(self, task_key: str) -> TaskContract | None:
         contract = self._contracts.get(resolve_template_key(task_key))
@@ -159,6 +226,599 @@ def _contract(
     )
 
 
+def _string_array_schema(
+    *,
+    max_items: int,
+    max_length: int,
+) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "maxItems": max_items,
+        "items": {"type": "string", "maxLength": max_length},
+    }
+
+
+_SOURCE_IDS_SCHEMA = {
+    "type": "array",
+    "minItems": 1,
+    "maxItems": 16,
+    "uniqueItems": True,
+    "items": {"type": "integer", "minimum": 1},
+}
+
+
+_NEWS_QUALITY_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "maxLength": 20},
+        "subtitle": {"type": "string", "maxLength": 30},
+        "verdict": {"type": "string", "maxLength": 90},
+        "top_story": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "maxLength": 80},
+                "what_happened": {"type": "string", "maxLength": 160},
+                "why_it_matters": {"type": "string", "maxLength": 100},
+                "source_ids": _SOURCE_IDS_SCHEMA,
+                "confidence": {
+                    "type": "string",
+                    "enum": ["high", "medium"],
+                },
+            },
+            "required": [
+                "title",
+                "what_happened",
+                "why_it_matters",
+                "source_ids",
+                "confidence",
+            ],
+            "additionalProperties": False,
+        },
+        "highlights": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string", "maxLength": 32},
+                    "text": {"type": "string", "maxLength": 240},
+                    "source_ids": _SOURCE_IDS_SCHEMA,
+                    "importance": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5,
+                    },
+                },
+                "required": [
+                    "label",
+                    "text",
+                    "source_ids",
+                    "importance",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "details": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "maxLength": 100},
+                    "known": _string_array_schema(
+                        max_items=6,
+                        max_length=180,
+                    ),
+                    "unknown": _string_array_schema(
+                        max_items=4,
+                        max_length=180,
+                    ),
+                    "impact": {"type": "string", "maxLength": 180},
+                    "source_labels": _string_array_schema(
+                        max_items=8,
+                        max_length=80,
+                    ),
+                },
+                "required": [
+                    "title",
+                    "known",
+                    "unknown",
+                    "impact",
+                    "source_labels",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "watchlist": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "maxLength": 180},
+                    "reason": {"type": "string", "maxLength": 180},
+                    "source_ids": _SOURCE_IDS_SCHEMA,
+                },
+                "required": ["text", "reason", "source_ids"],
+                "additionalProperties": False,
+            },
+        },
+        "missing_info": _string_array_schema(
+            max_items=12,
+            max_length=180,
+        ),
+        "closing": {"type": "string", "maxLength": 40},
+    },
+    "required": [
+        "title",
+        "subtitle",
+        "verdict",
+        "top_story",
+        "highlights",
+        "details",
+        "watchlist",
+        "missing_info",
+        "closing",
+    ],
+    "additionalProperties": False,
+}
+
+
+_NEWS_RELEVANCE_REVIEW_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reviews": {
+            "type": "array",
+            "maxItems": 40,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "candidate_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                    },
+                    "relevant": {"type": "boolean"},
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "model_release",
+                            "product",
+                            "research",
+                            "policy",
+                            "funding",
+                            "incident",
+                            "infrastructure",
+                            "other",
+                        ],
+                    },
+                    "importance": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5,
+                    },
+                    "entities": _string_array_schema(
+                        max_items=12,
+                        max_length=80,
+                    ),
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                    },
+                    "reason_code": {
+                        "type": "string",
+                        "enum": [
+                            "clear_ai_relevance",
+                            "clear_non_ai",
+                            "cross_domain_ai",
+                            "unknown_entity",
+                            "insufficient_evidence",
+                            "conflicting_signals",
+                        ],
+                    },
+                },
+                "required": [
+                    "candidate_id",
+                    "relevant",
+                    "category",
+                    "importance",
+                    "entities",
+                    "confidence",
+                    "reason_code",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["reviews"],
+    "additionalProperties": False,
+}
+
+
+_GROUP_TOPICS_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "topics": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "maxLength": 15},
+                    "contributors": _string_array_schema(
+                        max_items=8,
+                        max_length=64,
+                    ),
+                    "detail": {"type": "string", "maxLength": 240},
+                    "evidence_log_ids": {
+                        **_SOURCE_IDS_SCHEMA,
+                        "maxItems": 8,
+                    },
+                },
+                "required": [
+                    "topic",
+                    "contributors",
+                    "detail",
+                    "evidence_log_ids",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["topics"],
+    "additionalProperties": False,
+}
+
+
+_GROUP_TITLES_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "users": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "maxLength": 64},
+                    "title": {"type": "string", "maxLength": 8},
+                    "mbti": {
+                        "type": "string",
+                        "pattern": "^(?:[EI][NS][TF][JP])?$",
+                    },
+                    "reason": {"type": "string", "maxLength": 180},
+                },
+                "required": ["user_id", "title", "mbti", "reason"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["users"],
+    "additionalProperties": False,
+}
+
+
+_GROUP_QUOTES_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "quotes": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "maxLength": 64},
+                    "content": {"type": "string", "maxLength": 80},
+                },
+                "required": ["user_id", "content"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["quotes"],
+    "additionalProperties": False,
+}
+
+
+_GROUP_QUALITY_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "maxLength": 12},
+        "subtitle": {"type": "string", "maxLength": 20},
+        "dimensions": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "maxLength": 32},
+                    "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100,
+                    },
+                    "comment": {"type": "string", "maxLength": 180},
+                },
+                "required": ["name", "percentage", "comment"],
+                "additionalProperties": False,
+            },
+        },
+        "summary": {"type": "string", "maxLength": 360},
+    },
+    "required": ["title", "subtitle", "dimensions", "summary"],
+    "additionalProperties": False,
+}
+
+
+_GROUP_MEMORY_LEARNING_ITEM_PROPERTIES = {
+    "candidate_type": {
+        "type": "string",
+        "enum": ["expression", "slang", "style"],
+    },
+    "content": {"type": "string", "minLength": 1, "maxLength": 240},
+    "meaning": {"type": "string", "maxLength": 240},
+    "evidence_log_ids": {
+        **_SOURCE_IDS_SCHEMA,
+        "maxItems": 10,
+    },
+    "reason": {"type": "string", "maxLength": 240},
+}
+
+
+_GROUP_MEMORY_LEARNING_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reviews": {
+            "type": "array",
+            "maxItems": 40,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "candidate_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "new",
+                            "merge_into",
+                            "add_alias",
+                            "conflict_with",
+                            "reject",
+                        ],
+                    },
+                    **_GROUP_MEMORY_LEARNING_ITEM_PROPERTIES,
+                    "target_memory_id": {
+                        "anyOf": [
+                            {"type": "integer", "minimum": 1},
+                            {"type": "null"},
+                        ],
+                    },
+                },
+                "required": [
+                    "candidate_id",
+                    "action",
+                    "candidate_type",
+                    "content",
+                    "meaning",
+                    "evidence_log_ids",
+                    "target_memory_id",
+                    "reason",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "discoveries": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+                "type": "object",
+                "properties": _GROUP_MEMORY_LEARNING_ITEM_PROPERTIES,
+                "required": [
+                    "candidate_type",
+                    "content",
+                    "meaning",
+                    "evidence_log_ids",
+                    "reason",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["reviews", "discoveries"],
+    "additionalProperties": False,
+}
+
+
+_MEMORY_DIGEST_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "preview": {
+            "type": "object",
+            "properties": {
+                "brief": {"type": "string", "maxLength": 200},
+                "keywords": _string_array_schema(
+                    max_items=8,
+                    max_length=32,
+                ),
+                "participants": _string_array_schema(
+                    max_items=8,
+                    max_length=32,
+                ),
+            },
+            "required": ["brief", "keywords", "participants"],
+            "additionalProperties": False,
+        },
+        "long_summary": {
+            "type": "object",
+            "properties": {
+                "topic_flow": {"type": "string", "maxLength": 600},
+                "important_details": _string_array_schema(
+                    max_items=8,
+                    max_length=140,
+                ),
+                "conclusions": _string_array_schema(
+                    max_items=6,
+                    max_length=120,
+                ),
+                "open_loops": _string_array_schema(
+                    max_items=6,
+                    max_length=120,
+                ),
+            },
+            "required": [
+                "topic_flow",
+                "important_details",
+                "conclusions",
+                "open_loops",
+            ],
+            "additionalProperties": False,
+        },
+        "recall_cards": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "card_id": {"type": "string", "maxLength": 64},
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "decision",
+                            "fact",
+                            "todo",
+                            "preference",
+                            "module",
+                            "design_rule",
+                        ],
+                    },
+                    "text": {"type": "string", "maxLength": 120},
+                    "keywords": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 6,
+                        "items": {
+                            "type": "string",
+                            "maxLength": 32,
+                        },
+                    },
+                    "importance": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                    },
+                    "evidence_log_ids": {
+                        **_SOURCE_IDS_SCHEMA,
+                        "maxItems": 8,
+                    },
+                },
+                "required": [
+                    "card_id",
+                    "type",
+                    "text",
+                    "keywords",
+                    "importance",
+                    "evidence_log_ids",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "quality": {
+            "type": "object",
+            "properties": {
+                "score": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                },
+                "reason": {"type": "string", "maxLength": 180},
+            },
+            "required": ["score", "reason"],
+            "additionalProperties": False,
+        },
+    },
+    "required": [
+        "preview",
+        "long_summary",
+        "recall_cards",
+        "quality",
+    ],
+    "additionalProperties": False,
+}
+
+
+_SESSION_SUMMARY_STRING_LIST = _string_array_schema(
+    max_items=16,
+    max_length=400,
+)
+_SESSION_SUMMARY_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "open_threads": _SESSION_SUMMARY_STRING_LIST,
+        "decisions": _SESSION_SUMMARY_STRING_LIST,
+        "important_user_requests": _SESSION_SUMMARY_STRING_LIST,
+        "resolved_items": _SESSION_SUMMARY_STRING_LIST,
+        "artifacts": _SESSION_SUMMARY_STRING_LIST,
+        "participants": _SESSION_SUMMARY_STRING_LIST,
+        "keywords": _SESSION_SUMMARY_STRING_LIST,
+        "quality": {
+            "type": "object",
+            "properties": {
+                "score": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                },
+                "issues": _string_array_schema(
+                    max_items=16,
+                    max_length=240,
+                ),
+            },
+            "required": ["score", "issues"],
+            "additionalProperties": False,
+        },
+        "inheritance": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source_id": {"type": "string"},
+                    "disposition": {
+                        "type": "string",
+                        "enum": ["carried", "updated", "resolved"],
+                    },
+                    "target_field": {"type": "string"},
+                    "target_index": {"type": "integer", "minimum": 0},
+                },
+                "required": [
+                    "source_id",
+                    "disposition",
+                    "target_field",
+                    "target_index",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": [
+        "summary",
+        "open_threads",
+        "decisions",
+        "important_user_requests",
+        "resolved_items",
+        "artifacts",
+        "participants",
+        "keywords",
+        "quality",
+        "inheritance",
+    ],
+    "additionalProperties": False,
+}
+
+
 _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
         _contract(
             "tasks/classifier_legacy",
@@ -172,14 +832,162 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
         ),
         _contract(
             "tasks/private_decision",
-            owner_module="clients.classifier_client",
+            owner_module="core.task_runtime",
             domain="chat_routing",
+            required=("message", "has_files"),
+            non_empty=("message", "has_files"),
+            payload=("message",),
+            render_mode="system_with_user_ref",
+            output_contract_id=PRIVATE_DECISION_CONTRACT_VERSION,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": list(PRIVATE_ACTION_VALUES),
+                    },
+                    "effort": {
+                        "type": "string",
+                        "enum": list(PRIVATE_EFFORT_VALUES),
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": list(PRIVATE_INTENT_VALUES),
+                    },
+                    "response_mode": {
+                        "type": "string",
+                        "enum": list(PRIVATE_RESPONSE_MODE_VALUES),
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                    },
+                    "conflicting_signals": {
+                        "type": "array",
+                        "maxItems": 4,
+                        "uniqueItems": True,
+                        "items": {
+                            "type": "string",
+                            "enum": list(
+                                PRIVATE_CONFLICT_SIGNAL_VALUES
+                            ),
+                        },
+                    },
+                    "material_state": {
+                        "type": "string",
+                        "enum": list(PRIVATE_MATERIAL_STATE_VALUES),
+                    },
+                    "reason_code": {
+                        "type": "string",
+                        "enum": list(PRIVATE_MODEL_REASON_CODE_VALUES),
+                    },
+                },
+                "required": [
+                    "action",
+                    "effort",
+                    "intent",
+                    "response_mode",
+                    "confidence",
+                    "conflicting_signals",
+                    "material_state",
+                    "reason_code",
+                ],
+                "additionalProperties": False,
+            },
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="single_attempt_normal_agent",
+        ),
+        _contract(
+            "tasks/news_daily_quality",
+            owner_module="creatures.nanobot.news_daily",
+            domain="news_daily",
             required=("message",),
             non_empty=("message",),
             payload=("message",),
             render_mode="system_with_user_ref",
-            output_contract_id="private_decision_v1",
+            output_contract_id="news_quality_summary_v1",
+            output_schema=_NEWS_QUALITY_OUTPUT_SCHEMA,
             template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="retry_route_deterministic_fallback",
+        ),
+        _contract(
+            "tasks/news_relevance_review",
+            owner_module="core.news",
+            domain="news_relevance",
+            required=("message",),
+            non_empty=("message",),
+            payload=("message",),
+            render_mode="system_with_user_ref",
+            output_contract_id="news_relevance_review_v1",
+            output_schema=_NEWS_RELEVANCE_REVIEW_OUTPUT_SCHEMA,
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="single_attempt_conservative_downrank",
+        ),
+        _contract(
+            "tasks/group_analysis_topics",
+            owner_module="app.group_analysis",
+            domain="group_analysis",
+            required=("message",),
+            non_empty=("message",),
+            payload=("message",),
+            render_mode="system_with_user_ref",
+            output_contract_id="group_analysis_topics_v1",
+            output_schema=_GROUP_TOPICS_OUTPUT_SCHEMA,
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="retry_twice_branch_failed",
+        ),
+        _contract(
+            "tasks/group_analysis_titles",
+            owner_module="app.group_analysis",
+            domain="group_analysis",
+            required=("message",),
+            non_empty=("message",),
+            payload=("message",),
+            render_mode="system_with_user_ref",
+            output_contract_id="group_analysis_titles_v1",
+            output_schema=_GROUP_TITLES_OUTPUT_SCHEMA,
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="retry_twice_branch_failed",
+        ),
+        _contract(
+            "tasks/group_analysis_quotes",
+            owner_module="app.group_analysis",
+            domain="group_analysis",
+            required=("message",),
+            non_empty=("message",),
+            payload=("message",),
+            render_mode="system_with_user_ref",
+            output_contract_id="group_analysis_quotes_v1",
+            output_schema=_GROUP_QUOTES_OUTPUT_SCHEMA,
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="retry_twice_branch_failed",
+        ),
+        _contract(
+            "tasks/group_analysis_quality",
+            owner_module="app.group_analysis",
+            domain="group_analysis",
+            required=("message",),
+            non_empty=("message",),
+            payload=("message",),
+            render_mode="system_with_user_ref",
+            output_contract_id="group_analysis_quality_v1",
+            output_schema=_GROUP_QUALITY_OUTPUT_SCHEMA,
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="retry_twice_branch_failed",
+        ),
+        _contract(
+            "tasks/group_memory_learning",
+            owner_module="app.group_learning",
+            domain="group_memory_learning",
+            required=("message",),
+            non_empty=("message",),
+            payload=("message",),
+            render_mode="system_with_user_ref",
+            output_contract_id="group_memory_learning_v1",
+            output_schema=_GROUP_MEMORY_LEARNING_OUTPUT_SCHEMA,
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="single_attempt_preserve_pending",
         ),
         _contract(
             "tasks/timing_gate",
@@ -336,7 +1144,9 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
             domain="memory_digest",
             render_mode="paired_messages",
             output_contract_id="memory_digest_v2",
+            output_schema=_MEMORY_DIGEST_OUTPUT_SCHEMA,
             template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="single_attempt_deterministic_fallback",
         ),
         _contract(
             "tasks/memory_digest_user",
@@ -360,7 +1170,9 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
             ),
             render_mode="paired_messages",
             output_contract_id="memory_digest_v2",
+            output_schema=_MEMORY_DIGEST_OUTPUT_SCHEMA,
             template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="single_attempt_deterministic_fallback",
         ),
         _contract(
             "tasks/session_summary_system",
@@ -368,6 +1180,7 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
             domain="session_memory",
             render_mode="user_prompt",
             output_contract_id="session_summary_v1",
+            output_schema=_SESSION_SUMMARY_OUTPUT_SCHEMA,
             template_failure_policy="runtime_default_fail_closed",
             output_failure_policy="retry_then_preserve_pending",
         ),
@@ -377,6 +1190,7 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
             domain="session_memory",
             render_mode="user_prompt",
             output_contract_id="session_summary_v1",
+            output_schema=_SESSION_SUMMARY_OUTPUT_SCHEMA,
             template_failure_policy="runtime_default_fail_closed",
             output_failure_policy="retry_then_preserve_pending",
         ),
@@ -394,7 +1208,49 @@ _TASK_INVOCATION_SPECS: tuple[TaskInvocationSpec, ...] = (
         "private_decision",
         ("tasks/private_decision",),
         "messages",
-        "clients.classifier_client.PrivateDecisionClassifier._parse",
+        "core.task_runtime.TaskRuntime",
+    ),
+    TaskInvocationSpec(
+        "news_daily_quality",
+        ("tasks/news_daily_quality",),
+        "messages",
+        "core.task_runtime.TaskRuntime",
+    ),
+    TaskInvocationSpec(
+        "news_relevance_review",
+        ("tasks/news_relevance_review",),
+        "messages",
+        "core.task_runtime.TaskRuntime",
+    ),
+    TaskInvocationSpec(
+        "group_analysis_topics",
+        ("tasks/group_analysis_topics",),
+        "messages",
+        "core.task_runtime.TaskRuntime",
+    ),
+    TaskInvocationSpec(
+        "group_analysis_titles",
+        ("tasks/group_analysis_titles",),
+        "messages",
+        "core.task_runtime.TaskRuntime",
+    ),
+    TaskInvocationSpec(
+        "group_analysis_quotes",
+        ("tasks/group_analysis_quotes",),
+        "messages",
+        "core.task_runtime.TaskRuntime",
+    ),
+    TaskInvocationSpec(
+        "group_analysis_quality",
+        ("tasks/group_analysis_quality",),
+        "messages",
+        "core.task_runtime.TaskRuntime",
+    ),
+    TaskInvocationSpec(
+        "group_memory_learning",
+        ("tasks/group_memory_learning",),
+        "messages",
+        "core.task_runtime.TaskRuntime",
     ),
     TaskInvocationSpec(
         "timing_gate",
@@ -481,6 +1337,11 @@ def list_task_contract_keys() -> list[str]:
 
 def task_contract_registry_snapshot() -> tuple[dict[str, Any], ...]:
     return _TASK_CONTRACT_REGISTRY.snapshot()
+
+
+def task_contract_registry_kernel_snapshot(
+) -> RegistrySnapshot[TaskContractRegistryEntry]:
+    return _TASK_CONTRACT_REGISTRY.registry_snapshot
 
 
 def list_task_invocation_specs() -> list[TaskInvocationSpec]:
@@ -579,14 +1440,81 @@ def validate_task_call_values(task_key: str, values: dict) -> TaskContract | Non
 def _parse_json_object(raw: str, *, contract_id: str) -> dict:
     text = str(raw or "").strip()
     if not text:
-        raise TaskOutputContractError(f"{contract_id}: empty_output")
+        raise TaskOutputContractError(
+            f"{contract_id}: empty_output",
+            code="empty_output",
+        )
     try:
         value = json.loads(text)
     except (json.JSONDecodeError, TypeError) as exc:
-        raise TaskOutputContractError(f"{contract_id}: invalid_json") from exc
+        raise TaskOutputContractError(
+            f"{contract_id}: invalid_json",
+            code="invalid_json",
+        ) from exc
     if not isinstance(value, dict):
-        raise TaskOutputContractError(f"{contract_id}: root_must_be_object")
+        raise TaskOutputContractError(
+            f"{contract_id}: root_must_be_object",
+            code="schema_invalid",
+            diagnostics=({
+                "code": "root_must_be_object",
+                "path": "$",
+                "rule": "type",
+                "summary": "输出根节点必须是对象",
+            },),
+        )
     return value
+
+
+def _validate_output_schema(
+    contract: TaskContract,
+    value: dict[str, Any],
+) -> dict[str, Any]:
+    if not contract.output_schema:
+        return value
+    errors = sorted(
+        Draft202012Validator(contract.output_schema).iter_errors(value),
+        key=lambda error: (
+            tuple(str(part) for part in error.absolute_path),
+            str(error.validator),
+        ),
+    )
+    if not errors:
+        return value
+    error = errors[0]
+    validator = str(error.validator or "schema")
+    code = (
+        "field_out_of_range"
+        if validator in {
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "minLength",
+            "maxLength",
+            "minItems",
+            "maxItems",
+        }
+        else "schema_invalid"
+    )
+    path = ".".join(str(part) for part in error.absolute_path) or "$"
+    raise TaskOutputContractError(
+        f"{contract.output_contract_id}: {code}",
+        code=code,
+        diagnostics=({
+            "code": code,
+            "path": path,
+            "rule": validator,
+            "summary": f"输出不满足 {validator} 约束",
+        },),
+    )
+
+
+def _parse_private_decision(contract: TaskContract, raw: str) -> dict:
+    value = _parse_json_object(
+        raw,
+        contract_id=contract.output_contract_id,
+    )
+    return _validate_output_schema(contract, value)
 
 
 def _parse_memory_candidates(raw: str) -> dict:
@@ -677,6 +1605,8 @@ def parse_task_output(task_key: str, raw: str) -> dict:
     contract = get_task_contract(task_key)
     if contract is None:
         raise TaskOutputContractError("unregistered_task_contract")
+    if contract.output_contract_id == PRIVATE_DECISION_CONTRACT_VERSION:
+        return _parse_private_decision(contract, raw)
     if contract.output_contract_id == "memory_candidates_v1":
         return _parse_memory_candidates(raw)
     if contract.output_contract_id == "model_catalog_candidates_v1":
@@ -685,6 +1615,12 @@ def parse_task_output(task_key: str, raw: str) -> dict:
         return _parse_timing_gate(raw)
     if contract.output_contract_id == "timing_proactive_v1":
         return _parse_timing_proactive(raw)
+    if contract.output_schema:
+        value = _parse_json_object(
+            raw,
+            contract_id=contract.output_contract_id,
+        )
+        return _validate_output_schema(contract, value)
     raise TaskOutputContractError(
         f"{contract.output_contract_id}: parser_not_implemented"
     )

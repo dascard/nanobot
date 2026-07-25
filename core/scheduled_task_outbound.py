@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 
 from core.db.models.outbound import OutboundDeliveryOutbox, OutboundRun
 from core.db.models.scheduling import ScheduledTask
-from core.message_envelope import build_chat_response_envelope
+from core.message_envelope import is_html_reply
+from core.message_transport_adapters import render_chat_json
 from core.outbound.contracts import (
     OUTBOUND_PROTOCOL_VERSION,
     OutboundConflictError,
@@ -49,6 +50,13 @@ from core.outbound_delivery_service import (
     OutboundWorkerConfig,
     deliver_legacy_outbound_once,
     snapshot_live_legacy_writer,
+)
+from foundation.identity import RecipientIdentity
+from foundation.message_contract import (
+    MessageAction,
+    OutboundMessageContract,
+    TextContent,
+    TextFormat,
 )
 
 
@@ -1040,9 +1048,29 @@ async def enqueue_scheduled_task_occurrence(
             generation_attempted=True,
         )
 
-    envelope = build_chat_response_envelope(
+    outbound_message = OutboundMessageContract(
+        action=MessageAction.REPLY,
+        recipient=RecipientIdentity(
+            platform="qq",
+            recipient_type=(
+                "group" if frozen.target_type == "group" else "user"
+            ),
+            recipient_id=frozen.target_id,
+        ),
+        parts=(
+            TextContent(
+                content,
+                format=(
+                    TextFormat.HTML
+                    if is_html_reply(content)
+                    else TextFormat.PLAIN
+                ),
+            ),
+        ),
+    )
+    envelope = render_chat_json(
+        outbound_message,
         status="ok",
-        answer=content,
         meta={
             "platform": "qq",
             "chat_type": "scheduled_task",

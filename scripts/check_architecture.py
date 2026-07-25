@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import ast
+import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 @dataclass(frozen=True)
@@ -139,9 +143,24 @@ FORBIDDEN_KT_PRIVATE_MEMBERS = frozenset(
     }
 )
 
+DATABASE_PORT_CONTRACT_PATHS = (
+    ROOT / "core" / "db" / "contracts.py",
+    ROOT / "core" / "db" / "group_learning_contracts.py",
+    ROOT / "core" / "db" / "group_memory_contracts.py",
+    ROOT / "core" / "db" / "settings_contracts.py",
+)
+
 DATABASE_PORT_MIGRATED_PATHS = (
+    ROOT / "api" / "admin" / "group_memory_routes.py",
+    ROOT / "api" / "admin" / "model_routes.py",
     ROOT / "api" / "chat_persistence.py",
     ROOT / "api" / "chat_recovery.py",
+    ROOT / "app" / "group_analysis" / "service.py",
+    ROOT / "app" / "group_learning" / "migration_audit.py",
+    ROOT / "app" / "group_learning" / "query_service.py",
+    ROOT / "app" / "group_memory" / "extraction_service.py",
+    ROOT / "app" / "group_memory" / "injection_service.py",
+    ROOT / "app" / "group_memory" / "retrieval_service.py",
     ROOT / "app" / "persona" / "injection_service.py",
     ROOT / "app" / "persona" / "retrieval_service.py",
     ROOT / "core" / "db" / "adapter.py",
@@ -150,6 +169,7 @@ DATABASE_PORT_MIGRATED_PATHS = (
     ROOT / "core" / "persona_preprocess.py",
     ROOT / "core" / "repositories" / "chat_logs.py",
     ROOT / "core" / "repositories" / "users.py",
+    ROOT / "core" / "settings_service.py",
     *sorted((ROOT / "app" / "memory_digest").glob("*.py")),
     *sorted((ROOT / "app" / "session_memory").glob("*.py")),
     *sorted((ROOT / "core" / "outbound").glob("*.py")),
@@ -162,6 +182,14 @@ DATABASE_PORT_MIGRATED_PATHS = (
         if path.name
         not in {"delivery_runtime.py", "grounding.py", "runtime_support.py"}
     ),
+)
+
+DATABASE_SQL_ADAPTER_PATHS = (
+    ROOT / "app" / "group_analysis" / "repository.py",
+    ROOT / "core" / "db" / "adapter.py",
+    ROOT / "core" / "db" / "group_learning_adapter.py",
+    ROOT / "core" / "db" / "group_memory_adapter.py",
+    ROOT / "core" / "db" / "settings_adapter.py",
 )
 
 PURE_MODULE_RULES = {
@@ -211,6 +239,32 @@ PRODUCTION_PYTHON_ROOTS = (
     ROOT / "nanobot_kt",
     ROOT / "sandboxd",
 )
+MONOLITH_LINE_LIMITS = {
+    ROOT / "core" / "database.py": 1123,
+    ROOT / "nanobot_kt" / "bridge.py": 2759,
+}
+_IDENTITY_PREFIX_CALL_ARGUMENTS = {
+    "startswith": frozenset({"group_", "qq:"}),
+    "endswith": frozenset({":group"}),
+    "removeprefix": frozenset({"group_", "qq:"}),
+    "removesuffix": frozenset({":group"}),
+    "like": frozenset({"group_%", "qq:%:group"}),
+    "ilike": frozenset({"group_%", "qq:%:group"}),
+    "notlike": frozenset({"group_%", "qq:%:group"}),
+    "not_like": frozenset({"group_%", "qq:%:group"}),
+}
+_IDENTITY_SQL_LIKE_RE = re.compile(
+    r"\blike\s+['\"](?:group_%|qq:%:group)['\"]",
+    re.IGNORECASE,
+)
+_DYNAMIC_CHANNEL_REGISTRY_NAMES = frozenset(
+    {
+        "ChannelRegistry",
+        "ChannelPluginRegistry",
+        "DynamicChannelRegistry",
+    }
+)
+_IDENTITY_COMPATIBILITY_ADAPTER = ROOT / "core" / "chat_stream_identity.py"
 
 
 def imported_roots(tree: ast.AST) -> list[tuple[int, str]]:
@@ -274,13 +328,14 @@ def check_bridge_private_access() -> list[str]:
 
 def check_database_port_boundaries() -> list[str]:
     errors: list[str] = []
-    contracts_path = ROOT / "core" / "db" / "contracts.py"
-    contracts_tree = ast.parse(
-        contracts_path.read_text(encoding="utf-8"),
-        filename=str(contracts_path),
-    )
-    for line, root in imported_roots(contracts_tree):
-        if root in {"sqlalchemy", "core"}:
+    for contracts_path in DATABASE_PORT_CONTRACT_PATHS:
+        contracts_tree = ast.parse(
+            contracts_path.read_text(encoding="utf-8"),
+            filename=str(contracts_path),
+        )
+        for line, root in imported_roots(contracts_tree):
+            if root not in {"sqlalchemy", "core"}:
+                continue
             errors.append(
                 f"{contracts_path.relative_to(ROOT)}:{line}: 数据库 Port 合同不得依赖 "
                 f"{root} 实现层"
@@ -305,6 +360,31 @@ def check_database_port_boundaries() -> list[str]:
                             f"{path.relative_to(ROOT)}:{node.lineno}: 已迁移子域不得重新直接导入 "
                             "core.database"
                         )
+
+    for path in DATABASE_SQL_ADAPTER_PATHS:
+        if not path.is_file():
+            errors.append(
+                f"{path.relative_to(ROOT)}: 已登记的数据库 Adapter 不存在"
+            )
+            continue
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        for line, root in imported_roots(tree):
+            if root not in {
+                "api",
+                "clients",
+                "creatures",
+                "fastapi",
+                "nanobot_kt",
+                "sandboxd",
+            }:
+                continue
+            errors.append(
+                f"{path.relative_to(ROOT)}:{line}: 数据库 Adapter 不得反向依赖 "
+                f"{root} 交付层"
+            )
     return errors
 
 
@@ -319,6 +399,181 @@ def check_core_client_dependencies() -> list[str]:
                 errors.append(
                     f"{path.relative_to(ROOT)}:{line}: core 不得依赖 {module}；"
                     "请通过 Port 和 composition root 注入 Adapter"
+                )
+    return errors
+
+
+def check_kt_framework_boundaries(
+    paths: tuple[Path, ...] | None = None,
+) -> list[str]:
+    """core/app 不得直接导入 KT，包含函数内动态 import。"""
+
+    if paths is None:
+        paths = tuple(
+            path
+            for root in (ROOT / "core", ROOT / "app")
+            for path in sorted(root.rglob("*.py"))
+        )
+    errors: list[str] = []
+    for path in paths:
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        try:
+            display_path = path.relative_to(ROOT)
+        except ValueError:
+            display_path = path
+        for line, module in imported_modules(tree):
+            if (
+                module == "nanobot_kt"
+                or module.startswith("nanobot_kt.")
+                or module == "kohakuterrarium"
+                or module.startswith("kohakuterrarium.")
+            ):
+                errors.append(
+                    f"{display_path}:{line}: core/app 不得依赖 {module}；"
+                    "请通过框架无关 Port 和 Composition Root 注入 Adapter"
+                )
+    return errors
+
+
+def _base_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def check_message_contract_boundaries(
+    paths: tuple[Path, ...] | None = None,
+    *,
+    bridge_path: Path | None = None,
+) -> list[str]:
+    """消息差异只能由薄 Adapter 处理，不引入动态 Channel 插件层。"""
+
+    if paths is None:
+        paths = tuple(
+            path
+            for root in (*PRODUCTION_PYTHON_ROOTS, ROOT / "foundation")
+            for path in sorted(root.rglob("*.py"))
+            if path != ROOT / "nanobot_kt" / "bridge.py"
+        )
+    errors: list[str] = []
+    for path in paths:
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        try:
+            display_path = path.relative_to(ROOT)
+        except ValueError:
+            display_path = path
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ClassDef)
+                and node.name in _DYNAMIC_CHANNEL_REGISTRY_NAMES
+            ):
+                errors.append(
+                    f"{display_path}:{node.lineno}: 禁止新增动态 "
+                    f"{node.name}；协议差异必须留在 MessageContract Adapter"
+                )
+
+    resolved_bridge_path = (
+        bridge_path
+        if bridge_path is not None
+        else ROOT / "nanobot_kt" / "bridge.py"
+    )
+    bridge_tree = ast.parse(
+        resolved_bridge_path.read_text(encoding="utf-8"),
+        filename=str(resolved_bridge_path),
+    )
+    bridge_classes = {
+        node.name: node
+        for node in ast.walk(bridge_tree)
+        if isinstance(node, ast.ClassDef)
+    }
+    for class_name in ("NanobotBridge", "NanobotBridgePool"):
+        node = bridge_classes.get(class_name)
+        if node is None:
+            errors.append(
+                f"{resolved_bridge_path}:{class_name}: 缺少生产 Bridge 类"
+            )
+            continue
+        if not any(
+            _base_name(base) == "MessageContractBridgeMixin"
+            for base in node.bases
+        ):
+            errors.append(
+                f"{resolved_bridge_path}:{node.lineno}: {class_name} 必须经 "
+                "MessageContractBridgeMixin 接收类型化消息"
+            )
+    return errors
+
+
+def check_monolith_growth_boundaries() -> list[str]:
+    """既有兼容 façade 不得继续无界增长。"""
+
+    errors: list[str] = []
+    for path, max_lines in MONOLITH_LINE_LIMITS.items():
+        actual_lines = len(
+            path.read_text(encoding="utf-8").splitlines()
+        )
+        if actual_lines > max_lines:
+            errors.append(
+                f"{path.relative_to(ROOT)}: 当前 {actual_lines} 行，"
+                f"超过兼容上限 {max_lines}；新增逻辑必须迁入所属模块"
+            )
+    return errors
+
+
+def check_identity_prefix_inference_boundaries(
+    paths: tuple[Path, ...] | None = None,
+) -> list[str]:
+    """业务模块不得通过旧字符串前缀推断会话类型。"""
+
+    if paths is None:
+        paths = tuple(
+            path
+            for root in (ROOT / "core", ROOT / "app")
+            for path in sorted(root.rglob("*.py"))
+        )
+    errors: list[str] = []
+    for path in paths:
+        if path.resolve() == _IDENTITY_COMPATIBILITY_ADAPTER.resolve():
+            continue
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        try:
+            display_path = path.relative_to(ROOT)
+        except ValueError:
+            display_path = path
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.args
+                and node.func.attr in _IDENTITY_PREFIX_CALL_ARGUMENTS
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value
+                in _IDENTITY_PREFIX_CALL_ARGUMENTS[node.func.attr]
+            ):
+                errors.append(
+                    f"{display_path}:{node.lineno}: 禁止按字符串前缀推断会话类型："
+                    f"{ast.unparse(node)}"
+                )
+            elif (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and _IDENTITY_SQL_LIKE_RE.search(node.value)
+            ):
+                errors.append(
+                    f"{display_path}:{node.lineno}: 禁止使用 SQL LIKE 群聊前缀；"
+                    "请先解析类型化 ChatStreamIdentity"
                 )
     return errors
 
@@ -347,6 +602,68 @@ def check_tool_descriptor_consumers() -> list[str]:
                         f"{path.relative_to(ROOT)}:{node.lineno}: 生产消费者不得直接读取 "
                         f"{', '.join(sorted(imported))}；请使用 ToolDescriptor Registry"
                     )
+    return errors
+
+
+def check_model_route_descriptor_consumers(
+    paths: tuple[Path, ...] | None = None,
+) -> list[str]:
+    """模型路由消费者不得重新维护兼容元数据或 route key 映射。"""
+
+    if paths is None:
+        paths = tuple(
+            path
+            for root in PRODUCTION_PYTHON_ROOTS
+            if root.exists()
+            for path in sorted(root.rglob("*.py"))
+        )
+    errors: list[str] = []
+    compatibility_facade = ROOT / "core" / "route_metadata.py"
+    forbidden_assignments = {
+        "_MODEL_SETTING_KEYS",
+        "_MODEL_FALLBACK_SETTING_KEYS",
+        "_REPLY_INHERITED_ROUTE_KEYS",
+    }
+    for path in paths:
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        try:
+            display_path = path.relative_to(ROOT)
+        except ValueError:
+            display_path = path
+        for node in ast.walk(tree):
+            if (
+                path != compatibility_facade
+                and isinstance(node, ast.ImportFrom)
+                and node.level == 0
+                and node.module == "core.route_metadata"
+            ):
+                imported = {
+                    alias.name for alias in node.names
+                } & {"ROUTE_METADATA"}
+                if imported:
+                    errors.append(
+                        f"{display_path}:{node.lineno}: 生产消费者不得读取 "
+                        "ROUTE_METADATA；请使用 ModelRouteDescriptorRegistry"
+                    )
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            assigned = {
+                target.id
+                for target in targets
+                if isinstance(target, ast.Name)
+            } & forbidden_assignments
+            for name in sorted(assigned):
+                errors.append(
+                    f"{display_path}:{node.lineno}: 禁止重新定义 {name}；"
+                    "请从 ModelRouteDescriptorRegistry 投影"
+                )
     return errors
 
 
@@ -447,15 +764,61 @@ def check_legacy_prompt_boundaries() -> list[str]:
     return errors
 
 
+def _repository_paths() -> list[str]:
+    """只读取 Git 可见文件；忽略构建缓存和被 ignore 的本地状态。"""
+
+    completed = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return [
+        line
+        for line in completed.stdout.splitlines()
+        if line
+    ]
+
+
+def check_release_impact_ownership(
+    *,
+    paths: list[str] | None = None,
+) -> list[str]:
+    """生产文件必须命中代码所有的 Release Impact Descriptor。"""
+
+    from core.release import build_release_impact_report
+
+    candidates = _repository_paths() if paths is None else paths
+    report = build_release_impact_report(candidates)
+    return [
+        f"{path}: 未归属任何 ReleaseImpactDescriptor"
+        for path in report.unowned_production_paths
+    ]
+
+
 def main() -> int:
     errors = [error for rule in RULES for error in check_rule(rule)]
     errors.extend(check_bridge_private_access())
     errors.extend(check_database_port_boundaries())
     errors.extend(check_core_client_dependencies())
+    errors.extend(check_kt_framework_boundaries())
+    errors.extend(check_message_contract_boundaries())
+    errors.extend(check_monolith_growth_boundaries())
+    errors.extend(check_identity_prefix_inference_boundaries())
     errors.extend(check_tool_descriptor_consumers())
+    errors.extend(check_model_route_descriptor_consumers())
     errors.extend(check_model_setting_consumers())
     errors.extend(check_pure_module_boundaries())
     errors.extend(check_legacy_prompt_boundaries())
+    errors.extend(check_release_impact_ownership())
     if errors:
         print("架构边界检查失败：", file=sys.stderr)
         for error in errors:

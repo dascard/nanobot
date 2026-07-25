@@ -8,7 +8,6 @@ L4: Timeout fallback
 """
 
 import hashlib
-import json
 import logging
 import os
 import re
@@ -19,41 +18,34 @@ from core.model_provider import (
     ModelProviderRegistry,
     ModelProviderRequest,
     ModelProviderResponse,
-    ProviderCapability,
     SyncModelCompletionPort,
 )
 from core.model_provider.response_normalization import strip_think_blocks
+from core.model_provider.route_registry import (
+    list_model_route_descriptors,
+    model_route_registry_snapshot,
+    require_model_route_descriptor,
+)
 from foundation.llm.model_options import normalize_enable_thinking
 
 logger = logging.getLogger("nanobot.classifier")
 
 
 _MISSING = object()
-_OUTREACH_ROUTE_KEYS = {
-    "timing_proactive",
-    "outreach_extract",
-    "outreach_judge",
-    "outreach_generate",
-}
-_REPLY_INHERITED_ROUTE_KEYS = {
-    *_OUTREACH_ROUTE_KEYS,
-    "news_daily_quality",
-}
-
-_MODEL_SETTING_KEYS = {
-    "reply": "model.reply",
-    "fast": "model.fast",
-    "smart": "model.smart",
-    "session_summary": "model.session_summary",
-    "memory_digest": "model.memory_digest",
-}
-_MODEL_FALLBACK_SETTING_KEYS = {
-    "session_summary": "model.fast",
-    "memory_digest": "model.smart",
-}
 
 
 ModelRouteResponse = ModelProviderResponse
+
+
+class ModelRouteProviderUnavailableError(RuntimeError):
+    """配置明确禁用 route provider；供上层按类型处理。"""
+
+    def __init__(self, provider_id: str) -> None:
+        self.provider_id = str(provider_id or "").strip()
+        super().__init__(
+            "模型路由 Provider 已禁用"
+            f"（provider disabled: {self.provider_id}）"
+        )
 
 
 def _get_db_setting_value(key: str) -> tuple[bool, str | None]:
@@ -89,12 +81,10 @@ def _get_setting_value(key: str, default=None):
 def _configured_model_for_route(route_key: str) -> str:
     """只通过 SettingSpec 目录解析路由模型及兼容回退。"""
 
-    setting_key = _MODEL_SETTING_KEYS.get(route_key)
-    if setting_key is None:
-        return ""
-    value = _get_setting_value(setting_key, "")
+    descriptor = require_model_route_descriptor(route_key)
+    value = _get_setting_value(descriptor.model_setting_key, "")
     if not value:
-        fallback_key = _MODEL_FALLBACK_SETTING_KEYS.get(route_key)
+        fallback_key = descriptor.model_fallback_setting_key
         if fallback_key is not None:
             value = _get_setting_value(fallback_key, "")
     return str(value or "").strip()
@@ -140,34 +130,32 @@ def _classifier_timeout() -> float:
 
 
 def _resolve_classifier_route(route_key: str) -> dict:
-    """解析分类器路由配置。
+    """按冻结 Descriptor 解析模型路由配置。
 
     返回 {provider, base_url, api_key, model, timeout, temperature, max_tokens}。
-    子路由（private_decision / classifier_legacy）空配置时继承 timing_gate 的完整配置；
-    主动外呼与日报摘要路由继承主回复模型 reply 的完整配置，
-    字段级覆盖（如 private_decision.max_tokens=120）在继承后叠加。
+    继承、默认值、SettingSpec 和 fallback 均由 ModelRouteDescriptor 声明。
     """
 
+    descriptor = require_model_route_descriptor(route_key)
     defaults = {
         "provider": "llama.cpp",
+        "provider_id": descriptor.default_provider_id,
         "base_url": str(CLASSIFIER_API_URL or "http://172.17.0.1:9999/v1"),
         "api_key": "",
         "model": "",
-        "timeout": 15.0,
-        "temperature": 0,
-        "max_tokens": 30,
-        "enable_thinking": "auto",
+        "timeout": descriptor.default_timeout_seconds,
+        "temperature": descriptor.default_temperature,
+        "max_tokens": descriptor.default_max_tokens,
+        "enable_thinking": descriptor.default_enable_thinking,
     }
 
-    # 私聊/旧分类器子路由继承 timing_gate；生成型任务跟随主回复模型。
-    if route_key in ("private_decision", "classifier_legacy"):
-        base = _resolve_classifier_route("timing_gate")
-    elif route_key in _REPLY_INHERITED_ROUTE_KEYS:
-        base = _resolve_classifier_route("reply")
-    else:
-        base = dict(defaults)
+    base = (
+        _resolve_classifier_route(descriptor.inherits_from)
+        if descriptor.inherits_from is not None
+        else dict(defaults)
+    )
 
-    prefix = f"model.route.{route_key}"
+    prefix = descriptor.setting_prefix
     raw = _get_setting_value(prefix)
 
     if _setting_is_explicit(prefix, raw) and raw and isinstance(raw, str) and raw.strip():
@@ -188,13 +176,12 @@ def _resolve_classifier_route(route_key: str) -> dict:
     v = _get_setting_value(f"{prefix}.model")
     if v:
         base["model"] = str(v)
-    for k in ("timeout", "temperature", "max_tokens"):
-        route_default = None
-        if route_key in _REPLY_INHERITED_ROUTE_KEYS:
-            from core.config_registry import SETTING_DEFS
-
-            defn = SETTING_DEFS.get(f"{prefix}.{k}")
-            route_default = defn.default if defn is not None else None
+    route_defaults = {
+        "timeout": descriptor.default_timeout_seconds,
+        "temperature": descriptor.default_temperature,
+        "max_tokens": descriptor.default_max_tokens,
+    }
+    for k, route_default in route_defaults.items():
         v = _get_setting_value(f"{prefix}.{k}", route_default)
         if v is not None:
             base[k] = float(v) if k == "temperature" else (int(v) if k == "max_tokens" else float(v))
@@ -204,13 +191,9 @@ def _resolve_classifier_route(route_key: str) -> dict:
 
     enable_thinking_key = f"{prefix}.enable_thinking"
     enable_thinking = _get_setting_value(enable_thinking_key, "")
-    if route_key in _REPLY_INHERITED_ROUTE_KEYS:
-        from core.config_registry import SETTING_DEFS
-
-        defn = SETTING_DEFS.get(enable_thinking_key)
-        route_default = defn.default if defn is not None else "auto"
+    if not descriptor.inherit_thinking_when_unset:
         base["enable_thinking"] = normalize_enable_thinking(
-            enable_thinking or route_default
+            enable_thinking or descriptor.default_enable_thinking
         )
     elif _setting_is_explicit(enable_thinking_key, enable_thinking):
         base["enable_thinking"] = normalize_enable_thinking(enable_thinking)
@@ -257,7 +240,7 @@ def ensure_model_route_enabled(route_key: str, route: dict | None = None) -> dic
     route = route or resolve_model_route(route_key)
     provider_id = str(route.get("provider_id") or "").strip()
     if provider_id and route.get("provider_enabled") is False:
-        raise RuntimeError(f"provider disabled: {provider_id}")
+        raise ModelRouteProviderUnavailableError(provider_id)
     return route
 
 
@@ -285,6 +268,7 @@ def call_model_route_response(
     支持 OpenAI-compatible API / New API / 本地 llama.cpp。
     调用 /chat/completions，返回 cleaned text。
     """
+    descriptor = require_model_route_descriptor(route_key)
     route = ensure_model_route_enabled(route_key)
     logger.info(
         "[call_model_route] route=%s provider=%s model=%s",
@@ -301,15 +285,7 @@ def call_model_route_response(
         messages = fallback_messages
         from core.prompt_v2.task_templates import render_task_messages
 
-        prompt_key = {
-            "timing_gate": "timing_gate",
-            "private_decision": "private_decision",
-            "classifier_legacy": "classifier_legacy",
-            "timing_proactive": "timing_proactive",
-            "outreach_extract": "outreach_extract",
-            "outreach_judge": "outreach_judge",
-            "outreach_generate": "outreach_generate",
-        }.get(route_key, "")
+        prompt_key = descriptor.runtime_task_key
         if prompt_key:
             messages = render_task_messages(
                 prompt_key,
@@ -333,17 +309,12 @@ def call_model_route_response(
     provider_registry.freeze()
     provider = provider_registry.require(
         adapter.descriptor.id,
-        capabilities=frozenset({ProviderCapability.CHAT_COMPLETION}),
+        capabilities=descriptor.required_provider_capabilities,
     )
     if not isinstance(provider, SyncModelCompletionPort):
         raise TypeError(
             f"Provider {adapter.descriptor.id} 未实现同步 completion Port"
         )
-    default_source = {
-        "timing_gate": "classifier.timing_gate",
-        "private_decision": "classifier.private_decision",
-        "news_daily_quality": "news_daily.summarize_quality",
-    }.get(route_key, f"classifier.{route_key}" if route_key else "classifier")
     response = provider.complete(
         ModelProviderRequest(
             messages=tuple(messages),
@@ -358,7 +329,7 @@ def call_model_route_response(
             ),
             timeout_seconds=timeout or float(route.get("timeout", 15)),
             enable_thinking=str(route.get("enable_thinking") or "auto"),
-            trace_source=default_source,
+            trace_source=descriptor.trace_source,
             metadata={"route_key": route_key},
         )
     )
@@ -553,8 +524,10 @@ def resolve_model_route(route_key: str) -> dict:
           overridden_fields}
     """
     from core.settings_service import settings
-    from core.route_metadata import route_type_for, canonical_provider_id
+    from core.route_metadata import canonical_provider_id
 
+    descriptor = require_model_route_descriptor(route_key)
+    route_key = descriptor.route_key
     route = _resolve_classifier_route(route_key)
 
     # 确定 provider（使用 canonical 名）
@@ -562,12 +535,14 @@ def resolve_model_route(route_key: str) -> dict:
         str(route.get("provider_id") or settings.get(f"model.route.{route_key}.provider") or "")
     )
     if not provider_id:
-        if route_key in ("reply", "fast", "smart", "session_summary", "memory_digest"):
-            provider_id = "newapi"
-        elif route_key == "sticker_describe":
-            provider_id = "local_llama"
-        else:
-            provider_id = "local_llama"
+        provider_id = descriptor.default_provider_id
+    if not provider_id and descriptor.inherits_from is not None:
+        provider_id = str(
+            resolve_model_route(descriptor.inherits_from).get(
+                "provider_id",
+                "",
+            )
+        )
 
     provider = _get_provider_config(provider_id) or {
         "id": provider_id, "base_url": route.get("base_url", ""),
@@ -579,9 +554,10 @@ def resolve_model_route(route_key: str) -> dict:
     if not model:
         model = _configured_model_for_route(route_key)
 
+    route_registry_snapshot = model_route_registry_snapshot()
     result = {
         "route_key": route_key,
-        "route_type": route_type_for(route_key),
+        "route_type": descriptor.route_type,
         "provider_id": provider_id,
         "base_url": route.get("base_url") or provider["base_url"],
         "api_key": route.get("api_key") or provider["api_key"],
@@ -594,19 +570,13 @@ def resolve_model_route(route_key: str) -> dict:
         "max_tokens": route.get("max_tokens", 30),
         "enable_thinking": normalize_enable_thinking(route.get("enable_thinking", "auto")),
         "source": route.get("source", "provider"),
+        "route_registry_generation": route_registry_snapshot.generation,
+        "route_registry_sha256": route_registry_snapshot.sha256,
     }
 
-    # 继承信息（非 timing_gate 的 classifier routes）
-    if route_key in (
-        "private_decision",
-        "classifier_legacy",
-        *_REPLY_INHERITED_ROUTE_KEYS,
-    ):
-        inherited_from = (
-            "reply"
-            if route_key in _REPLY_INHERITED_ROUTE_KEYS
-            else "timing_gate"
-        )
+    # 继承信息完全来自 Descriptor。
+    if descriptor.inherits_from is not None:
+        inherited_from = descriptor.inherits_from
         parent = resolve_model_route(inherited_from)
         overrides = {}
         for k in ("max_tokens", "timeout", "temperature", "model", "provider_id", "enable_thinking"):
@@ -616,6 +586,31 @@ def resolve_model_route(route_key: str) -> dict:
         result["overridden_fields"] = overrides
         result["source"] = f"inherited_from_{inherited_from}"
 
+    result.update({
+        "domain": descriptor.domain,
+        "owner": descriptor.owner,
+        "required_provider_capabilities": sorted(
+            capability.value
+            for capability in descriptor.required_provider_capabilities
+        ),
+        "setting_prefix": descriptor.setting_prefix,
+        "model_setting_key": descriptor.model_setting_key,
+        "model_fallback_setting_key": (
+            descriptor.model_fallback_setting_key
+        ),
+        "fallback_route": descriptor.fallback_route,
+        "fallback_scope": descriptor.fallback_scope,
+        "candidate_policy_id": descriptor.candidate_policy_id,
+        "circuit_breaker_policy_id": (
+            descriptor.circuit_breaker_policy_id
+        ),
+        "task_contract_keys": list(descriptor.task_contract_keys),
+        "output_contract_id": descriptor.output_contract_id,
+        "trace_policy_id": descriptor.trace_policy_id,
+        "lifecycle": descriptor.lifecycle.value,
+        "execution_mode": descriptor.execution_mode.value,
+        "slo": descriptor.slo.metadata(),
+    })
     return result
 
 
@@ -696,10 +691,8 @@ def build_route_references() -> list[dict]:
 
     items: list[dict] = []
     seen: set[str] = set()
-    for rk in (
-        "reply", "fast", "smart", "timing_gate", "private_decision",
-        "classifier_legacy", "sticker_describe", *_REPLY_INHERITED_ROUTE_KEYS,
-    ):
+    for descriptor in list_model_route_descriptors():
+        rk = descriptor.route_key
         r = resolve_model_route(rk)
         m = r.get("model", "")
         if not m or m == "未指定":
@@ -994,102 +987,14 @@ def get_guardrail() -> Guardrail:
 
 
 class PrivateDecisionClassifier:
-    """私聊决策分类器——一次 Qwen 调用输出 action + complexity。"""
-
-    def _call_qwen(self, message: str, has_files: bool = False) -> str:
-        ctx = f"{message}\n[附带图片]" if has_files else message
-        logger.info(
-            "[private_decision] >> message=%.80s has_files=%s", message, has_files,
-        )
-        return call_model_route(
-            route_key="private_decision",
-            user_message=ctx,
-            max_tokens=120,
-        )
-
-    def _parse(self, raw: str) -> dict:
-        cleaned = raw or ""
-        for _ in range(5):
-            prev = cleaned
-            cleaned = THINK_PATTERN.sub("", cleaned).strip()
-            if cleaned == prev:
-                break
-        try:
-            start = cleaned.find("{")
-            end = cleaned.rfind("}") + 1
-            data = json.loads(cleaned[start:end])
-        except json.JSONDecodeError:
-            return self._parse_fallback(cleaned)
-
-        action = str(data.get("action", "")).strip().lower()
-        if action not in {"no_reply", "wait", "reply_now"}:
-            action = "reply_now"
-        try:
-            complexity = int(data.get("complexity", 5))
-        except (TypeError, ValueError):
-            complexity = 5
-        complexity = max(1, min(10, complexity))
-        if action in {"no_reply", "wait"}:
-            complexity = 0
-
-        return {
-            "action": action,
-            "complexity": complexity,
-            "reason": str(data.get("reason", ""))[:160],
-            "raw": raw[:300],
-        }
-
-    def _parse_fallback(self, text: str) -> dict:
-        """兼容旧格式输出（NO_REPLY/WAIT/是,5 等）。"""
-        upper = text.upper()
-        if "NO_REPLY" in upper or text.startswith(("否", "不用", "不需要")):
-            return {
-                "action": "no_reply",
-                "complexity": 0,
-                "reason": "fallback parse",
-                "raw": text[:300],
-            }
-        if "WAIT" in upper or "等待" in text or text.startswith(("等", "稍等")):
-            return {
-                "action": "wait",
-                "complexity": 0,
-                "reason": "fallback parse",
-                "raw": text[:300],
-            }
-        m = re.match(r"^\s*是\s*[,，]\s*(\d+)\s*$", text)
-        if m:
-            c = max(1, min(10, int(m.group(1))))
-            return {
-                "action": "reply_now",
-                "complexity": c,
-                "reason": "legacy reply parse",
-                "raw": text[:300],
-            }
-        return {
-            "action": "reply_now",
-            "complexity": 5,
-            "reason": "invalid output fallback",
-            "raw": text[:300],
-        }
+    """私聊决策兼容 façade；实际执行与解析统一由 TaskRuntime 负责。"""
 
     def classify(self, message: str, has_files: bool = False) -> dict:
-        if not message.strip() and not has_files:
-            return {
-                "action": "no_reply",
-                "complexity": 0,
-                "reason": "empty message",
-                "raw": "",
-            }
-        raw = self._call_qwen(message, has_files)
-        parsed = self._parse(raw)
-        logger.info(
-            "[private_decision] << action=%s complexity=%s raw_chars=%s raw_sha256=%s",
-            parsed["action"],
-            parsed["complexity"],
-            len(raw),
-            hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12],
+        from clients.decision_model_adapter import (
+            execute_private_decision_task,
         )
-        return parsed
+
+        return execute_private_decision_task(message, has_files)
 
 
 _private_decision_instance: PrivateDecisionClassifier | None = None
@@ -1205,33 +1110,6 @@ def get_timing_gate() -> TimingGate:
     if _timing_gate_instance is None:
         _timing_gate_instance = TimingGate()
     return _timing_gate_instance
-
-
-# ── Private reply timing classifier（独立 prompt，不混用 Guardrail.classify）──
-
-
-def _parse_private_label(raw: str) -> str:
-    text = (raw or "").strip().upper()
-    if "NO_REPLY" in text:
-        return "NO_REPLY"
-    if "WAIT" in text:
-        return "WAIT"
-    if "REPLY_NOW" in text:
-        return "REPLY_NOW"
-    if text.startswith("否"):
-        return "NO_REPLY"
-    return "REPLY_NOW"
-
-
-def call_qwen_private_timing(message: str, has_files: bool = False) -> dict:
-    """[DEPRECATED] 使用 get_private_decision_classifier().classify() 替代。"""
-    result = get_private_decision_classifier().classify(message, has_files)
-    label_map = {"no_reply": "NO_REPLY", "wait": "WAIT", "reply_now": "REPLY_NOW"}
-    return {
-        "label": label_map.get(result["action"], "REPLY_NOW"),
-        "raw": result.get("raw", ""),
-        "confidence": 1.0,
-    }
 
 
 # ── 群聊主动发言裁判（独立 route timing_proactive，默认倾向沉默）──

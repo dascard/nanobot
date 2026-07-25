@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -806,10 +807,12 @@ def test_rag_debug_group_memory_uses_retrieval_service_not_stub(client, db_sessi
     from core.database import GroupMemory
 
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    content = "群里经常讨论本地模型部署和 RAG reranker。"
+    reviewed_at = _local_now()
     row = GroupMemory(
         group_id="group_1097666427",
         memory_type="topic",
-        content="群里经常讨论本地模型部署和 RAG reranker。",
+        content=content,
         content_hash="rag-debug-group-memory",
         confidence=0.86,
         evidence_count=3,
@@ -817,7 +820,15 @@ def test_rag_debug_group_memory_uses_retrieval_service_not_stub(client, db_sessi
         decay_score=1.0,
         status="active",
         inject_policy="auto",
-        last_seen=_local_now(),
+        last_seen=reviewed_at,
+        approval_source="human",
+        governance_mode="human_managed",
+        approved_content_hash=hashlib.sha256(
+            f"{content}\0".encode("utf-8")
+        ).hexdigest(),
+        human_reviewer_id="rag-debug-reviewer",
+        human_reviewed_at=reviewed_at,
+        human_action="accept",
     )
     db_session.add(row)
     db_session.commit()

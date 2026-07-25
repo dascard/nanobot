@@ -7,18 +7,22 @@ semantics such as query rewrite, similarity search, and top-k ranking.
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.memory_digest.retrieval_service import validate_digest_date_range
 from app.memory_digest.renderer import render_digest_levels
-from core.db.models.session_memory import MemoryDigest, RollingSessionSummary
-
-
+from core.chat_stream_identity import (
+    parse_compatibility_chat_stream_identity,
+)
+from core.db.models.chat import ConversationTurn
+from core.db.models.session_memory import (
+    MemoryDigest,
+    RollingSessionSummary,
+)
 def _safe_json(raw: str | None, fallback: Any) -> Any:
     try:
         value = json.loads(raw or "")
@@ -56,10 +60,19 @@ def _canonical_session_id(session_id: str | None, user_id: str | None = "") -> s
     uid = str(user_id or "").strip()
     if not sid:
         return ""
-    if sid.startswith("group_"):
-        return sid
-    if re.fullmatch(r"\d+", sid) and uid.startswith("group_"):
-        return uid
+    session_identity = parse_compatibility_chat_stream_identity(sid)
+    if (
+        session_identity is not None
+        and session_identity.chat_type == "group"
+    ):
+        return session_identity.legacy_runtime_session_id
+    user_identity = parse_compatibility_chat_stream_identity(uid)
+    if (
+        sid.isdigit()
+        and user_identity is not None
+        and user_identity.chat_type == "group"
+    ):
+        return user_identity.legacy_runtime_session_id
     return sid
 
 
@@ -67,25 +80,27 @@ def _session_aliases(session_id: str | None) -> list[str]:
     sid = str(session_id or "").strip()
     if not sid:
         return []
-    aliases = {sid}
-    if sid.startswith("group_"):
-        raw = sid.removeprefix("group_")
-        if raw:
-            aliases.add(raw)
-    elif re.fullmatch(r"\d+", sid):
-        aliases.add(f"group_{sid}")
-    return sorted(aliases)
+    identity = parse_compatibility_chat_stream_identity(sid)
+    if (
+        identity is not None
+        and identity.platform == "qq"
+        and identity.chat_type == "group"
+    ):
+        return sorted({
+            identity.external_session_id,
+            identity.legacy_runtime_session_id,
+        })
+    return [sid]
 
 
 def _infer_chat_type(session_id: str, explicit: str = "") -> str:
     value = str(explicit or "").strip()
     if value:
         return value
-    if str(session_id or "").startswith("group_"):
-        return "group"
-    if str(session_id or "").startswith("private_"):
-        return "private"
-    return ""
+    identity = parse_compatibility_chat_stream_identity(
+        str(session_id or "")
+    )
+    return identity.chat_type if identity is not None else ""
 
 
 def _is_system_session(item: dict[str, Any]) -> bool:
@@ -145,7 +160,7 @@ class AdminSessionMemoryBrowser:
     def __init__(self, db: Session):
         self.db = db
 
-    def _session_rows_sql(
+    def _session_rows(
         self,
         *,
         limit: int,
@@ -153,240 +168,215 @@ class AdminSessionMemoryBrowser:
         kind: str,
         include_system_sessions: bool,
     ) -> tuple[int, list[dict[str, Any]]]:
-        sql = text("""
-WITH all_rows AS (
-    SELECT
-        CASE
-            WHEN session_id NOT LIKE 'group_%'
-             AND session_id GLOB '[0-9]*'
-             AND user_id LIKE 'group_%'
-            THEN user_id
-            ELSE session_id
-        END AS canonical_session_id,
-        session_id AS alias_session_id,
-        user_id AS user_id,
-        chat_type AS chat_type,
-        1 AS summary_count,
-        0 AS digest_count,
-        0 AS turn_count,
-        CASE WHEN status = 'archived' THEN 1 ELSE 0 END AS has_archived,
-        covered_until_turn_id AS latest_turn_index,
-        CASE WHEN covered_from_turn_id > 0 THEN covered_from_turn_id ELSE NULL END AS oldest_turn_index,
-        COALESCE(updated_at, created_at) AS latest_at
-    FROM rolling_session_summaries
-    WHERE session_id IS NOT NULL AND session_id != ''
-    UNION ALL
-    SELECT
-        CASE
-            WHEN session_id NOT LIKE 'group_%'
-             AND session_id GLOB '[0-9]*'
-             AND user_id LIKE 'group_%'
-            THEN user_id
-            ELSE session_id
-        END AS canonical_session_id,
-        session_id AS alias_session_id,
-        user_id AS user_id,
-        '' AS chat_type,
-        0 AS summary_count,
-        1 AS digest_count,
-        0 AS turn_count,
-        0 AS has_archived,
-        0 AS latest_turn_index,
-        NULL AS oldest_turn_index,
-        created_at AS latest_at
-    FROM memory_digests
-    WHERE session_id IS NOT NULL AND session_id != ''
-    UNION ALL
-    SELECT
-        CASE
-            WHEN session_id NOT LIKE 'group_%'
-             AND session_id GLOB '[0-9]*'
-             AND user_id LIKE 'group_%'
-            THEN user_id
-            ELSE session_id
-        END AS canonical_session_id,
-        session_id AS alias_session_id,
-        max(user_id) AS user_id,
-        CASE
-            WHEN session_id LIKE 'group_%' THEN 'group'
-            WHEN session_id LIKE 'private_%' THEN 'private'
-            WHEN max(user_id) LIKE 'group_%' THEN 'group'
-            ELSE ''
-        END AS chat_type,
-        0 AS summary_count,
-        0 AS digest_count,
-        count(*) AS turn_count,
-        0 AS has_archived,
-        max(id) AS latest_turn_index,
-        min(id) AS oldest_turn_index,
-        max(created_at) AS latest_at
-    FROM conversation_turns
-    WHERE session_id IS NOT NULL AND session_id != ''
-    GROUP BY canonical_session_id, alias_session_id
-),
-grouped AS (
-    SELECT
-        canonical_session_id AS session_id,
-        group_concat(DISTINCT alias_session_id) AS aliases,
-        max(user_id) AS user_id,
-        max(chat_type) AS chat_type,
-        sum(summary_count) AS summary_count,
-        sum(digest_count) AS digest_count,
-        sum(turn_count) AS turn_count,
-        max(has_archived) AS has_archived,
-        max(latest_turn_index) AS latest_turn_index,
-        min(oldest_turn_index) AS oldest_turn_index,
-        max(latest_at) AS latest_at
-    FROM all_rows
-    WHERE canonical_session_id IS NOT NULL AND canonical_session_id != ''
-    GROUP BY canonical_session_id
-),
-filtered AS (
-    SELECT *
-    FROM grouped
-    WHERE
-        (:kind = 'all'
-         OR (:kind = 'recent' AND (summary_count > 0 OR turn_count > 0))
-         OR (:kind = 'long' AND digest_count > 0))
-        AND (
-            :include_system = 1
-            OR (
-                lower(session_id) NOT IN ('g_test', 'news_search', 'test', 'smoke', 'local_test', 'news_tool', 'test_user_001')
-                AND lower(coalesce(user_id, '')) NOT IN ('g_test', 'news_search', 'test', 'smoke', 'local_test', 'news_tool', 'test_user_001')
-                AND lower(session_id) NOT LIKE '%test%'
-                AND lower(session_id) NOT LIKE '%smoke%'
-                AND lower(coalesce(user_id, '')) NOT LIKE '%test%'
-                AND lower(coalesce(user_id, '')) NOT LIKE '%smoke%'
-                AND lower(session_id) NOT LIKE '%_repl'
-                AND lower(coalesce(user_id, '')) NOT LIKE '%_repl'
+        grouped: dict[str, dict[str, Any]] = {}
+
+        def merge_row(
+            *,
+            session_id: Any,
+            user_id: Any,
+            chat_type: Any = "",
+            summary_count: int = 0,
+            digest_count: int = 0,
+            turn_count: int = 0,
+            has_archived: bool = False,
+            latest_turn_index: int = 0,
+            oldest_turn_index: int = 0,
+            latest_at: Any = None,
+        ) -> None:
+            raw_session_id = str(session_id or "").strip()
+            if not raw_session_id:
+                return
+            canonical = _canonical_session_id(
+                raw_session_id,
+                str(user_id or ""),
             )
+            item = grouped.setdefault(canonical, {
+                "session_id": canonical,
+                "aliases": set(_session_aliases(canonical)),
+                "user_id": "",
+                "chat_type": "",
+                "summary_count": 0,
+                "digest_count": 0,
+                "turn_count": 0,
+                "has_archived": False,
+                "latest_turn_index": 0,
+                "oldest_turn_index": 0,
+                "latest_at": None,
+            })
+            item["aliases"].add(raw_session_id)
+            item["user_id"] = max(
+                str(item["user_id"] or ""),
+                str(user_id or ""),
+            )
+            inferred_type = _infer_chat_type(
+                canonical,
+                str(chat_type or ""),
+            )
+            if inferred_type:
+                item["chat_type"] = max(
+                    str(item["chat_type"] or ""),
+                    inferred_type,
+                )
+            item["summary_count"] += int(summary_count or 0)
+            item["digest_count"] += int(digest_count or 0)
+            item["turn_count"] += int(turn_count or 0)
+            item["has_archived"] = (
+                bool(item["has_archived"]) or bool(has_archived)
+            )
+            item["latest_turn_index"] = max(
+                int(item["latest_turn_index"] or 0),
+                int(latest_turn_index or 0),
+            )
+            oldest = int(oldest_turn_index or 0)
+            if oldest and (
+                not item["oldest_turn_index"]
+                or oldest < int(item["oldest_turn_index"])
+            ):
+                item["oldest_turn_index"] = oldest
+            if (
+                latest_at is not None
+                and (
+                    item["latest_at"] is None
+                    or _iso_any(latest_at)
+                    > _iso_any(item["latest_at"])
+                )
+            ):
+                item["latest_at"] = latest_at
+
+        summary_rows = (
+            self.db.query(
+                RollingSessionSummary.session_id,
+                RollingSessionSummary.user_id,
+                RollingSessionSummary.chat_type,
+                func.count(RollingSessionSummary.id),
+                func.max(case(
+                    (RollingSessionSummary.status == "archived", 1),
+                    else_=0,
+                )),
+                func.max(
+                    RollingSessionSummary.covered_until_turn_id
+                ),
+                func.min(case(
+                    (
+                        RollingSessionSummary.covered_from_turn_id > 0,
+                        RollingSessionSummary.covered_from_turn_id,
+                    ),
+                    else_=None,
+                )),
+                func.max(func.coalesce(
+                    RollingSessionSummary.updated_at,
+                    RollingSessionSummary.created_at,
+                )),
+            )
+            .filter(
+                RollingSessionSummary.session_id.is_not(None),
+                RollingSessionSummary.session_id != "",
+            )
+            .group_by(
+                RollingSessionSummary.session_id,
+                RollingSessionSummary.user_id,
+                RollingSessionSummary.chat_type,
+            )
+            .all()
         )
-)
-SELECT *, count(*) OVER () AS total_count
-FROM filtered
-ORDER BY latest_at DESC, session_id DESC
-LIMIT :limit OFFSET :offset
-""")
-        rows = [
-            dict(row)
-            for row in self.db.execute(
-                sql,
-                {
-                    "kind": kind,
-                    "include_system": 1 if include_system_sessions else 0,
-                    "limit": limit,
-                    "offset": offset,
-                },
-            ).mappings().all()
-        ]
-        total = int(rows[0].get("total_count") or 0) if rows else 0
-        if not rows and offset > 0:
-            count_sql = text("""
-WITH all_rows AS (
-    SELECT
-        CASE
-            WHEN session_id NOT LIKE 'group_%'
-             AND session_id GLOB '[0-9]*'
-             AND user_id LIKE 'group_%'
-            THEN user_id
-            ELSE session_id
-        END AS canonical_session_id,
-        session_id AS alias_session_id,
-        user_id AS user_id,
-        chat_type AS chat_type,
-        1 AS summary_count,
-        0 AS digest_count,
-        0 AS turn_count,
-        CASE WHEN status = 'archived' THEN 1 ELSE 0 END AS has_archived,
-        covered_until_turn_id AS latest_turn_index,
-        CASE WHEN covered_from_turn_id > 0 THEN covered_from_turn_id ELSE NULL END AS oldest_turn_index,
-        COALESCE(updated_at, created_at) AS latest_at
-    FROM rolling_session_summaries
-    WHERE session_id IS NOT NULL AND session_id != ''
-    UNION ALL
-    SELECT
-        CASE
-            WHEN session_id NOT LIKE 'group_%'
-             AND session_id GLOB '[0-9]*'
-             AND user_id LIKE 'group_%'
-            THEN user_id
-            ELSE session_id
-        END AS canonical_session_id,
-        session_id AS alias_session_id,
-        user_id AS user_id,
-        '' AS chat_type,
-        0 AS summary_count,
-        1 AS digest_count,
-        0 AS turn_count,
-        0 AS has_archived,
-        0 AS latest_turn_index,
-        NULL AS oldest_turn_index,
-        created_at AS latest_at
-    FROM memory_digests
-    WHERE session_id IS NOT NULL AND session_id != ''
-    UNION ALL
-    SELECT
-        CASE
-            WHEN session_id NOT LIKE 'group_%'
-             AND session_id GLOB '[0-9]*'
-             AND user_id LIKE 'group_%'
-            THEN user_id
-            ELSE session_id
-        END AS canonical_session_id,
-        session_id AS alias_session_id,
-        max(user_id) AS user_id,
-        CASE
-            WHEN session_id LIKE 'group_%' THEN 'group'
-            WHEN session_id LIKE 'private_%' THEN 'private'
-            WHEN max(user_id) LIKE 'group_%' THEN 'group'
-            ELSE ''
-        END AS chat_type,
-        0 AS summary_count,
-        0 AS digest_count,
-        count(*) AS turn_count,
-        0 AS has_archived,
-        max(id) AS latest_turn_index,
-        min(id) AS oldest_turn_index,
-        max(created_at) AS latest_at
-    FROM conversation_turns
-    WHERE session_id IS NOT NULL AND session_id != ''
-    GROUP BY canonical_session_id, alias_session_id
-),
-grouped AS (
-    SELECT
-        canonical_session_id AS session_id,
-        max(user_id) AS user_id,
-        sum(summary_count) AS summary_count,
-        sum(digest_count) AS digest_count,
-        sum(turn_count) AS turn_count
-    FROM all_rows
-    WHERE canonical_session_id IS NOT NULL AND canonical_session_id != ''
-    GROUP BY canonical_session_id
-)
-SELECT count(*) FROM grouped
-WHERE
-    (:kind = 'all'
-     OR (:kind = 'recent' AND (summary_count > 0 OR turn_count > 0))
-     OR (:kind = 'long' AND digest_count > 0))
-    AND (
-        :include_system = 1
-        OR (
-            lower(session_id) NOT IN ('g_test', 'news_search', 'test', 'smoke', 'local_test', 'news_tool', 'test_user_001')
-            AND lower(coalesce(user_id, '')) NOT IN ('g_test', 'news_search', 'test', 'smoke', 'local_test', 'news_tool', 'test_user_001')
-            AND lower(session_id) NOT LIKE '%test%'
-            AND lower(session_id) NOT LIKE '%smoke%'
-            AND lower(coalesce(user_id, '')) NOT LIKE '%test%'
-            AND lower(coalesce(user_id, '')) NOT LIKE '%smoke%'
-            AND lower(session_id) NOT LIKE '%_repl'
-            AND lower(coalesce(user_id, '')) NOT LIKE '%_repl'
+        for row in summary_rows:
+            merge_row(
+                session_id=row[0],
+                user_id=row[1],
+                chat_type=row[2],
+                summary_count=row[3],
+                has_archived=bool(row[4]),
+                latest_turn_index=row[5],
+                oldest_turn_index=row[6],
+                latest_at=row[7],
+            )
+
+        digest_rows = (
+            self.db.query(
+                MemoryDigest.session_id,
+                MemoryDigest.user_id,
+                func.count(MemoryDigest.id),
+                func.max(MemoryDigest.created_at),
+            )
+            .filter(
+                MemoryDigest.session_id.is_not(None),
+                MemoryDigest.session_id != "",
+            )
+            .group_by(
+                MemoryDigest.session_id,
+                MemoryDigest.user_id,
+            )
+            .all()
         )
-    )
-""")
-            total = int(self.db.execute(
-                count_sql,
-                {"kind": kind, "include_system": 1 if include_system_sessions else 0},
-            ).scalar() or 0)
-        return total, rows
+        for row in digest_rows:
+            merge_row(
+                session_id=row[0],
+                user_id=row[1],
+                digest_count=row[2],
+                latest_at=row[3],
+            )
+
+        turn_rows = (
+            self.db.query(
+                ConversationTurn.session_id,
+                func.max(ConversationTurn.user_id),
+                func.count(ConversationTurn.id),
+                func.max(ConversationTurn.id),
+                func.min(ConversationTurn.id),
+                func.max(ConversationTurn.created_at),
+            )
+            .filter(
+                ConversationTurn.session_id.is_not(None),
+                ConversationTurn.session_id != "",
+            )
+            .group_by(ConversationTurn.session_id)
+            .all()
+        )
+        for row in turn_rows:
+            merge_row(
+                session_id=row[0],
+                user_id=row[1],
+                turn_count=row[2],
+                latest_turn_index=row[3],
+                oldest_turn_index=row[4],
+                latest_at=row[5],
+            )
+
+        rows = []
+        for item in grouped.values():
+            if (
+                kind == "recent"
+                and not (
+                    item["summary_count"] > 0
+                    or item["turn_count"] > 0
+                )
+            ):
+                continue
+            if kind == "long" and item["digest_count"] <= 0:
+                continue
+            system_probe = {
+                **item,
+                "session_aliases": item["aliases"],
+            }
+            if (
+                not include_system_sessions
+                and _is_system_session(system_probe)
+            ):
+                continue
+            rows.append({
+                **item,
+                "aliases": ",".join(sorted(item["aliases"])),
+                "latest_at": item["latest_at"],
+            })
+        rows.sort(
+            key=lambda item: (
+                _iso_any(item["latest_at"]),
+                str(item["session_id"]),
+            ),
+            reverse=True,
+        )
+        total = len(rows)
+        return total, rows[offset:offset + limit]
 
     def list_sessions(
         self,
@@ -405,7 +395,7 @@ WHERE
         except ValueError:
             offset = 0
 
-        total, session_rows = self._session_rows_sql(
+        total, session_rows = self._session_rows(
             limit=limit,
             offset=offset,
             kind=normalized_kind,

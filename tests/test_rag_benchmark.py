@@ -197,15 +197,35 @@ def test_rag_benchmark_fixture_db_supports_group_memory_positive_case(tmp_path):
     from evals.rag_benchmark.fixtures import (
         GROUP_MEMORY_CANDIDATE_ID,
         GROUP_MEMORY_CASE_ID,
+        GROUP_MEMORY_DECOY_ID,
         GROUP_MEMORY_DECOY_CANDIDATE_ID,
+        GROUP_MEMORY_ID,
         GROUP_MEMORY_GROUP_ID,
         build_fixture_db,
     )
     from evals.rag_benchmark.run import run_benchmark
+    from core.group_learning.prompt_injection import (
+        evaluate_group_memory_prompt_injection,
+    )
 
     fixture_db = tmp_path / "positive.db"
 
     cases = build_fixture_db(fixture_db, preset="positive_v1")
+    db = _session_for(fixture_db)
+    try:
+        seeded_memories = {
+            row.id: row
+            for row in db.query(GroupMemory)
+            .filter(GroupMemory.id.in_([GROUP_MEMORY_ID, GROUP_MEMORY_DECOY_ID]))
+            .all()
+        }
+        assert set(seeded_memories) == {GROUP_MEMORY_ID, GROUP_MEMORY_DECOY_ID}
+        assert all(
+            evaluate_group_memory_prompt_injection(memory).eligible
+            for memory in seeded_memories.values()
+        )
+    finally:
+        db.close()
     results, scores = run_benchmark(fixture_db, cases, provider_mode="deterministic")
 
     by_case = {case.id: case for case in cases}

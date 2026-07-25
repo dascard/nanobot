@@ -21,6 +21,17 @@ def _local_now() -> datetime:
     return datetime.now()  # noqa: DTZ005
 
 
+def _claim_summary_lease(db, job_id: int, *, owner: str):
+    from app.session_memory.jobs import (
+        claim_summary_job,
+        session_summary_job_lease,
+    )
+
+    claimed = claim_summary_job(db, job_id, owner=owner)
+    assert claimed is not None
+    return session_summary_job_lease(claimed)
+
+
 def _turn(db, *, session_id="s1", user_id="u1", role="user", content="hello", meta=None, created_at=None):
     row = ConversationTurn(
         user_id=user_id,
@@ -1096,7 +1107,6 @@ def test_admin_archive_obsoletes_pending_and_running_summary_jobs(db_session):
     from api.admin.session_memory_routes import archive_rolling_summary
     from app.session_memory.jobs import (
         SessionSummaryJobRetryConflict,
-        claim_summary_job,
         enqueue_session_summary_job,
         retry_session_summary_job,
     )
@@ -1159,15 +1169,14 @@ def test_admin_archive_obsoletes_pending_and_running_summary_jobs(db_session):
     db_session.add_all([pending_job, failed_job])
     db_session.commit()
 
-    assert claim_summary_job(
+    running_lease = _claim_summary_lease(
         db_session,
         running_job.id,
         owner="archive-worker",
-    ) is not None
+    )
     prepared = prepare_claimed_session_summary_job(
         db_session,
-        running_job.id,
-        owner="archive-worker",
+        lease=running_lease,
     )
     assert prepared is not None
     db_session.commit()
@@ -2739,7 +2748,7 @@ def test_summary_response_schema_rejects_extra_fields_and_invalid_quality(payloa
 
 
 def test_summary_inheritance_audit_is_recorded_in_prepared_batch_trace(db_session):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         _summarize_prepared_sync,
         prepare_claimed_session_summary_job,
@@ -2768,11 +2777,14 @@ def test_summary_inheritance_audit_is_recorded_in_prepared_batch_trace(db_sessio
         previous_summary=None,
         fallback_summary=fallback,
     )
-    claimed = claim_summary_job(db_session, job.id, owner="trace-worker")
+    lease = _claim_summary_lease(
+        db_session,
+        job.id,
+        owner="trace-worker",
+    )
     prepared = prepare_claimed_session_summary_job(
         db_session,
-        claimed.id,
-        owner="trace-worker",
+        lease=lease,
     )
 
     _summarize_prepared_sync(
@@ -3046,7 +3058,7 @@ def test_summary_previous_obligation_over_budget_fails_before_llm_without_backof
 
 
 def test_summary_previous_state_over_budget_is_non_retryable_prepare_error(db_session):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         NonRetryableSessionSummaryError,
         prepare_claimed_session_summary_job,
@@ -3088,7 +3100,11 @@ def test_summary_previous_state_over_budget_is_non_retryable_prepare_error(db_se
         previous_summary=previous,
         fallback_summary=fallback,
     )
-    claim_summary_job(db_session, job.id, owner="state-budget-worker")
+    lease = _claim_summary_lease(
+        db_session,
+        job.id,
+        owner="state-budget-worker",
+    )
 
     with pytest.raises(
         NonRetryableSessionSummaryError,
@@ -3096,8 +3112,7 @@ def test_summary_previous_state_over_budget_is_non_retryable_prepare_error(db_se
     ):
         prepare_claimed_session_summary_job(
             db_session,
-            job.id,
-            owner="state-budget-worker",
+            lease=lease,
         )
 
 
@@ -3105,7 +3120,6 @@ def test_summary_previous_obligation_over_budget_persists_in_sync_short_transact
     db_session,
 ):
     from app.session_memory.jobs import (
-        claim_summary_job,
         enqueue_session_summary_job,
         retry_session_summary_job,
     )
@@ -3153,15 +3167,18 @@ def test_summary_previous_obligation_over_budget_persists_in_sync_short_transact
         previous_summary=previous,
         fallback_summary=fallback,
     )
-    claim_summary_job(db_session, job.id, owner="sync-budget-worker")
+    lease = _claim_summary_lease(
+        db_session,
+        job.id,
+        owner="sync-budget-worker",
+    )
     db_session.commit()
     calls = []
 
     ok = process_claimed_session_summary_job_short_transactions(
         database.SessionLocal,
-        job_id=job.id,
+        lease=lease,
         summarizer=lambda _messages: calls.append(True),
-        owner="sync-budget-worker",
     )
 
     assert ok is False
@@ -3183,7 +3200,7 @@ def test_summary_previous_obligation_over_budget_persists_in_sync_short_transact
 async def test_summary_previous_obligation_over_budget_persists_in_async_short_transaction(
     db_session,
 ):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         process_claimed_session_summary_job_short_transactions_async,
     )
@@ -3228,7 +3245,11 @@ async def test_summary_previous_obligation_over_budget_persists_in_async_short_t
         previous_summary=previous,
         fallback_summary=fallback,
     )
-    claim_summary_job(db_session, job.id, owner="async-budget-worker")
+    lease = _claim_summary_lease(
+        db_session,
+        job.id,
+        owner="async-budget-worker",
+    )
     db_session.commit()
     calls = []
 
@@ -3237,9 +3258,8 @@ async def test_summary_previous_obligation_over_budget_persists_in_async_short_t
 
     ok = await process_claimed_session_summary_job_short_transactions_async(
         database.SessionLocal,
-        job_id=job.id,
+        lease=lease,
         summarizer=summarizer,
-        owner="async-budget-worker",
     )
 
     assert ok is False
@@ -3258,7 +3278,7 @@ async def test_summary_short_transaction_redacts_unknown_prefixed_error(
     caplog,
     worker_mode,
 ):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         process_claimed_session_summary_job_short_transactions,
         process_claimed_session_summary_job_short_transactions_async,
@@ -3293,18 +3313,17 @@ async def test_summary_short_transaction_redacts_unknown_prefixed_error(
         fallback_summary=fallback,
     )
     owner = f"prefixed-error-{worker_mode}-worker"
-    claim_summary_job(db_session, job.id, owner=owner)
+    lease = _claim_summary_lease(db_session, job.id, owner=owner)
     db_session.commit()
     sentinel = "summary_api_key_sensitive_sentinel"
 
     if worker_mode == "sync":
         processed = process_claimed_session_summary_job_short_transactions(
             database.SessionLocal,
-            job_id=job.id,
+            lease=lease,
             summarizer=lambda _messages: (_ for _ in ()).throw(
                 RuntimeError(sentinel)
             ),
-            owner=owner,
         )
     else:
         async def failing_summarizer(_messages):
@@ -3312,9 +3331,8 @@ async def test_summary_short_transaction_redacts_unknown_prefixed_error(
 
         processed = await process_claimed_session_summary_job_short_transactions_async(
             database.SessionLocal,
-            job_id=job.id,
+            lease=lease,
             summarizer=failing_summarizer,
-            owner=owner,
         )
 
     assert processed is False
@@ -3329,7 +3347,7 @@ async def test_summary_short_transaction_redacts_unknown_prefixed_error(
 
 @pytest.mark.parametrize("drift_kind", ["content", "role"])
 def test_summary_input_manifest_drift_blocks_finalize(db_session, drift_kind):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         _summarize_prepared_sync,
         finalize_claimed_session_summary_job,
@@ -3359,11 +3377,14 @@ def test_summary_input_manifest_drift_blocks_finalize(db_session, drift_kind):
         previous_summary=None,
         fallback_summary=fallback,
     )
-    claimed = claim_summary_job(db_session, job.id, owner="manifest-worker")
+    lease = _claim_summary_lease(
+        db_session,
+        job.id,
+        owner="manifest-worker",
+    )
     prepared = prepare_claimed_session_summary_job(
         db_session,
-        claimed.id,
-        owner="manifest-worker",
+        lease=lease,
     )
     raw = _summarize_prepared_sync(prepared, lambda _messages: {
         "summary": "不应保存的摘要",
@@ -3406,7 +3427,7 @@ def test_summary_input_manifest_drift_blocks_finalize(db_session, drift_kind):
 
 
 def test_summary_manifest_rejects_missing_fragment_completion_at_finalize(db_session):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         finalize_claimed_session_summary_job,
         prepare_claimed_session_summary_job,
@@ -3435,11 +3456,14 @@ def test_summary_manifest_rejects_missing_fragment_completion_at_finalize(db_ses
         previous_summary=None,
         fallback_summary=fallback,
     )
-    claimed = claim_summary_job(db_session, job.id, owner="manifest-worker")
+    lease = _claim_summary_lease(
+        db_session,
+        job.id,
+        owner="manifest-worker",
+    )
     prepared = prepare_claimed_session_summary_job(
         db_session,
-        claimed.id,
-        owner="manifest-worker",
+        lease=lease,
     )
     with pytest.raises(ValueError, match="^summary_input_manifest_mismatch$"):
         finalize_claimed_session_summary_job(
@@ -4096,6 +4120,62 @@ def test_worker_run_once_initializes_schema_before_query(monkeypatch):
     assert result == {"processed": 0, "done": 0, "failed": 0, "recovered": 0}
 
 
+def test_session_summary_worker_main_owns_model_runtime_lifecycle(
+    monkeypatch,
+):
+    import sys
+
+    from bootstrap import model_runtime
+    from core.telemetry import runtime as telemetry_runtime
+    from workers import session_summary_worker as worker
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        model_runtime,
+        "start_model_runtime",
+        lambda: calls.append("start"),
+    )
+    monkeypatch.setattr(
+        model_runtime,
+        "stop_model_runtime",
+        lambda: calls.append("stop"),
+    )
+    telemetry_handle = object()
+    monkeypatch.setattr(
+        telemetry_runtime,
+        "start_telemetry_runtime",
+        lambda: (calls.append("telemetry_start"), telemetry_handle)[-1],
+    )
+    monkeypatch.setattr(
+        telemetry_runtime,
+        "stop_telemetry_runtime",
+        lambda handle: (
+            handle is telemetry_handle
+            and calls.append("telemetry_stop")
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_run_coroutine_in_new_loop",
+        lambda coroutine: (
+            coroutine.close(),
+            calls.append("run"),
+            {"processed": 0},
+        )[-1],
+    )
+    monkeypatch.setattr(sys, "argv", ["session_summary_worker"])
+
+    worker.main()
+
+    assert calls == [
+        "telemetry_start",
+        "start",
+        "run",
+        "stop",
+        "telemetry_stop",
+    ]
+
+
 def test_worker_run_once_commits_claim_before_summarizer(db_session, monkeypatch):
     from core import database
     from workers import session_summary_worker as worker
@@ -4272,30 +4352,40 @@ def test_default_session_summary_summarizer_returns_call_metadata(monkeypatch):
         default_llm_summary_summarizer_async,
     )
 
-    class FakeClient:
-        def __init__(self, **_kwargs):
-            pass
+    from core.task_runtime import TaskResult
 
-        async def chat_completion(self, **_kwargs):
-            return {
-                "choices": [{"message": {"content": '{"summary":"真实响应"}'}}],
-                "model": "actual-provider-model",
-                "_nanobot_model_id": "selected-route-model",
-                "_nanobot_requested_model": "requested-route-model",
-                "_nanobot_request_log_id": 321,
-            }
-
-    monkeypatch.setattr("clients.new_api_client.NewAPIClient", FakeClient)
     monkeypatch.setattr(
-        "clients.classifier_client.resolve_model_route",
-        lambda _key: {
-            "model": "requested-route-model",
-            "api_key": "test-key",
-            "base_url": "http://new-api.test/v1",
-            "temperature": 0.1,
-            "max_tokens": 1200,
-            "enable_thinking": "false",
-        },
+        "core.task_runtime.execute_task",
+        lambda _invocation: TaskResult(
+            parsed_value={
+                "summary": "真实响应",
+                "open_threads": [],
+                "decisions": [],
+                "important_user_requests": [],
+                "resolved_items": [],
+                "artifacts": [],
+                "participants": [],
+                "keywords": [],
+                "quality": {"score": 1.0, "issues": []},
+                "inheritance": [],
+            },
+            contract_version="session_summary_v1",
+            route_key="session_summary",
+            provider="newapi",
+            model="actual-provider-model",
+            attempt_count=1,
+            latency_ms=1,
+            failure=None,
+            raw_output_sha256="a" * 64,
+            raw_output_bytes=128,
+            validation_diagnostics=(),
+            run_id="taskrun_session_summary_test",
+            execution_metadata={
+                "requested_model": "requested-route-model",
+                "request_log_id": 321,
+                "actual_model_observed": True,
+            },
+        ),
     )
 
     result = run_async(default_llm_summary_summarizer_async([
@@ -4303,7 +4393,10 @@ def test_default_session_summary_summarizer_returns_call_metadata(monkeypatch):
     ]))
 
     assert isinstance(result, SessionSummaryLLMResult)
-    assert result.content == '{"summary":"真实响应"}'
+    payload = json.loads(result.content)
+    assert payload["summary"] == "真实响应"
+    assert payload["open_threads"] == []
+    assert payload["quality"] == {"issues": [], "score": 1.0}
     assert result.model == "actual-provider-model"
     assert result.requested_model == "requested-route-model"
     assert result.request_log_id == 321
@@ -4404,7 +4497,7 @@ def test_renew_summary_job_lease_is_owner_fenced(db_session):
 
 
 def test_summary_batch_stops_when_lease_renewal_is_lost(db_session):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         _summarize_prepared_sync,
         prepare_claimed_session_summary_job,
@@ -4436,11 +4529,14 @@ def test_summary_batch_stops_when_lease_renewal_is_lost(db_session):
         previous_summary=None,
         fallback_summary=fallback,
     )
-    claim_summary_job(db_session, job.id, owner="worker-a")
-    prepared = prepare_claimed_session_summary_job(
+    lease = _claim_summary_lease(
         db_session,
         job.id,
         owner="worker-a",
+    )
+    prepared = prepare_claimed_session_summary_job(
+        db_session,
+        lease=lease,
     )
     summarizer_calls = []
     renew_calls = []
@@ -4473,7 +4569,7 @@ def test_short_transaction_processor_renews_lease_after_each_batch(
     db_session,
     monkeypatch,
 ):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory import llm_summarizer
     from core import database
 
@@ -4503,20 +4599,25 @@ def test_short_transaction_processor_renews_lease_after_each_batch(
         previous_summary=None,
         fallback_summary=fallback,
     )
-    assert claim_summary_job(db_session, job.id, owner="worker-a") is not None
+    lease = _claim_summary_lease(
+        db_session,
+        job.id,
+        owner="worker-a",
+    )
     db_session.commit()
 
     real_renew = llm_summarizer._renew_claimed_job_with_factory
     renew_calls = []
     summarizer_calls = []
 
-    def tracking_renew(session_factory, *, job_id, owner):
+    def tracking_renew(session_factory, *, lease):
         renewed = real_renew(
             session_factory,
-            job_id=job_id,
-            owner=owner,
+            lease=lease,
         )
-        renew_calls.append((job_id, owner, renewed))
+        renew_calls.append(
+            (lease.job_id, lease.worker_id, renewed)
+        )
         return renewed
 
     def summarizer(_messages):
@@ -4535,9 +4636,8 @@ def test_short_transaction_processor_renews_lease_after_each_batch(
 
     assert llm_summarizer.process_claimed_session_summary_job_short_transactions(
         database.SessionLocal,
-        job_id=job.id,
+        lease=lease,
         summarizer=summarizer,
-        owner="worker-a",
     ) is True
 
     assert len(summarizer_calls) >= 2
@@ -4562,7 +4662,7 @@ def test_session_summary_default_worker_owner_is_unique():
 def test_older_summary_finalize_becomes_obsolete_after_newer_coverage(
     db_session,
 ):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         _summarize_prepared_sync,
         finalize_claimed_session_summary_job,
@@ -4618,17 +4718,23 @@ def test_older_summary_finalize_becomes_obsolete_after_newer_coverage(
         fallback_summary=newer_fallback,
         force=True,
     )
-    claim_summary_job(db_session, older_job.id, owner="older-worker")
-    claim_summary_job(db_session, newer_job.id, owner="newer-worker")
-    older_prepared = prepare_claimed_session_summary_job(
+    older_lease = _claim_summary_lease(
         db_session,
         older_job.id,
         owner="older-worker",
     )
-    newer_prepared = prepare_claimed_session_summary_job(
+    newer_lease = _claim_summary_lease(
         db_session,
         newer_job.id,
         owner="newer-worker",
+    )
+    older_prepared = prepare_claimed_session_summary_job(
+        db_session,
+        lease=older_lease,
+    )
+    newer_prepared = prepare_claimed_session_summary_job(
+        db_session,
+        lease=newer_lease,
     )
 
     def summarize(prepared, label):
@@ -4686,7 +4792,7 @@ async def test_obsolete_summary_job_skips_async_summarizer_before_llm(
 ):
     from sqlalchemy.orm import sessionmaker
 
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         process_claimed_session_summary_job_short_transactions_async,
     )
@@ -4733,11 +4839,11 @@ async def test_obsolete_summary_job_skips_async_summarizer_before_llm(
         fallback_summary=fallback,
         force=True,
     )
-    assert claim_summary_job(
+    lease = _claim_summary_lease(
         db_session,
         job.id,
         owner="preflight-worker",
-    ) is not None
+    )
     db_session.commit()
     session_factory = sessionmaker(bind=db_session.bind, expire_on_commit=False)
     summarizer_calls: list[int] = []
@@ -4752,9 +4858,8 @@ async def test_obsolete_summary_job_skips_async_summarizer_before_llm(
 
     processed = await process_claimed_session_summary_job_short_transactions_async(
         session_factory,
-        job_id=job.id,
+        lease=lease,
         summarizer=summarizer,
-        owner="preflight-worker",
     )
 
     db_session.expire_all()
@@ -4769,7 +4874,7 @@ async def test_obsolete_summary_job_skips_async_summarizer_before_llm(
 
 
 def test_equal_coverage_other_active_summary_makes_job_obsolete(db_session):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         _summarize_prepared_sync,
         finalize_claimed_session_summary_job,
@@ -4810,11 +4915,14 @@ def test_equal_coverage_other_active_summary_makes_job_obsolete(db_session):
         fallback_summary=fallback,
         force=True,
     )
-    claim_summary_job(db_session, job.id, owner="equal-worker")
-    prepared = prepare_claimed_session_summary_job(
+    lease = _claim_summary_lease(
         db_session,
         job.id,
         owner="equal-worker",
+    )
+    prepared = prepare_claimed_session_summary_job(
+        db_session,
+        lease=lease,
     )
     _summarize_prepared_sync(
         prepared,
@@ -4845,7 +4953,7 @@ def test_equal_coverage_other_active_summary_makes_job_obsolete(db_session):
 
 
 def test_lost_summary_owner_cannot_finalize_or_write(db_session):
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         finalize_claimed_session_summary_job,
         prepare_claimed_session_summary_job,
@@ -4874,11 +4982,14 @@ def test_lost_summary_owner_cannot_finalize_or_write(db_session):
         previous_summary=None,
         fallback_summary=fallback,
     )
-    claim_summary_job(db_session, job.id, owner="worker-a")
-    prepared = prepare_claimed_session_summary_job(
+    lease = _claim_summary_lease(
         db_session,
         job.id,
         owner="worker-a",
+    )
+    prepared = prepare_claimed_session_summary_job(
+        db_session,
+        lease=lease,
     )
     job.locked_by = "worker-b"
     db_session.commit()
@@ -4907,7 +5018,7 @@ def test_short_transaction_finalize_rolls_back_when_semantic_enqueue_fails(
 ):
     from sqlalchemy.orm import sessionmaker
 
-    from app.session_memory.jobs import claim_summary_job, enqueue_session_summary_job
+    from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         process_claimed_session_summary_job_short_transactions,
     )
@@ -4935,7 +5046,11 @@ def test_short_transaction_finalize_rolls_back_when_semantic_enqueue_fails(
         previous_summary=None,
         fallback_summary=fallback,
     )
-    claim_summary_job(db_session, job.id, owner="rollback-worker")
+    lease = _claim_summary_lease(
+        db_session,
+        job.id,
+        owner="rollback-worker",
+    )
     db_session.commit()
     session_factory = sessionmaker(bind=db_session.bind, expire_on_commit=False)
     monkeypatch.setattr(
@@ -4947,13 +5062,12 @@ def test_short_transaction_finalize_rolls_back_when_semantic_enqueue_fails(
 
     processed = process_claimed_session_summary_job_short_transactions(
         session_factory,
-        job_id=job.id,
+        lease=lease,
         summarizer=lambda _messages: {
             "summary": "不应持久化的新摘要",
             "inheritance": [],
             "quality": {"score": 0.9, "issues": []},
         },
-        owner="rollback-worker",
     )
 
     db_session.expire_all()

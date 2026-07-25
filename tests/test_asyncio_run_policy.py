@@ -10,10 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SKIP_DIRS = {
     ".git",
     ".agents",
+    ".claude",
     ".codex",
     ".playwright-mcp",
     ".pytest_cache",
+    ".qoder",
     ".ruff_cache",
+    ".tmp",
     ".venv",
     "__pycache__",
     "build",

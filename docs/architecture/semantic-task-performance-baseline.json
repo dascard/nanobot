@@ -1,0 +1,305 @@
+{
+  "observability_gaps": [
+    {
+      "metric": "schema_invalid_rate",
+      "reason": "当前日志没有结构化 contract failure code；阶段 4 Task Runtime 补齐后才能可靠统计。"
+    },
+    {
+      "metric": "news_candidate_count",
+      "reason": "当前 news quality 调用日志没有候选数量字段。"
+    },
+    {
+      "metric": "group_messages_per_session",
+      "reason": "当前 group_analysis 日志没有 canonical session 和输入消息数；只能观察调用数、run 数和请求字节数。"
+    },
+    {
+      "metric": "private_end_to_end_proportion",
+      "reason": "只有部分 ChatLog 写入 Timing stage，不能把模型调用数、规则短路数和 Agent Run 数拼成伪全量比例。"
+    },
+    {
+      "metric": "currency_normalized_cost",
+      "reason": "Provider cost 没有币种字段；当前只保留网关报告数值，不跨 Provider 推断货币。"
+    }
+  ],
+  "private_flow": {
+    "actions": {
+      "reply_now": 19
+    },
+    "limitation": "仅统计已写入 timing_gate meta 的 user ChatLog；不能与完整 Agent 调用直接相加为全量比例。",
+    "samples": 19,
+    "stages": {
+      "rule_shortcut": 19
+    },
+    "status": "observed"
+  },
+  "schema_version": 1,
+  "source": {
+    "database": "data/nanobot.db（只读聚合）",
+    "forbidden_fields": [
+      "Prompt／request_json 正文",
+      "response_json 正文",
+      "error 正文",
+      "user_id",
+      "session_id",
+      "trace_id",
+      "run_id 原值"
+    ],
+    "mode": "sqlite_readonly_aggregate",
+    "observed_window": {
+      "first_at": "2026-05-21 08:00:31.556223",
+      "last_at": "2026-07-09 18:59:43.820229"
+    },
+    "selected_fields": [
+      "source",
+      "provider",
+      "model",
+      "status",
+      "response_status",
+      "latency_ms",
+      "created_at",
+      "request_json length",
+      "response_json usage numeric fields",
+      "response_json cost numeric field",
+      "run_id distinct count only"
+    ]
+  },
+  "tasks": {
+    "group_analysis": {
+      "billing_class": "provider_gateway",
+      "calls": 79,
+      "calls_per_run": 26.333,
+      "cost": {
+        "coverage_calls": 19,
+        "currency": "provider_reported_unit",
+        "note": "仅汇总 Provider 响应的数值 cost；空值不按 0 推断。",
+        "reported_total": 0.0
+      },
+      "distinct_runs": 3,
+      "failure_calls": 23,
+      "failure_rate": 0.291139,
+      "latency_ms": {
+        "coverage_calls": 79,
+        "max": 92326,
+        "p50": 3446.0,
+        "p95": 7451.9,
+        "p99": 27589.12
+      },
+      "model_distribution": {
+        "deepseek-v4-flash": 79
+      },
+      "observed_window": {
+        "first_at": "2026-05-22 21:24:11.535335",
+        "last_at": "2026-06-15 19:39:45.850760"
+      },
+      "provider_distribution": {
+        "new-api": 79
+      },
+      "purpose": "群分析多方面模型任务",
+      "request_bytes": {
+        "average": 15722.304,
+        "coverage_calls": 79,
+        "max": 62298,
+        "p95": 62159.0
+      },
+      "schema_invalid_rate": {
+        "reason": "现有 llm_api_request_logs 没有类型化 contract_failure_code；不得从错误正文关键词猜测。",
+        "status": "not_observable"
+      },
+      "sources": [
+        "group_analysis"
+      ],
+      "status_distribution": {
+        "failed|http_401": 17,
+        "failed|http_500": 6,
+        "success|http_200": 56
+      },
+      "success_calls": 56,
+      "tokens": {
+        "average_total_per_covered_call": null,
+        "completion_total": 0,
+        "coverage_calls": 0,
+        "prompt_total": 0,
+        "total": 0
+      }
+    },
+    "news_quality": {
+      "billing_class": "provider_gateway",
+      "calls": 57,
+      "calls_per_run": 1.425,
+      "cost": {
+        "coverage_calls": 7,
+        "currency": "provider_reported_unit",
+        "note": "仅汇总 Provider 响应的数值 cost；空值不按 0 推断。",
+        "reported_total": 0.0
+      },
+      "distinct_runs": 40,
+      "failure_calls": 27,
+      "failure_rate": 0.473684,
+      "latency_ms": {
+        "coverage_calls": 57,
+        "max": 19800,
+        "p50": 7815.0,
+        "p95": 15213.2,
+        "p99": 17583.52
+      },
+      "model_distribution": {
+        "deepseek-v4-flash": 57
+      },
+      "observed_window": {
+        "first_at": "2026-05-21 08:00:31.556223",
+        "last_at": "2026-07-09 08:01:09.631219"
+      },
+      "provider_distribution": {
+        "new-api": 57
+      },
+      "purpose": "AI 日报质量摘要与仲裁",
+      "request_bytes": {
+        "average": 5793.351,
+        "coverage_calls": 57,
+        "max": 10163,
+        "p95": 7702.4
+      },
+      "schema_invalid_rate": {
+        "reason": "现有 llm_api_request_logs 没有类型化 contract_failure_code；不得从错误正文关键词猜测。",
+        "status": "not_observable"
+      },
+      "sources": [
+        "news_daily.summarize_quality"
+      ],
+      "status_distribution": {
+        "failed|http_401": 25,
+        "failed|http_500": 2,
+        "success|http_200": 30
+      },
+      "success_calls": 30,
+      "tokens": {
+        "average_total_per_covered_call": null,
+        "completion_total": 0,
+        "coverage_calls": 0,
+        "prompt_total": 0,
+        "total": 0
+      }
+    },
+    "private_decision": {
+      "billing_class": "local_free",
+      "calls": 67,
+      "calls_per_run": null,
+      "cost": {
+        "coverage_calls": 0,
+        "currency": "provider_reported_unit",
+        "note": "仅汇总 Provider 响应的数值 cost；空值不按 0 推断。",
+        "reported_total": 0
+      },
+      "distinct_runs": 0,
+      "failure_calls": 15,
+      "failure_rate": 0.223881,
+      "latency_ms": {
+        "coverage_calls": 67,
+        "max": 15021,
+        "p50": 9853.0,
+        "p95": 15020.0,
+        "p99": 15020.34
+      },
+      "model_distribution": {
+        "Qwen3.5-4B-IQ4_NL.gguf": 60,
+        "unit-model": 7
+      },
+      "observed_window": {
+        "first_at": "2026-05-21 19:16:52.035294",
+        "last_at": "2026-07-07 00:40:02.826233"
+      },
+      "provider_distribution": {
+        "local_llama": 67
+      },
+      "purpose": "私聊三态与 effort 分类",
+      "request_bytes": {
+        "average": 1980.821,
+        "coverage_calls": 67,
+        "max": 13069,
+        "p95": 5808.0
+      },
+      "schema_invalid_rate": {
+        "reason": "现有 llm_api_request_logs 没有类型化 contract_failure_code；不得从错误正文关键词猜测。",
+        "status": "not_observable"
+      },
+      "sources": [
+        "classifier.private_decision"
+      ],
+      "status_distribution": {
+        "error|http_0": 14,
+        "error|http_400": 1,
+        "success|http_200": 52
+      },
+      "success_calls": 52,
+      "tokens": {
+        "average_total_per_covered_call": null,
+        "completion_total": 0,
+        "coverage_calls": 0,
+        "prompt_total": 0,
+        "total": 0
+      }
+    },
+    "private_timing_gate": {
+      "billing_class": "local_free",
+      "calls": 17192,
+      "calls_per_run": null,
+      "cost": {
+        "coverage_calls": 0,
+        "currency": "provider_reported_unit",
+        "note": "仅汇总 Provider 响应的数值 cost；空值不按 0 推断。",
+        "reported_total": 0
+      },
+      "distinct_runs": 0,
+      "failure_calls": 2325,
+      "failure_rate": 0.135237,
+      "latency_ms": {
+        "coverage_calls": 17192,
+        "max": 2580520,
+        "p50": 7941.0,
+        "p95": 15027.0,
+        "p99": 15052.0
+      },
+      "model_distribution": {
+        "Qwen3.5-4B-IQ4_NL.gguf": 17185,
+        "unit-model": 7
+      },
+      "observed_window": {
+        "first_at": "2026-05-21 18:09:06.099955",
+        "last_at": "2026-07-09 18:59:43.820229"
+      },
+      "provider_distribution": {
+        "local_llama": 17192
+      },
+      "purpose": "私聊／群聊 TimingGate 结构化分类",
+      "request_bytes": {
+        "average": 2117.744,
+        "coverage_calls": 17192,
+        "max": 3305,
+        "p95": 2383.0
+      },
+      "schema_invalid_rate": {
+        "reason": "现有 llm_api_request_logs 没有类型化 contract_failure_code；不得从错误正文关键词猜测。",
+        "status": "not_observable"
+      },
+      "sources": [
+        "classifier.timing_gate"
+      ],
+      "status_distribution": {
+        "created|http_0": 7,
+        "error|http_0": 2027,
+        "error|http_400": 1,
+        "error|http_500": 290,
+        "success|http_1": 3,
+        "success|http_200": 14864
+      },
+      "success_calls": 14867,
+      "tokens": {
+        "average_total_per_covered_call": null,
+        "completion_total": 0,
+        "coverage_calls": 0,
+        "prompt_total": 0,
+        "total": 0
+      }
+    }
+  }
+}

@@ -87,7 +87,7 @@ def _log_prompt_budget(
     injection_mode: bool,
 ) -> None:
     if not injection_mode:
-        chat_type = "private" if str(runtime_input.req.session_id).startswith("private_") else "group"
+        chat_type = "group" if runtime_input.is_group else "private"
         services.logger.info(
             f"[/chat] Prompt budget: type={chat_type}, "
             f"query_chars={prompt_budget['safe_user_input_chars']}, "

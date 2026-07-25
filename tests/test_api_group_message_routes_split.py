@@ -194,10 +194,18 @@ async def test_group_message_uses_legacy_routes_get_bridge_monkeypatch(monkeypat
     calls = []
 
     class FakeService:
-        def __init__(self, *, db, background_tasks, bridge_provider):
+        def __init__(
+            self,
+            *,
+            db,
+            background_tasks,
+            bridge_provider,
+            image_precache,
+        ):
             self.db = db
             self.background_tasks = background_tasks
             self.bridge_provider = bridge_provider
+            self.image_precache = image_precache
 
         async def handle(self, req):
             bridge = self.bridge_provider()

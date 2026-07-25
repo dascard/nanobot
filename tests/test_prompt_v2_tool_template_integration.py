@@ -215,19 +215,31 @@ def test_group_analysis_internal_llm_uses_v2_templates(tmp_path, monkeypatch):
     monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
 
-    from creatures.nanobot.prompts.skills.group_analysis import analyzer
+    from app.group_analysis import analyzer
 
     captured: list[tuple[str, str]] = []
 
     async def fake_call(_client, system_prompt, prompt, max_retries=2, **kwargs):
         captured.append((system_prompt, prompt))
         if "V2 TOPIC TEMPLATE MARKER" in prompt:
-            return '{"topics":[{"topic":"模板生效","contributors":["A"],"detail":"ok"}]}'
+            return {
+                "topics": [{
+                    "topic": "模板生效",
+                    "contributors": ["A"],
+                    "detail": "ok",
+                    "evidence_log_ids": [1],
+                }],
+            }
         if "用户发言统计" in prompt:
-            return '{"users":[]}'
+            return {"users": []}
         if "聊天质量" in prompt:
-            return '{"title":"ok","subtitle":"","dimensions":[],"summary":"ok"}'
-        return '{"quotes":[]}'
+            return {
+                "title": "ok",
+                "subtitle": "",
+                "dimensions": [],
+                "summary": "ok",
+            }
+        return {"quotes": []}
 
     class DummyClient:
         def __init__(self, *args, **kwargs):
@@ -235,7 +247,6 @@ def test_group_analysis_internal_llm_uses_v2_templates(tmp_path, monkeypatch):
 
     monkeypatch.setattr("clients.new_api_client.NewAPIClient", DummyClient)
     monkeypatch.setattr(analyzer, "_call_llm_with_retry", fake_call)
-
 
     result = run_async(
         analyzer.analyze_group(

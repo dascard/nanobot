@@ -19,7 +19,24 @@ from core.sandbox.access_contracts import (
     TOOL_REQUIRED_CAPABILITY,
 )
 from core.sandbox.access_repository import SandboxAccessRepository
+from core.runtime.extensions import (
+    PolicyDescriptor,
+    PolicyTypedFailure,
+    RuntimeFailurePolicy,
+    execute_policy,
+)
 from core.settings_service import coerce_setting_value, settings
+
+
+SANDBOX_ACCESS_POLICY_DESCRIPTOR = PolicyDescriptor(
+    policy_id="sandbox.access",
+    owner_module="sandbox.control_plane",
+    domain="sandbox",
+    input_contract="sandbox.access.input.v1",
+    output_contract="sandbox.access.decision.v1",
+    failure_policy=RuntimeFailurePolicy.FAIL_CLOSED,
+    security_sensitive=True,
+)
 
 
 def _database_bool(db: Session, key: str, default: bool = False) -> bool:
@@ -98,6 +115,46 @@ class SandboxAccessPolicy:
         )
 
     def evaluate(
+        self,
+        tool_name: str,
+        *,
+        platform: object,
+        chat_type: object,
+        session_id: object,
+    ) -> SandboxAccessDecision:
+        required = TOOL_REQUIRED_CAPABILITY.get(
+            str(tool_name or ""),
+            SandboxCapability.EXEC,
+        )
+        return execute_policy(
+            SANDBOX_ACCESS_POLICY_DESCRIPTOR,
+            lambda: self._evaluate(
+                tool_name,
+                platform=platform,
+                chat_type=chat_type,
+                session_id=session_id,
+            ),
+            fallback=lambda failure: self._failure_decision(
+                failure,
+                required=required,
+            ),
+        ).value
+
+    @staticmethod
+    def _failure_decision(
+        failure: PolicyTypedFailure,
+        *,
+        required: SandboxCapability,
+    ) -> SandboxAccessDecision:
+        del failure
+        return SandboxAccessDecision(
+            False,
+            "authorization_failed",
+            "Sandbox 授权策略暂时不可用",
+            required,
+        )
+
+    def _evaluate(
         self,
         tool_name: str,
         *,
@@ -227,4 +284,8 @@ class SandboxAccessPolicy:
         )
 
 
-__all__ = ["SandboxAccessPolicy", "canonical_sandbox_identity"]
+__all__ = [
+    "SANDBOX_ACCESS_POLICY_DESCRIPTOR",
+    "SandboxAccessPolicy",
+    "canonical_sandbox_identity",
+]

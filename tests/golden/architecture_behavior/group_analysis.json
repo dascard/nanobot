@@ -1,0 +1,39 @@
+{
+  "clean_messages": [
+    {
+      "id": "command",
+      "result": null
+    },
+    {
+      "id": "url_only",
+      "result": null
+    },
+    {
+      "id": "checkin",
+      "result": null
+    },
+    {
+      "id": "normal",
+      "result": "正常聊天内容"
+    }
+  ],
+  "instruction_windows": [
+    {
+      "hours": 6,
+      "id": "hours"
+    },
+    {
+      "hours": 48,
+      "id": "days"
+    },
+    {
+      "hours": 0,
+      "id": "all"
+    },
+    {
+      "hours": null,
+      "id": "unspecified"
+    }
+  ],
+  "schema_version": 1
+}

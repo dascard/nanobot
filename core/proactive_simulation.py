@@ -10,8 +10,6 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from kohakuterrarium.modules.plugin.base import PluginBlockError
-
 from core.proactive_candidate import (
     DEFAULT_ACTIVE_HOURS,
     DEFAULT_MAX_SILENCE_MIN,
@@ -27,6 +25,7 @@ from core.proactive_research import (
     ResearchBudgetPlugin,
     ResearchRequest,
     ResearchSource,
+    ResearchToolBlockError,
     run_proactive_research,
 )
 
@@ -670,7 +669,7 @@ class _SimulationResearchBridge:
                         tool_name="web_search",
                         job_id=f"simulation-budget-{index}",
                     )
-                except PluginBlockError:
+                except ResearchToolBlockError:
                     self.blocked_calls += 1
                 else:
                     self.allowed_calls += 1
@@ -678,6 +677,24 @@ class _SimulationResearchBridge:
 
     async def stop(self) -> None:
         self.events.append("stop")
+
+    def research_tool_guards_ready(self) -> bool:
+        plugins = list(self._agent.plugins._plugins)
+        guard_ready = any(
+            getattr(plugin, "name", "") == "nanobot_tool_plan_guard"
+            for plugin in plugins
+        )
+        controller = self._agent.controller
+        return guard_ready and bool(
+            controller._nanobot_tool_plan_schema_filter_installed
+        )
+
+    def install_research_budget_guard(
+        self,
+        guard: ResearchBudgetPlugin,
+    ) -> bool:
+        self._agent.plugins.register(guard)
+        return True
 
 
 def _source_tool_call(index: int, *, query: str) -> Any:

@@ -42,6 +42,117 @@ def _init_db():
 
 
 class TestUpsert:
+    def test_new_write_persists_canonical_identity_and_legacy_projection(self):
+        from core.database import GroupMemory, SessionLocal
+
+        result = upsert(
+            "g_identity",
+            "event",
+            "群里约定周五复盘",
+            confidence_hint=0.40,
+        )
+
+        assert result == "new"
+        db = SessionLocal()
+        try:
+            row = db.query(GroupMemory).one()
+            assert row.chat_stream_id == "qq:g_identity:group"
+            assert row.group_id == "group_g_identity"
+        finally:
+            db.close()
+
+    def test_canonical_and_legacy_inputs_update_the_same_memory(self):
+        from core.database import GroupMemory, SessionLocal
+
+        assert upsert(
+            "qq:g_alias:group",
+            "topic",
+            "群里讨论身份迁移",
+            evidence_log_ids=[1],
+            confidence_hint=0.70,
+        ) == "new"
+        assert upsert(
+            "group_g_alias",
+            "topic",
+            "群里讨论身份迁移",
+            evidence_log_ids=[2],
+            confidence_hint=0.70,
+        ) == "updated"
+
+        db = SessionLocal()
+        try:
+            rows = db.query(GroupMemory).all()
+            assert len(rows) == 1
+            assert rows[0].chat_stream_id == "qq:g_alias:group"
+            assert rows[0].group_id == "group_g_alias"
+        finally:
+            db.close()
+
+    def test_same_external_id_on_different_platforms_does_not_collide(self):
+        assert upsert(
+            "shared",
+            "topic",
+            "跨平台共同话题",
+            platform="qq",
+            evidence_log_ids=[1, 2],
+            confidence_hint=0.80,
+        ) == "new"
+        assert upsert(
+            "shared",
+            "topic",
+            "跨平台共同话题",
+            platform="web",
+            evidence_log_ids=[3, 4],
+            confidence_hint=0.80,
+        ) == "new"
+
+        qq_rows = query_active("shared", platform="qq")
+        web_rows = query_active("shared", platform="web")
+
+        assert [row["content"] for row in qq_rows] == ["跨平台共同话题"]
+        assert [row["content"] for row in web_rows] == ["跨平台共同话题"]
+
+        from core.database import GroupMemory, SessionLocal
+
+        db = SessionLocal()
+        try:
+            projections = {
+                row.chat_stream_id: row.group_id
+                for row in db.query(GroupMemory).all()
+            }
+        finally:
+            db.close()
+        assert projections == {
+            "qq:shared:group": "group_shared",
+            "web:shared:group": "web:shared:group",
+        }
+
+    def test_conflicting_canonical_and_legacy_identity_fails_closed(self):
+        from core.database import GroupMemory, SessionLocal
+        from core.group_memory import GroupMemoryIdentityConflictError
+
+        db = SessionLocal()
+        db.add(GroupMemory(
+            chat_stream_id="qq:g_conflict:group",
+            group_id="group_other",
+            memory_type="topic",
+            content="冲突记录",
+            content_hash="identity-conflict",
+            confidence=0.8,
+            evidence_count=2,
+            evidence_log_ids_json="[1, 2]",
+            decay_score=1.0,
+            status="active",
+        ))
+        db.commit()
+        db.close()
+
+        with pytest.raises(
+            GroupMemoryIdentityConflictError,
+            match="群体记忆身份投影不一致",
+        ):
+            query_active("g_conflict")
+
     def test_high_confidence_requires_two_distinct_evidence_logs_to_activate(self):
         r = upsert(
             "g_test",
@@ -110,7 +221,7 @@ class TestUpsert:
 
 
 class TestBuildProfile:
-    def test_single_group_analysis_topic_with_evidence_is_injectable(self):
+    def test_legacy_upsert_topic_cannot_bypass_governance(self):
         upsert(
             "g_single_pass",
             "topic",
@@ -121,24 +232,23 @@ class TestBuildProfile:
 
         memories = query_injectable("g_single_pass")
 
-        assert any(m["content"].startswith("稳定话题") for m in memories)
+        assert memories == []
 
-    def test_only_active_high_confidence(self):
-        # topic needs ≥2 evidence, call twice
+    def test_legacy_confidence_and_evidence_cannot_activate_prompt_memory(self):
         upsert("g_profile", "topic", "高置信话题", confidence_hint=0.85, evidence_log_ids=[1])
         upsert("g_profile", "topic", "高置信话题", confidence_hint=0.85, evidence_log_ids=[2])
         upsert("g_profile", "topic", "低置信话题", confidence_hint=0.40, evidence_log_ids=[3])
         upsert("g_profile", "style", "群风格", confidence_hint=0.80, evidence_log_ids=[4])
         upsert("g_profile", "style", "群风格", confidence_hint=0.80, evidence_log_ids=[5])
         profile = build_profile("g_profile")
-        assert "高置信话题" in profile["common_topics"]
-        assert "低置信话题" not in profile["common_topics"]
+        assert profile["common_topics"] == []
+        assert profile["style"] == []
 
     def test_empty_group_returns_empty_profile(self):
         profile = build_profile("g_nonexistent")
         assert profile["common_topics"] == []
 
-    def test_profile_includes_relationships_in_context(self):
+    def test_deprecated_profile_excludes_non_governed_relationship(self):
         from core.context_builder import GROUP_PROFILE_CONTEXT_DEPRECATED
         from core.database import GroupMemory, SessionLocal
 
@@ -160,12 +270,10 @@ class TestBuildProfile:
         db.commit()
         db.close()
         profile = build_profile("g_relationship")
-        assert "A 经常和 B 一起讨论模型部署" in profile["relationships"]
+        assert profile["relationships"] == []
 
         context = build_group_profile_context("g_relationship")
-        assert context.startswith('<group_memory_context group_id="g_relationship">')
-        assert "群内关系" in context
-        assert "A 经常和 B 一起讨论模型部署" in context
+        assert context == ""
 
 
 class TestDecay:

@@ -7,8 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from api.admin.endpoint_registry import ADMIN_ENDPOINT_CONTRACT_REGISTRY
 from api.admin_routes import router as admin_router
+from api.endpoint_contracts import (
+    install_openapi_contracts,
+    stable_operation_id,
+)
 from api.routes import router as api_router
+from api.telemetry_middleware import TelemetryHttpMiddleware
 from bootstrap.lifespan import lifespan
 from bootstrap.logging_config import configure_logging
 from config import get_cors_origins
@@ -17,7 +23,12 @@ from config import get_cors_origins
 configure_logging()
 
 
-app = FastAPI(title="Nanobot Self-Evolution Gateway", lifespan=lifespan)
+app = FastAPI(
+    title="Nanobot Self-Evolution Gateway",
+    version="1.0.0",
+    lifespan=lifespan,
+    generate_unique_id_function=stable_operation_id,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,9 +37,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(TelemetryHttpMiddleware)
 
 app.include_router(api_router)
 app.include_router(admin_router)
+install_openapi_contracts(
+    app,
+    ADMIN_ENDPOINT_CONTRACT_REGISTRY.registry_snapshot,
+)
 
 
 class SPAStaticFiles(StaticFiles):

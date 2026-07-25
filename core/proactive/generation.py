@@ -16,7 +16,8 @@ from core.db.models.outbound import (
     OutboundRun,
 )
 from core.db.models.proactive import ProactiveOutreachLog
-from core.message_envelope import build_chat_response_envelope
+from core.message_envelope import is_html_reply
+from core.message_transport_adapters import render_chat_json
 from core.model_provider.response_normalization import strip_think_blocks
 from core.outbound.contracts import (
     OUTBOUND_PROTOCOL_VERSION,
@@ -74,6 +75,13 @@ from core.proactive.serialization import (
 from core.proactive_diagnostics import (
     OutreachModelContractError,
     generation_failure_from_exception,
+)
+from foundation.identity import RecipientIdentity
+from foundation.message_contract import (
+    MessageAction,
+    OutboundMessageContract,
+    TextContent,
+    TextFormat,
 )
 
 
@@ -715,9 +723,27 @@ async def _commit_generated_outreach(
                 evaluation_owner_token=evaluation_owner_token,
                 research_payload=research_payload,
             )
-        envelope = build_chat_response_envelope(
+        outbound_message = OutboundMessageContract(
+            action=MessageAction.REPLY,
+            recipient=RecipientIdentity(
+                platform="qq",
+                recipient_type="user",
+                recipient_id=user_id,
+            ),
+            parts=(
+                TextContent(
+                    cleaned_message,
+                    format=(
+                        TextFormat.HTML
+                        if is_html_reply(cleaned_message)
+                        else TextFormat.PLAIN
+                    ),
+                ),
+            ),
+        )
+        envelope = render_chat_json(
+            outbound_message,
             status="ok",
-            answer=cleaned_message,
             meta={
                 "platform": "qq",
                 "chat_type": "private",

@@ -1,0 +1,573 @@
+{
+  "files": [
+    {
+      "path": "data/prompts_v2/chat/branch_group.md",
+      "sha256": "c7c236b1e5cd1fb5e4566e255810c672ef858144080eb09d0ee9667fac2f7af7",
+      "size_bytes": 2165
+    },
+    {
+      "path": "data/prompts_v2/chat/branch_private.md",
+      "sha256": "0e978787f29ca4b720699eae84fd3a6b996db5ef76120c4e8fe8e109f6f9b25c",
+      "size_bytes": 907
+    },
+    {
+      "path": "data/prompts_v2/chat/flow.json",
+      "sha256": "ebbe5acaff4b745bc608365be2fc936bc2ba085eaae1367917ea1e7ff9437eb8",
+      "size_bytes": 3708
+    },
+    {
+      "path": "data/prompts_v2/chat/platform/qq/common.md",
+      "sha256": "7cd04cfef395ea6e33774998d119b94252a19b4e023cce4df5b917ca3327a7e9",
+      "size_bytes": 874
+    },
+    {
+      "path": "data/prompts_v2/chat/platform/qq/group.md",
+      "sha256": "cc6a37cbd4eac0527c69f9d7ed1ea23430bf4163366bf2258cc258df546e9e04",
+      "size_bytes": 760
+    },
+    {
+      "path": "data/prompts_v2/tools/image_generation/usage.md",
+      "sha256": "08c3e43e7b9ba837c61947b58dc6e74598c96fc1b292eca090a6bc943bd90626",
+      "size_bytes": 1111
+    },
+    {
+      "path": "data/prompts_v2/tools/reply/usage.md",
+      "sha256": "f0adcefa38d1a42b28a660d044fd65f16b1f98932d9d8194f3afc0cfe0d60433",
+      "size_bytes": 965
+    },
+    {
+      "path": "data/prompts_v2/tools/sticker_search/usage.md",
+      "sha256": "0e640b46803169efadbf125525a8d228bbffd1cf520ea71f58b7b4db923f2736",
+      "size_bytes": 876
+    },
+    {
+      "path": "prompts.v2.default/chat/branch_group.md",
+      "sha256": "c7c236b1e5cd1fb5e4566e255810c672ef858144080eb09d0ee9667fac2f7af7",
+      "size_bytes": 2165
+    },
+    {
+      "path": "prompts.v2.default/chat/branch_private.md",
+      "sha256": "0e978787f29ca4b720699eae84fd3a6b996db5ef76120c4e8fe8e109f6f9b25c",
+      "size_bytes": 907
+    },
+    {
+      "path": "prompts.v2.default/chat/flow.json",
+      "sha256": "ebbe5acaff4b745bc608365be2fc936bc2ba085eaae1367917ea1e7ff9437eb8",
+      "size_bytes": 3708
+    },
+    {
+      "path": "prompts.v2.default/chat/identity_context.md",
+      "sha256": "a5545014858e201274e3c47261c2dfdb7b349604e59b37bef3be79c03579ec5b",
+      "size_bytes": 287
+    },
+    {
+      "path": "prompts.v2.default/chat/main.md",
+      "sha256": "49abbef784ad93286792c7b8d5fdb832d96fea47b7947c571fde58fe678d3698",
+      "size_bytes": 4385
+    },
+    {
+      "path": "prompts.v2.default/chat/platform/qq/common.md",
+      "sha256": "7cd04cfef395ea6e33774998d119b94252a19b4e023cce4df5b917ca3327a7e9",
+      "size_bytes": 874
+    },
+    {
+      "path": "prompts.v2.default/chat/platform/qq/group.md",
+      "sha256": "cc6a37cbd4eac0527c69f9d7ed1ea23430bf4163366bf2258cc258df546e9e04",
+      "size_bytes": 760
+    },
+    {
+      "path": "prompts.v2.default/tasks/classifier_legacy.md",
+      "sha256": "904542cca33f58cf750c98f191508197d5603f3dffbbca95e0ee97fa4e0b76cf",
+      "size_bytes": 207
+    },
+    {
+      "path": "prompts.v2.default/tasks/group_analysis_quality.md",
+      "sha256": "e1837e14c37ed5b2576bb789f79de0c7eabce62feffcc9607ba81d96df841f05",
+      "size_bytes": 537
+    },
+    {
+      "path": "prompts.v2.default/tasks/group_analysis_quotes.md",
+      "sha256": "30731643fbd5e030ea05ce4221b7727d5bbb942f031c636951b4b5d03049dce0",
+      "size_bytes": 495
+    },
+    {
+      "path": "prompts.v2.default/tasks/group_analysis_titles.md",
+      "sha256": "b6195792a7cc05c2f775129eb3ab80d9443a06bda9fec546f9c6465edadbe622",
+      "size_bytes": 475
+    },
+    {
+      "path": "prompts.v2.default/tasks/group_analysis_topics.md",
+      "sha256": "57d7576fa48f01835a7dbdcff378a7b4b7d957bc911f85f9825499e02e4609c0",
+      "size_bytes": 586
+    },
+    {
+      "path": "prompts.v2.default/tasks/group_memory_learning.md",
+      "sha256": "449bc4aafe3d7b8ceab9b10cd0a2a9456142fba4f2563d35ed7b043f6cbe74a6",
+      "size_bytes": 1347
+    },
+    {
+      "path": "prompts.v2.default/tasks/memory_digest_system.md",
+      "sha256": "ac51371432cd9d2b283a39a347d765d4441b548ae586be854395841d33fb1c8c",
+      "size_bytes": 4968
+    },
+    {
+      "path": "prompts.v2.default/tasks/memory_digest_user.md",
+      "sha256": "3551aa32a78871939e6477ccaa4fd57c410d158a7d424f4c22f25d05c13358ae",
+      "size_bytes": 2366
+    },
+    {
+      "path": "prompts.v2.default/tasks/memory_extract.md",
+      "sha256": "8aabc6ab47cd2a0618cb46f3a892d85101f3d192e8c08cbe5c19f23afdd310d5",
+      "size_bytes": 522
+    },
+    {
+      "path": "prompts.v2.default/tasks/model_scout_system.md",
+      "sha256": "b55e18958ab0c74f0bf7f188ebaef69f6c4797297a703eb2bacd4963e9ab092b",
+      "size_bytes": 1036
+    },
+    {
+      "path": "prompts.v2.default/tasks/news_daily_quality.md",
+      "sha256": "33ad5b74352b7721bdd63c31c3fcaad50fac59df676825eaa6a6d41a2cddb959",
+      "size_bytes": 1097
+    },
+    {
+      "path": "prompts.v2.default/tasks/news_relevance_review.md",
+      "sha256": "e4a054955bfd2ad19af66172cc08c4b60305fda576b33c80318ab0e50b17ad89",
+      "size_bytes": 1412
+    },
+    {
+      "path": "prompts.v2.default/tasks/outreach_extract.md",
+      "sha256": "bd13b3a5b059b8016e44c71b0a2b51b5a893089e57fb5ce3f71f7495cf564ab9",
+      "size_bytes": 695
+    },
+    {
+      "path": "prompts.v2.default/tasks/outreach_generate.md",
+      "sha256": "12a6f5b07867afdbcdd92fe3262237463b4c7e0fa977fb5dc9cbf127af76b6ec",
+      "size_bytes": 950
+    },
+    {
+      "path": "prompts.v2.default/tasks/outreach_judge.md",
+      "sha256": "7425fe9f338a1f80e7f6857c822172a1616ca52542501cabe404576884390b9d",
+      "size_bytes": 1788
+    },
+    {
+      "path": "prompts.v2.default/tasks/persona_candidate_system.md",
+      "sha256": "a271e43841f64d55694949ee67b446e72f462cdf9c23a2856e6ff6a7d548efec",
+      "size_bytes": 2554
+    },
+    {
+      "path": "prompts.v2.default/tasks/private_decision.md",
+      "sha256": "0361a269dba252eb41a9908e4f8165f4fd9601732f8c2fde69bb39a4db8efded",
+      "size_bytes": 3194
+    },
+    {
+      "path": "prompts.v2.default/tasks/proactive_research.md",
+      "sha256": "d088f54f81d00d8d2686d19e951f44a4583c822e0ed87bbfdb360e18ab81452c",
+      "size_bytes": 1913
+    },
+    {
+      "path": "prompts.v2.default/tasks/reply_contract_retry.md",
+      "sha256": "11297e7e9a739b13dc129afd68b31b98e58707f4c6c04056bb6f96e6044d134f",
+      "size_bytes": 282
+    },
+    {
+      "path": "prompts.v2.default/tasks/session_summary_output.md",
+      "sha256": "b7211cd7ea79ce38aba7bc0837d94d6f1822902602e85c7e8232c01090f46423",
+      "size_bytes": 1936
+    },
+    {
+      "path": "prompts.v2.default/tasks/session_summary_system.md",
+      "sha256": "e2b9f9df80e35ab87816e9e12ce8f21b0bdd31a2a6bddcbf4b4afde506194ebd",
+      "size_bytes": 1416
+    },
+    {
+      "path": "prompts.v2.default/tasks/timing_gate.md",
+      "sha256": "643e46621fbba37b00553838847b6a409780e402deb6c46b17abc59ba005385f",
+      "size_bytes": 3213
+    },
+    {
+      "path": "prompts.v2.default/tasks/timing_proactive.md",
+      "sha256": "181edfe91168ef1e17cc01d2a0add99304444f13cfd8d1d846f0f686d3c93cbd",
+      "size_bytes": 972
+    },
+    {
+      "path": "prompts.v2.default/tools/ai_daily/digest_system.md",
+      "sha256": "619d44e4b9e855e56cafe061d6e02b213b94701cdd67e611fafe9c9e9a153edb",
+      "size_bytes": 1746
+    },
+    {
+      "path": "prompts.v2.default/tools/ai_daily/digest_user.md",
+      "sha256": "dff4d15bdc06f1ec413df8b8cadbd08f13b7d019d82a81b47a9e1931ca9cad2c",
+      "size_bytes": 297
+    },
+    {
+      "path": "prompts.v2.default/tools/ai_daily/quality_system.md",
+      "sha256": "c2fcdb82354db6efec50dbead18bc7c987943c62e17ae3d7412925edd4b838c8",
+      "size_bytes": 1744
+    },
+    {
+      "path": "prompts.v2.default/tools/ai_daily/quality_user.md",
+      "sha256": "5853ed7208ba360f2ae528d922759c607943d17eed2e52055c87dc9c0b7cac99",
+      "size_bytes": 733
+    },
+    {
+      "path": "prompts.v2.default/tools/ai_daily/usage.md",
+      "sha256": "1be826708033d4b8d22d247718328d6d5020154ca0a36fd8bae3daa3bde12136",
+      "size_bytes": 734
+    },
+    {
+      "path": "prompts.v2.default/tools/asset_import/usage.md",
+      "sha256": "71e694c19c2f3d44e5a1f0eb002bc3dfddb06d743997bed3109074869a222646",
+      "size_bytes": 556
+    },
+    {
+      "path": "prompts.v2.default/tools/asset_publish/usage.md",
+      "sha256": "09ef28ff63d3c8f6e357dad742b53dd0c45948622d7c07d5f5bc4b39d71ae959",
+      "size_bytes": 893
+    },
+    {
+      "path": "prompts.v2.default/tools/group_analysis/quality.md",
+      "sha256": "bcfd408257cdbe1e01537ea699c2ecc60342c2377e5d67ebd919227c99c50c8b",
+      "size_bytes": 700
+    },
+    {
+      "path": "prompts.v2.default/tools/group_analysis/quotes.md",
+      "sha256": "e4ed3f30a339edd1de62d0e618079f30def7f21b30e11cde8474ffd54479cfb5",
+      "size_bytes": 501
+    },
+    {
+      "path": "prompts.v2.default/tools/group_analysis/system.md",
+      "sha256": "f55aa95f16e5b028e89ee277e0fc309c5125006388c4b3c5848b8971c2226daf",
+      "size_bytes": 511
+    },
+    {
+      "path": "prompts.v2.default/tools/group_analysis/titles.md",
+      "sha256": "2149e031268f24e5ba8718b25d6b23efb6f97468900d2ab1ced8fe80a7667dfc",
+      "size_bytes": 751
+    },
+    {
+      "path": "prompts.v2.default/tools/group_analysis/topics.md",
+      "sha256": "af6a25fb64bf814584080e265ad7cc98304e238d84a2b19f941a10d2c6c4e11c",
+      "size_bytes": 1129
+    },
+    {
+      "path": "prompts.v2.default/tools/group_analysis/usage.md",
+      "sha256": "dbac82feebf61c67373c314125ff79f0b50e41d13a9db9f279bd877189505230",
+      "size_bytes": 3099
+    },
+    {
+      "path": "prompts.v2.default/tools/image_generation/usage.md",
+      "sha256": "08c3e43e7b9ba837c61947b58dc6e74598c96fc1b292eca090a6bc943bd90626",
+      "size_bytes": 1111
+    },
+    {
+      "path": "prompts.v2.default/tools/image_summary/system.md",
+      "sha256": "a3e0f4e0e262ee3ba7a8394e5fe47f6c455a2235b5853de3588f3a10cb90dbe5",
+      "size_bytes": 643
+    },
+    {
+      "path": "prompts.v2.default/tools/image_summary/usage.md",
+      "sha256": "aed0eac8521ea73e7dd1edf38e39f60dd519646b85993188aeb4f5cd31aead3b",
+      "size_bytes": 673
+    },
+    {
+      "path": "prompts.v2.default/tools/image_summary/user.md",
+      "sha256": "6f3293b400a4b2ebaf9741e3c0e61a8e6c73537e96735cb34d6e99e5d38535ca",
+      "size_bytes": 528
+    },
+    {
+      "path": "prompts.v2.default/tools/knowledge_query/usage.md",
+      "sha256": "c4632c7b280d5fa1ebce3c9acdb11b9644687e5fded1e9cad88c320047522126",
+      "size_bytes": 929
+    },
+    {
+      "path": "prompts.v2.default/tools/memory_query/usage.md",
+      "sha256": "1a6a7152aeba47fc2fed7ff6a11488219c2707dfc252502c2edd972f32bed690",
+      "size_bytes": 2387
+    },
+    {
+      "path": "prompts.v2.default/tools/no_reply/usage.md",
+      "sha256": "e0437c11f0d1831c85f32834623b54146ea44809d13ad470f639016e27a28309",
+      "size_bytes": 500
+    },
+    {
+      "path": "prompts.v2.default/tools/persona_update/usage.md",
+      "sha256": "82a38ffb273ee9ae69c35be19a2455e0dfa5a23c869d22ba2e9084a2e2dabe29",
+      "size_bytes": 741
+    },
+    {
+      "path": "prompts.v2.default/tools/python_sandbox/usage.md",
+      "sha256": "460b62bed34040e3ee85fe091975bfeaf5279c15dd196c3b66a47873e4265587",
+      "size_bytes": 520
+    },
+    {
+      "path": "prompts.v2.default/tools/reply/usage.md",
+      "sha256": "f0adcefa38d1a42b28a660d044fd65f16b1f98932d9d8194f3afc0cfe0d60433",
+      "size_bytes": 965
+    },
+    {
+      "path": "prompts.v2.default/tools/sandbox_exec/usage.md",
+      "sha256": "2f54b35532b64ff709ed4b15fba12b525d087fd7f14e1172678788c74b9edf91",
+      "size_bytes": 1057
+    },
+    {
+      "path": "prompts.v2.default/tools/schedule_task/usage.md",
+      "sha256": "280cc97806e1aaca9a3c485a1b4c1353115432e538613d3529db3b90778f188f",
+      "size_bytes": 650
+    },
+    {
+      "path": "prompts.v2.default/tools/sql_analysis/usage.md",
+      "sha256": "1fafb30c96af6889ad5dc3a086304ff4ce39f0193746e72789d03993911ac88c",
+      "size_bytes": 819
+    },
+    {
+      "path": "prompts.v2.default/tools/sticker_search/usage.md",
+      "sha256": "0e640b46803169efadbf125525a8d228bbffd1cf520ea71f58b7b4db923f2736",
+      "size_bytes": 876
+    },
+    {
+      "path": "prompts.v2.default/tools/web_search/usage.md",
+      "sha256": "5caed07ebb2d939320fda80398499d911bb5680c9e7c37f7a81c9701caef9c8c",
+      "size_bytes": 1400
+    },
+    {
+      "path": "prompts.v2.default/tools/workspace_list/usage.md",
+      "sha256": "39f6615fc44f3c7a804d7c408dc190f1b83b65ece83e000904a1ddb771129895",
+      "size_bytes": 576
+    },
+    {
+      "path": "prompts.v2.default/tools/workspace_read/usage.md",
+      "sha256": "7cea7604a8a0580cf5a84cc31a09bb56299312ced4db53645f9be03d2c4cad12",
+      "size_bytes": 547
+    },
+    {
+      "path": "prompts.v2.default/tools/workspace_search/usage.md",
+      "sha256": "fea1666f62624d52f83bf788939a7a7325a0d2641f9185626ddc4a35e32b8001",
+      "size_bytes": 564
+    },
+    {
+      "path": "prompts.v2.default/tools/workspace_write/usage.md",
+      "sha256": "a9e12ce31ebb69a9ff8a03d518a57e2586685412c53a8436e5ebfe9cc50d4adf",
+      "size_bytes": 685
+    }
+  ],
+  "schema_version": 1,
+  "section_descriptors": [
+    {
+      "authority": "operator_policy",
+      "dependencies": [],
+      "domain": "chat_contract",
+      "editable": true,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2",
+      "phase": "platform",
+      "section_id": "base_contract",
+      "source_precedence": [
+        "runtime",
+        "default"
+      ],
+      "trust": "trusted_instruction"
+    },
+    {
+      "authority": "data",
+      "dependencies": [],
+      "domain": "conversation",
+      "editable": false,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2.compiler",
+      "phase": "context",
+      "section_id": "conversation_context_header",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "trusted_data"
+    },
+    {
+      "authority": "user",
+      "dependencies": [],
+      "domain": "request",
+      "editable": false,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2.compiler",
+      "phase": "request",
+      "section_id": "current_user_event",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "untrusted_instruction"
+    },
+    {
+      "authority": "application_policy",
+      "dependencies": [],
+      "domain": "reply_policy",
+      "editable": false,
+      "failure_policy": "skip_optional",
+      "owner_module": "core.prompt_v2.compiler",
+      "phase": "policy",
+      "section_id": "effort_constraint",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "trusted_instruction"
+    },
+    {
+      "authority": "data",
+      "dependencies": [],
+      "domain": "group_memory",
+      "editable": false,
+      "failure_policy": "skip_optional",
+      "owner_module": "app.group_memory",
+      "phase": "context",
+      "section_id": "group_context",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "untrusted_data"
+    },
+    {
+      "authority": "application_policy",
+      "dependencies": [],
+      "domain": "chat_routing",
+      "editable": true,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2",
+      "phase": "policy",
+      "section_id": "group_policy",
+      "source_precedence": [
+        "runtime",
+        "default"
+      ],
+      "trust": "trusted_instruction"
+    },
+    {
+      "authority": "data",
+      "dependencies": [],
+      "domain": "conversation",
+      "editable": false,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2.compiler",
+      "phase": "context",
+      "section_id": "history_messages",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "untrusted_data"
+    },
+    {
+      "authority": "application_policy",
+      "dependencies": [],
+      "domain": "identity",
+      "editable": true,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2",
+      "phase": "identity",
+      "section_id": "identity_context",
+      "source_precedence": [
+        "runtime",
+        "default"
+      ],
+      "trust": "trusted_instruction"
+    },
+    {
+      "authority": "data",
+      "dependencies": [],
+      "domain": "persona",
+      "editable": false,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2.compiler",
+      "phase": "context",
+      "section_id": "persona_reference",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "untrusted_data"
+    },
+    {
+      "authority": "application_policy",
+      "dependencies": [],
+      "domain": "chat_routing",
+      "editable": true,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2",
+      "phase": "policy",
+      "section_id": "private_policy",
+      "source_precedence": [
+        "runtime",
+        "default"
+      ],
+      "trust": "trusted_instruction"
+    },
+    {
+      "authority": "operator_policy",
+      "dependencies": [],
+      "domain": "platform_policy",
+      "editable": true,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2",
+      "phase": "policy",
+      "section_id": "qq_common_policy",
+      "source_precedence": [
+        "runtime",
+        "default"
+      ],
+      "trust": "trusted_instruction"
+    },
+    {
+      "authority": "application_policy",
+      "dependencies": [],
+      "domain": "platform_policy",
+      "editable": true,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2",
+      "phase": "policy",
+      "section_id": "qq_group_policy",
+      "source_precedence": [
+        "runtime",
+        "default"
+      ],
+      "trust": "trusted_instruction"
+    },
+    {
+      "authority": "data",
+      "dependencies": [],
+      "domain": "request_context",
+      "editable": false,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2.compiler",
+      "phase": "context",
+      "section_id": "runtime_context",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "trusted_data"
+    },
+    {
+      "authority": "tool",
+      "dependencies": [],
+      "domain": "tool",
+      "editable": false,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.tool_registry",
+      "phase": "tool",
+      "section_id": "runtime_tool_prompt",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "trusted_instruction"
+    },
+    {
+      "authority": "operator_policy",
+      "dependencies": [],
+      "domain": "session_memory",
+      "editable": false,
+      "failure_policy": "fail_closed",
+      "owner_module": "core.prompt_v2.compiler",
+      "phase": "policy",
+      "section_id": "session_guidance",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "trusted_instruction"
+    }
+  ]
+}

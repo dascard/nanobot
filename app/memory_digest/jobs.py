@@ -7,14 +7,13 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal, Sequence
-from uuid import uuid4
-
 from sqlalchemy import and_, func, or_, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from core.db.models.chat import ChatLog
 from core.db.models.session_memory import MemoryDigestJob
+from core.fencing import lease_deadline, new_fencing_token
 from core.time_utils import db_now_naive, to_db_naive
 
 
@@ -42,6 +41,9 @@ class MemoryDigestJobClaim:
     decision: ClaimDecision
     job_id: int
     lease_token: str = ""
+    worker_id: str = ""
+    lease_expires_at: datetime | None = None
+    attempt_count: int = 0
     source_revision: str = ""
     retryable: bool = False
     error_type: str = ""
@@ -228,6 +230,9 @@ def claim_memory_digest_job(
     """原子 claim 同一 `(session,date)` 作业。"""
 
     claimed_at = to_db_naive(now) or db_now_naive()
+    normalized_worker = str(worker_id or "").strip()
+    if not normalized_worker or len(normalized_worker) > 128:
+        raise ValueError("worker_id 必须是 1-128 字符")
     job = (
         db.query(MemoryDigestJob)
         .filter(
@@ -351,10 +356,12 @@ def claim_memory_digest_job(
                 error_type=str(job.error_type or ""),
             )
 
-    lease_token = uuid4().hex
-    lease_expires_at = claimed_at + timedelta(
-        seconds=max(30, int(lease_seconds or DEFAULT_LEASE_SECONDS))
+    lease_token = new_fencing_token()
+    lease_expires_at = lease_deadline(
+        claimed_at,
+        max(30, int(lease_seconds or DEFAULT_LEASE_SECONDS)),
     )
+    attempt_count = int(job.attempt_count or 0) + 1
     predicate = [
         MemoryDigestJob.id == job_id,
         MemoryDigestJob.status == previous_status,
@@ -374,10 +381,10 @@ def claim_memory_digest_job(
             source_log_count=snapshot.source_log_count,
             source_revision=snapshot.source_revision,
             status="running",
-            locked_by=str(worker_id or "memory-digest-inline")[:128],
+            locked_by=normalized_worker,
             lease_token=lease_token,
             lease_expires_at=lease_expires_at,
-            attempt_count=func.coalesce(MemoryDigestJob.attempt_count, 0) + 1,
+            attempt_count=attempt_count,
             retry_count=(
                 func.coalesce(MemoryDigestJob.retry_count, 0) + 1
                 if previous_status in {"failed", "running"}
@@ -409,6 +416,9 @@ def claim_memory_digest_job(
         decision="claimed",
         job_id=job_id,
         lease_token=lease_token,
+        worker_id=normalized_worker,
+        lease_expires_at=lease_expires_at,
+        attempt_count=attempt_count,
         source_revision=snapshot.source_revision,
         checkpoint=dict(resume_checkpoint),
     )
@@ -416,14 +426,16 @@ def claim_memory_digest_job(
 
 def _active_lease_predicate(
     *,
-    job_id: int,
-    lease_token: str,
+    claim: MemoryDigestJobClaim,
     now: datetime,
 ):
     return and_(
-        MemoryDigestJob.id == int(job_id),
+        MemoryDigestJob.id == int(claim.job_id),
         MemoryDigestJob.status == "running",
-        MemoryDigestJob.lease_token == str(lease_token or ""),
+        MemoryDigestJob.locked_by == str(claim.worker_id or ""),
+        MemoryDigestJob.lease_token == str(claim.lease_token or ""),
+        MemoryDigestJob.attempt_count == int(claim.attempt_count or 0),
+        MemoryDigestJob.source_revision == str(claim.source_revision or ""),
         MemoryDigestJob.lease_expires_at.is_not(None),
         MemoryDigestJob.lease_expires_at > now,
     )
@@ -446,11 +458,9 @@ def heartbeat_memory_digest_job(
         result = db.execute(
             update(MemoryDigestJob)
             .where(_active_lease_predicate(
-                job_id=claim.job_id,
-                lease_token=claim.lease_token,
+                claim=claim,
                 now=heartbeat_at,
             ))
-            .where(MemoryDigestJob.source_revision == claim.source_revision)
             .values(
                 lease_expires_at=lease_expires_at,
                 updated_at=heartbeat_at,
@@ -483,11 +493,9 @@ def save_memory_digest_batch_checkpoint(
     row = (
         db.query(MemoryDigestJob)
         .filter(_active_lease_predicate(
-            job_id=claim.job_id,
-            lease_token=claim.lease_token,
+            claim=claim,
             now=saved_at,
         ))
-        .filter(MemoryDigestJob.source_revision == claim.source_revision)
         .one_or_none()
     )
     if row is None:
@@ -499,11 +507,9 @@ def save_memory_digest_batch_checkpoint(
         result = db.execute(
             update(MemoryDigestJob)
             .where(_active_lease_predicate(
-                job_id=claim.job_id,
-                lease_token=claim.lease_token,
+                claim=claim,
                 now=saved_at,
             ))
-            .where(MemoryDigestJob.source_revision == claim.source_revision)
             .values(
                 meta_json=json.dumps(
                     meta,
@@ -543,11 +549,9 @@ def finish_memory_digest_job(
     result = db.execute(
         update(MemoryDigestJob)
         .where(_active_lease_predicate(
-            job_id=claim.job_id,
-            lease_token=claim.lease_token,
+            claim=claim,
             now=finished_at,
         ))
-        .where(MemoryDigestJob.source_revision == claim.source_revision)
         .values(
             status="done",
             locked_by="",
@@ -586,11 +590,9 @@ def settle_memory_digest_job_without_rows(
     current = (
         db.query(MemoryDigestJob)
         .filter(_active_lease_predicate(
-            job_id=claim.job_id,
-            lease_token=claim.lease_token,
+            claim=claim,
             now=finished_at,
         ))
-        .filter(MemoryDigestJob.source_revision == claim.source_revision)
         .one_or_none()
     )
     if current is None:
@@ -603,11 +605,9 @@ def settle_memory_digest_job_without_rows(
     result = db.execute(
         update(MemoryDigestJob)
         .where(_active_lease_predicate(
-            job_id=claim.job_id,
-            lease_token=claim.lease_token,
+            claim=claim,
             now=finished_at,
         ))
-        .where(MemoryDigestJob.source_revision == claim.source_revision)
         .values(
             status=status,
             locked_by="",

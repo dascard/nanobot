@@ -52,13 +52,19 @@ def _get_providers(mode: str) -> list:
 
 
 def _apply_quotas(items, limit: int) -> list:
-    from .sources.official import DAILY_QUOTA
+    from core.news.policy import DEFAULT_NEWS_RANKING_POLICY
+
+    policy = DEFAULT_NEWS_RANKING_POLICY
     buckets: dict[str, list] = {}
     for item in items:
-        buckets.setdefault(item.source_group or "curated", []).append(item)
+        buckets.setdefault(item.source_group or "unknown", []).append(item)
     result = []
-    for group in ["core_provider", "core_platform", "ai_media", "research", "curated", "community"]:
-        result.extend(buckets.get(group, [])[:DAILY_QUOTA.get(group, 0)])
+    for group in policy.group_priority:
+        result.extend(
+            buckets.get(group, [])[
+                : int(policy.daily_group_quotas.get(group, 0))
+            ]
+        )
     if len(result) < limit:
         for item in items:
             if item not in result and item.source_group != "community":
@@ -399,6 +405,27 @@ def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
                 effective_request.freshness,
             )
         return _render_no_new_digest(query, mode, skipped_seen)
+    if mode == "quality":
+        from core.news.review import review_news_candidates
+
+        review_outcome = review_news_candidates(items)
+        items = list(review_outcome.items)
+        logger.info(
+            "[daily] relevance_review mode=%s requested=%d reviewed=%d "
+            "removed=%d downranked=%d failure=%s",
+            review_outcome.mode.value,
+            review_outcome.requested_count,
+            review_outcome.reviewed_count,
+            review_outcome.removed_count,
+            review_outcome.downranked_count,
+            review_outcome.failure_code or "-",
+        )
+        if not items:
+            return _render_no_candidates_digest(
+                query,
+                mode,
+                effective_request.freshness,
+            )
     items = items[:limit]
 
     if mode == "daily":

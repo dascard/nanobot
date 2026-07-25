@@ -377,10 +377,18 @@ def _run_coroutine_in_new_loop(coroutine) -> Any:
 
 def main(argv: list[str] | None = None) -> int:
     from bootstrap.logging_config import configure_logging
+    from core.telemetry.runtime import (
+        start_telemetry_runtime,
+        stop_telemetry_runtime,
+    )
 
     configure_logging()
     args = _parser().parse_args(argv)
-    return int(_run_coroutine_in_new_loop(_main_async(args)))
+    telemetry_handle = start_telemetry_runtime()
+    try:
+        return int(_run_coroutine_in_new_loop(_main_async(args)))
+    finally:
+        stop_telemetry_runtime(telemetry_handle)
 
 
 if __name__ == "__main__":

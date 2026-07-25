@@ -107,6 +107,7 @@ class GroupIngressService:
         db: Any,
         background_tasks: Any = None,
         bridge_provider: Any = None,
+        image_precache: Callable[..., list[dict[str, Any]]] | None = None,
         session_factory: Callable[[], Any] | None = None,
     ):
         self.db = db
@@ -116,6 +117,7 @@ class GroupIngressService:
             self._phase_session_factory = session_factory_from_session(db)
         self.background_tasks = background_tasks
         self.bridge_provider = bridge_provider
+        self.image_precache = image_precache
 
     def _current_db(self) -> Any:
         return self._phase_db if self._phase_db is not None else self.db
@@ -251,6 +253,15 @@ class GroupIngressService:
             await asyncio.gather(business_task, return_exceptions=True)
 
     async def handle(self, req: Any) -> dict[str, Any]:
+        from app.group_ingress.message_adapter import (
+            build_group_message_contract,
+        )
+
+        message_contract = build_group_message_contract(req)
+        try:
+            req._message_contract = message_contract
+        except (AttributeError, TypeError):
+            pass
         group_user_id = h.normalize_group_session_id(req.group_id)
         claim_key = normalize_inbound_claim_key(
             self._platform_from_request(req),
@@ -799,9 +810,9 @@ class GroupIngressService:
     ) -> GroupIngressResult:
         try:
             if self.bridge_provider is None:
-                from nanobot_kt.bridge import get_bridge
+                from core.agent_runtime.gateway import get_agent_gateway
 
-                bridge = get_bridge()
+                bridge = get_agent_gateway()
             else:
                 bridge = self.bridge_provider()
             preparation = await self._run_db_phase(
@@ -826,10 +837,26 @@ class GroupIngressService:
             await claim_owner.checkpoint()
 
         try:
-            reply = await bridge.handle_message(
-                preparation.enriched_query,
-                session_id=group_user_id,
-                user_id=group_user_id,
+            from core.agent_runtime import dispatch_agent_message
+            from app.group_ingress.message_adapter import (
+                build_group_message_contract,
+            )
+
+            message_contract = getattr(
+                req,
+                "_message_contract",
+                None,
+            )
+            if message_contract is None:
+                message_contract = build_group_message_contract(req)
+
+            reply = await dispatch_agent_message(
+                bridge,
+                message_contract,
+                content=preparation.enriched_query,
+                runtime_session_id=group_user_id,
+                runtime_user_id=group_user_id,
+                sender_name=req.sender_name,
                 metadata=preparation.bridge_meta,
             )
             answer = reply if isinstance(reply, str) else str(reply or "")
@@ -1082,13 +1109,18 @@ class GroupIngressService:
 
     def _schedule_image_precache(self, files: Any, *, group_id: str, message_id: str) -> None:
         normalized = h.normalize_files(files)
-        if not normalized or self.background_tasks is None:
+        if (
+            not normalized
+            or self.background_tasks is None
+            or self.image_precache is None
+        ):
             return
         self.background_tasks.add_task(
             _precache_group_images_bg,
             normalized,
             group_id=group_id,
             message_id=message_id,
+            precache=self.image_precache,
         )
 
     async def _cache_registered_sticker_previews(self, registered_stickers: list[dict]) -> None:
@@ -1135,10 +1167,14 @@ class GroupIngressService:
         return files
 
 
-def _precache_group_images_bg(files: list[str], *, group_id: str, message_id: str) -> None:
-    from nanobot_kt.image_pipeline import precache_image_sources
-
-    results = precache_image_sources(
+def _precache_group_images_bg(
+    files: list[str],
+    *,
+    group_id: str,
+    message_id: str,
+    precache: Callable[..., list[dict[str, Any]]],
+) -> None:
+    results = precache(
         files,
         source_type="group_message",
         source_name_prefix=f"group_{group_id}_{message_id or 'message'}",

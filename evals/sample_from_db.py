@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 from datetime import timedelta
 
 
@@ -183,77 +182,19 @@ def _sample_timing_gate(db, limit: int) -> list[dict]:
 
 
 def _sample_memory_learning(db, limit: int) -> list[dict]:
-    """从 JargonMemory / ExpressionMemory 抽低质量候选。"""
-    from core.database import JargonMemory, ExpressionMemory
+    """复用在线 Eval Sampling，只读取新群学习候选事实源。"""
+
+    from core.eval_sampling.db_sampler import sample_memory_learning
 
     cases: list[dict] = []
-
-    jargon_rows = (
-        db.query(JargonMemory)
-        .filter(JargonMemory.status == "candidate")
-        .order_by(JargonMemory.confidence.asc())
-        .limit(limit * 2)
-        .all()
-    )
-    for j in jargon_rows:
-        term = j.term or ""
-        is_suspicious = bool(re.search(r"[×xX\*\/\=\+\-\d\.]{2,}", term))
-        low_conf = (j.confidence or 1.0) < 0.6
-        if not (is_suspicious or low_conf):
-            continue
-        if len(cases) >= limit:
-            break
-
-        examples = (_safe_json(j.examples_json) if isinstance(j.examples_json, str)
-                    else (j.examples_json or []))
-        cases.append({
-            "id": f"candidate_memory_learning_j_{j.id}",
-            "suite": "memory_learning",
-            "description": f"可疑 jargon term={term} conf={j.confidence}",
-            "input": {
-                "chat_stream_id": j.chat_stream_id,
-                "term": term,
-                "meaning": j.meaning or "",
-                "confidence": j.confidence,
-                "examples": examples,
-            },
-            "expected": {"needs_label": True},
-            "tags": ["sampled", "memory_learning", "jargon"],
-            "source": "db",
-            "source_ref": f"jargon:{j.id}",
-        })
-
-    expr_rows = (
-        db.query(ExpressionMemory)
-        .filter(ExpressionMemory.status == "candidate")
-        .order_by(ExpressionMemory.confidence.asc())
-        .limit(limit * 2)
-        .all()
-    )
-    for e in expr_rows:
-        expr = e.expression or ""
-        is_suspicious = bool(re.search(r"[×xX\*\/\=\+\-\d\.]{2,}", expr))
-        low_conf = (e.confidence or 1.0) < 0.6
-        if not (is_suspicious or low_conf):
-            continue
-        if len(cases) >= limit * 2:
-            break
-
-        cases.append({
-            "id": f"candidate_memory_learning_e_{e.id}",
-            "suite": "memory_learning",
-            "description": f"可疑 expression expr={expr} conf={e.confidence}",
-            "input": {
-                "chat_stream_id": e.chat_stream_id,
-                "expression": expr,
-                "expression_type": e.expression_type or "phrase",
-                "confidence": e.confidence,
-            },
-            "expected": {"needs_label": True},
-            "tags": ["sampled", "memory_learning", "expression"],
-            "source": "db",
-            "source_ref": f"expression:{e.id}",
-        })
+    for sampled in sample_memory_learning(
+        db,
+        candidate_type="all",
+        limit=limit,
+    ):
+        case = dict(sampled)
+        case["id"] = case.pop("case_id")
+        cases.append(case)
     return cases
 
 

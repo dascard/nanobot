@@ -18,7 +18,13 @@ from uuid import uuid4
 from sqlalchemy import inspect, text
 
 from core.chat_delivery_outbox_schema import chat_delivery_outbox_table
-from core.chat_stream_identity import canonicalize_legacy_chat_stream_id
+from core.chat_stream_identity import (
+    ChatStreamIdentity,
+    ChatStreamIdentityError,
+    canonicalize_legacy_chat_stream_id,
+    parse_canonical_chat_stream_id,
+    resolve_chat_stream_identity,
+)
 from core.outbound_delivery_schema import (
     OUTBOUND_DELIVERY_SCHEMA_VERSION,
     create_outbound_delivery_schema,
@@ -37,6 +43,24 @@ MigrationFn = Callable[[Any, Any, str | None], None]
 _CHAT_LOG_METADATA_VERSION = "20260523_chat_log_metadata_columns"
 _SESSION_GUIDANCE_COLUMNS_VERSION = "20260712_chat_stream_session_guidance_columns"
 _CHAT_STREAM_IDENTITY_VERSION = "20260712_chat_stream_identity_normalization"
+_GROUP_MEMORY_CANONICAL_IDENTITY_VERSION = (
+    "20260723_group_memory_canonical_identity"
+)
+_GROUP_LEARNING_STAGE7A_SCHEMA_VERSION = (
+    "20260723_group_learning_stage7a_schema"
+)
+_GROUP_LEARNING_STAGE7B_REVIEW_VERSION = (
+    "20260723_group_learning_stage7b_review_fields"
+)
+_GROUP_LEARNING_STAGE7C_SCHEDULE_VERSION = (
+    "20260724_group_learning_stage7c_schedule_fencing"
+)
+_GROUP_LEARNING_STAGE7D_LEGACY_READ_ONLY_VERSION = (
+    "20260724_group_learning_stage7d_legacy_read_only"
+)
+_ADMIN_IDEMPOTENCY_RECORDS_VERSION = (
+    "20260724_admin_idempotency_records"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -343,6 +367,159 @@ def _group_memory_governance_columns(conn: Any, engine: Any, db_path: str | None
         "last_injected_at": "TIMESTAMP",
         "injected_count": "INTEGER DEFAULT 0",
     })
+
+
+def _parse_group_memory_identity(
+    value: object,
+    *,
+    platform: str | None = None,
+) -> ChatStreamIdentity:
+    raw = str(value or "").strip()
+    parts = raw.split(":")
+    try:
+        if len(parts) == 3 and parts[2] in {"group", "private"}:
+            identity = parse_canonical_chat_stream_id(raw)
+        else:
+            identity = resolve_chat_stream_identity(
+                platform=platform or "qq",
+                chat_type="group",
+                session_id=raw,
+            )
+    except ChatStreamIdentityError as exc:
+        raise SchemaMigrationValidationError(
+            "group_memories 包含无法规范化的群会话身份"
+        ) from exc
+    if identity.chat_type != "group":
+        raise SchemaMigrationValidationError(
+            "group_memories 包含非群聊 canonical 身份"
+        )
+    if platform is not None and identity.platform != platform:
+        raise SchemaMigrationValidationError(
+            "group_memories canonical 与兼容身份投影不一致"
+        )
+    return identity
+
+
+def _validate_group_memory_canonical_index(conn: Any) -> None:
+    expected_name = "uq_group_memory_canonical_hash"
+    expected_columns = [
+        "chat_stream_id",
+        "memory_type",
+        "content_hash",
+    ]
+    for index in inspect(conn).get_indexes("group_memories"):
+        if index["name"] != expected_name:
+            continue
+        if not index["unique"] or index["column_names"] != expected_columns:
+            raise SchemaMigrationValidationError(
+                "group_memories canonical 唯一索引定义不符合契约"
+            )
+        return
+    raise SchemaMigrationValidationError(
+        "group_memories 缺少 canonical 唯一索引"
+    )
+
+
+def _group_memory_canonical_identity(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """回填 GroupMemory canonical 身份并固定兼容投影。"""
+
+    columns = _columns(conn, "group_memories")
+    if not columns:
+        return
+    required = {"id", "group_id", "memory_type", "content_hash"}
+    if not required <= columns:
+        raise SchemaMigrationValidationError(
+            "group_memories 缺少 canonical 身份迁移所需字段"
+        )
+
+    canonical_select = (
+        "chat_stream_id"
+        if "chat_stream_id" in columns
+        else "NULL AS chat_stream_id"
+    )
+    rows = conn.execute(text(
+        "SELECT id, group_id, memory_type, content_hash, "
+        f"{canonical_select} FROM group_memories ORDER BY id"
+    )).mappings().all()
+
+    updates: list[dict[str, object]] = []
+    canonical_keys: set[tuple[str, str, str]] = set()
+    for row in rows:
+        existing_canonical = str(row["chat_stream_id"] or "").strip()
+        if existing_canonical:
+            try:
+                identity = parse_canonical_chat_stream_id(
+                    existing_canonical
+                )
+            except ChatStreamIdentityError as exc:
+                raise SchemaMigrationValidationError(
+                    "group_memories 包含非法 canonical 身份"
+                ) from exc
+            if identity.chat_type != "group":
+                raise SchemaMigrationValidationError(
+                    "group_memories 包含非群聊 canonical 身份"
+                )
+            projected = _parse_group_memory_identity(
+                row["group_id"],
+                platform=identity.platform,
+            )
+            if projected.chat_stream_id != identity.chat_stream_id:
+                raise SchemaMigrationValidationError(
+                    "group_memories canonical 与兼容身份投影不一致"
+                )
+        else:
+            identity = _parse_group_memory_identity(row["group_id"])
+
+        key = (
+            identity.chat_stream_id,
+            str(row["memory_type"] or ""),
+            str(row["content_hash"] or ""),
+        )
+        if key in canonical_keys:
+            raise SchemaMigrationValidationError(
+                "group_memories canonical 身份冲突，拒绝自动合并"
+            )
+        canonical_keys.add(key)
+        updates.append({
+            "id": int(row["id"]),
+            "chat_stream_id": identity.chat_stream_id,
+            "group_id": (
+                identity.legacy_runtime_session_id
+                if identity.platform == "qq"
+                else identity.chat_stream_id
+            ),
+        })
+
+    _add_missing_columns(
+        conn,
+        "group_memories",
+        {"chat_stream_id": "TEXT"},
+    )
+    for update in updates:
+        result = conn.execute(
+            text(
+                "UPDATE group_memories "
+                "SET chat_stream_id = :chat_stream_id, "
+                "group_id = :group_id WHERE id = :id"
+            ),
+            update,
+        )
+        if result.rowcount != 1:
+            raise SchemaMigrationValidationError(
+                "group_memories canonical 身份回填行数异常"
+            )
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS ix_group_memories_chat_stream_id "
+        "ON group_memories(chat_stream_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "uq_group_memory_canonical_hash "
+        "ON group_memories(chat_stream_id, memory_type, content_hash)",
+    ])
+    _validate_group_memory_canonical_index(conn)
 
 
 def _chat_stream_config_group_profile_mode(conn: Any, engine: Any, db_path: str | None) -> None:
@@ -707,7 +884,12 @@ def _session_summary_jobs(conn: Any, engine: Any, db_path: str | None) -> None:
         "next_retry_at DATETIME, "
         "locked_by TEXT DEFAULT '', "
         "locked_at DATETIME, "
+        "lease_token TEXT NOT NULL DEFAULT '', "
+        "lease_expires_at DATETIME, "
+        "generation INTEGER NOT NULL DEFAULT 0, "
+        "attempt_count INTEGER NOT NULL DEFAULT 0, "
         "error TEXT DEFAULT '', "
+        "finished_at DATETIME, "
         "stable_hash TEXT DEFAULT '', "
         "meta_json TEXT DEFAULT '{}', "
         "created_at DATETIME, "
@@ -719,6 +901,48 @@ def _session_summary_jobs(conn: Any, engine: Any, db_path: str | None) -> None:
         "CREATE INDEX IF NOT EXISTS idx_ssj_status_retry ON session_summary_jobs(status, next_retry_at)",
         "CREATE INDEX IF NOT EXISTS idx_ssj_session_range ON session_summary_jobs(session_id, covered_from_turn_id, covered_until_turn_id)",
         "CREATE INDEX IF NOT EXISTS idx_ssj_stable_hash ON session_summary_jobs(stable_hash)",
+    ])
+
+
+def _session_summary_job_fencing(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """为会话摘要任务补充不可复用的租约 fencing 身份。"""
+
+    _add_missing_columns(conn, "session_summary_jobs", {
+        "lease_token": "TEXT NOT NULL DEFAULT ''",
+        "lease_expires_at": "DATETIME",
+        "generation": "INTEGER NOT NULL DEFAULT 0",
+        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        "finished_at": "DATETIME",
+    })
+    if "session_summary_jobs" not in _table_names(conn):
+        return
+
+    now = db_now_naive()
+    conn.execute(
+        text(
+            "UPDATE session_summary_jobs SET "
+            "status = 'pending', "
+            "locked_by = '', "
+            "locked_at = NULL, "
+            "lease_token = '', "
+            "lease_expires_at = NULL, "
+            "next_retry_at = COALESCE(next_retry_at, :now), "
+            "error = 'migration_requeued_legacy_running', "
+            "finished_at = NULL, "
+            "updated_at = :now "
+            "WHERE status = 'running'"
+        ),
+        {"now": now},
+    )
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_ssj_claim_fencing "
+        "ON session_summary_jobs(status, next_retry_at, id)",
+        "CREATE INDEX IF NOT EXISTS idx_ssj_lease_fencing "
+        "ON session_summary_jobs(status, lease_expires_at, id)",
     ])
 
 
@@ -2353,6 +2577,314 @@ def _sandbox_tool_overrides_retired(
     )
 
 
+def _runtime_telemetry_events(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建无正文 RuntimeEvent 持久化账本。"""
+
+    from core.db.models.observability import RuntimeTelemetryEvent
+
+    RuntimeTelemetryEvent.__table__.create(
+        bind=conn,
+        checkfirst=True,
+    )
+
+
+def _group_learning_stage7a_schema(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建群学习只读基础设施，不迁移或激活任何旧记忆。"""
+
+    from core.db.models.group_learning import (
+        GroupLearningCandidate,
+        GroupLearningEvidence,
+        GroupLearningRun,
+        GroupLearningSchedule,
+        GroupLearningStreamState,
+    )
+
+    for model in (
+        GroupLearningSchedule,
+        GroupLearningStreamState,
+        GroupLearningCandidate,
+        GroupLearningEvidence,
+        GroupLearningRun,
+    ):
+        model.__table__.create(bind=conn, checkfirst=True)
+
+    if "group_memories" not in _table_names(conn):
+        return
+    _add_missing_columns(
+        conn,
+        "group_memories",
+        {
+            "approval_source": "VARCHAR(16)",
+            "governance_mode": "VARCHAR(24)",
+            "approved_content_hash": "VARCHAR(64)",
+            "model_review_run_id": "VARCHAR(64)",
+            "model_contract_version": "VARCHAR(64)",
+            "human_reviewer_id": "VARCHAR(128)",
+            "human_reviewed_at": "DATETIME",
+            "human_action": "VARCHAR(32)",
+            "conflict_group_id": "VARCHAR(64)",
+            "version": "INTEGER NOT NULL DEFAULT 1",
+        },
+    )
+    _create_indexes(
+        conn,
+        [
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_group_memories_conflict_group_id "
+            "ON group_memories(conflict_group_id)",
+        ],
+    )
+
+
+def _group_learning_stage7a_needs_backup(conn: Any) -> bool:
+    """只有文件库需要 ALTER 旧 GroupMemory 时才请求在线快照。"""
+
+    if "group_memories" not in _table_names(conn):
+        return False
+    required = {
+        "approval_source",
+        "governance_mode",
+        "approved_content_hash",
+        "model_review_run_id",
+        "model_contract_version",
+        "human_reviewer_id",
+        "human_reviewed_at",
+        "human_action",
+        "conflict_group_id",
+        "version",
+    }
+    return not required <= _columns(conn, "group_memories")
+
+
+def _group_learning_stage7b_review_fields(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """补充 candidate-only 模型观察和人工审核账本字段。"""
+
+    _add_missing_columns(
+        conn,
+        "group_learning_candidates",
+        {
+            "model_observed_at": "DATETIME",
+            "observation_reason_hash": (
+                "VARCHAR(64) NOT NULL DEFAULT ''"
+            ),
+            "reviewed_content": "TEXT",
+            "reviewed_meaning": "TEXT",
+            "reviewed_content_hash": "VARCHAR(64)",
+            "human_reviewer_id": "VARCHAR(128)",
+            "human_reviewed_at": "DATETIME",
+            "human_action": "VARCHAR(32)",
+        },
+    )
+    _add_missing_columns(
+        conn,
+        "group_learning_runs",
+        {
+            "mode": (
+                "VARCHAR(24) NOT NULL DEFAULT 'candidate_only'"
+            ),
+            "task_run_id": "VARCHAR(64) NOT NULL DEFAULT ''",
+            "input_chars": "INTEGER NOT NULL DEFAULT 0",
+            "input_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "output_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "total_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "cost_microusd": "INTEGER",
+            "latency_ms": "INTEGER NOT NULL DEFAULT 0",
+            "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+            "raw_output_bytes": "INTEGER NOT NULL DEFAULT 0",
+            "raw_output_sha256": (
+                "VARCHAR(64) NOT NULL DEFAULT ''"
+            ),
+        },
+    )
+
+
+def _group_learning_stage7b_needs_backup(conn: Any) -> bool:
+    candidate_required = {
+        "model_observed_at",
+        "observation_reason_hash",
+        "reviewed_content",
+        "reviewed_meaning",
+        "reviewed_content_hash",
+        "human_reviewer_id",
+        "human_reviewed_at",
+        "human_action",
+    }
+    run_required = {
+        "mode",
+        "task_run_id",
+        "input_chars",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cost_microusd",
+        "latency_ms",
+        "attempt_count",
+        "raw_output_bytes",
+        "raw_output_sha256",
+    }
+    candidate_missing = (
+        "group_learning_candidates" in _table_names(conn)
+        and not candidate_required
+        <= _columns(conn, "group_learning_candidates")
+    )
+    run_missing = (
+        "group_learning_runs" in _table_names(conn)
+        and not run_required <= _columns(conn, "group_learning_runs")
+    )
+    return candidate_missing or run_missing
+
+
+def _group_learning_stage7c_schedule_fencing(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """给群学习白名单调度补充独立租约 generation 和 attempt。"""
+
+    _add_missing_columns(
+        conn,
+        "group_learning_schedules",
+        {
+            "lease_generation": "INTEGER NOT NULL DEFAULT 0",
+            "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
+
+
+def _group_learning_stage7c_schedule_needs_backup(
+    conn: Any,
+) -> bool:
+    return (
+        "group_learning_schedules" in _table_names(conn)
+        and not {"lease_generation", "attempt_count"}
+        <= _columns(conn, "group_learning_schedules")
+    )
+
+
+_GROUP_LEARNING_LEGACY_READ_ONLY_TRIGGERS = {
+    (
+        "expression_memories",
+        "INSERT",
+    ): "trg_group_learning_legacy_expression_insert_read_only",
+    (
+        "expression_memories",
+        "UPDATE",
+    ): "trg_group_learning_legacy_expression_update_read_only",
+    (
+        "expression_memories",
+        "DELETE",
+    ): "trg_group_learning_legacy_expression_delete_read_only",
+    (
+        "jargon_memories",
+        "INSERT",
+    ): "trg_group_learning_legacy_jargon_insert_read_only",
+    (
+        "jargon_memories",
+        "UPDATE",
+    ): "trg_group_learning_legacy_jargon_update_read_only",
+    (
+        "jargon_memories",
+        "DELETE",
+    ): "trg_group_learning_legacy_jargon_delete_read_only",
+}
+
+
+def _sqlite_trigger_names(conn: Any) -> set[str]:
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return set()
+    rows = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+    )).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def _group_learning_stage7d_legacy_read_only(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """保留旧表达和黑话读面，并在数据库层拒绝所有新写。"""
+
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        raise RuntimeError("旧群学习表只读迁移仅支持 SQLite")
+    tables = _table_names(conn)
+    for (
+        table_name,
+        operation,
+    ), trigger_name in (
+        _GROUP_LEARNING_LEGACY_READ_ONLY_TRIGGERS.items()
+    ):
+        if table_name not in tables:
+            continue
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS {trigger_name} "
+            f"BEFORE {operation} ON {table_name} "
+            "BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_read_only'); "
+            "END"
+        ))
+
+
+def _group_learning_stage7d_legacy_read_only_needs_backup(
+    conn: Any,
+) -> bool:
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return False
+    tables = _table_names(conn)
+    expected = {
+        trigger_name
+        for (table_name, _operation), trigger_name
+        in _GROUP_LEARNING_LEGACY_READ_ONLY_TRIGGERS.items()
+        if table_name in tables
+    }
+    return bool(expected - _sqlite_trigger_names(conn))
+
+
+def _admin_idempotency_records(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """建立 Admin 写操作的数据库唯一 at-most-once 账本。"""
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS admin_idempotency_records ("
+        "request_id VARCHAR(64) PRIMARY KEY, "
+        "action VARCHAR(128) NOT NULL, "
+        "target_id VARCHAR(255) NOT NULL DEFAULT '', "
+        "request_sha256 VARCHAR(64) NOT NULL, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'running' "
+        "CHECK (status IN ('running','succeeded','failed')), "
+        "result_json TEXT NOT NULL DEFAULT '{}', "
+        "error_code VARCHAR(128) NOT NULL DEFAULT '', "
+        "created_at DATETIME NOT NULL, "
+        "updated_at DATETIME NOT NULL"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS "
+        "idx_admin_idempotency_records_action "
+        "ON admin_idempotency_records(action)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS "
+        "idx_admin_idempotency_action_target "
+        "ON admin_idempotency_records(action, target_id)"
+    ))
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -2371,6 +2903,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260525_rolling_session_summaries", "rolling session summaries", _rolling_session_summaries),
     ("20260526_session_summary_llm_columns", "session summary llm columns", _session_summary_llm_columns),
     ("20260526_session_summary_jobs", "session summary jobs", _session_summary_jobs),
+    (
+        "20260723_session_summary_job_fencing",
+        "session summary job fencing columns",
+        _session_summary_job_fencing,
+    ),
     ("20260526_semantic_rag_tables", "semantic rag tables", _semantic_rag_tables),
     ("20260526_knowledge_library_tables", "knowledge library tables", _knowledge_library_tables),
     ("20260618_runtime_tool_decision_platform", "runtime tool decision platform column", _runtime_tool_decision_platform_column),
@@ -2462,6 +2999,41 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "retire sandbox tool overrides",
         _sandbox_tool_overrides_retired,
     ),
+    (
+        "20260723_runtime_telemetry_events",
+        "runtime telemetry event ledger",
+        _runtime_telemetry_events,
+    ),
+    (
+        _GROUP_MEMORY_CANONICAL_IDENTITY_VERSION,
+        "group memory canonical chat stream identity",
+        _group_memory_canonical_identity,
+    ),
+    (
+        _GROUP_LEARNING_STAGE7A_SCHEMA_VERSION,
+        "group learning stage 7a schema",
+        _group_learning_stage7a_schema,
+    ),
+    (
+        _GROUP_LEARNING_STAGE7B_REVIEW_VERSION,
+        "group learning stage 7b review fields",
+        _group_learning_stage7b_review_fields,
+    ),
+    (
+        _GROUP_LEARNING_STAGE7C_SCHEDULE_VERSION,
+        "group learning stage 7c schedule fencing",
+        _group_learning_stage7c_schedule_fencing,
+    ),
+    (
+        _GROUP_LEARNING_STAGE7D_LEGACY_READ_ONLY_VERSION,
+        "group learning stage 7d legacy tables read only",
+        _group_learning_stage7d_legacy_read_only,
+    ),
+    (
+        _ADMIN_IDEMPOTENCY_RECORDS_VERSION,
+        "admin mutation idempotency records",
+        _admin_idempotency_records,
+    ),
 ]
 
 
@@ -2483,9 +3055,37 @@ def _prepare_schema_migration_backup(
         OUTBOUND_DELIVERY_SCHEMA_VERSION not in applied_before_transaction
         and outbound_delivery_schema_needs_backup(conn)
     )
+    group_learning_backup_needed = (
+        _GROUP_LEARNING_STAGE7A_SCHEMA_VERSION
+        not in applied_before_transaction
+        and _group_learning_stage7a_needs_backup(conn)
+    )
+    group_learning_stage7b_backup_needed = (
+        _GROUP_LEARNING_STAGE7B_REVIEW_VERSION
+        not in applied_before_transaction
+        and _group_learning_stage7b_needs_backup(conn)
+    )
+    group_learning_stage7c_backup_needed = (
+        _GROUP_LEARNING_STAGE7C_SCHEDULE_VERSION
+        not in applied_before_transaction
+        and _group_learning_stage7c_schedule_needs_backup(conn)
+    )
+    group_learning_stage7d_backup_needed = (
+        _GROUP_LEARNING_STAGE7D_LEGACY_READ_ONLY_VERSION
+        not in applied_before_transaction
+        and _group_learning_stage7d_legacy_read_only_needs_backup(
+            conn
+        )
+    )
     drivername = str(getattr(getattr(engine, "url", None), "drivername", ""))
     if drivername.startswith("sqlite") and (
-        chat_log_backup_needed or identity_backup_needed or outbound_backup_needed
+        chat_log_backup_needed
+        or identity_backup_needed
+        or outbound_backup_needed
+        or group_learning_backup_needed
+        or group_learning_stage7b_backup_needed
+        or group_learning_stage7c_backup_needed
+        or group_learning_stage7d_backup_needed
     ):
         backup_path = _migration_backup_path(engine, db_path)
         if backup_path is not None:

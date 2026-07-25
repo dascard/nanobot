@@ -272,9 +272,6 @@ function SessionConfigEditor({ config, onClose, onSaved }) {
     session_id: config?.session_id || '',
     talk_value: config?.talk_value ?? 0.5,
     mentioned_bot_reply: config?.mentioned_bot_reply ?? true,
-    use_expression: config?.use_expression ?? true,
-    enable_expression_learning: config?.enable_expression_learning ?? true,
-    enable_jargon_learning: config?.enable_jargon_learning ?? true,
     group_profile_mode: config?.group_profile_mode || 'off',
     planner_smooth: config?.planner_smooth ?? 3,
     session_guidance: '',
@@ -303,9 +300,6 @@ function SessionConfigEditor({ config, onClose, onSaved }) {
           session_id: detail.session_id || config.session_id || '',
           talk_value: detail.talk_value ?? current.talk_value,
           mentioned_bot_reply: detail.mentioned_bot_reply ?? current.mentioned_bot_reply,
-          use_expression: detail.use_expression ?? current.use_expression,
-          enable_expression_learning: detail.enable_expression_learning ?? current.enable_expression_learning,
-          enable_jargon_learning: detail.enable_jargon_learning ?? current.enable_jargon_learning,
           group_profile_mode: detail.group_profile_mode || current.group_profile_mode,
           planner_smooth: detail.planner_smooth ?? current.planner_smooth,
           session_guidance: detail.session_guidance || '',
@@ -380,9 +374,6 @@ function SessionConfigEditor({ config, onClose, onSaved }) {
         session_id: externalSessionId,
         talk_value: numbers.talkValue,
         mentioned_bot_reply: form.mentioned_bot_reply ? 1 : 0,
-        use_expression: form.use_expression ? 1 : 0,
-        enable_expression_learning: form.enable_expression_learning ? 1 : 0,
-        enable_jargon_learning: form.enable_jargon_learning ? 1 : 0,
         group_profile_mode: form.group_profile_mode,
         planner_smooth: numbers.plannerSmooth,
         session_guidance: guidance,
@@ -554,11 +545,8 @@ function SessionConfigEditor({ config, onClose, onSaved }) {
                 </Field>
               </div>
 
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2">
                 <ToggleField id="session-config-mentioned-reply" label="被 @ 时回复" checked={Boolean(form.mentioned_bot_reply)} disabled={busy || !detailLoaded || !isEditableIdentity} onChange={value => setField('mentioned_bot_reply', value)} />
-                <ToggleField id="session-config-expression" label="注入表达" checked={Boolean(form.use_expression)} disabled={busy || !detailLoaded || !isEditableIdentity} onChange={value => setField('use_expression', value)} />
-                <ToggleField id="session-config-expression-learning" label="表达学习" checked={Boolean(form.enable_expression_learning)} disabled={busy || !detailLoaded || !isEditableIdentity} onChange={value => setField('enable_expression_learning', value)} />
-                <ToggleField id="session-config-jargon-learning" label="黑话学习" checked={Boolean(form.enable_jargon_learning)} disabled={busy || !detailLoaded || !isEditableIdentity} onChange={value => setField('enable_jargon_learning', value)} />
               </div>
 
               <Field id="session-config-group-profile" label="群画像模式">

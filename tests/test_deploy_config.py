@@ -380,12 +380,19 @@ def test_runtime_mutable_paths_stay_under_data_or_temp(monkeypatch, tmp_path):
 
 def test_production_deploy_requires_digest_and_never_builds_in_place():
     script = Path("scripts/deploy-production.sh").read_text(encoding="utf-8")
+    deployer = Path("scripts/deploy_release.py").read_text(encoding="utf-8")
+    deployment = Path("core/release/deployment.py").read_text(
+        encoding="utf-8"
+    )
+    implementation = script + deployer + deployment
 
     assert "@sha256:" in script
-    assert "docker-compose.prod.yml" in script
-    assert "--no-build" in script
-    assert "docker compose build" not in script
-    assert "prune" not in script
+    assert "NANOBOT_RELEASE_MANIFEST" in script
+    assert "scripts/deploy_release.py" in script
+    assert "docker-compose.prod.yml" in deployment
+    assert "--no-build" in deployment
+    assert "docker compose build" not in implementation
+    assert "prune" not in implementation
 
 
 def test_local_build_rolls_back_when_compose_recreate_fails(tmp_path):
@@ -478,9 +485,13 @@ exit 1
         "image tag sha256:old-runtime nanobot-runtime:predeploy",
         "image tag sha256:old-runtime nanobot-runtime:rollback",
         "compose build nanobot-server",
-        "compose up -d --force-recreate nanobot-server",
+        "compose up -d --force-recreate --wait --wait-timeout 90 "
+        "nanobot-server session-summary-worker "
+        "outbound-delivery-worker semantic-index-worker",
         "image tag nanobot-runtime:predeploy nanobot-runtime:latest",
-        "compose up -d --force-recreate nanobot-server",
+        "compose up -d --force-recreate --wait --wait-timeout 90 "
+        "nanobot-server session-summary-worker "
+        "outbound-delivery-worker semantic-index-worker",
         "image tag sha256:old-runtime nanobot-runtime:rollback",
         "image rm nanobot-runtime:predeploy",
     ]
@@ -552,6 +563,24 @@ def test_quality_gate_runs_full_backend_frontend_and_architecture_checks():
 
     assert "python -m pytest tests/ -v" in workflow
     assert "python scripts/check_architecture.py" in workflow
+    assert (
+        "python scripts/build_release_impact.py --check-golden"
+        in workflow
+    )
+    assert (
+        "python scripts/build_verification_plan.py --check-golden"
+        in workflow
+    )
+    assert "python scripts/audit_decision_rules.py --check" in workflow
+    assert "python scripts/build_behavior_baseline.py --check" in workflow
+    inventory_step = workflow.split(
+        "- name: 检查决策规则清单漂移", maxsplit=1
+    )[1].split("- name:", maxsplit=1)[0]
+    behavior_step = workflow.split(
+        "- name: 检查架构行为 Golden 漂移", maxsplit=1
+    )[1].split("- name:", maxsplit=1)[0]
+    assert "continue-on-error: true" in inventory_step
+    assert "continue-on-error: true" not in behavior_step
     assert "python -m ruff check" in workflow
     assert "npm run lint" in workflow
     assert "npm run build" in workflow

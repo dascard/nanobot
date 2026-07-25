@@ -51,6 +51,10 @@ async def test_group_message_continue_returns_standard_envelope(db_session, monk
     assert data["reason"] == "reply now"
     assert data["meta"]["platform"] == "web"
     assert data["meta"]["chat_type"] == "group"
+    assert (
+        data["meta"]["chat_stream_id"]
+        == "web:envelope-group:group"
+    )
     assert data["meta"]["group_id"] == "envelope-group"
     assert data["meta"]["generation"] == 3
 

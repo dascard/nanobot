@@ -20,29 +20,126 @@ def test_private_decision_classifier_propagates_programming_error(monkeypatch):
     def fail_with_programming_error(*_args, **_kwargs):
         raise TypeError("private decision programming error")
 
-    monkeypatch.setattr(classifier, "_call_qwen", fail_with_programming_error)
+    monkeypatch.setattr(
+        "clients.decision_model_adapter.execute_private_decision_task",
+        fail_with_programming_error,
+    )
 
     with pytest.raises(TypeError, match="programming error"):
         classifier.classify("帮我看看这个链接")
 
 
-def test_private_decision_classifier_keeps_invalid_model_output_parser_fallback(
+def test_private_decision_classifier_delegates_to_task_runtime_facade(
     monkeypatch,
 ):
     from clients.classifier_client import PrivateDecisionClassifier
 
     classifier = PrivateDecisionClassifier()
-    monkeypatch.setattr(classifier, "_call_qwen", lambda *_args: "不是合法 JSON")
+    monkeypatch.setattr(
+        "clients.decision_model_adapter.execute_private_decision_task",
+        lambda *_args: {
+            "action": "reply_now",
+            "effort": "short",
+            "intent": "other",
+            "response_mode": "agent",
+            "confidence": 0.0,
+            "parse_quality": "invalid",
+            "error_type": "invalid_json",
+            "conflicting_signals": [],
+            "material_state": "unknown",
+            "reason_code": "ambiguous_input",
+            "contract_version": "private_decision_v2",
+            "task_run_id": "taskrun_test",
+        },
+    )
 
     result = classifier.classify("帮我看看这个链接")
 
     assert result["action"] == "reply_now"
-    assert result["reason"] == "invalid output fallback"
+    assert result["response_mode"] == "agent"
+    assert result["parse_quality"] == "invalid"
+    assert result["error_type"] == "invalid_json"
+
+
+def test_private_decision_adapter_success_returns_only_v2_contract_fields():
+    from clients.decision_model_adapter import _private_result_payload
+
+    result = SimpleNamespace(
+        ok=True,
+        parsed_value={
+            "action": "reply_now",
+            "effort": "short",
+            "intent": "general_question",
+            "response_mode": "agent",
+            "confidence": 0.91,
+            "conflicting_signals": (),
+            "material_state": "none",
+            "reason_code": "clear_request",
+        },
+        contract_version="private_decision_v2",
+        run_id="taskrun_success",
+    )
+
+    payload = _private_result_payload(result)
+
+    assert payload == {
+        "action": "reply_now",
+        "effort": "short",
+        "intent": "general_question",
+        "response_mode": "agent",
+        "confidence": 0.91,
+        "parse_quality": "schema_valid",
+        "error_type": None,
+        "conflicting_signals": (),
+        "material_state": "none",
+        "reason_code": "clear_request",
+        "contract_version": "private_decision_v2",
+        "task_run_id": "taskrun_success",
+    }
+    assert "raw" not in payload
+    assert "task_failure_code" not in payload
+
+
+def test_private_decision_adapter_failure_returns_safe_v2_fallback():
+    from clients.decision_model_adapter import _private_result_payload
+
+    result = SimpleNamespace(
+        ok=False,
+        parsed_value=None,
+        failure=SimpleNamespace(
+            code=SimpleNamespace(value="provider_unavailable"),
+        ),
+        contract_version="private_decision_v2",
+        run_id="taskrun_failure",
+    )
+
+    payload = _private_result_payload(result)
+
+    assert payload == {
+        "action": "reply_now",
+        "effort": "short",
+        "intent": "other",
+        "response_mode": "agent",
+        "confidence": 0.0,
+        "parse_quality": "invalid",
+        "error_type": "provider_unavailable",
+        "conflicting_signals": [],
+        "material_state": "unknown",
+        "reason_code": "ambiguous_input",
+        "contract_version": "private_decision_v2",
+        "task_run_id": "taskrun_failure",
+    }
+    assert "raw" not in payload
+    assert "task_terminal_action" not in payload
 
 
 @pytest.mark.asyncio
 async def test_private_timing_gate_owns_expected_network_fallback_once():
     from core.private_timing import PrivateTimingGate
+    from core.private_timing_policy import (
+        PrivateTimingPolicy,
+        PrivateTimingRolloutMode,
+    )
 
     class OfflineClassifier:
         def __init__(self):
@@ -53,27 +150,45 @@ async def test_private_timing_gate_owns_expected_network_fallback_once():
             raise urllib.error.URLError("offline")
 
     classifier = OfflineClassifier()
-    decision = await PrivateTimingGate(classifier=classifier).classify(
+    decision = await PrivateTimingGate(
+        classifier=classifier,
+        policy=PrivateTimingPolicy(
+            mode=PrivateTimingRolloutMode.ACTIVE,
+        ),
+    ).classify(
         "帮我看看 https://example.com",
         user_id="u-private",
+        session_id="private_u-private",
     )
 
     assert classifier.calls == 1
-    assert decision.raw_label in {"fallback", "fallback_scoring"}
+    assert decision.action == "reply_now"
+    assert decision.response_mode == "agent"
+    assert decision.error_type == "provider_unavailable"
 
 
 @pytest.mark.asyncio
 async def test_private_timing_gate_does_not_convert_programming_error_to_decision():
     from core.private_timing import PrivateTimingGate
+    from core.private_timing_policy import (
+        PrivateTimingPolicy,
+        PrivateTimingRolloutMode,
+    )
 
     class BrokenClassifier:
         def classify(self, *_args, **_kwargs):
             raise TypeError("classifier programming error")
 
     with pytest.raises(TypeError, match="programming error"):
-        await PrivateTimingGate(classifier=BrokenClassifier()).classify(
+        await PrivateTimingGate(
+            classifier=BrokenClassifier(),
+            policy=PrivateTimingPolicy(
+                mode=PrivateTimingRolloutMode.ACTIVE,
+            ),
+        ).classify(
             "帮我看看 https://example.com",
             user_id="u-private",
+            session_id="private_u-private",
         )
 
 

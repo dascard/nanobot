@@ -31,6 +31,15 @@ from core.agent_runtime.errors import (
     AgentRuntimeStateError,
 )
 from core.agent_runtime.fake import FakeAgentRuntime
+from core.agent_runtime.gateway import (
+    agent_runtime_binding_state,
+    bind_agent_runtime,
+    clear_agent_runtime_bindings,
+    create_isolated_agent_gateway,
+    create_research_agent_runtime,
+    get_agent_gateway,
+)
+from core.agent_runtime.message_gateway import dispatch_agent_message
 
 
 __all__ = [
@@ -61,4 +70,11 @@ __all__ = [
     "RuntimeToolCallStatus",
     "RuntimeTurnKind",
     "RuntimeToolPolicyStatus",
+    "agent_runtime_binding_state",
+    "bind_agent_runtime",
+    "clear_agent_runtime_bindings",
+    "create_isolated_agent_gateway",
+    "create_research_agent_runtime",
+    "dispatch_agent_message",
+    "get_agent_gateway",
 ]

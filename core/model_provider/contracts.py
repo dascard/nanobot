@@ -64,6 +64,21 @@ class ProviderDescriptor:
             "override_protected": self.override_protected,
         }
 
+    @property
+    def registry_namespace(self) -> str:
+        return "model_provider"
+
+    @property
+    def registry_id(self) -> str:
+        return self.id
+
+    @property
+    def registry_dependencies(self) -> tuple[str, ...]:
+        return ()
+
+    def registry_payload(self) -> Mapping[str, object]:
+        return self.metadata()
+
 
 @dataclass(frozen=True)
 class ProviderAvailability:

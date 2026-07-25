@@ -212,6 +212,26 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
               <div>max_tokens: {r.max_tokens} | timeout: {r.timeout}s | temp: {r.temperature} | thinking: {thinkingLabel(r.enable_thinking)}</div>
               {r.source && <div className="text-slate-600">source: {r.source}</div>}
             </div>
+            {(r.task_contracts || []).length > 0 && (
+              <details className="mt-3 rounded-lg bg-slate-950/60 p-2 text-xs">
+                <summary className="cursor-pointer text-cyan-300">
+                  Task / Output Contract（{r.output_contract_id}）
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {r.task_contracts.map(contract => (
+                    <div key={contract.task_key} className="rounded border border-slate-800 p-2">
+                      <div className="font-mono text-slate-200">{contract.task_key}</div>
+                      <div className="text-slate-500">
+                        owner: {contract.owner_module} | failure: {contract.output_failure_policy}
+                      </div>
+                      <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-all text-[10px] text-slate-400">
+                        {JSON.stringify(contract.output_schema || {}, null, 2)}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
             {testResult[key] && !testResult[key].loading && (
               <div className={`mt-2 p-2 rounded-lg text-xs ${testResult[key].ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
                 {testResult[key].ok ? `✅ ${testResult[key].latency_ms}ms${testResult[key].vision_payload_ok ? ' | vision payload OK' : ''}` : `❌ ${testResult[key].error}`}

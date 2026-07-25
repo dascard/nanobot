@@ -24,6 +24,7 @@ os.environ["NANOBOT_TESTING"] = "1"  # 测试环境跳过生产启动副作用
 os.environ.setdefault("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
 
 from core.database import get_db  # noqa: E402
+from core.db import get_db as canonical_get_db  # noqa: E402
 from core import database  # noqa: E402
 from server import app  # noqa: E402
 from tests.sqlite_test_utils import restore_in_memory_base_schema  # noqa: E402
@@ -103,6 +104,7 @@ def client(db_session):
             pass
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[canonical_get_db] = override_get_db
     app.dependency_overrides[routes.verify_token] = lambda: None
     test_client = TestClient(app)
     try:

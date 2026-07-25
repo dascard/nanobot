@@ -1,9 +1,12 @@
 """配置定义中心——所有受管设置的类型化元数据注册表。"""
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from core.lifecycle import COMPATIBILITY_REGISTRY, CompatibilityKind
+from core.model_provider.route_registry import list_model_route_descriptors
 from core.settings_specs import (
     SettingDef,
     SettingSpec,
@@ -17,23 +20,38 @@ class LegacySettingAlias:
 
     key: str
     env_name: str
+    compatibility_id: str
 
 
-LEGACY_SETTING_ALIASES: dict[str, LegacySettingAlias] = {
-    "memory_digest.scheduler_enabled": LegacySettingAlias(
-        key="daily_digest.enabled",
-        env_name="DAILY_DIGEST_ENABLED",
-    ),
-    "memory_digest.schedule_hour": LegacySettingAlias(
-        key="daily_digest.hour",
-        env_name="DAILY_DIGEST_HOUR",
-    ),
-}
+def _legacy_setting_alias_projection(
+) -> Mapping[str, LegacySettingAlias]:
+    """从 Compatibility Registry 生成旧设置只读投影。"""
 
-LEGACY_SETTING_CANONICAL_KEYS: dict[str, str] = {
+    projected: dict[str, LegacySettingAlias] = {}
+    for descriptor in COMPATIBILITY_REGISTRY.descriptors(
+        CompatibilityKind.SETTING
+    ):
+        if descriptor.environment_alias is None:
+            raise ValueError(
+                f"旧设置 {descriptor.compatibility_id} 缺少环境变量 alias"
+            )
+        canonical_key = descriptor.canonical_replacement
+        if canonical_key in projected:
+            raise ValueError(f"旧设置 canonical key 冲突: {canonical_key}")
+        projected[canonical_key] = LegacySettingAlias(
+            key=descriptor.alias_value,
+            env_name=descriptor.environment_alias,
+            compatibility_id=descriptor.compatibility_id,
+        )
+    return MappingProxyType(projected)
+
+
+LEGACY_SETTING_ALIASES = _legacy_setting_alias_projection()
+
+LEGACY_SETTING_CANONICAL_KEYS = MappingProxyType({
     alias.key: canonical_key
     for canonical_key, alias in LEGACY_SETTING_ALIASES.items()
-}
+})
 
 
 def canonical_setting_key(key: str) -> str:
@@ -53,6 +71,47 @@ def _validate_proactive_outreach_probability_range(
         raise ValueError(
             "proactive_outreach.surge_min_prob 不能大于 surge_max_prob"
         )
+
+
+def _validate_private_timing_confidence_thresholds(
+    values: Mapping[str, object],
+) -> None:
+    decision = values.get(
+        "private_timing.decision_confidence_threshold"
+    )
+    template = values.get(
+        "private_timing.template_confidence_threshold"
+    )
+    if decision is None or template is None:
+        return
+    if float(decision) > float(template):
+        raise ValueError(
+            "private_timing.decision_confidence_threshold "
+            "不能大于 template_confidence_threshold"
+        )
+
+
+def _validate_news_governance_settings(
+    values: Mapping[str, object],
+) -> None:
+    mode = str(
+        values.get("news.relevance_review.mode", "disabled")
+    ).strip().lower()
+    if mode not in {"disabled", "observation", "active"}:
+        raise ValueError(
+            "news.relevance_review.mode 必须是 "
+            "disabled/observation/active"
+        )
+    raw_overrides = str(values.get("news.source_overrides", "{}"))
+    try:
+        overrides = json.loads(raw_overrides)
+    except json.JSONDecodeError as exc:
+        raise ValueError("news.source_overrides 必须是 JSON 对象") from exc
+    if not isinstance(overrides, dict):
+        raise ValueError("news.source_overrides 必须是 JSON 对象")
+    from core.news.source_registry import load_news_source_registry
+
+    load_news_source_registry(operator_overrides=overrides)
 
 
 SETTING_DEFS: dict[str, SettingDef] = {
@@ -139,6 +198,26 @@ SETTING_DEFS: dict[str, SettingDef] = {
         value_type="bool",
         category="memory",
         description="是否允许在真实群聊回复中自动检索并注入群记忆",
+    ),
+    "group_learning.enabled": SettingDef(
+        key="group_learning.enabled",
+        env_name="NANOBOT_GROUP_LEARNING_ENABLED",
+        default=False,
+        value_type="bool",
+        category="memory",
+        description="群学习候选扫描、模型审核和治理写入总开关",
+        dangerous=True,
+        owner_module="core.group_learning",
+    ),
+    "group_learning.rule_controls": SettingDef(
+        key="group_learning.rule_controls",
+        env_name="NANOBOT_GROUP_LEARNING_RULE_CONTROLS",
+        default="",
+        value_type="str",
+        category="memory",
+        description="群学习提取规则的全局与 canonical session 禁用配置",
+        dangerous=True,
+        owner_module="core.group_learning",
     ),
     "proactive_outreach.enabled": SettingDef(
         key="proactive_outreach.enabled",
@@ -242,6 +321,110 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=15.0, value_type="float",
         category="classifier", description="TimingGate/分类器超时(秒)",
         min_value=1, max_value=120,
+    ),
+    "private_timing.rollout.default_mode": SettingDef(
+        key="private_timing.rollout.default_mode",
+        env_name="PRIVATE_TIMING_ROLLOUT_DEFAULT_MODE",
+        default="disabled",
+        value_type="str",
+        category="classifier",
+        description="私聊 Timing v2 默认灰度模式：disabled/observation/active",
+        owner_module="core.private_timing_policy",
+    ),
+    "private_timing.rollout.session_modes": SettingDef(
+        key="private_timing.rollout.session_modes",
+        env_name="PRIVATE_TIMING_ROLLOUT_SESSION_MODES",
+        default="{}",
+        value_type="str",
+        category="classifier",
+        description="私聊 Timing v2 按 canonical session 配置灰度模式的 JSON 对象",
+        owner_module="core.private_timing_policy",
+    ),
+    "private_timing.rollout.active_allowed": SettingDef(
+        key="private_timing.rollout.active_allowed",
+        env_name="PRIVATE_TIMING_ROLLOUT_ACTIVE_ALLOWED",
+        default=False,
+        value_type="bool",
+        category="classifier",
+        description="发布门禁是否允许私聊 Timing v2 从观察切为生效",
+        dangerous=True,
+        owner_module="core.private_timing_policy",
+    ),
+    "private_timing.decision_confidence_threshold": SettingDef(
+        key="private_timing.decision_confidence_threshold",
+        env_name="PRIVATE_TIMING_DECISION_CONFIDENCE_THRESHOLD",
+        default=0.70,
+        value_type="float",
+        category="classifier",
+        description="私聊结构化语义决策最低置信度",
+        min_value=0,
+        max_value=1,
+        owner_module="core.private_timing_policy",
+    ),
+    "private_timing.template_confidence_threshold": SettingDef(
+        key="private_timing.template_confidence_threshold",
+        env_name="PRIVATE_TIMING_TEMPLATE_CONFIDENCE_THRESHOLD",
+        default=0.85,
+        value_type="float",
+        category="classifier",
+        description="私聊模板 Fast Path 最低置信度",
+        min_value=0,
+        max_value=1,
+        owner_module="core.private_timing_policy",
+        cross_field_validator=(
+            _validate_private_timing_confidence_thresholds
+        ),
+    ),
+    "news.relevance_review.mode": SettingDef(
+        key="news.relevance_review.mode",
+        env_name="NEWS_RELEVANCE_REVIEW_MODE",
+        default="disabled",
+        value_type="str",
+        category="news",
+        description="新闻相关性批量审核模式：disabled/observation/active",
+        owner_module="core.news",
+    ),
+    "news.relevance_review.active_allowed": SettingDef(
+        key="news.relevance_review.active_allowed",
+        env_name="NEWS_RELEVANCE_REVIEW_ACTIVE_ALLOWED",
+        default=False,
+        value_type="bool",
+        category="news",
+        description="发布门禁是否允许新闻审核从观察切为生效",
+        dangerous=True,
+        owner_module="core.news",
+    ),
+    "news.relevance_review.confidence_threshold": SettingDef(
+        key="news.relevance_review.confidence_threshold",
+        env_name="NEWS_RELEVANCE_REVIEW_CONFIDENCE_THRESHOLD",
+        default=0.80,
+        value_type="float",
+        category="news",
+        description="新闻审核结果允许删除候选的最低置信度",
+        min_value=0,
+        max_value=1,
+        owner_module="core.news",
+    ),
+    "news.relevance_review.max_batch_size": SettingDef(
+        key="news.relevance_review.max_batch_size",
+        env_name="NEWS_RELEVANCE_REVIEW_MAX_BATCH_SIZE",
+        default=24,
+        value_type="int",
+        category="news",
+        description="单次新闻相关性审核最大候选数",
+        min_value=1,
+        max_value=40,
+        owner_module="core.news",
+    ),
+    "news.source_overrides": SettingDef(
+        key="news.source_overrides",
+        env_name="NEWS_SOURCE_OVERRIDES",
+        default="{}",
+        value_type="str",
+        category="news",
+        description="仅允许覆盖启用、质量权重、超时和单次上限的 JSON 对象",
+        owner_module="core.news",
+        cross_field_validator=_validate_news_governance_settings,
     ),
     "timing_gate.model_policy.default": SettingDef(
         key="timing_gate.model_policy.default",
@@ -965,15 +1148,16 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
 }
 
-_REPLY_INHERITED_ROUTE_DEFAULTS = {
-    "timing_proactive": {"timeout": 30, "temperature": 0.0, "max_tokens": 65536},
-    "outreach_extract": {"timeout": 30, "temperature": 0.0, "max_tokens": 65536},
-    "outreach_judge": {"timeout": 45, "temperature": 0.0, "max_tokens": 65536},
-    "outreach_generate": {"timeout": 60, "temperature": 0.7, "max_tokens": 65536},
-    "news_daily_quality": {"timeout": 20, "temperature": 0.1, "max_tokens": 3200},
-}
-
-for _route_key, _route_defaults in _REPLY_INHERITED_ROUTE_DEFAULTS.items():
+_MODEL_ROUTE_DESCRIPTORS = list_model_route_descriptors()
+for _route_descriptor in _MODEL_ROUTE_DESCRIPTORS:
+    if _route_descriptor.inherits_from != "reply":
+        continue
+    _route_key = _route_descriptor.route_key
+    _route_defaults = {
+        "timeout": _route_descriptor.default_timeout_seconds,
+        "temperature": _route_descriptor.default_temperature,
+        "max_tokens": _route_descriptor.default_max_tokens,
+    }
     SETTING_DEFS.setdefault(
         f"model.route.{_route_key}",
         SettingDef(
@@ -1008,6 +1192,17 @@ for _route_key, _route_defaults in _REPLY_INHERITED_ROUTE_DEFAULTS.items():
             sensitive=True,
         ),
     )
+    SETTING_DEFS.setdefault(
+        f"model.route.{_route_key}.provider",
+        SettingDef(
+            key=f"model.route.{_route_key}.provider",
+            env_name="",
+            default="",
+            value_type="str",
+            category="model",
+            description=f"{_route_key} 供应商（空则继承 reply）",
+        ),
+    )
     for _field, _default in _route_defaults.items():
         _value_type = "float" if _field == "temperature" else "int"
         SETTING_DEFS.setdefault(
@@ -1028,28 +1223,18 @@ for _route_key, _route_defaults in _REPLY_INHERITED_ROUTE_DEFAULTS.items():
         SettingDef(
             key=f"model.route.{_route_key}.enable_thinking",
             env_name="",
-            default="false" if _route_key == "news_daily_quality" else "true",
+            default=_route_descriptor.default_enable_thinking,
             value_type="str",
             category="model",
             description=f"{_route_key} thinking 模式: auto/true/false",
         ),
     )
 
-for _route_key in (
-    "reply",
-    "fast",
-    "smart",
-    "session_summary",
-    "memory_digest",
-    "timing_gate",
-    "private_decision",
-    "classifier_legacy",
-):
-    _thinking_default = (
-        "false"
-        if _route_key in {"session_summary", "memory_digest"}
-        else "auto"
-    )
+for _route_descriptor in _MODEL_ROUTE_DESCRIPTORS:
+    if _route_descriptor.inherits_from == "reply":
+        continue
+    _route_key = _route_descriptor.route_key
+    _thinking_default = _route_descriptor.default_enable_thinking
     SETTING_DEFS.setdefault(
         f"model.route.{_route_key}.enable_thinking",
         SettingDef(
@@ -1061,18 +1246,66 @@ for _route_key in (
             description=f"{_route_key} thinking 模式: auto/true/false",
         ),
     )
-# sticker_describe 是视觉/JSON 输出任务，默认禁用 thinking 减少不必要 reasoning
-SETTING_DEFS.setdefault(
-    "model.route.sticker_describe.enable_thinking",
-    SettingDef(
-        key="model.route.sticker_describe.enable_thinking",
-        env_name="",
-        default="false",
-        value_type="str",
-        category="model",
-        description="sticker_describe thinking 模式: auto/true/false（视觉摘要默认禁用）",
-    ),
-)
+
+
+def _validate_model_route_setting_specs() -> None:
+    """启动期核对 Descriptor 与 SettingSpec，防止默认值再次漂移。"""
+
+    for descriptor in _MODEL_ROUTE_DESCRIPTORS:
+        required_keys = {
+            descriptor.model_setting_key,
+            f"{descriptor.setting_prefix}.provider",
+            f"{descriptor.setting_prefix}.timeout",
+            f"{descriptor.setting_prefix}.temperature",
+            f"{descriptor.setting_prefix}.max_tokens",
+            f"{descriptor.setting_prefix}.enable_thinking",
+        }
+        if (
+            descriptor.execution_mode
+            is not None
+            and descriptor.route_type != "controller"
+        ):
+            required_keys.update({
+                descriptor.setting_prefix,
+                f"{descriptor.setting_prefix}.api_key",
+            })
+        missing = sorted(required_keys - SETTING_DEFS.keys())
+        if missing:
+            raise ValueError(
+                f"模型路由 {descriptor.route_key} 缺少 SettingSpec: {missing}"
+            )
+
+        expected_defaults = {
+            f"{descriptor.setting_prefix}.timeout": (
+                descriptor.default_timeout_seconds
+            ),
+            f"{descriptor.setting_prefix}.temperature": (
+                descriptor.default_temperature
+            ),
+            f"{descriptor.setting_prefix}.max_tokens": (
+                descriptor.default_max_tokens
+            ),
+            f"{descriptor.setting_prefix}.enable_thinking": (
+                descriptor.default_enable_thinking
+            ),
+        }
+        for key, expected in expected_defaults.items():
+            actual = SETTING_DEFS[key].default
+            if isinstance(expected, (int, float)) and not isinstance(
+                expected,
+                bool,
+            ):
+                matches = float(actual) == float(expected)
+            else:
+                matches = str(actual) == str(expected)
+            if not matches:
+                raise ValueError(
+                    f"模型路由 {descriptor.route_key} 默认值漂移: "
+                    f"{key}={actual!r}, Descriptor={expected!r}"
+                )
+
+
+_validate_model_route_setting_specs()
 
 
 def _register_web_search_settings() -> None:

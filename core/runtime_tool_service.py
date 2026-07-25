@@ -5,23 +5,35 @@ import logging
 from datetime import timedelta
 
 from core.time_utils import db_now_naive
+from core.tool_registration import (
+    RESEARCH_TOOL_NAMES as _REGISTRY_RESEARCH_TOOL_NAMES,
+    ToolProfileDescriptor,
+    get_default_lightweight_tool_names,
+    get_tool_profile,
+    list_user_tool_registrations,
+    normalize_tool_profile_id,
+)
 from core.tool_registry import (
     SANDBOX_TOOL_NAMES,
     get_tool_def,
     get_tool_descriptor,
-    list_user_tool_descriptors,
 )
 
 logger = logging.getLogger("nanobot.runtime_tools")
 
-_DEFAULT_LIGHTWEIGHT_SET = {
-    "reply", "no_reply", "image_summary", "image_generation", "sticker_search",
-}
-RESEARCH_TOOL_NAMES = frozenset({
-    "web_search",
-    "reply",
-    "no_reply",
-})
+# 兼容旧调用方；真实默认值由 ToolProfileDescriptor Registry 持有。
+_DEFAULT_LIGHTWEIGHT_SET = set(get_default_lightweight_tool_names())
+RESEARCH_TOOL_NAMES = _REGISTRY_RESEARCH_TOOL_NAMES
+
+
+def list_user_tool_descriptors():
+    """兼容旧测试／调用方的只读投影；事实源仍是 ToolRegistration。"""
+
+    return tuple(
+        registration.descriptor
+        for registration in list_user_tool_registrations()
+    )
+
 
 _SUPPORTED_CHAT_TYPES = {"group", "private", "private_superuser"}
 _DEFAULT_FIELD_BY_CHAT_TYPE = {
@@ -83,14 +95,7 @@ def resolve_tool_default(tool_name: str, chat_type: str = "group", db=None) -> b
 
 def normalize_runtime_preset(value: str = "full") -> str:
     """把旧值和外部输入归一成运行时预设。"""
-    normalized = str(value or "full").strip().lower()
-    if normalized in {"none", "off", "disabled"}:
-        return "none"
-    if normalized in {"lightweight", "light", "lite"}:
-        return "lightweight"
-    if normalized in {"research", "research_companion"}:
-        return "research"
-    return "full"
+    return normalize_tool_profile_id(value)
 
 
 def _parse_lightweight_set(raw: object) -> set[str] | None:
@@ -105,23 +110,26 @@ def _parse_lightweight_set(raw: object) -> set[str] | None:
 
 
 def _load_lightweight_set(db=None) -> set[str]:
+    profile = get_tool_profile("lightweight")
+    setting_key = profile.setting_key
+    defaults = set(profile.default_tool_names)
     if db is not None:
         try:
             from core.database import SystemSetting
             row = db.query(SystemSetting).filter(
-                SystemSetting.key == "tool.lightweight_set"
+                SystemSetting.key == setting_key
             ).first()
             parsed = _parse_lightweight_set(row.value if row else None)
             if parsed is not None:
                 return parsed
-            return _DEFAULT_LIGHTWEIGHT_SET
+            return defaults
         except Exception:
             pass
     from core.settings_service import settings
-    parsed = _parse_lightweight_set(settings.get("tool.lightweight_set"))
+    parsed = _parse_lightweight_set(settings.get(setting_key))
     if parsed is not None:
         return parsed
-    return _DEFAULT_LIGHTWEIGHT_SET
+    return defaults
 
 
 def resolve_lightweight_default(tool_name: str, db=None) -> bool:
@@ -141,7 +149,7 @@ def _apply_sandbox_policy(
     chat_type: str,
     platform: str,
     session_id: str,
-    runtime_preset: str,
+    profile: ToolProfileDescriptor,
     db=None,
 ) -> None:
     """用唯一 session Policy 覆盖 Sandbox 工具，彻底退出 ToolOverride 链。"""
@@ -149,17 +157,27 @@ def _apply_sandbox_policy(
     from core.sandbox.access_policy import SandboxAccessPolicy
 
     policy = SandboxAccessPolicy(db)
+    profile_tool_names = (
+        _load_lightweight_set(db=db)
+        if profile.mode == "allowlist"
+        else set(profile.default_tool_names)
+    )
 
     for tool_name in SANDBOX_TOOL_NAMES:
-        if runtime_preset in {"none", "research"}:
+        if profile.mode == "force_only":
             enabled[tool_name] = False
             disabled[tool_name] = "当前运行时预设不允许 Sandbox 工具"
             continue
-        if runtime_preset == "lightweight" and tool_name not in _load_lightweight_set(
-            db=db,
+        if (
+            profile.mode in {"allowlist", "ceiling"}
+            and tool_name not in profile_tool_names
         ):
             enabled[tool_name] = False
-            disabled[tool_name] = "运行时轻量预设"
+            disabled[tool_name] = (
+                "运行时轻量预设"
+                if profile.mode == "allowlist"
+                else "当前运行时预设不允许 Sandbox 工具"
+            )
             continue
         decision = policy.evaluate(
             tool_name,
@@ -199,6 +217,7 @@ def resolve_effective_tools(
     chat_type = normalize_tool_chat_type(chat_type)
     platform = normalize_tool_platform(platform)
     runtime_preset = normalize_runtime_preset(runtime_preset)
+    profile = get_tool_profile(runtime_preset)
     enabled: dict[str, bool] = {}
     disabled: dict[str, str] = {}
 
@@ -218,13 +237,13 @@ def resolve_effective_tools(
             enabled[name] = False
             disabled[name] = "群聊强制禁用"
 
-    if runtime_preset == "none":
+    if profile.mode == "force_only":
         for name in list(enabled.keys()):
             td = get_tool_def(name)
             if not (td and td.force_enabled):
                 enabled[name] = False
                 disabled[name] = "运行时预设=none"
-    elif runtime_preset == "lightweight":
+    elif profile.mode == "allowlist":
         lightweight = _load_lightweight_set(db=db)
         for name in list(enabled.keys()):
             td = get_tool_def(name)
@@ -234,7 +253,7 @@ def resolve_effective_tools(
                 enabled[name] = False
                 disabled[name] = "运行时轻量预设"
 
-    if db is not None and runtime_preset != "none":
+    if db is not None and profile.allow_scope_overrides:
         try:
             from core.database import ToolOverride
             from sqlalchemy import or_
@@ -286,9 +305,10 @@ def resolve_effective_tools(
             enabled[name] = False
             disabled[name] = "群聊强制禁用"
 
-    if runtime_preset == "research":
+    if profile.mode == "ceiling":
+        ceiling = set(profile.default_tool_names)
         for name in list(enabled):
-            if name in RESEARCH_TOOL_NAMES:
+            if name in ceiling:
                 continue
             enabled[name] = False
             disabled[name] = "研究预设固定权限上限"
@@ -306,7 +326,7 @@ def resolve_effective_tools(
         chat_type=chat_type,
         platform=platform,
         session_id=session_id,
-        runtime_preset=runtime_preset,
+        profile=profile,
         db=db,
     )
 

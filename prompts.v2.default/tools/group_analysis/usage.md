@@ -1,6 +1,6 @@
 ---
 name: 群聊日报工具
-version: 2
+version: 3
 kind: tool
 tool_name: group_analysis
 description: group_analysis 工具的使用边界。
@@ -21,10 +21,12 @@ description: group_analysis 工具的使用边界。
 - `group_id` 必填，是被分析的群，不是最终回复要发送到的会话。
 - `instructions` 可选，只写用户额外分析要求，例如“只看最近讨论 AI 的部分”“偏技术总结”“找活跃用户”。
 - `window_hours` 可选，默认 24；传 `0` 表示不限制历史范围。用户说“最近 2 小时/最近 3 天”时换算后填写。
+- `aspects` 可选，只能从 `topics/expressions/slang/style/titles/quotes/quality` 中选择且不能重复；显式填写后只执行被选方面。
+- 为兼容现有显式工具调用，省略 `aspects` 时使用 `topics/titles/quotes/quality`。自动定时总结的默认值另为 `topics/expressions/slang/style`，不要混用两套默认语义。
 
 ### 报告内容
 
-工具会自行完成群解析、消息读取、清洗、统计、分析和 HTML 渲染。报告可能包括：
+工具会自行完成群解析、消息读取、清洗、统计、分析和 HTML 渲染。只有被选中的报告方面会创建模型调用和渲染区块；`expressions/slang/style` 属于受治理的长期群记忆候选，不会伪装成称号、金句或质量报告。报告可能包括：
 
 - 群级统计：消息数、参与人数、总字数、表情统计、活跃时段。
 - 活跃度分布：按小时展示群聊活跃轨迹。

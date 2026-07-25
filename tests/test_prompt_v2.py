@@ -973,8 +973,6 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
                 {"role": "assistant", "content": "[发言内容]旧回复"},
             ],
             group_profile_context="[GroupProfileContext]\ngroup_id: 1001\n- style: 轻松\n[/GroupProfileContext]",
-            expression_context="[ExpressionContext]\n- 哈哈\n[/ExpressionContext]",
-            jargon_context="[JargonContext]\n- 梗=解释\n[/JargonContext]",
             runtime_tool_prompt="[RuntimeTool]\n规则：必须 reply/no_reply",
             debug={
                 "message_token_estimate": -1,
@@ -1062,6 +1060,9 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
     assert "## QQ 群聊" in joined
     assert "## 群聊行为" in joined
     assert "## 私聊行为" not in joined
+    assert "[GroupProfileContext]" in joined
+    assert "[ExpressionContext]" not in joined
+    assert "[JargonContext]" not in joined
     assert sum("<user_input>" in c for c in contents) == 1
     assert sum("[RuntimeTool]" in c for c in contents) == 1
     assert sum('"section":"persona_reference"' in c for c in contents) == 1

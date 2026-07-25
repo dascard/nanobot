@@ -1,56 +1,38 @@
-"""管线配置——阈值、配额、权重。"""
+"""新闻管线兼容配置投影；事实源位于 ``core.news``。"""
 
-DAILY_FRESHNESS_HOURS = 48
-TOP_STORY_FRESHNESS_HOURS = 36
+from core.news.policy import DEFAULT_NEWS_RANKING_POLICY
+from core.news.signals import (
+    KNOWN_ENTITY_ALIASES,
+    NEWS_TOKEN_STOP_WORDS,
+    TOPIC_SIGNAL_ALIASES,
+)
+from core.news.source_registry import get_news_source_registry
 
-MAX_FINAL_CLUSTERS = 8
-MAX_ARTICLES_PER_DOMAIN_FINAL = 2
-MAX_CLUSTERS_PER_DOMAIN_FINAL = 2
-MAX_SAME_ENTITY_CLUSTERS_DAILY = 1
 
-CLUSTER_SIM_THRESHOLD = 0.48
+_POLICY = DEFAULT_NEWS_RANKING_POLICY
+DAILY_FRESHNESS_HOURS = _POLICY.daily_freshness_hours
+TOP_STORY_FRESHNESS_HOURS = _POLICY.top_story_hours
 
-OFFICIAL_SOURCES = {
-    "openai_news", "anthropic_news", "google_deepmind_news",
-    "mistral_news", "deepseek_news", "qwen_blog",
-    "kimi_blog", "xai_news", "nvidia_blog", "cohere_blog",
-    "meta_ai_blog",
-}
+MAX_FINAL_CLUSTERS = _POLICY.max_final_clusters
+MAX_ARTICLES_PER_DOMAIN_FINAL = _POLICY.max_articles_per_domain
+MAX_CLUSTERS_PER_DOMAIN_FINAL = _POLICY.max_clusters_per_domain
+MAX_SAME_ENTITY_CLUSTERS_DAILY = _POLICY.max_same_entity_clusters
 
-SOURCE_QUALITY = {
-    "core_provider": 1.0, "core_platform": 0.9,
-    "ai_media": 0.75, "curated": 0.55,
-    "research": 0.55, "community": 0.35, "unknown": 0.3,
-}
+CLUSTER_SIM_THRESHOLD = _POLICY.cluster_similarity_threshold
 
-EVENT_TYPE_WEIGHT = {
-    "model_release": 0.9, "benchmark": 0.6, "funding": 0.5,
-    "product": 0.65, "policy": 0.75, "research": 0.55, "incident": 0.8,
-}
-
-MAJOR_ENTITIES = {"openai", "anthropic", "google", "deepseek", "qwen", "kimi", "meta"}
-
-STOP_WORDS = {"发布", "宣布", "推出", "上线", "开源", "模型", "AI", "正式", "全新", "最新", "重磅"}
-
-TOPIC_KEYWORDS = {
-    "model_release": ["发布", "推出", "release", "launch", "open-source", "开源"],
-    "benchmark": ["benchmark", "评测", "swe-bench", "mmlu"],
-    "funding": ["融资", "funding", "raised", "valuation"],
-    "product": ["app", "agent", "api", "platform", "browser"],
-    "policy": ["regulation", "policy", "法案", "监管"],
-    "research": ["paper", "论文", "arxiv", "research"],
-    "incident": ["outage", "leak", "breach", "security", "故障", "泄露"],
-}
-
-KNOWN_ENTITIES = {
-    "kimi": ["kimi", "moonshot", "月之暗面"],
-    "openai": ["openai", "chatgpt", "gpt"],
-    "anthropic": ["anthropic", "claude"],
-    "google": ["google", "deepmind", "gemini"],
-    "deepseek": ["deepseek", "深度求索"],
-    "qwen": ["qwen", "通义千问", "alibaba"],
-    "mistral": ["mistral"],
-    "meta": ["meta", "llama"],
-    "nvidia": ["nvidia"],
-    "xai": ["xai", "grok"],
-}
+OFFICIAL_SOURCES = frozenset(
+    descriptor.source_id
+    for descriptor in get_news_source_registry().descriptors()
+    if descriptor.group == "core_provider"
+)
+OFFICIAL_DOMAINS = frozenset(
+    descriptor.domain
+    for descriptor in get_news_source_registry().descriptors()
+    if descriptor.group == "core_provider"
+)
+SOURCE_QUALITY = _POLICY.source_group_quality
+EVENT_TYPE_WEIGHT = _POLICY.event_type_weight
+MAJOR_ENTITIES = _POLICY.major_entities
+STOP_WORDS = NEWS_TOKEN_STOP_WORDS
+TOPIC_KEYWORDS = TOPIC_SIGNAL_ALIASES
+KNOWN_ENTITIES = KNOWN_ENTITY_ALIASES

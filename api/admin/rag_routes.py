@@ -474,7 +474,9 @@ def _build_group_analysis_debug_response(
     body: RagDebugQueryRequest,
     latency_ms: int,
 ) -> dict[str, Any]:
-    from creatures.nanobot.prompts.skills.group_analysis.local_rag import select_group_analysis_context
+    from app.group_analysis.local_rag import (
+        select_group_analysis_context,
+    )
     from core.semantic.provider_factory import get_embedding_provider, get_rag_runtime_config, get_reranker_provider
 
     filters = body.filters or {}

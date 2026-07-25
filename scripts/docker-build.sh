@@ -7,9 +7,9 @@ Usage:
   scripts/docker-build.sh [docker compose build args...]
   scripts/docker-build.sh --build-only [docker compose build args...]
 
-默认行为：构建镜像后执行 docker compose up -d --force-recreate，确保运行中的容器使用新镜像。
-只想构建镜像时传 --build-only。部署并通过健康检查后，脚本仅保留当前镜像和最近一个
-已验证回滚镜像；不会执行任何全局 prune。
+默认行为：构建镜像后原子重建四个固定 Runtime 服务，并等待全部健康，确保它们使用
+同一镜像。只想构建镜像时传 --build-only。部署并通过健康检查后，脚本仅保留当前镜像
+和最近一个已验证回滚镜像；不会执行任何全局 prune。
 EOF
 }
 
@@ -81,27 +81,12 @@ if [[ "${MODE}" == "build-only" ]]; then
   exit 0
 fi
 
-services=()
-skip_next=false
-for arg in "$@"; do
-  if [[ "${skip_next}" == "true" ]]; then
-    skip_next=false
-    continue
-  fi
-  case "${arg}" in
-    --build-arg|--builder|-m|--memory|--progress|--ssh)
-      skip_next=true
-      continue
-      ;;
-  esac
-  if [[ "${arg}" == -* || "${arg}" == *=* ]]; then
-    continue
-  fi
-  services+=("${arg}")
-done
-if [ "${#services[@]}" -eq 0 ]; then
-  services=("nanobot-server")
-fi
+services=(
+  "nanobot-server"
+  "session-summary-worker"
+  "outbound-delivery-worker"
+  "semantic-index-worker"
+)
 
 health_url="${NANOBOT_DEPLOY_HEALTH_URL:-http://127.0.0.1:8000/api/v1/health}"
 health_timeout_seconds="${NANOBOT_DEPLOY_HEALTH_TIMEOUT_SECONDS:-90}"
@@ -126,7 +111,8 @@ restore_previous_runtime() {
     echo "无法恢复部署前 Runtime 镜像标签：${predeploy_image}" >&2
     return 1
   fi
-  if ! docker compose up -d --force-recreate "${services[@]}"; then
+  if ! docker compose up -d --force-recreate --wait \
+    --wait-timeout "${health_timeout_seconds}" "${services[@]}"; then
     echo "部署前 Runtime 容器恢复失败。" >&2
     return 1
   fi
@@ -143,7 +129,8 @@ restore_previous_runtime() {
   echo "已恢复部署前 Runtime：${previous_image_id}" >&2
 }
 
-if docker compose up -d --force-recreate "${services[@]}"; then
+if docker compose up -d --force-recreate --wait \
+  --wait-timeout "${health_timeout_seconds}" "${services[@]}"; then
   :
 else
   deploy_exit=$?

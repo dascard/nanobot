@@ -7,7 +7,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from api.chat_request_contract import ChatProxyRequest, resolve_push_target_id
-from core.message_envelope import build_chat_response_envelope
+from core.message_envelope import is_html_reply
+from core.message_transport_adapters import render_chat_json
+from foundation.identity import RecipientIdentity
+from foundation.message_contract import (
+    MessageAction,
+    OutboundMessageContract,
+    TextContent,
+    TextFormat,
+)
 
 
 @dataclass(frozen=True)
@@ -50,12 +58,41 @@ def build_chat_push_envelope(
         for key, value in extra_meta.items():
             if key not in reserved_meta_keys:
                 meta[str(key)] = value
+    inbound = getattr(req, "_message_contract", None)
+    recipient = getattr(inbound, "recipient", None)
+    if not isinstance(recipient, RecipientIdentity):
+        recipient = RecipientIdentity(
+            platform=platform,
+            recipient_type="group" if is_group else "user",
+            recipient_id=target_id,
+        )
+    normalized_answer = str(answer or "")
+    if normalized_answer:
+        action = MessageAction.REPLY
+        parts = (
+            TextContent(
+                normalized_answer,
+                format=(
+                    TextFormat.HTML
+                    if is_html_reply(normalized_answer)
+                    else TextFormat.PLAIN
+                ),
+            ),
+        )
+    else:
+        action = MessageAction.NO_REPLY
+        parts = ()
+    outbound = OutboundMessageContract(
+        action=action,
+        recipient=recipient,
+        parts=parts,
+    )
     return ChatPushEnvelope(
         target_type=target_type,
         target_id=target_id,
-        envelope=build_chat_response_envelope(
+        envelope=render_chat_json(
+            outbound,
             status=status,
-            answer=answer,
             reply_meta=reply_meta,
             meta=meta,
         ),

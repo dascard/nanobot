@@ -300,6 +300,38 @@ def test_build_chat_runtime_route_context_delegates_runtime_input_and_logs_promp
     assert context.prompt_budget["safe_user_input_chars"] == len("私聊问题")
 
 
+def test_prompt_budget_log_uses_explicit_chat_type_not_session_prefix():
+    from api.chat_runtime_route_context import (
+        ChatRuntimeRouteInput,
+        build_chat_runtime_route_context,
+    )
+
+    calls: dict[str, list[Any]] = {}
+    runtime_input = ChatRuntimeRouteInput(
+        req=_request(session_id="private_misleading"),
+        final_query="群聊问题",
+        final_files=[],
+        memory_header="",
+        history_messages=[],
+        ctx_debug={},
+        is_group=True,
+        is_superuser=False,
+        private_decision=None,
+        guardrail_status="safe",
+        classifier_ran=False,
+    )
+
+    build_chat_runtime_route_context(
+        runtime_input,
+        services=_services(calls),
+    )
+
+    assert any(
+        "[/chat] Prompt budget: type=group" in message
+        for message in calls["info"]
+    )
+
+
 def test_build_chat_runtime_route_context_logs_injection_mode():
     from api.chat_runtime_route_context import ChatRuntimeRouteInput, build_chat_runtime_route_context
 

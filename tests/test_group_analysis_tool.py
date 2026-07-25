@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 from tests.async_helpers import run_async
 import json
 
+import pytest
+
 
 def _local_now() -> datetime:
     # 群分析测试 fixture 保持 naive 本地墙钟时间语义。
@@ -9,7 +11,7 @@ def _local_now() -> datetime:
 
 
 def test_clean_message_filters_commands_and_noise():
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import clean_message
+    from app.group_analysis.preprocess import clean_message
 
     assert clean_message("/group_analysis") is None
     assert clean_message("<@123456> /help") is None
@@ -22,8 +24,8 @@ def test_clean_message_filters_commands_and_noise():
 
 
 def test_group_analysis_payload_labels_untrusted_sources_and_limits_memory_evidence():
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import build_analysis_payload
-    from creatures.nanobot.prompts.skills.group_analysis.schemas import RawChatLog
+    from app.group_analysis.preprocess import build_analysis_payload
+    from app.group_analysis.schemas import RawChatLog
 
     now = _local_now()
     logs = [
@@ -76,7 +78,7 @@ def test_group_analysis_payload_labels_untrusted_sources_and_limits_memory_evide
 
 
 def test_parse_instruction_window_hours():
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import parse_instruction_window_hours
+    from app.group_analysis.preprocess import parse_instruction_window_hours
 
     assert parse_instruction_window_hours("最近2小时") == 2
     assert parse_instruction_window_hours("只看最近6小时") == 6
@@ -86,7 +88,7 @@ def test_parse_instruction_window_hours():
 
 
 def test_resolve_analysis_window_hours_defaults_and_overrides():
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import resolve_analysis_window_hours
+    from app.group_analysis.preprocess import resolve_analysis_window_hours
 
     assert resolve_analysis_window_hours(None, "") == 24
     assert resolve_analysis_window_hours("6", "") == 6
@@ -97,7 +99,7 @@ def test_resolve_analysis_window_hours_defaults_and_overrides():
 
 def test_call_llm_branch_does_not_inspect_helper_signature(monkeypatch):
     import inspect
-    from creatures.nanobot.prompts.skills.group_analysis import analyzer
+    from app.group_analysis import analyzer
 
     captured = {}
 
@@ -127,9 +129,160 @@ def test_call_llm_branch_does_not_inspect_helper_signature(monkeypatch):
     }
 
 
+def test_group_analysis_only_renders_and_calls_selected_report_aspects(
+    monkeypatch,
+):
+    from app.group_analysis import analyzer
+
+    payload = {
+        "msg_text": "群聊正文",
+        "style_msg_text": "风格正文",
+        "users_text": "用户统计",
+        "trusted_source_log_ids": [1, 2],
+        "messages": [],
+        "group_stats": {},
+    }
+    rendered: list[str] = []
+    called: list[str] = []
+
+    def fake_render(template_key, _values, _fallback):
+        rendered.append(template_key)
+        return template_key
+
+    async def fake_call(
+        _client,
+        _system_prompt,
+        _prompt,
+        *,
+        prompt_key,
+        prompt_vars,
+    ):
+        del prompt_vars
+        called.append(prompt_key)
+        if prompt_key == "group_analysis_topics":
+            return {"topics": []}
+        if prompt_key == "group_analysis_quality":
+            return {
+                "title": "质量",
+                "subtitle": "",
+                "dimensions": [],
+                "summary": "",
+            }
+        raise AssertionError(f"不应调用未选择的分支：{prompt_key}")
+
+    monkeypatch.setattr(
+        analyzer,
+        "_render_v2_tool_prompt",
+        fake_render,
+    )
+    monkeypatch.setattr(analyzer, "_call_llm_branch", fake_call)
+
+    result = run_async(analyzer.analyze_group(
+        payload,
+        "",
+        aspects=("topics", "quality"),
+    ))
+
+    assert rendered == [
+        "tools/group_analysis/system",
+        "tools/group_analysis/topics",
+        "tools/group_analysis/quality",
+    ]
+    assert called == [
+        "group_analysis_topics",
+        "group_analysis_quality",
+    ]
+    assert set(result) == {"topics", "quality"}
+
+
+def test_group_analysis_learning_only_selection_skips_report_tasks(
+    monkeypatch,
+):
+    from app.group_analysis import analyzer
+
+    payload = {
+        "msg_text": "群聊正文",
+        "style_msg_text": "风格正文",
+        "users_text": "用户统计",
+        "trusted_source_log_ids": [1, 2],
+        "messages": [],
+        "group_stats": {},
+    }
+
+    def fail_render(*_args, **_kwargs):
+        raise AssertionError("长期学习方面不应渲染报告 Prompt")
+
+    async def fail_call(*_args, **_kwargs):
+        raise AssertionError("长期学习方面不应调用报告 Task")
+
+    monkeypatch.setattr(
+        analyzer,
+        "_render_v2_tool_prompt",
+        fail_render,
+    )
+    monkeypatch.setattr(analyzer, "_call_llm_branch", fail_call)
+
+    result = run_async(analyzer.analyze_group(
+        payload,
+        "",
+        aspects=("expressions",),
+    ))
+
+    assert result == {}
+
+
+def test_group_analysis_task_failure_uses_typed_exception(monkeypatch):
+    from app.group_analysis import analyzer
+    from core.task_runtime import (
+        TaskFailureCode,
+        TaskFailureStage,
+        TaskResult,
+        TaskTerminalAction,
+        TaskTypedFailure,
+    )
+
+    monkeypatch.setattr(
+        "core.task_runtime.execute_task",
+        lambda _invocation: TaskResult(
+            parsed_value=None,
+            contract_version="group_analysis_topics_v1",
+            route_key="group_analysis_topics",
+            provider="newapi",
+            model="test-model",
+            attempt_count=3,
+            latency_ms=5,
+            failure=TaskTypedFailure(
+                code=TaskFailureCode.SCHEMA_INVALID,
+                stage=TaskFailureStage.OUTPUT_PARSE,
+                retryable=False,
+                summary="结构化输出不合法",
+                terminal_action=TaskTerminalAction.BRANCH_FAILED,
+            ),
+            raw_output_sha256="a" * 64,
+            raw_output_bytes=20,
+            validation_diagnostics=(),
+            run_id="taskrun_group_failure",
+        ),
+    )
+
+    with pytest.raises(analyzer.GroupAnalysisTaskError) as captured:
+        run_async(analyzer._call_llm_with_retry(
+            None,
+            "system",
+            "prompt",
+            prompt_key="group_analysis_topics",
+            prompt_vars={"allowed_evidence_log_ids": [1]},
+        ))
+
+    assert captured.value.failure_code == "schema_invalid"
+    assert captured.value.terminal_action == "branch_failed"
+    assert captured.value.run_id == "taskrun_group_failure"
+    assert "schema_invalid" not in str(captured.value)
+
+
 def test_group_analysis_resolves_group_name_from_chatlog_session_name(db_session):
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.repository import GroupAnalysisRepository
+    from app.group_analysis.repository import GroupAnalysisRepository
 
     db_session.add(ChatLog(
         user_id="group_2468",
@@ -153,7 +306,7 @@ def test_group_analysis_resolves_group_name_from_chatlog_session_name(db_session
 
 def test_group_analysis_resolves_noisy_group_name_by_ordered_match(db_session):
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.repository import GroupAnalysisRepository
+    from app.group_analysis.repository import GroupAnalysisRepository
 
     db_session.add(ChatLog(
         user_id="group_984760873",
@@ -183,7 +336,7 @@ def test_group_analysis_resolves_noisy_group_name_by_ordered_match(db_session):
 
 def test_group_analysis_prefers_exact_group_name_when_fuzzy_has_multiple(db_session):
     from core.database import User
-    from creatures.nanobot.prompts.skills.group_analysis.repository import GroupAnalysisRepository
+    from app.group_analysis.repository import GroupAnalysisRepository
 
     db_session.add(User(id="group_1001", name="AI"))
     db_session.add(User(id="group_1002", name="AI 讨论群"))
@@ -198,7 +351,7 @@ def test_group_analysis_prefers_exact_group_name_when_fuzzy_has_multiple(db_sess
 
 def test_group_analysis_resolves_stream_id_from_chat_stream_config(db_session):
     from core.database import ChatStreamConfig
-    from creatures.nanobot.prompts.skills.group_analysis.repository import GroupAnalysisRepository
+    from app.group_analysis.repository import GroupAnalysisRepository
 
     db_session.add(ChatStreamConfig(chat_stream_id="qq:24680:group"))
     db_session.commit()
@@ -211,7 +364,7 @@ def test_group_analysis_resolves_stream_id_from_chat_stream_config(db_session):
 
 
 def test_compute_group_statistics_returns_summary():
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import compute_group_statistics
+    from app.group_analysis.preprocess import compute_group_statistics
 
     messages = [
         {"user_id": "A", "content": "早上好😂", "hour": 9, "is_reply": False},
@@ -231,7 +384,7 @@ def test_compute_group_statistics_returns_summary():
 
 
 def test_format_group_report_includes_statistics_quality_and_mbti():
-    from creatures.nanobot.prompts.skills.group_analysis.render import format_scrapbook_html
+    from app.group_analysis.render import format_scrapbook_html
 
     report = format_scrapbook_html(
         "测试群",
@@ -271,7 +424,7 @@ def test_format_group_report_includes_statistics_quality_and_mbti():
 
 
 def test_format_group_report_escapes_contributors_and_clamps_percentages():
-    from creatures.nanobot.prompts.skills.group_analysis.render import format_scrapbook_html
+    from app.group_analysis.render import format_scrapbook_html
 
     report = format_scrapbook_html(
         "测试群",
@@ -311,7 +464,7 @@ def test_format_group_report_escapes_contributors_and_clamps_percentages():
 
 
 def test_build_message_prompt_text_keeps_large_group_context():
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import build_message_prompt_text
+    from app.group_analysis.preprocess import build_message_prompt_text
 
     messages = [
         {
@@ -331,7 +484,7 @@ def test_build_message_prompt_text_keeps_large_group_context():
 
 def test_group_analysis_filters_internal_and_artifact_logs():
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import filter_analyzable_logs
+    from app.group_analysis.preprocess import filter_analyzable_logs
 
     logs = [
         ChatLog(role="ambient", content="[A]: 今天聊 AI", sender_name="A"),
@@ -357,7 +510,7 @@ def test_group_analysis_filters_internal_and_artifact_logs():
 def test_group_analysis_dedupes_all_ambient_covered_by_user_source_ids():
     """TimingGate 合并转发：user 的 source_message_ids 覆盖全部 ambient → 全去重。"""
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
+    from app.group_analysis.preprocess import dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
@@ -375,7 +528,7 @@ def test_group_analysis_dedupes_all_ambient_covered_by_user_source_ids():
 def test_group_analysis_keeps_ambient_not_in_user_source_ids():
     """ambient 的 message_id 不在任何 user 的 source_message_ids 中 → 保留。"""
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
+    from app.group_analysis.preprocess import dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
@@ -396,7 +549,7 @@ def test_group_analysis_keeps_ambient_not_in_user_source_ids():
 def test_group_analysis_keeps_source_ambient_when_user_content_does_not_cover_it():
     """防御非 Plan8 客户端：source_ids 批量传入但 user 内容未合并对应原文时，不能误删 ambient。"""
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
+    from app.group_analysis.preprocess import dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
@@ -416,7 +569,7 @@ def test_group_analysis_keeps_source_ambient_when_user_content_does_not_cover_it
 def test_group_analysis_dedupes_duplicate_ambient_same_message_id():
     """同 message_id 的 ambient 只保留一条。"""
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
+    from app.group_analysis.preprocess import dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
@@ -433,7 +586,7 @@ def test_group_analysis_dedupes_duplicate_ambient_same_message_id():
 def test_group_analysis_assistant_not_participate_in_dedupe():
     """assistant 消息不参与 ambient/user 去重，也不被去重逻辑删除。"""
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
+    from app.group_analysis.preprocess import dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
@@ -453,7 +606,7 @@ def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
     import core.database as database
     import clients.new_api_client as new_api_client
     from core.database import ChatLog, User, Persona
-    from creatures.nanobot.prompts.skills.group_analysis.tool import GroupAnalysisTool
+    from nanobot_kt.tools.group_analysis import GroupAnalysisTool
 
     now = _local_now()
     logs = [
@@ -514,7 +667,10 @@ def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
 
     monkeypatch.setattr(database, "SessionLocal", lambda: FakeSession())
     monkeypatch.setattr(new_api_client, "NewAPIClient", DummyClient)
-    monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.analyzer._call_llm_with_retry", fake_call)
+    monkeypatch.setattr(
+        "app.group_analysis.analyzer._call_llm_with_retry",
+        fake_call,
+    )
 
     tool = GroupAnalysisTool()
     result = run_async(tool.execute({"group_id": "123", "instructions": "最近2小时"}))
@@ -538,7 +694,7 @@ def test_group_analysis_tool_filters_artifacts_before_llm(monkeypatch):
     import core.database as database
     import clients.new_api_client as new_api_client
     from core.database import ChatLog, User
-    from creatures.nanobot.prompts.skills.group_analysis.tool import GroupAnalysisTool
+    from nanobot_kt.tools.group_analysis import GroupAnalysisTool
 
     now = _local_now()
     logs = [
@@ -557,6 +713,7 @@ def test_group_analysis_tool_filters_artifacts_before_llm(monkeypatch):
     ]
     user = User(id="group_123", name="测试群")
     prompts = []
+    prompt_keys = []
 
     class DummyClient:
         def __init__(self, *args, **kwargs):
@@ -597,6 +754,7 @@ def test_group_analysis_tool_filters_artifacts_before_llm(monkeypatch):
 
     async def fake_call(_client, _system_prompt, prompt, max_retries=2, *, prompt_key="", prompt_vars=None):
         prompts.append(prompt)
+        prompt_keys.append(prompt_key)
         assert "旧日报" not in prompt
         assert "[NO_SEND]" not in prompt
         assert "今天聊 AI" in prompt
@@ -610,20 +768,34 @@ def test_group_analysis_tool_filters_artifacts_before_llm(monkeypatch):
 
     monkeypatch.setattr(database, "SessionLocal", lambda: FakeSession())
     monkeypatch.setattr(new_api_client, "NewAPIClient", DummyClient)
-    monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.analyzer._call_llm_with_retry", fake_call)
+    monkeypatch.setattr(
+        "app.group_analysis.analyzer._call_llm_with_retry",
+        fake_call,
+    )
 
     tool = GroupAnalysisTool()
-    result = run_async(tool.execute({"group_id": "123", "window_hours": 24}))
+    result = run_async(tool.execute({
+        "group_id": "123",
+        "window_hours": 24,
+        "aspects": ["topics", "quality"],
+    }))
 
     assert result.success
-    assert prompts
+    assert prompt_keys == [
+        "group_analysis_topics",
+        "group_analysis_quality",
+    ]
+    rich = json.loads(result.output)["NANOBOT_RICH_OUTPUT"]
+    assert "话题总结" in rich["html"]
+    assert "群友画像" not in rich["html"]
+    assert "群聊金句" not in rich["html"]
 
 
 def test_group_analysis_uses_deterministic_fallback_when_llm_fails(monkeypatch):
     import clients.new_api_client as new_api_client
-    from creatures.nanobot.prompts.skills.group_analysis.analyzer import analyze_group
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import build_analysis_payload
-    from creatures.nanobot.prompts.skills.group_analysis.schemas import RawChatLog
+    from app.group_analysis.analyzer import analyze_group
+    from app.group_analysis.preprocess import build_analysis_payload
+    from app.group_analysis.schemas import RawChatLog
 
     now = _local_now()
     logs = [
@@ -646,7 +818,10 @@ def test_group_analysis_uses_deterministic_fallback_when_llm_fails(monkeypatch):
         raise RuntimeError("LLM down")
 
     monkeypatch.setattr(new_api_client, "NewAPIClient", DummyClient)
-    monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.analyzer._call_llm_with_retry", fail_call)
+    monkeypatch.setattr(
+        "app.group_analysis.analyzer._call_llm_with_retry",
+        fail_call,
+    )
 
     result = run_async(analyze_group(payload, ""))
 
@@ -658,3 +833,54 @@ def test_group_analysis_uses_deterministic_fallback_when_llm_fails(monkeypatch):
     assert {result[branch]["_generator"] for branch in ("topics", "titles", "quotes", "quality")} == {
         "deterministic_fallback"
     }
+
+
+def test_group_analysis_cache_key_includes_selected_aspects():
+    from app.group_analysis.cache import _make_key
+
+    topics = _make_key(
+        "qq:42:group",
+        24,
+        "",
+        100,
+        10,
+        aspects=("topics",),
+    )
+    quality = _make_key(
+        "qq:42:group",
+        24,
+        "",
+        100,
+        10,
+        aspects=("quality",),
+    )
+
+    assert topics != quality
+
+
+def test_group_analysis_renderer_omits_unselected_sections():
+    from app.group_analysis.render import format_scrapbook_html
+
+    report = format_scrapbook_html(
+        "测试群",
+        {
+            "message_count": 3,
+            "participant_count": 2,
+            "total_characters": 20,
+            "emoji_count": 0,
+        },
+        {"topics": [{"topic": "AI", "contributors": [], "detail": ""}]},
+        {"users": [{"user_id": "u1", "title": "群友", "reason": ""}]},
+        {"quotes": [{"user_id": "u1", "content": "金句"}]},
+        {
+            "title": "质量",
+            "subtitle": "",
+            "dimensions": [],
+            "summary": "",
+        },
+        aspects=("topics", "quality"),
+    )
+
+    assert "话题总结" in report
+    assert "群友画像" not in report
+    assert "群聊金句" not in report

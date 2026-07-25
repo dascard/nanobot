@@ -7,11 +7,18 @@ import hashlib
 import json
 import logging
 
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 
 from core import database
+from core.chat_stream_identity import (
+    ChatStreamIdentity,
+    identity_storage_aliases,
+    resolve_chat_stream_identity,
+)
 from core.database import GroupMemory
-from core.group_runtime.ids import normalize_group_session_id
+from core.group_learning.prompt_injection import (
+    evaluate_group_memory_prompt_injection,
+)
 from core.time_utils import db_now_naive
 
 logger = logging.getLogger("nanobot.group_memory")
@@ -19,6 +26,10 @@ logger = logging.getLogger("nanobot.group_memory")
 MEMORY_TYPES = {"topic", "slang", "relationship", "style", "event", "preference"}
 CONFIDENCE_FLOOR = 0.55
 MANUAL_REVIEW_TYPES = {"relationship", "event", "slang", "style"}
+
+
+class GroupMemoryIdentityConflictError(RuntimeError):
+    """GroupMemory canonical 身份与兼容投影发生冲突。"""
 
 
 def _normalize_evidence_ids(value: list[int] | None) -> list[int]:
@@ -38,8 +49,73 @@ def _normalize_content(content: str) -> str:
     return re.sub(r"\s+", " ", (content or "").strip().lower()).rstrip("。.!！?？")
 
 
-def _norm_group(prefix: str) -> str:
-    return normalize_group_session_id(prefix) if prefix else prefix
+def resolve_group_memory_identity(
+    group_id: str,
+    *,
+    platform: str,
+) -> ChatStreamIdentity:
+    return resolve_chat_stream_identity(
+        platform=platform,
+        chat_type="group",
+        session_id=group_id,
+    )
+
+
+def group_memory_compatibility_projection(
+    identity: ChatStreamIdentity,
+) -> str:
+    if identity.platform == "qq":
+        return identity.legacy_runtime_session_id
+    return identity.chat_stream_id
+
+
+def group_memory_identity_filter(identity: ChatStreamIdentity):
+    canonical = GroupMemory.chat_stream_id == identity.chat_stream_id
+    if identity.platform != "qq":
+        return canonical
+    legacy_aliases = identity_storage_aliases(
+        identity,
+        include_raw_group_id=True,
+    )
+    return or_(
+        canonical,
+        and_(
+            or_(
+                GroupMemory.chat_stream_id.is_(None),
+                GroupMemory.chat_stream_id == "",
+            ),
+            GroupMemory.group_id.in_(legacy_aliases),
+        ),
+    )
+
+
+def validate_group_memory_row_identity(
+    row: GroupMemory,
+    identity: ChatStreamIdentity,
+) -> None:
+    canonical = str(row.chat_stream_id or "")
+    if canonical:
+        if (
+            canonical != identity.chat_stream_id
+            or row.group_id
+            != group_memory_compatibility_projection(identity)
+        ):
+            raise GroupMemoryIdentityConflictError(
+                "群体记忆身份投影不一致"
+            )
+        return
+    if identity.platform != "qq":
+        raise GroupMemoryIdentityConflictError(
+            "群体记忆身份投影不一致"
+        )
+    legacy = resolve_group_memory_identity(
+        row.group_id,
+        platform="qq",
+    )
+    if legacy.chat_stream_id != identity.chat_stream_id:
+        raise GroupMemoryIdentityConflictError(
+            "群体记忆身份投影不一致"
+        )
 
 
 def _content_hash(content: str) -> str:
@@ -78,7 +154,8 @@ def _default_status_and_policy(
 
 def upsert(
     group_id: str, memory_type: str, content: str,
-    *, evidence_log_ids: list[int] | None = None,
+    *, platform: str = "qq",
+    evidence_log_ids: list[int] | None = None,
     confidence_hint: float = 0.5, meta: dict | None = None,
     source: str = "group_analysis",
     cluster_key: str = "",
@@ -90,7 +167,10 @@ def upsert(
     if memory_type not in MEMORY_TYPES:
         return "skipped"
 
-    group_id = _norm_group(group_id)
+    identity = resolve_group_memory_identity(
+        group_id,
+        platform=platform,
+    )
     evidence_log_ids = _normalize_evidence_ids(evidence_log_ids)
     incoming_meta = dict(meta or {})
 
@@ -100,13 +180,18 @@ def upsert(
         existing = (
             db.query(GroupMemory)
             .filter(and_(
-                GroupMemory.group_id == group_id,
+                group_memory_identity_filter(identity),
                 GroupMemory.memory_type == memory_type,
                 GroupMemory.content_hash == ch,
             ))
             .first()
         )
         if existing:
+            validate_group_memory_row_identity(existing, identity)
+            existing.chat_stream_id = identity.chat_stream_id
+            existing.group_id = group_memory_compatibility_projection(
+                identity
+            )
             now = db_now_naive()
             existing.last_seen = now
             existing.decay_score = min(1.0, existing.decay_score + 0.05)
@@ -159,7 +244,9 @@ def upsert(
         )
         now = db_now_naive()
         entry = GroupMemory(
-            group_id=group_id, memory_type=memory_type,
+            chat_stream_id=identity.chat_stream_id,
+            group_id=group_memory_compatibility_projection(identity),
+            memory_type=memory_type,
             content=content.strip(), content_hash=ch,
             cluster_key=ck,
             evidence_log_ids_json=json.dumps(evidence_log_ids),
@@ -182,15 +269,19 @@ def upsert(
 
 
 def query_active(
-    group_id: str, *, memory_type: str | None = None,
+    group_id: str, *, platform: str = "qq",
+    memory_type: str | None = None,
     min_confidence: float = 0.5, limit: int = 20,
 ) -> list[dict]:
     """查询活跃记忆——用于注入 GroupProfile。"""
-    group_id = _norm_group(group_id)
+    identity = resolve_group_memory_identity(
+        group_id,
+        platform=platform,
+    )
     db = database.SessionLocal()
     try:
         q = db.query(GroupMemory).filter(and_(
-            GroupMemory.group_id == group_id,
+            group_memory_identity_filter(identity),
             GroupMemory.status == "active",
             GroupMemory.confidence >= min_confidence,
         ))
@@ -201,23 +292,29 @@ def query_active(
                        GroupMemory.last_seen.desc())
             .limit(limit).all()
         )
+        for row in rows:
+            validate_group_memory_row_identity(row, identity)
         return [_row_to_dict(r) for r in rows]
     finally:
         db.close()
 
 
-def apply_decay(group_id: str):
+def apply_decay(group_id: str, *, platform: str = "qq"):
     """对活跃记忆降 decay_score。<0.2 → archived。"""
-    group_id = _norm_group(group_id)
+    identity = resolve_group_memory_identity(
+        group_id,
+        platform=platform,
+    )
     db = database.SessionLocal()
     try:
         rows = (
             db.query(GroupMemory)
-            .filter(and_(GroupMemory.group_id == group_id,
+            .filter(and_(group_memory_identity_filter(identity),
                          GroupMemory.status == "active"))
             .all()
         )
         for r in rows:
+            validate_group_memory_row_identity(r, identity)
             if r.decay_score <= 0.2:
                 r.status = "archived"
             else:
@@ -230,11 +327,21 @@ def apply_decay(group_id: str):
         db.close()
 
 
-def query_injectable(group_id: str, *, limit: int = 50) -> list[dict]:
+def query_injectable(
+    group_id: str,
+    *,
+    platform: str = "qq",
+    limit: int = 50,
+) -> list[dict]:
     """查询可注入的 GroupMemory——与 build_profile 口径一致。"""
-    group_id = _norm_group(group_id)
     return [
-        m for m in query_active(group_id, min_confidence=CONFIDENCE_FLOOR, limit=limit)
+        m
+        for m in query_active(
+            group_id,
+            platform=platform,
+            min_confidence=CONFIDENCE_FLOOR,
+            limit=limit,
+        )
         if should_inject(m)
     ]
 
@@ -261,20 +368,33 @@ def build_profile_from_memories(memories: list[dict]) -> dict:
     }
 
 
-def build_profile(group_id: str) -> dict:
+def build_profile(group_id: str, *, platform: str = "qq") -> dict:
     """从 GroupMemory 动态生成 GroupProfile JSON。"""
-    all_mem = query_injectable(group_id)
+    all_mem = query_injectable(group_id, platform=platform)
     return build_profile_from_memories(all_mem)
 
 
-def build_profile_with_evidence(group_id: str, db) -> tuple[dict, dict[str, list[str]]]:
+def build_profile_with_evidence(
+    group_id: str,
+    db,
+    *,
+    platform: str = "qq",
+) -> tuple[dict, dict[str, list[str]]]:
     """与 build_profile 相同，但额外返回 evidence_map: content → evidence 原文摘要列表。
 
     调用方负责管理 db session 生命周期。
     """
     from core.database import ChatLog
 
-    all_mem = [m for m in query_active(group_id, min_confidence=CONFIDENCE_FLOOR) if should_inject(m)]
+    all_mem = [
+        m
+        for m in query_active(
+            group_id,
+            platform=platform,
+            min_confidence=CONFIDENCE_FLOOR,
+        )
+        if should_inject(m)
+    ]
     by_type: dict[str, list[dict]] = {}
     for m in all_mem:
         by_type.setdefault(m["memory_type"], []).append(m)
@@ -345,32 +465,16 @@ def _safe_meta(raw: str) -> dict:
 
 
 def should_inject(memory: dict) -> bool:
-    """判断一条记忆是否应注入 GroupProfile。
+    """兼容 façade：复用正式群体记忆的唯一 Prompt 注入 Policy。"""
 
-    基础 gate：active + 达到写入 floor + 有证据 + decay 未过期。
-    每条候选必须绑定具体证据日志；至少两条去重证据才允许注入。
-    """
-    if not (
-        memory.get("status") == "active"
-        and memory.get("inject_policy", "auto") == "auto"
-        and memory.get("confidence", 0) >= CONFIDENCE_FLOOR
-        and memory.get("decay_score", 0) >= 0.3
-        and bool(_safe_evidence_ids(memory.get("evidence_log_ids_json", "")))
-    ):
-        return False
-
-    meta = _safe_meta(memory.get("meta_json", ""))
-    if (
-        meta.get("consensus_gate") == "multi_speaker"
-        and int(meta.get("evidence_speaker_count") or 0) < 2
-    ):
-        return False
-    return memory.get("evidence_count", 0) >= 2
+    return evaluate_group_memory_prompt_injection(memory).eligible
 
 
 def _row_to_dict(r: GroupMemory) -> dict:
     return {
-        "id": r.id, "group_id": r.group_id,
+        "id": r.id,
+        "chat_stream_id": r.chat_stream_id or "",
+        "group_id": r.group_id,
         "memory_type": r.memory_type, "content": r.content,
         "content_hash": r.content_hash or "",
         "cluster_key": r.cluster_key or "",
@@ -389,4 +493,13 @@ def _row_to_dict(r: GroupMemory) -> dict:
         "source": r.source or "group_analysis",
         "meta_json": r.meta_json,
         "evidence_log_ids_json": r.evidence_log_ids_json,
+        "approval_source": r.approval_source or "",
+        "governance_mode": r.governance_mode or "",
+        "approved_content_hash": r.approved_content_hash or "",
+        "model_review_run_id": r.model_review_run_id or "",
+        "model_contract_version": r.model_contract_version or "",
+        "human_reviewer_id": r.human_reviewer_id or "",
+        "human_reviewed_at": r.human_reviewed_at,
+        "human_action": r.human_action or "",
+        "conflict_group_id": r.conflict_group_id or "",
     }

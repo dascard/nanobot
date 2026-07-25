@@ -10,6 +10,7 @@ from core.identity import build_identity_vars
 from core.prompt_v2.template_loader import load_template
 from core.prompt_v2.variables import render_scoped_template
 from core.session_guidance import normalize_session_guidance
+from foundation.identity import resolve_chat_stream_identity
 
 
 _ID_MAX_CHARS = 128
@@ -80,9 +81,14 @@ def _request_group_id(request) -> str:
         return ""
     group_id = str(request.group_id or "").strip()
     session_id = str(request.session_id or "").strip()
-    if not group_id and session_id.startswith("group_"):
-        group_id = session_id[len("group_"):]
-    return group_id
+    source_id = group_id or session_id
+    if not source_id:
+        return ""
+    return resolve_chat_stream_identity(
+        platform=request.normalized_platform,
+        chat_type="group",
+        session_id=source_id,
+    ).external_session_id
 
 
 def build_template_values(request, *, current_time: str | None = None) -> dict[str, Any]:

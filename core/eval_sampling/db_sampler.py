@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from datetime import timedelta
+
+from foundation.identity import (
+    ChatStreamIdentityError,
+    resolve_chat_stream_identity,
+)
 
 
 def _safe_json(raw) -> dict:
@@ -38,8 +42,13 @@ def sample_chatlog_replies(db, *, after_id: int = 0, limit: int = 50) -> list[di
         meta = _safe_json(r.meta_json)
         if meta.get("kind") != "group_reply":
             continue
-        group_id = str(r.session_id or "").removeprefix("group_")
-        if not group_id:
+        try:
+            group_id = resolve_chat_stream_identity(
+                platform="qq",
+                chat_type="group",
+                session_id=str(r.session_id or ""),
+            ).external_session_id
+        except ChatStreamIdentityError:
             continue
         if len(candidates) >= limit:
             break
@@ -111,8 +120,16 @@ def sample_timing_events(db, *, after_id: int = 0, limit: int = 50) -> list[dict
             break
 
         case_id = f"cand_timing_gate_{r.id}"
+        try:
+            group_id = resolve_chat_stream_identity(
+                platform="qq",
+                chat_type="group",
+                session_id=str(r.session_id or ""),
+            ).external_session_id
+        except ChatStreamIdentityError:
+            continue
         input_data = {
-            "group_id": str(r.session_id or "").removeprefix("group_"),
+            "group_id": group_id,
             "action": tg.get("action", ""),
             "trigger_reason": tg.get("reason", ""),
             "generation": tg.get("generation", 0),
@@ -138,102 +155,81 @@ def sample_timing_events(db, *, after_id: int = 0, limit: int = 50) -> list[dict
     return candidates
 
 
-def sample_memory_learning(db, *, after_latest: int = 0, limit: int = 50,
-                           table: str = "all") -> list[dict]:
-    """从 JargonMemory / ExpressionMemory 抽取低质量候选。
-    table: "jargon" / "expression" / "all"
-    游标追踪：after_latest 是上次最大 id。
-    """
-    from core.database import JargonMemory, ExpressionMemory
+def sample_memory_learning(
+    db,
+    *,
+    after_latest: int = 0,
+    limit: int = 50,
+    candidate_type: str = "all",
+) -> list[dict]:
+    """从新群学习候选表抽取待评估表达和黑话。"""
+
+    from core.db.models import GroupLearningCandidate
+
+    normalized_type = str(candidate_type or "").strip()
+    if normalized_type not in {"all", "expression", "slang"}:
+        raise ValueError("candidate_type 必须是 all/expression/slang")
+    selected_types = (
+        ("expression", "slang")
+        if normalized_type == "all"
+        else (normalized_type,)
+    )
+    bounded_limit = max(1, min(int(limit), 500))
+    rows = (
+        db.query(GroupLearningCandidate)
+        .filter(
+            GroupLearningCandidate.id > max(0, int(after_latest)),
+            GroupLearningCandidate.candidate_type.in_(selected_types),
+            GroupLearningCandidate.status.in_((
+                "raw",
+                "pending_model_review",
+                "waiting_for_evidence",
+                "conflict",
+            )),
+        )
+        .order_by(GroupLearningCandidate.id.asc())
+        .limit(bounded_limit)
+        .all()
+    )
 
     candidates: list[dict] = []
-    do_jargon = table in ("all", "jargon")
-    do_expr = table in ("all", "expression")
-
-    if do_jargon:
-        jargon_rows = (
-            db.query(JargonMemory)
-            .filter(JargonMemory.id > after_latest, JargonMemory.status == "candidate")
-            .order_by(JargonMemory.id.asc())
-            .limit(limit * 2)
-            .all()
+    for row in rows:
+        content = str(row.content or "")
+        meaning = str(row.meaning or "")
+        status = str(row.status or "")
+        memory_type = str(row.candidate_type or "")
+        fingerprint_raw = (
+            f"memory_learning|{memory_type}|{row.fingerprint}"
         )
-    else:
-        jargon_rows = []
-
-    for j in jargon_rows:
-        term = j.term or ""
-        is_suspicious = bool(re.search(r"[×xX\*\/\=\+\-\d\.]{2,}", term))
-        low_conf = (j.confidence or 1.0) < 0.6
-        if not (is_suspicious or low_conf):
-            continue
-        if len(candidates) >= limit:
-            break
-
-        examples = (_safe_json(j.examples_json) if isinstance(j.examples_json, str)
-                    else (j.examples_json or []))
-        case_id = f"cand_memory_learning_j_{j.id}"
-        input_data = {
-            "chat_stream_id": j.chat_stream_id,
-            "term": term,
-            "meaning": j.meaning or "",
-            "confidence": j.confidence,
-            "examples": examples,
-        }
-        fingerprint_raw = f"memory_learning|jargon|{term}"[:200]
-        fingerprint = hashlib.sha256(fingerprint_raw.encode("utf-8")).hexdigest()[:16]
-
+        fingerprint = hashlib.sha256(
+            fingerprint_raw.encode("utf-8")
+        ).hexdigest()[:16]
         candidates.append({
-            "case_id": case_id,
+            "case_id": f"cand_memory_learning_{row.id}",
             "suite": "memory_learning",
             "source": "db",
-            "source_ref": f"jargon:{j.id}",
-            "description": f"可疑 jargon term={term} conf={j.confidence}",
-            "input": input_data,
+            "source_ref": f"group_learning_candidate:{row.id}",
+            "description": (
+                f"群学习候选 type={memory_type} status={status}"
+            ),
+            "input": {
+                "candidate_id": str(row.candidate_id or ""),
+                "chat_stream_id": str(row.chat_stream_id or ""),
+                "candidate_type": memory_type,
+                "content": content,
+                "meaning": meaning,
+                "source": str(row.source or ""),
+                "status": status,
+                "rule_id": str(row.rule_id or ""),
+                "hit_count": int(row.hit_count or 0),
+            },
             "expected": {"needs_label": True},
-            "tags": ["sampled", "memory_learning", "jargon"],
+            "tags": [
+                "sampled",
+                "memory_learning",
+                memory_type,
+                status,
+            ],
             "fingerprint": fingerprint,
         })
-
-    if do_expr:
-        expr_rows = (
-            db.query(ExpressionMemory)
-            .filter(ExpressionMemory.id > after_latest, ExpressionMemory.status == "candidate")
-            .order_by(ExpressionMemory.id.asc())
-            .limit(limit * 2)
-            .all()
-        )
-    else:
-        expr_rows = []
-    for e in expr_rows:
-        expr = e.expression or ""
-        is_suspicious = bool(re.search(r"[×xX\*\/\=\+\-\d\.]{2,}", expr))
-        low_conf = (e.confidence or 1.0) < 0.6
-        if not (is_suspicious or low_conf):
-            continue
-        if len(candidates) >= limit:
-            break
-
-        case_id = f"cand_memory_learning_e_{e.id}"
-        input_data = {
-            "chat_stream_id": e.chat_stream_id,
-            "expression": expr,
-            "expression_type": e.expression_type or "phrase",
-            "confidence": e.confidence,
-        }
-        fingerprint_raw = f"memory_learning|expression|{expr}"[:200]
-        fingerprint = hashlib.sha256(fingerprint_raw.encode("utf-8")).hexdigest()[:16]
-
-        candidates.append({
-            "case_id": case_id,
-            "suite": "memory_learning",
-            "source": "db",
-            "source_ref": f"expression:{e.id}",
-            "description": f"可疑 expression expr={expr} conf={e.confidence}",
-            "input": input_data,
-            "expected": {"needs_label": True},
-            "tags": ["sampled", "memory_learning", "expression"],
-            "fingerprint": fingerprint,
-        })
-
     return candidates

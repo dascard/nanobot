@@ -8,6 +8,7 @@ import logging
 import time
 import urllib.request
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, Callable
 
 from core.model_provider.contracts import (
@@ -19,7 +20,10 @@ from core.model_provider.contracts import (
 )
 from core.model_provider.registry import ModelProviderRegistry
 from core.model_provider.response_normalization import strip_think_blocks
-from core.runtime.event_bus import emit_runtime_event
+from core.runtime.event_bus import (
+    current_runtime_event_context,
+    emit_runtime_event,
+)
 from core.runtime.events import RuntimeEventContext
 from foundation.llm.model_options import apply_enable_thinking_to_payload
 from foundation.llm.safe_diagnostics import safe_response_summary
@@ -51,13 +55,18 @@ def _payload_digest(value: Mapping[str, Any]) -> str:
 
 
 def _model_event_context() -> RuntimeEventContext:
+    context = current_runtime_event_context()
     try:
         from core.llm_trace_context import get_llm_trace_vars
 
         trace_id, run_id, _source = get_llm_trace_vars()
     except Exception:
         trace_id, run_id = "", ""
-    return RuntimeEventContext(trace_id=trace_id, run_id=run_id)
+    return replace(
+        context,
+        trace_id=trace_id or context.trace_id,
+        run_id=run_id or context.run_id,
+    )
 
 
 def _read_bounded_response(response: Any, limit: int) -> tuple[bytes, bool]:
@@ -159,6 +168,7 @@ class OpenAICompatibleProviderAdapter:
         event_context = _model_event_context()
         request_sha256 = _payload_digest(payload)
         event_attributes = {
+            "route_key": str(request.metadata.get("route_key") or ""),
             "provider": self._descriptor.id,
             "model": request.model,
             "source": request.trace_source,
@@ -361,15 +371,21 @@ def descriptor_from_route(route: Mapping[str, Any]) -> ProviderDescriptor:
     """把兼容 route dict 映射为类型化 Provider 描述符。"""
 
     provider_id = str(route.get("provider_id") or "openai_compatible").strip()
+    declared_capabilities = route.get("required_provider_capabilities")
+    capabilities = {
+        ProviderCapability.CHAT_COMPLETION,
+        ProviderCapability.REASONING_CONTENT,
+    }
+    if isinstance(declared_capabilities, (list, tuple, set, frozenset)):
+        for value in declared_capabilities:
+            try:
+                capabilities.add(ProviderCapability(str(value)))
+            except ValueError:
+                continue
     return ProviderDescriptor(
         id=provider_id,
         display_name=provider_id,
-        capabilities=frozenset(
-            {
-                ProviderCapability.CHAT_COMPLETION,
-                ProviderCapability.REASONING_CONTENT,
-            }
-        ),
+        capabilities=frozenset(capabilities),
         implementation="openai_compatible",
         built_in=provider_id in {"newapi", "local_llama", "local_vision"},
     )

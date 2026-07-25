@@ -1,0 +1,2121 @@
+{
+  "cases": [
+    {
+      "id": "documentation_commit_gate",
+      "plan": {
+        "artifact_profiles": [],
+        "features": [],
+        "highest_security_level": "local",
+        "registries": {
+          "build_profile": {
+            "generation": 1,
+            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+          },
+          "feature_lifecycle": {
+            "generation": 1,
+            "sha256": "80f705122c37c97b9d92aa37dd34558db5c5fda8eed969a5ee73b882b794cc63"
+          },
+          "release_impact": {
+            "generation": 1,
+            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          },
+          "verification_suite": {
+            "generation": 1,
+            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+          }
+        },
+        "release_impact": {
+          "changed_paths": [
+            "docs/architecture/admin-db-query-migration-matrix.md"
+          ],
+          "descriptor_ids": [
+            "documentation"
+          ],
+          "sha256": "6be177c454dc58dcc5d096e98db06965cd46c01e524aec29f1be67f1597eba7a"
+        },
+        "required_credentials": [],
+        "schema_version": 1,
+        "sha256": "255f88e87b63ba3310a9233568fe8440627087b1d1417cc2a40f10876ab7e9f9",
+        "suites": [
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "operations",
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "scripts/check_architecture.py"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "quality.architecture",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "dependency:backend-full"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "architecture",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "prompt_runtime",
+              "database_schema",
+              "sandbox",
+              "news_resources",
+              "kt_vendor",
+              "tests"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "pytest_summary"
+            ],
+            "owner": "quality.backend",
+            "preconditions": [
+              "python_dependencies_installed",
+              "kt_compatibility_patch_applied",
+              "prompt_runtime_acceptance_copy_initialized",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "commit_gate"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "zero_test_failures"
+            ],
+            "suite_id": "backend-full",
+            "timeout_seconds": 1800,
+            "working_directory": "."
+          }
+        ]
+      }
+    },
+    {
+      "id": "private_timing_preview",
+      "plan": {
+        "artifact_profiles": [
+          {
+            "artifact_kind": "oci_image",
+            "fixed_services": [
+              "nanobot-server",
+              "session-summary-worker",
+              "outbound-delivery-worker",
+              "semantic-index-worker"
+            ],
+            "profile_id": "nanobot-runtime"
+          }
+        ],
+        "features": [
+          {
+            "default_enabled": false,
+            "enablement_gates": [
+              "offline_eval_passed",
+              "task_slo_activation_ready",
+              "token_observability_ready",
+              "explicit_session_allowlist",
+              "operator_approval"
+            ],
+            "feature_id": "private_timing_v2",
+            "owner_module": "core.private_timing",
+            "state": "preview"
+          }
+        ],
+        "highest_security_level": "local",
+        "registries": {
+          "build_profile": {
+            "generation": 1,
+            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+          },
+          "feature_lifecycle": {
+            "generation": 1,
+            "sha256": "80f705122c37c97b9d92aa37dd34558db5c5fda8eed969a5ee73b882b794cc63"
+          },
+          "release_impact": {
+            "generation": 1,
+            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          },
+          "verification_suite": {
+            "generation": 1,
+            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+          }
+        },
+        "release_impact": {
+          "changed_paths": [
+            "core/private_timing_policy.py",
+            "prompts.v2.default/tasks/private_decision.md"
+          ],
+          "descriptor_ids": [
+            "prompt_runtime",
+            "runtime"
+          ],
+          "sha256": "2c5a39ae65592876ad2385274c6be1a9719234519f0a810f83e8572eb279b893"
+        },
+        "required_credentials": [],
+        "schema_version": 1,
+        "sha256": "0246f55224c9ece1e8466d8525a3787f575855f905fb4a576a6b51f7b72330cf",
+        "suites": [
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "operations",
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "scripts/check_architecture.py"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "quality.architecture",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "dependency:backend-full",
+              "dependency:database-migration-check",
+              "dependency:kt-compatibility",
+              "dependency:prompt-runtime-audit",
+              "release_impact:runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "architecture",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "deployment"
+            ],
+            "cleanup": [
+              "remove_temporary_dotenv"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "cp .env.example .env && trap 'rm -f .env' EXIT && docker compose -f docker-compose.yml config --quiet && NANOBOT_RUNTIME_IMAGE=example.invalid/nanobot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "operations.compose",
+            "preconditions": [
+              "docker_compose_available"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "dependency:deployment-contract"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "compose-config",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "evaluation"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "bash",
+              "scripts/run_eval_pr_gate.sh"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "eval_gate_reports"
+            ],
+            "owner": "quality.eval",
+            "preconditions": [
+              "python_dependencies_installed",
+              "deterministic_eval_fixtures_available",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_gate:private_timing_v2:offline_eval_passed"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "zero_new_eval_failures"
+            ],
+            "suite_id": "eval-gate",
+            "timeout_seconds": 900,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_lifecycle_registries.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "core.lifecycle",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_lifecycle:private_timing_v2:preview"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "feature-lifecycle-contract",
+            "timeout_seconds": 180,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "webui"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "npm run lint && npm run build"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "webui_dist_bundle"
+            ],
+            "owner": "webui",
+            "preconditions": [
+              "node_dependencies_installed",
+              "feature_manifest_valid"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "eslint_zero_errors",
+              "vite_build_completed"
+            ],
+            "suite_id": "frontend-lint-build",
+            "timeout_seconds": 900,
+            "working_directory": "webui"
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "python scripts/build_task_slo_manifest.py --check && python -m pytest tests/test_task_slo.py tests/test_task_slo_manifest.py -v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "task_slo_manifest"
+            ],
+            "owner": "core.task_runtime",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_gate:private_timing_v2:task_slo_activation_ready",
+              "feature_gate:private_timing_v2:token_observability_ready"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "task_slo_manifest_unchanged"
+            ],
+            "suite_id": "task-slo-contract",
+            "timeout_seconds": 300,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "prompt_runtime",
+              "database_schema",
+              "sandbox",
+              "news_resources",
+              "kt_vendor",
+              "tests"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "pytest_summary"
+            ],
+            "owner": "quality.backend",
+            "preconditions": [
+              "python_dependencies_installed",
+              "kt_compatibility_patch_applied",
+              "prompt_runtime_acceptance_copy_initialized",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "commit_gate",
+              "release_impact:prompt_runtime",
+              "release_impact:runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "zero_test_failures"
+            ],
+            "suite_id": "backend-full",
+            "timeout_seconds": 1800,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "database_schema"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_schema_migrations.py",
+              "tests/test_group_learning_legacy_migration_cli.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "migration_idempotency_summary"
+            ],
+            "owner": "core.db",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "migration_idempotency_passed"
+            ],
+            "suite_id": "database-migration-check",
+            "timeout_seconds": 420,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_atomic_release_deployment.py",
+              "tests/test_deploy_config.py",
+              "tests/test_release_artifacts.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "release_contract_summary"
+            ],
+            "owner": "operations.release",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "deployment-contract",
+            "timeout_seconds": 360,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "kt_vendor"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_kt_framework.py",
+              "tests/test_kt_integration.py",
+              "tests/test_agent_runtime_gateway.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "nanobot_kt",
+            "preconditions": [
+              "python_dependencies_installed",
+              "kt_compatibility_patch_applied"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "kt-compatibility",
+            "timeout_seconds": 420,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "prompt_runtime"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_prompt_v2_template_registry.py",
+              "tests/test_prompt_v2_template_migration.py",
+              "tests/test_prompt_v2_tool_template_integration.py",
+              "tests/test_prompt_contribution_registry.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "prompt_runtime_audit_summary"
+            ],
+            "owner": "core.prompt_v2",
+            "preconditions": [
+              "python_dependencies_installed",
+              "prompt_runtime_acceptance_copy_initialized"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "release_impact:prompt_runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "prompt_runtime_audit_passed"
+            ],
+            "suite_id": "prompt-runtime-audit",
+            "timeout_seconds": 600,
+            "working_directory": "."
+          }
+        ]
+      }
+    },
+    {
+      "id": "news_preview",
+      "plan": {
+        "artifact_profiles": [
+          {
+            "artifact_kind": "oci_image",
+            "fixed_services": [
+              "nanobot-server",
+              "session-summary-worker",
+              "outbound-delivery-worker",
+              "semantic-index-worker"
+            ],
+            "profile_id": "nanobot-runtime"
+          }
+        ],
+        "features": [
+          {
+            "default_enabled": false,
+            "enablement_gates": [
+              "offline_eval_passed",
+              "task_slo_activation_ready",
+              "token_observability_ready",
+              "operator_approval"
+            ],
+            "feature_id": "news_relevance_review",
+            "owner_module": "core.news",
+            "state": "preview"
+          }
+        ],
+        "highest_security_level": "local",
+        "registries": {
+          "build_profile": {
+            "generation": 1,
+            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+          },
+          "feature_lifecycle": {
+            "generation": 1,
+            "sha256": "80f705122c37c97b9d92aa37dd34558db5c5fda8eed969a5ee73b882b794cc63"
+          },
+          "release_impact": {
+            "generation": 1,
+            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          },
+          "verification_suite": {
+            "generation": 1,
+            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+          }
+        },
+        "release_impact": {
+          "changed_paths": [
+            "core/news/signals.py",
+            "resources/news/news_sources.v1.json"
+          ],
+          "descriptor_ids": [
+            "news_resources",
+            "runtime"
+          ],
+          "sha256": "de5944fcdcfb3574ac73d657f86cbe10c4e3ba5e9ca55765a55f50e3ef62e517"
+        },
+        "required_credentials": [],
+        "schema_version": 1,
+        "sha256": "7d46149f8a1d1d68787edd1e57ea0c4ec732675d7da4ca2b309744c31109c6c6",
+        "suites": [
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "operations",
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "scripts/check_architecture.py"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "quality.architecture",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "dependency:backend-full",
+              "dependency:database-migration-check",
+              "dependency:kt-compatibility",
+              "dependency:prompt-runtime-audit",
+              "release_impact:runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "architecture",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "deployment"
+            ],
+            "cleanup": [
+              "remove_temporary_dotenv"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "cp .env.example .env && trap 'rm -f .env' EXIT && docker compose -f docker-compose.yml config --quiet && NANOBOT_RUNTIME_IMAGE=example.invalid/nanobot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "operations.compose",
+            "preconditions": [
+              "docker_compose_available"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "dependency:deployment-contract"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "compose-config",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "evaluation"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "bash",
+              "scripts/run_eval_pr_gate.sh"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "eval_gate_reports"
+            ],
+            "owner": "quality.eval",
+            "preconditions": [
+              "python_dependencies_installed",
+              "deterministic_eval_fixtures_available",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_gate:news_relevance_review:offline_eval_passed"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "zero_new_eval_failures"
+            ],
+            "suite_id": "eval-gate",
+            "timeout_seconds": 900,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_lifecycle_registries.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "core.lifecycle",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_lifecycle:news_relevance_review:preview"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "feature-lifecycle-contract",
+            "timeout_seconds": 180,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "webui"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "npm run lint && npm run build"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "webui_dist_bundle"
+            ],
+            "owner": "webui",
+            "preconditions": [
+              "node_dependencies_installed",
+              "feature_manifest_valid"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "eslint_zero_errors",
+              "vite_build_completed"
+            ],
+            "suite_id": "frontend-lint-build",
+            "timeout_seconds": 900,
+            "working_directory": "webui"
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "news_resources"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_news_governance.py",
+              "tests/test_news_daily_pipeline.py",
+              "tests/test_news_daily_model_route.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "news_governance_summary"
+            ],
+            "owner": "core.news",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "release_impact:news_resources"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "news-governance",
+            "timeout_seconds": 420,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "python scripts/build_task_slo_manifest.py --check && python -m pytest tests/test_task_slo.py tests/test_task_slo_manifest.py -v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "task_slo_manifest"
+            ],
+            "owner": "core.task_runtime",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_gate:news_relevance_review:task_slo_activation_ready",
+              "feature_gate:news_relevance_review:token_observability_ready"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "task_slo_manifest_unchanged"
+            ],
+            "suite_id": "task-slo-contract",
+            "timeout_seconds": 300,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "prompt_runtime",
+              "database_schema",
+              "sandbox",
+              "news_resources",
+              "kt_vendor",
+              "tests"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "pytest_summary"
+            ],
+            "owner": "quality.backend",
+            "preconditions": [
+              "python_dependencies_installed",
+              "kt_compatibility_patch_applied",
+              "prompt_runtime_acceptance_copy_initialized",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "commit_gate",
+              "release_impact:news_resources",
+              "release_impact:runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "zero_test_failures"
+            ],
+            "suite_id": "backend-full",
+            "timeout_seconds": 1800,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "database_schema"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_schema_migrations.py",
+              "tests/test_group_learning_legacy_migration_cli.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "migration_idempotency_summary"
+            ],
+            "owner": "core.db",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "migration_idempotency_passed"
+            ],
+            "suite_id": "database-migration-check",
+            "timeout_seconds": 420,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_atomic_release_deployment.py",
+              "tests/test_deploy_config.py",
+              "tests/test_release_artifacts.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "release_contract_summary"
+            ],
+            "owner": "operations.release",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "deployment-contract",
+            "timeout_seconds": 360,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "kt_vendor"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_kt_framework.py",
+              "tests/test_kt_integration.py",
+              "tests/test_agent_runtime_gateway.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "nanobot_kt",
+            "preconditions": [
+              "python_dependencies_installed",
+              "kt_compatibility_patch_applied"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "kt-compatibility",
+            "timeout_seconds": 420,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "prompt_runtime"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_prompt_v2_template_registry.py",
+              "tests/test_prompt_v2_template_migration.py",
+              "tests/test_prompt_v2_tool_template_integration.py",
+              "tests/test_prompt_contribution_registry.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "prompt_runtime_audit_summary"
+            ],
+            "owner": "core.prompt_v2",
+            "preconditions": [
+              "python_dependencies_installed",
+              "prompt_runtime_acceptance_copy_initialized"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "prompt_runtime_audit_passed"
+            ],
+            "suite_id": "prompt-runtime-audit",
+            "timeout_seconds": 600,
+            "working_directory": "."
+          }
+        ]
+      }
+    },
+    {
+      "id": "group_learning_experimental",
+      "plan": {
+        "artifact_profiles": [
+          {
+            "artifact_kind": "oci_image",
+            "fixed_services": [
+              "nanobot-server",
+              "session-summary-worker",
+              "outbound-delivery-worker",
+              "semantic-index-worker"
+            ],
+            "profile_id": "nanobot-runtime"
+          }
+        ],
+        "features": [
+          {
+            "default_enabled": false,
+            "enablement_gates": [
+              "schema_ready",
+              "explicit_session_schedule",
+              "candidate_writer_exclusive",
+              "model_review_observation_passed",
+              "evidence_policy_ready",
+              "operator_approval"
+            ],
+            "feature_id": "group_learning",
+            "owner_module": "core.group_learning",
+            "state": "experimental"
+          }
+        ],
+        "highest_security_level": "local",
+        "registries": {
+          "build_profile": {
+            "generation": 1,
+            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+          },
+          "feature_lifecycle": {
+            "generation": 1,
+            "sha256": "80f705122c37c97b9d92aa37dd34558db5c5fda8eed969a5ee73b882b794cc63"
+          },
+          "release_impact": {
+            "generation": 1,
+            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          },
+          "verification_suite": {
+            "generation": 1,
+            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+          }
+        },
+        "release_impact": {
+          "changed_paths": [
+            "app/group_learning/pipeline.py",
+            "core/db/models/group_learning.py"
+          ],
+          "descriptor_ids": [
+            "database_schema",
+            "runtime"
+          ],
+          "sha256": "89477563a6a57b2257322919df4b904b1a651d8491e4b370a8cac0100d386848"
+        },
+        "required_credentials": [],
+        "schema_version": 1,
+        "sha256": "3d90c0f4300b68ac36a6772cec72193a6b0be02c96e855a6276693d80f14c95e",
+        "suites": [
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "operations",
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "scripts/check_architecture.py"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "quality.architecture",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "dependency:backend-full",
+              "dependency:database-migration-check",
+              "dependency:kt-compatibility",
+              "dependency:prompt-runtime-audit",
+              "release_impact:runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "architecture",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "deployment"
+            ],
+            "cleanup": [
+              "remove_temporary_dotenv"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "cp .env.example .env && trap 'rm -f .env' EXIT && docker compose -f docker-compose.yml config --quiet && NANOBOT_RUNTIME_IMAGE=example.invalid/nanobot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "operations.compose",
+            "preconditions": [
+              "docker_compose_available"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "dependency:deployment-contract"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "compose-config",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "evaluation"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "bash",
+              "scripts/run_eval_pr_gate.sh"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "eval_gate_reports"
+            ],
+            "owner": "quality.eval",
+            "preconditions": [
+              "python_dependencies_installed",
+              "deterministic_eval_fixtures_available",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_gate:group_learning:model_review_observation_passed"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "zero_new_eval_failures"
+            ],
+            "suite_id": "eval-gate",
+            "timeout_seconds": 900,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_lifecycle_registries.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "core.lifecycle",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_lifecycle:group_learning:experimental"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "feature-lifecycle-contract",
+            "timeout_seconds": 180,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "webui"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "npm run lint && npm run build"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "webui_dist_bundle"
+            ],
+            "owner": "webui",
+            "preconditions": [
+              "node_dependencies_installed",
+              "feature_manifest_valid"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "eslint_zero_errors",
+              "vite_build_completed"
+            ],
+            "suite_id": "frontend-lint-build",
+            "timeout_seconds": 900,
+            "working_directory": "webui"
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_group_learning_stage7a.py",
+              "tests/test_group_learning_stage7b.py",
+              "tests/test_group_learning_stage7c.py",
+              "tests/test_group_learning_stage7d.py",
+              "tests/test_group_learning_pipeline.py",
+              "tests/test_group_learning_schedule.py",
+              "tests/test_group_analysis_application_service.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "group_learning_contract_summary"
+            ],
+            "owner": "core.group_learning",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_gate:group_learning:candidate_writer_exclusive",
+              "feature_gate:group_learning:evidence_policy_ready",
+              "feature_gate:group_learning:explicit_session_schedule",
+              "feature_gate:group_learning:model_review_observation_passed",
+              "feature_gate:group_learning:schema_ready"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "group-learning-governance",
+            "timeout_seconds": 480,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "prompt_runtime",
+              "database_schema",
+              "sandbox",
+              "news_resources",
+              "kt_vendor",
+              "tests"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "pytest_summary"
+            ],
+            "owner": "quality.backend",
+            "preconditions": [
+              "python_dependencies_installed",
+              "kt_compatibility_patch_applied",
+              "prompt_runtime_acceptance_copy_initialized",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "commit_gate",
+              "release_impact:database_schema",
+              "release_impact:runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "zero_test_failures"
+            ],
+            "suite_id": "backend-full",
+            "timeout_seconds": 1800,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "database_schema"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_schema_migrations.py",
+              "tests/test_group_learning_legacy_migration_cli.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "migration_idempotency_summary"
+            ],
+            "owner": "core.db",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime",
+              "feature_gate:group_learning:schema_ready",
+              "release_impact:database_schema"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "migration_idempotency_passed"
+            ],
+            "suite_id": "database-migration-check",
+            "timeout_seconds": 420,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_atomic_release_deployment.py",
+              "tests/test_deploy_config.py",
+              "tests/test_release_artifacts.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "release_contract_summary"
+            ],
+            "owner": "operations.release",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "deployment-contract",
+            "timeout_seconds": 360,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "kt_vendor"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_kt_framework.py",
+              "tests/test_kt_integration.py",
+              "tests/test_agent_runtime_gateway.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "nanobot_kt",
+            "preconditions": [
+              "python_dependencies_installed",
+              "kt_compatibility_patch_applied"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "kt-compatibility",
+            "timeout_seconds": 420,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "prompt_runtime"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_prompt_v2_template_registry.py",
+              "tests/test_prompt_v2_template_migration.py",
+              "tests/test_prompt_v2_tool_template_integration.py",
+              "tests/test_prompt_contribution_registry.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "prompt_runtime_audit_summary"
+            ],
+            "owner": "core.prompt_v2",
+            "preconditions": [
+              "python_dependencies_installed",
+              "prompt_runtime_acceptance_copy_initialized"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "prompt_runtime_audit_passed"
+            ],
+            "suite_id": "prompt-runtime-audit",
+            "timeout_seconds": 600,
+            "working_directory": "."
+          }
+        ]
+      }
+    },
+    {
+      "id": "sandbox_host_boundary",
+      "plan": {
+        "artifact_profiles": [
+          {
+            "artifact_kind": "oci_image",
+            "fixed_services": [],
+            "profile_id": "nanobot-sandbox-python"
+          },
+          {
+            "artifact_kind": "host_service",
+            "fixed_services": [],
+            "profile_id": "sandboxd"
+          }
+        ],
+        "features": [
+          {
+            "default_enabled": false,
+            "enablement_gates": [
+              "infrastructure_allowed",
+              "sandboxd_ready",
+              "apparmor_loaded",
+              "fixed_image_digest",
+              "workspace_quota_ready",
+              "explicit_session_grant"
+            ],
+            "feature_id": "sandbox",
+            "owner_module": "sandbox.control_plane",
+            "state": "experimental"
+          }
+        ],
+        "highest_security_level": "host_privileged",
+        "registries": {
+          "build_profile": {
+            "generation": 1,
+            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+          },
+          "feature_lifecycle": {
+            "generation": 1,
+            "sha256": "80f705122c37c97b9d92aa37dd34558db5c5fda8eed969a5ee73b882b794cc63"
+          },
+          "release_impact": {
+            "generation": 1,
+            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          },
+          "verification_suite": {
+            "generation": 1,
+            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+          }
+        },
+        "release_impact": {
+          "changed_paths": [
+            "core/sandbox/backend.py",
+            "deploy/apparmor/nanobot-sandbox",
+            "sandboxd/docker_backend.py"
+          ],
+          "descriptor_ids": [
+            "deployment",
+            "runtime",
+            "sandbox"
+          ],
+          "sha256": "49c5d0c2cc626b31f39e762380557e1a42e536fd02b8197cba974b55a825f71d"
+        },
+        "required_credentials": [
+          "docker_host_access"
+        ],
+        "schema_version": 1,
+        "sha256": "906598b4126158a8966d80395be5d5b54168286d76b39a10e524a3857c0664a6",
+        "suites": [
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "operations",
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "scripts/check_architecture.py"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "quality.architecture",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:nanobot-sandbox-python",
+              "artifact_profile:sandboxd",
+              "dependency:backend-full",
+              "release_impact:deployment",
+              "release_impact:runtime"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "architecture",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "deployment"
+            ],
+            "cleanup": [
+              "remove_temporary_dotenv"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "cp .env.example .env && trap 'rm -f .env' EXIT && docker compose -f docker-compose.yml config --quiet && NANOBOT_RUNTIME_IMAGE=example.invalid/nanobot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "operations.compose",
+            "preconditions": [
+              "docker_compose_available"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "dependency:deployment-contract",
+              "release_impact:deployment"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "compose-config",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_lifecycle_registries.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "core.lifecycle",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "feature_lifecycle:sandbox:experimental"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "feature-lifecycle-contract",
+            "timeout_seconds": 180,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "prompt_runtime",
+              "database_schema",
+              "sandbox",
+              "news_resources",
+              "kt_vendor",
+              "tests"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "pytest_summary"
+            ],
+            "owner": "quality.backend",
+            "preconditions": [
+              "python_dependencies_installed",
+              "kt_compatibility_patch_applied",
+              "prompt_runtime_acceptance_copy_initialized",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:sandboxd",
+              "commit_gate",
+              "release_impact:runtime",
+              "release_impact:sandbox"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "zero_test_failures"
+            ],
+            "suite_id": "backend-full",
+            "timeout_seconds": 1800,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_atomic_release_deployment.py",
+              "tests/test_deploy_config.py",
+              "tests/test_release_artifacts.py",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "release_contract_summary"
+            ],
+            "owner": "operations.release",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:sandboxd",
+              "dependency:sandbox-real-docker",
+              "release_impact:deployment"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "deployment-contract",
+            "timeout_seconds": 360,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "sandbox"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_sandbox_security.py",
+              "-v"
+            ],
+            "environment": [
+              {
+                "name": "NANOBOT_RUN_DOCKER_TESTS",
+                "value": "1"
+              }
+            ],
+            "output_artifacts": [
+              "captured_stdout",
+              "sandbox_security_evidence"
+            ],
+            "owner": "core.sandbox",
+            "preconditions": [
+              "real_docker_available",
+              "sandbox_image_digest_pinned",
+              "apparmor_profile_loaded",
+              "sandboxd_ready",
+              "sandbox_data_quota_ready",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [
+              "docker_host_access"
+            ],
+            "security_level": "host_privileged",
+            "selection_reasons": [
+              "artifact_profile:nanobot-sandbox-python",
+              "artifact_profile:sandboxd",
+              "feature_gate:sandbox:apparmor_loaded",
+              "feature_gate:sandbox:fixed_image_digest",
+              "feature_gate:sandbox:infrastructure_allowed",
+              "feature_gate:sandbox:sandboxd_ready",
+              "feature_gate:sandbox:workspace_quota_ready",
+              "release_impact:sandbox"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "real_docker_matrix_zero_skips"
+            ],
+            "suite_id": "sandbox-real-docker",
+            "timeout_seconds": 900,
+            "working_directory": "."
+          }
+        ]
+      }
+    },
+    {
+      "id": "web_static_bundle",
+      "plan": {
+        "artifact_profiles": [
+          {
+            "artifact_kind": "static_bundle",
+            "fixed_services": [],
+            "profile_id": "webui"
+          }
+        ],
+        "features": [],
+        "highest_security_level": "local",
+        "registries": {
+          "build_profile": {
+            "generation": 1,
+            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+          },
+          "feature_lifecycle": {
+            "generation": 1,
+            "sha256": "80f705122c37c97b9d92aa37dd34558db5c5fda8eed969a5ee73b882b794cc63"
+          },
+          "release_impact": {
+            "generation": 1,
+            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          },
+          "verification_suite": {
+            "generation": 1,
+            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+          }
+        },
+        "release_impact": {
+          "changed_paths": [
+            "webui/package-lock.json",
+            "webui/src/App.jsx"
+          ],
+          "descriptor_ids": [
+            "webui"
+          ],
+          "sha256": "14b94643ed7cd34bc05f01c4e928f23edaff2b118cf696cf81df933cfff3d976"
+        },
+        "required_credentials": [],
+        "schema_version": 1,
+        "sha256": "67200d45ddfcf6b3f324795dbb75777d7b280f209de2886ad7c07313cec90f60",
+        "suites": [
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "operations",
+              "deployment"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "scripts/check_architecture.py"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout"
+            ],
+            "owner": "quality.architecture",
+            "preconditions": [
+              "python_dependencies_installed"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "dependency:backend-full"
+            ],
+            "success_criteria": [
+              "exit_code_zero"
+            ],
+            "suite_id": "architecture",
+            "timeout_seconds": 120,
+            "working_directory": "."
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "webui"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "bash",
+              "-lc",
+              "npm run lint && npm run build"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "webui_dist_bundle"
+            ],
+            "owner": "webui",
+            "preconditions": [
+              "node_dependencies_installed",
+              "feature_manifest_valid"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "artifact_profile:webui",
+              "release_impact:webui"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "eslint_zero_errors",
+              "vite_build_completed"
+            ],
+            "suite_id": "frontend-lint-build",
+            "timeout_seconds": 900,
+            "working_directory": "webui"
+          },
+          {
+            "allow_skip": false,
+            "applicable_release_impacts": [
+              "runtime",
+              "prompt_runtime",
+              "database_schema",
+              "sandbox",
+              "news_resources",
+              "kt_vendor",
+              "tests"
+            ],
+            "cleanup": [
+              "none_required"
+            ],
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/",
+              "-v"
+            ],
+            "environment": [],
+            "output_artifacts": [
+              "captured_stdout",
+              "pytest_summary"
+            ],
+            "owner": "quality.backend",
+            "preconditions": [
+              "python_dependencies_installed",
+              "kt_compatibility_patch_applied",
+              "prompt_runtime_acceptance_copy_initialized",
+              "proxy_environment_cleared"
+            ],
+            "required_credentials": [],
+            "security_level": "local",
+            "selection_reasons": [
+              "commit_gate"
+            ],
+            "success_criteria": [
+              "exit_code_zero",
+              "zero_test_failures"
+            ],
+            "suite_id": "backend-full",
+            "timeout_seconds": 1800,
+            "working_directory": "."
+          }
+        ]
+      }
+    }
+  ],
+  "registries": {
+    "build_profile": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160",
+    "feature_lifecycle": "80f705122c37c97b9d92aa37dd34558db5c5fda8eed969a5ee73b882b794cc63",
+    "release_impact": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9",
+    "verification_suite": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+  },
+  "schema_version": 1
+}

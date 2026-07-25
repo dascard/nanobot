@@ -1,27 +1,19 @@
 """候选选择 + 配额策略——基于 source_group 而非 trust。"""
 
+from core.news.policy import DEFAULT_NEWS_RANKING_POLICY
+
 from ..schema import NewsItem
 
-GROUP_PRIORITY = ["core_provider", "curated", "core_platform", "ai_media", "research", "community"]
-QUALITY_QUOTAS = {
-    "core_provider": 4, "core_platform": 2, "ai_media": 3,
-    "research": 1, "curated": 2, "community": 0,
-}
-MAX_ITEMS_PER_SOURCE = 2
+GROUP_PRIORITY = DEFAULT_NEWS_RANKING_POLICY.group_priority
+QUALITY_QUOTAS = DEFAULT_NEWS_RANKING_POLICY.quality_group_quotas
+MAX_ITEMS_PER_SOURCE = DEFAULT_NEWS_RANKING_POLICY.per_source_quota
 
 
 def _item_group(item: NewsItem) -> str:
     sg = getattr(item, "source_group", "") or ""
     if sg in GROUP_PRIORITY:
         return sg
-    # fallback: trust-based inference for items without source_group
-    if item.trust >= 0.88:
-        return "core_provider"
-    if item.trust >= 0.78:
-        return "core_platform"
-    if item.trust >= 0.60:
-        return "ai_media"
-    return "curated"
+    return "unknown"
 
 
 def select_items_by_quota(items: list[NewsItem], max_items: int = 10) -> list[NewsItem]:

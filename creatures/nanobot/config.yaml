@@ -26,10 +26,6 @@ tools:
     type: package
     module: nanobot_kt.tools.sql_analysis
     class: SQLAnalysisTool
-  - name: python_sandbox
-    type: package
-    module: nanobot_kt.tools.python_sandbox
-    class: PythonSandboxTool
   - name: ai_daily
     type: package
     module: nanobot_kt.tools.ai_daily

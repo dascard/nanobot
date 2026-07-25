@@ -10,7 +10,7 @@ import os
 import random
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -33,7 +33,10 @@ from core.outbound.settlement import (
 )
 from core.outbound_transport import DeliveryOutcome, resolve_qq_push_token
 from core.qq_outbound_renderer import render_qq_outbound_envelope
-from core.runtime.event_bus import emit_runtime_event
+from core.runtime.event_bus import (
+    current_runtime_event_context,
+    emit_runtime_event,
+)
 
 
 QQ_ENDPOINT_KEY = "qq_push"
@@ -468,6 +471,16 @@ def _settlement_outcome(category: str) -> str:
     return "ambiguous"
 
 
+def _delivery_failure_code(category: str) -> str:
+    if category == "transient":
+        return "delivery.transient"
+    if category == "ambiguous":
+        return "delivery.ambiguous"
+    if category == "success":
+        return ""
+    return "delivery.permanent_failure"
+
+
 def _retry_at(
     *,
     now: datetime,
@@ -539,6 +552,16 @@ async def _deliver_claim(
     settlement_retry_sleep: Callable[[float], Awaitable[None]],
 ) -> OutboundDeliveryWorkResult:
     event_started = time.perf_counter()
+    current_event_context = current_runtime_event_context()
+    event_context = replace(
+        current_event_context,
+        run_id=(
+            current_event_context.run_id
+            or f"outbound:{claim.run_id}"
+        ),
+        job_id=str(claim.outbox_id),
+        delivery_id=str(claim.outbox_id),
+    )
     event_attributes = {
         "channel": "qq",
         "target_type": claim.target_type,
@@ -549,6 +572,7 @@ async def _deliver_claim(
     emit_runtime_event(
         "delivery.attempt",
         "started",
+        context=event_context,
         attributes=event_attributes,
     )
     preflight = await _transaction(
@@ -566,9 +590,11 @@ async def _deliver_claim(
         emit_runtime_event(
             "delivery.attempt",
             "failed",
+            context=event_context,
             attributes={
                 **event_attributes,
                 "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "failure_code": "delivery.preflight_cancelled",
                 "error_type": "preflight_cancelled",
             },
         )
@@ -599,9 +625,11 @@ async def _deliver_claim(
         emit_runtime_event(
             "delivery.attempt",
             "failed",
+            context=event_context,
             attributes={
                 **event_attributes,
                 "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "failure_code": "delivery.contract_invalid",
                 "error_type": "delivery_contract_invalid",
             },
         )
@@ -635,9 +663,11 @@ async def _deliver_claim(
         emit_runtime_event(
             "delivery.attempt",
             "failed",
+            context=event_context,
             attributes={
                 **event_attributes,
                 "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "failure_code": "delivery.source_invalidated",
                 "error_type": "source_invalidated",
             },
         )
@@ -659,9 +689,11 @@ async def _deliver_claim(
         emit_runtime_event(
             "delivery.attempt",
             "failed",
+            context=event_context,
             attributes={
                 **event_attributes,
                 "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "failure_code": "delivery.cancelled",
                 "error_type": "CancelledError",
             },
         )
@@ -707,18 +739,23 @@ async def _deliver_claim(
         },
         retry_sleep=settlement_retry_sleep,
     )
+    final_event_attributes = {
+        **event_attributes,
+        "latency_ms": (time.perf_counter() - event_started) * 1000,
+        "error_type": (
+            ""
+            if delivery_outcome.category == "success"
+            else delivery_outcome.error_type or delivery_outcome.category
+        ),
+    }
+    failure_code = _delivery_failure_code(delivery_outcome.category)
+    if failure_code:
+        final_event_attributes["failure_code"] = failure_code
     emit_runtime_event(
         "delivery.attempt",
         "succeeded" if delivery_outcome.category == "success" else "failed",
-        attributes={
-            **event_attributes,
-            "latency_ms": (time.perf_counter() - event_started) * 1000,
-            "error_type": (
-                ""
-                if delivery_outcome.category == "success"
-                else delivery_outcome.error_type or delivery_outcome.category
-            ),
-        },
+        context=event_context,
+        attributes=final_event_attributes,
     )
     return _work_result(claim, settlement)
 

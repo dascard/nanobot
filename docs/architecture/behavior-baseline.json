@@ -1,0 +1,176 @@
+{
+  "approved_changes": [
+    {
+      "after_sha256": "ad6e92b28b53ee8ac4e5ad2c208f43eb3eea6596710fd9ed1325f8b2518b4457",
+      "before_sha256": "5f369375cd179c523d77fc5728228fa1f6d70ef5d68b40f8dc55935213a4dbed",
+      "id": "stage1_admin_structured_views",
+      "reason": "删除 Admin 任意 SQL 产品入口，改为代码所有的结构化 Table View Registry；Sandbox、URL、CQ 和 Prompt 安全基线保持不变。",
+      "snapshot_id": "security_invariants",
+      "stage": "阶段 1.1"
+    },
+    {
+      "after_sha256": "b88655df8155786208304d2252574f03995a25fb07d27ab1b2087653b907871c",
+      "before_sha256": "24a8ea0718109500b32a1284ca7c1b810c47ad372bbebf752d4c9e2fd09cad5d",
+      "id": "stage47_task_slo_registry",
+      "reason": "为现有语义 Task Route 增加显式 Task SLO Descriptor 引用；未改变 Tool、Setting、Prompt 或安全边界。",
+      "snapshot_id": "runtime_registries",
+      "stage": "阶段 4.7"
+    },
+    {
+      "after_sha256": "c3eb2d741c45be152a0e7f1a03b1f708384bff0b6b0bfc377e935a8af50629bc",
+      "before_sha256": "42c50c79818dc783d15d070339f1c35bde2f4613951cc1075ba8ec14d51137a1",
+      "id": "stage5_private_timing_policy",
+      "reason": "删除私聊自然语言关键词的最终语义决策，改为单次结构化分类、按会话观察和显式发布门禁；模型或合同失败统一进入正常 Agent。",
+      "snapshot_id": "private_timing",
+      "stage": "阶段 5"
+    },
+    {
+      "after_sha256": "3e5fb59f1e05aa568eb285d3e564c96e73d1e424e2fb37168446ed9f673b1824",
+      "before_sha256": "517b6dc684e6995f27a122d4e658e72d61a7cfddedb3eed60a7c4eb8dd7b95ab",
+      "id": "stage5_private_timing_prompt",
+      "reason": "同步 private_decision_v2 的 canonical/runtime Prompt、变量和严格结构化输出约束。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "阶段 5"
+    },
+    {
+      "after_sha256": "89ab0c4a6e53be676d39cc717f74948d79a1008ad37802b53827656b49c96661",
+      "before_sha256": "b88655df8155786208304d2252574f03995a25fb07d27ab1b2087653b907871c",
+      "id": "stage5_private_timing_registry",
+      "reason": "把 private_decision 输出合同升级为 v2，登记私聊灰度设置和 Feature 生命周期；默认保持 disabled。",
+      "snapshot_id": "runtime_registries",
+      "stage": "阶段 5"
+    },
+    {
+      "after_sha256": "5d4d04aac757d9ba8c85f00509bb3609cf22dca0ed87d9ee99f6e9f919175f27",
+      "before_sha256": "cca9102e4053fdbca33c38d5a16aee9b9a83ad7c290b144cc8a21cbaeda3ea5b",
+      "id": "stage6_news_signals",
+      "reason": "删除关键词直接过滤，把词典和正则收敛为可审计信号；未知实体、冲突和边界候选进入批量审核。",
+      "snapshot_id": "news_heuristics",
+      "stage": "阶段 6"
+    },
+    {
+      "after_sha256": "5405407faf159d9d99209d7452213172c8aaca86228d2e52f6e7d70b6579c43e",
+      "before_sha256": "3e5fb59f1e05aa568eb285d3e564c96e73d1e424e2fb37168446ed9f673b1824",
+      "id": "stage6_prompt_inventory_coverage",
+      "reason": "修复 Prompt Golden 只枚举 Git 已跟踪文件的覆盖缺口，使 canonical 目录中新登记但尚未提交的模板也进入审计。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "阶段 6"
+    },
+    {
+      "after_sha256": "e2947c4572ab7fa53619dbebd07c7a6ab5c4a28735d5de6209342c730d1226ee",
+      "before_sha256": "5405407faf159d9d99209d7452213172c8aaca86228d2e52f6e7d70b6579c43e",
+      "id": "stage6_news_prompt",
+      "reason": "新增 news_relevance_review 严格批量输出合同及 canonical/runtime Prompt。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "阶段 6"
+    },
+    {
+      "after_sha256": "d6127b3f19ff082bdbb3163a384f394ca5b748fa524ecab0b176aa26e8fb54d5",
+      "before_sha256": "e2947c4572ab7fa53619dbebd07c7a6ab5c4a28735d5de6209342c730d1226ee",
+      "id": "stage7b_group_learning_prompt",
+      "reason": "同步 group_memory_learning 的 candidate-only 审核边界；模型输出只形成观察建议，不直接激活、删除或注入长期记忆。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "阶段 7B"
+    },
+    {
+      "after_sha256": "a38635a895c5442dd3a1a853f614fa2d8e89b9fc8dac68e844ba6ded6534c2c9",
+      "before_sha256": "d6127b3f19ff082bdbb3163a384f394ca5b748fa524ecab0b176aa26e8fb54d5",
+      "id": "stage7c_group_analysis_prompt",
+      "reason": "为 group_analysis 增加 Registry 驱动的可选 aspects，同步显式工具兼容默认和定时学习默认；同时把经来源审核且无冲突的正式群体记忆作为不可信背景接入 canonical Prompt Contribution，未选择方面不创建模型分支或报告区块。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "阶段 7C"
+    },
+    {
+      "after_sha256": "59ca2e9a073385589f81b7374a91030605c583122f2c3af2b74b27b1b1e40d9c",
+      "before_sha256": "89ab0c4a6e53be676d39cc717f74948d79a1008ad37802b53827656b49c96661",
+      "id": "stage6_news_registry",
+      "reason": "登记新闻来源、模型路由、Task、SLO、Feature 和受管设置；新行为默认 disabled 且 SLO 仅允许观察。",
+      "snapshot_id": "runtime_registries",
+      "stage": "阶段 6"
+    },
+    {
+      "after_sha256": "6e902760c2fd31dcb2ae7b7ae8c10f7cc046ef9fbc6db23d386b7a36cbfce336",
+      "before_sha256": "59ca2e9a073385589f81b7374a91030605c583122f2c3af2b74b27b1b1e40d9c",
+      "id": "stage7a_group_learning_registry",
+      "reason": "登记默认关闭的群学习总开关；Schema、只读查询和迁移审计不启用候选 Writer 或 Prompt 注入。",
+      "snapshot_id": "runtime_registries",
+      "stage": "阶段 7A"
+    },
+    {
+      "after_sha256": "a2e5de1a65d2804950629d03cec6062ccf3594f53a5ed152c0a886e0f8e77c68",
+      "before_sha256": "6e902760c2fd31dcb2ae7b7ae8c10f7cc046ef9fbc6db23d386b7a36cbfce336",
+      "id": "stage7b_group_learning_registry",
+      "reason": "把 group_memory_learning Task owner 纠正为 candidate-only 应用模块 app.group_learning；群学习 Feature 仍保持 experimental 且默认关闭。",
+      "snapshot_id": "runtime_registries",
+      "stage": "阶段 7B"
+    },
+    {
+      "after_sha256": "e071a5c594294bf97b280fce1342dcb1131b86ac17a550841e1fc51cd66a762a",
+      "before_sha256": "a2e5de1a65d2804950629d03cec6062ccf3594f53a5ed152c0a886e0f8e77c68",
+      "id": "stage8_group_learning_rule_controls",
+      "reason": "登记 Web 群学习工作台使用的受管规则启停配置；默认值为空且标记为危险设置，不创建白名单、不启用学习或 Prompt 注入。",
+      "snapshot_id": "runtime_registries",
+      "stage": "阶段 8"
+    }
+  ],
+  "baseline_git_commit": "35b8904eef449e8fd7beb7831685abf033249aa6",
+  "fixture": {
+    "path": "tests/fixtures/architecture_behavior_cases.json",
+    "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
+  },
+  "generation": {
+    "command": "python scripts/build_behavior_baseline.py --root \"$PWD\" --write",
+    "environment": "清除代理；不访问网络；不读取生产数据库；只读取版本化 Prompt 文件"
+  },
+  "runtime_versions": {
+    "generated_with_python": "3.12.7",
+    "kt_commit": "6c2c5f1d059ac7f99379b0cddeea21da8e9b55c0",
+    "prompt_runtime_schema": "v2",
+    "python_constraint": ">=3.11"
+  },
+  "schema_version": 1,
+  "snapshots": [
+    {
+      "classification": "known_bad",
+      "id": "group_analysis",
+      "note": "记录现有命令清洗和正则时间窗口解析；阶段 7 可按批准差异更新。",
+      "path": "tests/golden/architecture_behavior/group_analysis.json",
+      "sha256": "18dca866e7b9571ea9444809a69a2b82a1b5789cc87064ae6fdc2d4fa2da7aba"
+    },
+    {
+      "classification": "preserve",
+      "id": "news_heuristics",
+      "note": "记录新闻确定性信号、边界原因和统一来源 Registry；信号不再直接删除候选。",
+      "path": "tests/golden/architecture_behavior/news_heuristics.json",
+      "sha256": "5d4d04aac757d9ba8c85f00509bb3609cf22dca0ed87d9ee99f6e9f919175f27"
+    },
+    {
+      "classification": "preserve",
+      "id": "private_timing",
+      "note": "记录私聊 Timing v2 的 disabled、observation、active、模板、低置信和失败降级策略；数值 Timing 只保留为诊断快照。",
+      "path": "tests/golden/architecture_behavior/private_timing.json",
+      "sha256": "c3eb2d741c45be152a0e7f1a03b1f708384bff0b6b0bfc377e935a8af50629bc"
+    },
+    {
+      "classification": "preserve",
+      "id": "prompt_runtime",
+      "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
+      "path": "tests/golden/architecture_behavior/prompt_runtime.json",
+      "sha256": "a38635a895c5442dd3a1a853f614fa2d8e89b9fc8dac68e844ba6ded6534c2c9"
+    },
+    {
+      "classification": "preserve",
+      "id": "runtime_registries",
+      "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
+      "path": "tests/golden/architecture_behavior/runtime_registries.json",
+      "sha256": "e071a5c594294bf97b280fce1342dcb1131b86ac17a550841e1fc51cd66a762a"
+    },
+    {
+      "classification": "security_invariant",
+      "id": "security_invariants",
+      "note": "Sandbox 路径、Admin 结构化视图、URL、CQ 和 Prompt 权威边界不得削弱。",
+      "path": "tests/golden/architecture_behavior/security_invariants.json",
+      "sha256": "ad6e92b28b53ee8ac4e5ad2c208f43eb3eea6596710fd9ed1325f8b2518b4457"
+    }
+  ]
+}

@@ -8,7 +8,14 @@ from typing import Any
 
 from app.group_ingress import helpers as h
 from core.inbound_idempotency import CompletedInboundResponse, GroupReplayFields
-from core.message_envelope import build_group_response_envelope
+from core.message_transport_adapters import render_group_json
+from foundation.identity import RecipientIdentity
+from foundation.message_contract import (
+    MessageAction,
+    OutboundMessageContract,
+    TextContent,
+    TextFormat,
+)
 
 
 logger = logging.getLogger("nanobot.group_ingress")
@@ -21,13 +28,21 @@ def _request_platform(req: Any) -> str:
 
 
 def _request_meta(req: Any) -> dict[str, Any]:
-    return {
+    meta = {
         "platform": _request_platform(req),
         "chat_type": "group",
         "group_id": getattr(req, "group_id", ""),
         "message_id": getattr(req, "message_id", "") or "",
         "sender_id": getattr(req, "sender_id", "") or "",
     }
+    message_contract = getattr(req, "_message_contract", None)
+    chat_stream = getattr(message_contract, "chat_stream", None)
+    chat_stream_id = str(
+        getattr(chat_stream, "chat_stream_id", "") or ""
+    )
+    if chat_stream_id:
+        meta["chat_stream_id"] = chat_stream_id
+    return meta
 
 
 def _safe_warning(message: str, *args: Any, **kwargs: Any) -> None:
@@ -77,12 +92,84 @@ def build_completed_group_response(
     )
 
 
-def _group_action(outcome: str) -> str:
-    if outcome == "respond":
-        return "continue"
-    if outcome == "wait":
-        return "wait"
-    return "no_reply"
+def _outbound_action(outcome: str) -> MessageAction:
+    return {
+        "respond": MessageAction.REPLY,
+        "wait": MessageAction.WAIT,
+        "silent": MessageAction.SILENT,
+        "blocked": MessageAction.BLOCKED,
+    }.get(outcome, MessageAction.NO_REPLY)
+
+
+def _recipient(req: Any) -> RecipientIdentity:
+    message_contract = getattr(req, "_message_contract", None)
+    recipient = getattr(message_contract, "recipient", None)
+    if isinstance(recipient, RecipientIdentity):
+        return recipient
+    return RecipientIdentity(
+        platform=_request_platform(req),
+        recipient_type="group",
+        recipient_id=str(
+            getattr(req, "group_id", "") or "unknown"
+        ),
+    )
+
+
+def _outbound_message(
+    req: Any,
+    *,
+    outcome: str,
+    reply: str = "",
+) -> OutboundMessageContract:
+    action = _outbound_action(outcome)
+    parts = ()
+    if action is MessageAction.REPLY:
+        text_format = (
+            TextFormat.HTML
+            if h.is_html_reply(reply)
+            else TextFormat.PLAIN
+        )
+        parts = (TextContent(reply, format=text_format),)
+    return OutboundMessageContract(
+        action=action,
+        recipient=_recipient(req),
+        parts=parts,
+    )
+
+
+def _response_meta(
+    req: Any,
+    *,
+    generation: int | None = None,
+    reason: str = "",
+    delay_seconds: int | float | None = None,
+    diagnostics: Mapping[str, Any] | None = None,
+    duplicate_reply: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    meta = _request_meta(req)
+    optional = {
+        "generation": generation,
+        "reason": reason,
+        "delay_seconds": delay_seconds,
+        "diagnostics": (
+            dict(diagnostics)
+            if isinstance(diagnostics, Mapping)
+            else None
+        ),
+        "duplicate_reply": (
+            dict(duplicate_reply)
+            if isinstance(duplicate_reply, Mapping)
+            else None
+        ),
+    }
+    meta.update(
+        {
+            key: value
+            for key, value in optional.items()
+            if value is not None and value != ""
+        }
+    )
+    return meta
 
 
 def completed_group_response_payload(
@@ -97,7 +184,6 @@ def completed_group_response_payload(
         raise ValueError("群聊完成结果必须包含 group 字段")
 
     group = response.group
-    action = _group_action(response.outcome)
     answer = ""
     if response.outcome == "respond":
         answer = _format_transport_answer(response.reply)
@@ -105,16 +191,21 @@ def completed_group_response_payload(
     reason = str(response.reason or "")[:120]
     diagnostics = dict(group.diagnostics) if group.diagnostics else None
     duplicate_reply = dict(group.duplicate_reply) if group.duplicate_reply else None
-    payload = build_group_response_envelope(
-        action=action,
-        reply=answer,
+    payload = render_group_json(
+        _outbound_message(
+            req,
+            outcome=response.outcome,
+            reply=answer,
+        ),
         reply_meta=dict(response.reply_meta),
-        generation=group.generation,
-        reason=reason,
-        delay_seconds=group.delay_seconds,
-        diagnostics=diagnostics,
-        duplicate_reply=duplicate_reply,
-        meta=_request_meta(req),
+        meta=_response_meta(
+            req,
+            generation=group.generation,
+            reason=reason,
+            delay_seconds=group.delay_seconds,
+            diagnostics=diagnostics,
+            duplicate_reply=duplicate_reply,
+        ),
     )
     if group.generation is not None:
         payload["generation"] = group.generation
@@ -144,14 +235,19 @@ def technical_group_response_payload(
 
     reason_text = str(reason or "")[:120]
     diagnostics_payload = None if diagnostics is None else dict(diagnostics)
-    payload = build_group_response_envelope(
-        action="no_reply",
+    payload = render_group_json(
+        _outbound_message(
+            req,
+            outcome="blocked",
+        ),
         reply_meta={} if reply_meta is None else dict(reply_meta),
-        generation=generation,
-        reason=reason_text,
-        delay_seconds=delay_seconds,
-        diagnostics=diagnostics_payload,
-        meta=_request_meta(req),
+        meta=_response_meta(
+            req,
+            generation=generation,
+            reason=reason_text,
+            delay_seconds=delay_seconds,
+            diagnostics=diagnostics_payload,
+        ),
     )
     if generation is not None:
         payload["generation"] = generation
@@ -168,10 +264,14 @@ def duplicate_inflight_group_response_payload(req: Any) -> dict[str, Any]:
     """使用当前请求身份构造不属于业务完成结果的处理中重复响应。"""
 
     reason = "duplicate_inflight"
-    payload = build_group_response_envelope(
-        action=reason,
-        reason=reason,
-        meta=_request_meta(req),
+    payload = render_group_json(
+        _outbound_message(
+            req,
+            outcome="no_reply",
+        ),
+        meta=_response_meta(req, reason=reason),
     )
+    payload["status"] = reason
+    payload["action"] = reason
     payload["reason"] = reason
     return payload

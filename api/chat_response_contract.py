@@ -11,7 +11,15 @@ from core.inbound_idempotency import (
     CompletedInboundResponse,
     GroupReplayFields,
 )
-from core.message_envelope import build_chat_response_envelope
+from core.message_envelope import is_html_reply
+from core.message_transport_adapters import render_chat_json
+from foundation.identity import RecipientIdentity
+from foundation.message_contract import (
+    MessageAction,
+    OutboundMessageContract,
+    TextContent,
+    TextFormat,
+)
 
 
 def normalize_chat_stream_event(event: Any) -> dict[str, Any] | None:
@@ -102,12 +110,19 @@ def chat_response_meta(
     extra_meta: dict | None = None,
 ) -> dict[str, Any]:
     client_meta = getattr(req, "client_meta", None)
+    message_contract = getattr(req, "_message_contract", None)
     meta: dict[str, Any] = {
         "user_id": getattr(req, "user_id", ""),
         "session_id": getattr(req, "session_id", ""),
         "platform": platform or _chat_request_platform(req),
         "chat_type": chat_type or _chat_request_type(req),
     }
+    chat_stream = getattr(message_contract, "chat_stream", None)
+    chat_stream_id = str(
+        getattr(chat_stream, "chat_stream_id", "") or ""
+    )
+    if chat_stream_id:
+        meta["chat_stream_id"] = chat_stream_id
     request_id = client_meta_request_id(client_meta)
     if request_id:
         meta["request_id"] = request_id
@@ -142,9 +157,57 @@ def chat_response_payload(
     include_answer_chunks: bool = False,
     extra_meta: dict | None = None,
 ) -> dict[str, Any]:
-    payload = build_chat_response_envelope(
+    message_contract = getattr(req, "_message_contract", None)
+    recipient = getattr(message_contract, "recipient", None)
+    if not isinstance(recipient, RecipientIdentity):
+        resolved_chat_type = chat_type or _chat_request_type(req)
+        recipient = RecipientIdentity(
+            platform=platform or _chat_request_platform(req),
+            recipient_type=(
+                "group"
+                if resolved_chat_type == "group"
+                else "user"
+            ),
+            recipient_id=str(
+                getattr(
+                    req,
+                    (
+                        "session_id"
+                        if resolved_chat_type == "group"
+                        else "user_id"
+                    ),
+                    "",
+                )
+                or "unknown"
+            ),
+        )
+    normalized_answer = str(answer or "")
+    if normalized_answer:
+        action = MessageAction.REPLY
+        text_format = (
+            TextFormat.HTML
+            if is_html_reply(normalized_answer)
+            else TextFormat.PLAIN
+        )
+        parts = (
+            TextContent(normalized_answer, format=text_format),
+        )
+    else:
+        action = {
+            "wait": MessageAction.WAIT,
+            "silent": MessageAction.SILENT,
+            "blocked": MessageAction.BLOCKED,
+            "error": MessageAction.BLOCKED,
+        }.get(str(status), MessageAction.NO_REPLY)
+        parts = ()
+    outbound = OutboundMessageContract(
+        action=action,
+        recipient=recipient,
+        parts=parts,
+    )
+    payload = render_chat_json(
+        outbound,
         status=status,
-        answer=answer,
         reply_meta=reply_meta,
         meta=chat_response_meta(
             req,

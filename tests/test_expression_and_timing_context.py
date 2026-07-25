@@ -1,17 +1,28 @@
-def test_short_cjk_phrases_extracts_whole_phrases():
-    from core.expression_learner import _short_cjk_phrases
+def test_group_learning_rules_extract_whole_phrase_signal():
+    from core.group_learning import dry_run_learning_rules
 
-    phrases = _short_cjk_phrases("端口冲突了，先看服务端日志")
+    result = dry_run_learning_rules("端口冲突了，先看服务端日志")
+    phrases = [
+        item.canonical_content
+        for item in result.matches
+        if item.candidate_type == "expression"
+    ]
 
-    assert "端口冲突" in phrases or len(phrases) > 0
+    assert phrases
 
 
-def test_short_cjk_phrases_filters_noise():
-    from core.expression_learner import _short_cjk_phrases
+def test_group_learning_rules_do_not_treat_math_as_slang_definition():
+    from core.group_learning import dry_run_learning_rules
 
-    phrases = _short_cjk_phrases("今天感觉不知道")
+    result = dry_run_learning_rules(
+        "梦铃股: 500股 × 140.62 = 70310.00金币"
+    )
 
-    assert phrases == [] or all(p not in ("今天", "感觉", "不知道") for p in phrases)
+    assert not [
+        item
+        for item in result.matches
+        if item.candidate_type == "slang"
+    ]
 
 
 def test_build_timing_recent_context_strips_speaker_prefix():

@@ -39,8 +39,16 @@ async def run_sampling_cycle():
             cursors = {
                 "chatlog_replies": get_cursor(db, "db", "chatlog_replies"),
                 "timing_events": get_cursor(db, "db", "timing_events"),
-                "memory_jargon": get_cursor(db, "db", "memory_jargon"),
-                "memory_expression": get_cursor(db, "db", "memory_expression"),
+                "group_learning_slang": get_cursor(
+                    db,
+                    "db",
+                    "group_learning_slang",
+                ),
+                "group_learning_expression": get_cursor(
+                    db,
+                    "db",
+                    "group_learning_expression",
+                ),
             }
 
             items = sample_chatlog_replies(db, after_id=cursors["chatlog_replies"].get("after_id", 0), limit=30)
@@ -57,24 +65,40 @@ async def run_sampling_cycle():
             if items:
                 cursors["timing_events"] = {"after_id": int(items[-1].get("source_ref", ":0").split(":")[-1])}
 
-            # JargonMemory 和 ExpressionMemory 分开采样
-            items = sample_memory_learning(db, after_latest=cursors["memory_jargon"].get("after_id", 0),
-                                            table="jargon", limit=30)
+            # 新群学习 slang/expression 候选分开推进游标。
+            items = sample_memory_learning(
+                db,
+                after_latest=cursors[
+                    "group_learning_slang"
+                ].get("after_id", 0),
+                candidate_type="slang",
+                limit=30,
+            )
             for item in items:
                 if upsert_candidate(db, item):
                     created += 1
             if items:
                 max_id = max(int(i["source_ref"].split(":")[-1]) for i in items)
-                cursors["memory_jargon"] = {"after_id": max_id}
+                cursors["group_learning_slang"] = {
+                    "after_id": max_id
+                }
 
-            items = sample_memory_learning(db, after_latest=cursors["memory_expression"].get("after_id", 0),
-                                            table="expression", limit=30)
+            items = sample_memory_learning(
+                db,
+                after_latest=cursors[
+                    "group_learning_expression"
+                ].get("after_id", 0),
+                candidate_type="expression",
+                limit=30,
+            )
             for item in items:
                 if upsert_candidate(db, item):
                     created += 1
             if items:
                 max_id = max(int(i["source_ref"].split(":")[-1]) for i in items)
-                cursors["memory_expression"] = {"after_id": max_id}
+                cursors["group_learning_expression"] = {
+                    "after_id": max_id
+                }
 
             for cursor_key in cursors:
                 save_cursor(db, "db", cursor_key, cursors[cursor_key])

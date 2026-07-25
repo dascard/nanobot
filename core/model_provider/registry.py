@@ -11,6 +11,7 @@ from core.model_provider.contracts import (
     ProviderCapability,
     ProviderDescriptor,
 )
+from core.registry import RegistryBuilder, RegistrySnapshot
 
 
 class OverridePolicy(StrEnum):
@@ -53,10 +54,19 @@ class ModelProviderRegistry:
         self._providers: dict[str, ModelProviderPort] = {}
         self._aliases: dict[str, str] = {}
         self._frozen = False
+        self._registry_snapshot: (
+            RegistrySnapshot[ProviderDescriptor] | None
+        ) = None
 
     @property
     def frozen(self) -> bool:
         return self._frozen
+
+    @property
+    def registry_snapshot(self) -> RegistrySnapshot[ProviderDescriptor]:
+        if self._registry_snapshot is None:
+            raise ProviderRegistryError("Provider Registry 尚未冻结")
+        return self._registry_snapshot
 
     def register(
         self,
@@ -98,6 +108,12 @@ class ModelProviderRegistry:
                 self._aliases.pop(alias, None)
 
     def freeze(self) -> "ModelProviderRegistry":
+        if self._frozen:
+            return self
+        builder = RegistryBuilder[ProviderDescriptor]("model_provider")
+        for provider_id in sorted(self._providers):
+            builder.register(self._providers[provider_id].descriptor)
+        self._registry_snapshot = builder.freeze()
         self._frozen = True
         return self
 
@@ -131,6 +147,8 @@ class ModelProviderRegistry:
         return provider
 
     def descriptors(self) -> tuple[ProviderDescriptor, ...]:
+        if self._registry_snapshot is not None:
+            return tuple(self._registry_snapshot)
         return tuple(
             provider.descriptor
             for _, provider in sorted(self._providers.items())

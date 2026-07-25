@@ -16,6 +16,7 @@ from api import (
     chat_streaming_helpers,
     chat_streaming_result,
 )
+from core.agent_runtime import dispatch_agent_message
 
 
 logger = logging.getLogger("nanobot.routes")
@@ -120,6 +121,7 @@ class ChatRouteRunnerContext:
     claim_owner: Any | None = None
     claim_key: Any | None = None
     request_sha256: str = ""
+    message_contract: Any | None = None
 
 
 async def _best_effort_fail_claim(owner: Any | None, error: Any) -> None:
@@ -301,9 +303,20 @@ async def _run_stream_bridge(
 ) -> None:
     req = context.req
     try:
-        result_holder["answer"] = await _await_with_owner_guard(
-            context.claim_owner,
-            context.bridge.handle_message(
+        if context.message_contract is not None:
+            invocation = dispatch_agent_message(
+                context.bridge,
+                context.message_contract,
+                content=context.enriched_query,
+                runtime_user_id=req.user_id,
+                runtime_session_id=req.session_id,
+                sender_name=req.sender_name or "",
+                metadata=context.bridge_meta,
+                stream_queue=stream_queue,
+                stream=True,
+            )
+        else:
+            invocation = context.bridge.handle_message(
                 context.enriched_query,
                 user_id=req.user_id,
                 session_id=req.session_id,
@@ -311,7 +324,10 @@ async def _run_stream_bridge(
                 metadata=context.bridge_meta,
                 stream_queue=stream_queue,
                 stream=True,
-            ),
+            )
+        result_holder["answer"] = await _await_with_owner_guard(
+            context.claim_owner,
+            invocation,
         )
     except asyncio.CancelledError:
         raise
@@ -611,15 +627,22 @@ async def run_non_streaming_chat_response(
     context: ChatRouteRunnerContext,
 ) -> ChatRouteNonStreamingResult:
     try:
+        bridge_kwargs = {
+            "enriched_query": context.enriched_query,
+            "user_id": context.req.user_id,
+            "session_id": context.req.session_id,
+            "sender_name": context.req.sender_name or "",
+            "metadata": context.bridge_meta,
+        }
+        if context.message_contract is not None:
+            bridge_kwargs["message_contract"] = (
+                context.message_contract
+            )
         answer = await _await_with_owner_guard(
             context.claim_owner,
             context.callbacks.call_bridge_non_streaming(
                 context.bridge,
-                enriched_query=context.enriched_query,
-                user_id=context.req.user_id,
-                session_id=context.req.session_id,
-                sender_name=context.req.sender_name or "",
-                metadata=context.bridge_meta,
+                **bridge_kwargs,
             ),
         )
     except Exception as exc:

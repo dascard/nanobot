@@ -37,13 +37,17 @@ from app.session_memory.llm_contract import (
     validate_inheritance,
 )
 from app.session_memory.jobs import (
+    SessionSummaryJobLease,
+    SessionSummaryJobLeaseLost,
     acquire_summary_finalize_permit,
+    assert_summary_job_lease,
     claim_summary_job,
     fetch_pending_summary_jobs,
     mark_summary_job_done,
     mark_summary_job_failed,
     mark_summary_job_obsolete,
     renew_summary_job_lease,
+    session_summary_job_lease,
 )
 from app.session_memory.rolling_summary import archive_active_summaries_for_session, audit_rolling_summary
 from app.session_memory.summarizer import render_summary_text
@@ -185,6 +189,7 @@ SessionSummaryTurn = ConversationTurn | SessionSummaryTurnSnapshot
 @dataclass(frozen=True)
 class PreparedSessionSummaryJob:
     job_id: int
+    lease: SessionSummaryJobLease
     source_turns: tuple[SessionSummaryTurnSnapshot, ...]
     fragments: tuple[TurnFragment, ...]
     manifest: TurnCoverageManifest
@@ -370,49 +375,61 @@ def build_llm_summary_messages(
 async def default_llm_summary_summarizer_async(
     messages: list[dict[str, str]],
 ) -> SessionSummaryLLMResult:
-    from config import NEW_API_KEY
-    from clients.new_api_client import NewAPIClient
-    from clients.classifier_client import resolve_model_route
+    import asyncio
 
-    route = resolve_model_route("session_summary")
-    client = NewAPIClient(
-        api_key=route.get("api_key") or NEW_API_KEY,
-        base_url=route.get("base_url") or "",
+    from core.task_runtime import (
+        TaskInvocation,
+        execute_task,
+        thaw_task_value,
     )
-    response = await client.chat_completion(
-        messages=messages,
-        temperature=float(route.get("temperature", 0.1)),
-        manual_model=route.get("model", ""),
-        max_tokens=int(route.get("max_tokens", 4096)),
-        llm_source="session_summary",
-        enable_thinking=route.get("enable_thinking", "false"),
+
+    messages_sha256 = hashlib.sha256(
+        json.dumps(
+            messages,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    result = await asyncio.to_thread(
+        execute_task,
+        TaskInvocation(
+            invocation_id="session_summary",
+            route_key="session_summary",
+            input_values={},
+            rendered_messages=tuple(messages),
+            idempotency_key=f"session_summary:{messages_sha256}",
+            timeout_budget_seconds=120.0,
+        ),
     )
-    if isinstance(response, dict) and response.get("error"):
-        raise RuntimeError(str(response.get("detail") or response.get("error")))
-    try:
-        content = str(response["choices"][0]["message"].get("content") or "")
-    except Exception as exc:
-        raise RuntimeError("llm_response_missing_content") from exc
-    actual_model = str(
-        response.get("model")
-        or response.get("_nanobot_model_id")
-        or "unknown"
-    ).strip() or "unknown"
+    if not result.ok:
+        failure_code = (
+            result.failure.code.value
+            if result.failure is not None
+            else "provider_error"
+        )
+        raise RuntimeError(
+            f"task_runtime_failed:{failure_code}"
+        )
+    payload = thaw_task_value(result.parsed_value)
+    actual_model = str(result.model or "unknown").strip() or "unknown"
     requested_model = str(
-        response.get("_nanobot_requested_model")
-        or response.get("_nanobot_model_id")
-        or route.get("model")
-        or "unknown"
+        result.execution_metadata.get("requested_model")
+        or actual_model
     ).strip() or "unknown"
-    raw_log_id = response.get("_nanobot_request_log_id")
+    raw_log_id = result.execution_metadata.get("request_log_id")
     request_log_id = (
         int(raw_log_id)
-        if isinstance(raw_log_id, int) and not isinstance(raw_log_id, bool)
-        and raw_log_id > 0
+        if type(raw_log_id) is int and raw_log_id > 0
         else None
     )
     return SessionSummaryLLMResult(
-        content=content,
+        content=json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
         model=actual_model,
         requested_model=requested_model,
         request_log_id=request_log_id,
@@ -1122,16 +1139,30 @@ def _build_prepared_summary_contract(
 
 def prepare_claimed_session_summary_job(
     db: Session,
-    job_id: int,
+    job_id: int | None = None,
     *,
-    owner: str = "session-summary-worker",
+    lease: SessionSummaryJobLease | None = None,
+    owner: str = "",
 ) -> PreparedSessionSummaryJob | None:
-    job = db.get(SessionSummaryJob, int(job_id))
-    if job is None:
+    if lease is None:
+        job = db.get(SessionSummaryJob, int(job_id or 0))
+        if (
+            job is None
+            or job.status != "running"
+            or str(job.lease_token or "")
+            or (job.locked_by and job.locked_by != owner)
+        ):
+            return None
+        raise SessionSummaryJobLeaseLost(
+            "legacy_session_summary_job_has_no_fencing_lease"
+        )
+    if job_id is not None and int(job_id) != lease.job_id:
+        raise ValueError("job_id 与 lease 不一致")
+    if owner and owner != lease.worker_id:
         return None
-    if job.status != "running":
-        return None
-    if job.locked_by and job.locked_by != owner:
+    try:
+        job = assert_summary_job_lease(db, lease)
+    except SessionSummaryJobLeaseLost:
         return None
     source_turns = _load_source_turns(db, job)
     if not source_turns:
@@ -1150,6 +1181,7 @@ def prepare_claimed_session_summary_job(
     )
     return PreparedSessionSummaryJob(
         job_id=int(job.id or 0),
+        lease=lease,
         source_turns=source_turn_snapshots,
         fragments=fragments,
         manifest=manifest,
@@ -1164,15 +1196,14 @@ def finalize_claimed_session_summary_job(
     prepared: PreparedSessionSummaryJob,
     *,
     raw: Any,
-    owner: str = "session-summary-worker",
+    owner: str = "",
     model: str = "",
 ) -> bool:
-    job = db.get(SessionSummaryJob, int(prepared.job_id))
-    if job is None:
+    if owner and owner != prepared.lease.worker_id:
         return False
-    if job.status != "running":
-        return False
-    if job.locked_by and job.locked_by != owner:
+    try:
+        job = assert_summary_job_lease(db, prepared.lease)
+    except SessionSummaryJobLeaseLost:
         return False
     source_turns = _load_source_turns(db, job)
     if not source_turns:
@@ -1189,8 +1220,7 @@ def finalize_claimed_session_summary_job(
 
     permit = acquire_summary_finalize_permit(
         db,
-        int(job.id or 0),
-        owner=owner,
+        lease=prepared.lease,
     )
     if permit.decision == "lost_lease":
         return False
@@ -1263,18 +1293,33 @@ def finalize_claimed_session_summary_job(
 
 def fail_claimed_session_summary_job(
     db: Session,
-    job_id: int,
+    job_id: int | None = None,
     *,
-    owner: str = "session-summary-worker",
+    lease: SessionSummaryJobLease | None = None,
+    owner: str = "",
     error: str,
     retryable: bool = True,
+    now: datetime | None = None,
 ) -> bool:
-    job = db.get(SessionSummaryJob, int(job_id))
+    if lease is None:
+        job = db.get(SessionSummaryJob, int(job_id or 0))
+        if (
+            job is None
+            or job.status != "running"
+            or str(job.lease_token or "")
+            or (job.locked_by and job.locked_by != owner)
+        ):
+            return False
+    else:
+        if job_id is not None and int(job_id) != lease.job_id:
+            raise ValueError("job_id 与 lease 不一致")
+        if owner and owner != lease.worker_id:
+            return False
+        try:
+            job = assert_summary_job_lease(db, lease, now=now)
+        except SessionSummaryJobLeaseLost:
+            return False
     if job is None:
-        return False
-    if job.status != "running":
-        return False
-    if job.locked_by and job.locked_by != owner:
         return False
     mark_summary_job_failed(
         db,
@@ -1289,8 +1334,7 @@ def fail_claimed_session_summary_job(
 def _fail_claimed_job_with_factory(
     session_factory: Callable[[], Session],
     *,
-    job_id: int,
-    owner: str,
+    lease: SessionSummaryJobLease,
     error: str,
     retryable: bool = True,
 ) -> bool:
@@ -1298,8 +1342,7 @@ def _fail_claimed_job_with_factory(
     try:
         failed = fail_claimed_session_summary_job(
             db,
-            job_id,
-            owner=owner,
+            lease=lease,
             error=error,
             retryable=retryable,
         )
@@ -1315,15 +1358,13 @@ def _fail_claimed_job_with_factory(
 def _renew_claimed_job_with_factory(
     session_factory: Callable[[], Session],
     *,
-    job_id: int,
-    owner: str,
+    lease: SessionSummaryJobLease,
 ) -> bool:
     db = session_factory()
     try:
         renewed = renew_summary_job_lease(
             db,
-            int(job_id),
-            owner=owner,
+            lease=lease,
         )
         db.commit()
         return renewed
@@ -1337,18 +1378,16 @@ def _renew_claimed_job_with_factory(
 def _preflight_claimed_job_with_factory(
     session_factory: Callable[[], Session],
     *,
-    job_id: int,
-    owner: str,
+    lease: SessionSummaryJobLease,
 ) -> str:
     """在调用 LLM 前淘汰已被更高或同级 active coverage 阻塞的 job。"""
 
     db = session_factory()
     try:
-        job = db.get(SessionSummaryJob, int(job_id))
+        job = db.get(SessionSummaryJob, lease.job_id)
         permit = acquire_summary_finalize_permit(
             db,
-            int(job_id),
-            owner=owner,
+            lease=lease,
         )
         if permit.decision == "obsolete" and job is not None:
             mark_summary_job_obsolete(db, job, permit=permit)
@@ -1364,23 +1403,22 @@ def _preflight_claimed_job_with_factory(
 def process_claimed_session_summary_job_short_transactions(
     session_factory: Callable[[], Session],
     *,
-    job_id: int,
+    lease: SessionSummaryJobLease,
     summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
-    owner: str = "session-summary-worker",
 ) -> bool:
     """处理已抢占的 job，避免 LLM 调用期间持有写事务。"""
     summarizer = summarizer or default_llm_summary_summarizer
+    job_id = lease.job_id
     db = session_factory()
     try:
-        prepared = prepare_claimed_session_summary_job(db, int(job_id), owner=owner)
+        prepared = prepare_claimed_session_summary_job(db, lease=lease)
         db.commit()
     except Exception as exc:
         db.rollback()
         safe_error = _safe_session_summary_error(exc)
         _fail_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
             error=safe_error,
             retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
@@ -1394,8 +1432,7 @@ def process_claimed_session_summary_job_short_transactions(
     try:
         preflight_decision = _preflight_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
         )
     except Exception as exc:
         safe_error = _safe_session_summary_error(exc)
@@ -1406,8 +1443,7 @@ def process_claimed_session_summary_job_short_transactions(
         )
         _fail_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
             error=safe_error,
             retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
@@ -1423,8 +1459,7 @@ def process_claimed_session_summary_job_short_transactions(
             summarizer,
             renew_lease=lambda: _renew_claimed_job_with_factory(
                 session_factory,
-                job_id=int(job_id),
-                owner=owner,
+                lease=lease,
             ),
         )
     except Exception as exc:
@@ -1436,8 +1471,7 @@ def process_claimed_session_summary_job_short_transactions(
         )
         _fail_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
             error=safe_error,
         )
         return False
@@ -1448,7 +1482,6 @@ def process_claimed_session_summary_job_short_transactions(
             db,
             prepared,
             raw=raw,
-            owner=owner,
         )
         db.commit()
         return ok
@@ -1462,8 +1495,7 @@ def process_claimed_session_summary_job_short_transactions(
         )
         _fail_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
             error=safe_error,
         )
         return False
@@ -1474,23 +1506,22 @@ def process_claimed_session_summary_job_short_transactions(
 async def process_claimed_session_summary_job_short_transactions_async(
     session_factory: Callable[[], Session],
     *,
-    job_id: int,
+    lease: SessionSummaryJobLease,
     summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
-    owner: str = "session-summary-worker",
 ) -> bool:
     """异步处理已抢占的 job，LLM 调用不经过同步 bridge。"""
     summarizer = summarizer or default_llm_summary_summarizer_async
+    job_id = lease.job_id
     db = session_factory()
     try:
-        prepared = prepare_claimed_session_summary_job(db, int(job_id), owner=owner)
+        prepared = prepare_claimed_session_summary_job(db, lease=lease)
         db.commit()
     except Exception as exc:
         db.rollback()
         safe_error = _safe_session_summary_error(exc)
         _fail_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
             error=safe_error,
             retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
@@ -1504,8 +1535,7 @@ async def process_claimed_session_summary_job_short_transactions_async(
     try:
         preflight_decision = _preflight_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
         )
     except Exception as exc:
         safe_error = _safe_session_summary_error(exc)
@@ -1516,8 +1546,7 @@ async def process_claimed_session_summary_job_short_transactions_async(
         )
         _fail_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
             error=safe_error,
         )
         return False
@@ -1532,8 +1561,7 @@ async def process_claimed_session_summary_job_short_transactions_async(
             summarizer,
             renew_lease=lambda: _renew_claimed_job_with_factory(
                 session_factory,
-                job_id=int(job_id),
-                owner=owner,
+                lease=lease,
             ),
         )
     except Exception as exc:
@@ -1545,8 +1573,7 @@ async def process_claimed_session_summary_job_short_transactions_async(
         )
         _fail_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
             error=safe_error,
         )
         return False
@@ -1557,7 +1584,6 @@ async def process_claimed_session_summary_job_short_transactions_async(
             db,
             prepared,
             raw=raw,
-            owner=owner,
         )
         db.commit()
         return ok
@@ -1571,8 +1597,7 @@ async def process_claimed_session_summary_job_short_transactions_async(
         )
         _fail_claimed_job_with_factory(
             session_factory,
-            job_id=int(job_id),
-            owner=owner,
+            lease=lease,
             error=safe_error,
         )
         return False
@@ -1602,8 +1627,11 @@ def process_session_summary_job(
         return False
     elif job.locked_by and job.locked_by != owner:
         return False
+    if not str(job.lease_token or ""):
+        return False
+    lease = session_summary_job_lease(job)
     try:
-        prepared = prepare_claimed_session_summary_job(db, int(job.id or 0), owner=owner)
+        prepared = prepare_claimed_session_summary_job(db, lease=lease)
         if prepared is None:
             return False
         raw = _summarize_prepared_sync(prepared, summarizer)
@@ -1611,7 +1639,6 @@ def process_session_summary_job(
             db,
             prepared,
             raw=raw,
-            owner=owner,
             model="custom_summarizer",
         )
         return ok
@@ -1624,8 +1651,7 @@ def process_session_summary_job(
         )
         fail_claimed_session_summary_job(
             db,
-            int(job.id or 0),
-            owner=owner,
+            lease=lease,
             error=safe_error,
             retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )

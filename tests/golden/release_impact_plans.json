@@ -1,0 +1,459 @@
+{
+  "cases": [
+    {
+      "id": "prompt_contract",
+      "report": {
+        "affected_services": [
+          "nanobot-server",
+          "session-summary-worker",
+          "outbound-delivery-worker",
+          "semantic-index-worker"
+        ],
+        "artifacts": [
+          "nanobot-runtime"
+        ],
+        "changed_paths": [
+          "core/prompt_v2/variables.py",
+          "prompts.v2.default/chat/system.md"
+        ],
+        "database_migration_checks": [],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "prompt_runtime",
+              "runtime"
+            ],
+            "path": "core/prompt_v2/variables.py"
+          },
+          {
+            "descriptor_ids": [
+              "prompt_runtime"
+            ],
+            "path": "prompts.v2.default/chat/system.md"
+          }
+        ],
+        "prompt_runtime_audit_required": true,
+        "real_docker_sandbox_required": false,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "352eaf0e698fa8f068d27bd4c816df94ff04a959476523b4cc26f44af195caeb",
+        "unowned_production_paths": [],
+        "verification_suites": [
+          "architecture",
+          "backend-full",
+          "prompt-runtime-audit"
+        ],
+        "web_build_required": false
+      }
+    },
+    {
+      "id": "sandbox_security",
+      "report": {
+        "affected_services": [
+          "nanobot-server",
+          "session-summary-worker",
+          "outbound-delivery-worker",
+          "semantic-index-worker"
+        ],
+        "artifacts": [
+          "nanobot-runtime",
+          "nanobot-sandbox-python",
+          "nanobot-sandboxd"
+        ],
+        "changed_paths": [
+          "core/sandbox/backend.py",
+          "deploy/apparmor/nanobot-sandbox",
+          "sandboxd/docker_backend.py"
+        ],
+        "database_migration_checks": [],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "runtime",
+              "sandbox"
+            ],
+            "path": "core/sandbox/backend.py"
+          },
+          {
+            "descriptor_ids": [
+              "deployment",
+              "sandbox"
+            ],
+            "path": "deploy/apparmor/nanobot-sandbox"
+          },
+          {
+            "descriptor_ids": [
+              "sandbox"
+            ],
+            "path": "sandboxd/docker_backend.py"
+          }
+        ],
+        "prompt_runtime_audit_required": false,
+        "real_docker_sandbox_required": true,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "49c5d0c2cc626b31f39e762380557e1a42e536fd02b8197cba974b55a825f71d",
+        "unowned_production_paths": [],
+        "verification_suites": [
+          "architecture",
+          "backend-full",
+          "compose-config",
+          "deployment-contract",
+          "sandbox-real-docker"
+        ],
+        "web_build_required": false
+      }
+    },
+    {
+      "id": "web_feature",
+      "report": {
+        "affected_services": [
+          "nanobot-server",
+          "session-summary-worker",
+          "outbound-delivery-worker",
+          "semantic-index-worker"
+        ],
+        "artifacts": [
+          "nanobot-runtime",
+          "webui"
+        ],
+        "changed_paths": [
+          "webui/package-lock.json",
+          "webui/src/App.jsx"
+        ],
+        "database_migration_checks": [],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "webui"
+            ],
+            "path": "webui/package-lock.json"
+          },
+          {
+            "descriptor_ids": [
+              "webui"
+            ],
+            "path": "webui/src/App.jsx"
+          }
+        ],
+        "prompt_runtime_audit_required": false,
+        "real_docker_sandbox_required": false,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "14b94643ed7cd34bc05f01c4e928f23edaff2b118cf696cf81df933cfff3d976",
+        "unowned_production_paths": [],
+        "verification_suites": [
+          "frontend-lint-build"
+        ],
+        "web_build_required": true
+      }
+    },
+    {
+      "id": "schema_migration",
+      "report": {
+        "affected_services": [
+          "nanobot-server",
+          "session-summary-worker",
+          "outbound-delivery-worker",
+          "semantic-index-worker"
+        ],
+        "artifacts": [
+          "nanobot-runtime"
+        ],
+        "changed_paths": [
+          "core/db/models/chat.py",
+          "core/schema_migrations.py"
+        ],
+        "database_migration_checks": [
+          "schema-migration-idempotency"
+        ],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "database_schema",
+              "runtime"
+            ],
+            "path": "core/db/models/chat.py"
+          },
+          {
+            "descriptor_ids": [
+              "database_schema",
+              "runtime"
+            ],
+            "path": "core/schema_migrations.py"
+          }
+        ],
+        "prompt_runtime_audit_required": false,
+        "real_docker_sandbox_required": false,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "7114393adfc7cd3c04f29f92ec832236a496ef2422bb9ae3c7e3ca3e61fd7cc5",
+        "unowned_production_paths": [],
+        "verification_suites": [
+          "architecture",
+          "backend-full",
+          "database-migration-check"
+        ],
+        "web_build_required": false
+      }
+    },
+    {
+      "id": "documentation_only",
+      "report": {
+        "affected_services": [],
+        "artifacts": [],
+        "changed_paths": [
+          "docs/architecture/admin-db-query-migration-matrix.md"
+        ],
+        "database_migration_checks": [],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "documentation"
+            ],
+            "path": "docs/architecture/admin-db-query-migration-matrix.md"
+          }
+        ],
+        "prompt_runtime_audit_required": false,
+        "real_docker_sandbox_required": false,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "6be177c454dc58dcc5d096e98db06965cd46c01e524aec29f1be67f1597eba7a",
+        "unowned_production_paths": [],
+        "verification_suites": [],
+        "web_build_required": false
+      }
+    },
+    {
+      "id": "evaluation_only",
+      "report": {
+        "affected_services": [],
+        "artifacts": [],
+        "changed_paths": [
+          "evals/run.py",
+          "test_prompt.py"
+        ],
+        "database_migration_checks": [],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "evaluation"
+            ],
+            "path": "evals/run.py"
+          },
+          {
+            "descriptor_ids": [
+              "evaluation"
+            ],
+            "path": "test_prompt.py"
+          }
+        ],
+        "prompt_runtime_audit_required": false,
+        "real_docker_sandbox_required": false,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "2d7461a86ddb0ff25f785ed7055cd81e4d264f845f334d5e93f12bf7af4af746",
+        "unowned_production_paths": [],
+        "verification_suites": [
+          "eval-gate"
+        ],
+        "web_build_required": false
+      }
+    },
+    {
+      "id": "sentinel_runtime_resource",
+      "report": {
+        "affected_services": [
+          "nanobot-server",
+          "session-summary-worker",
+          "semantic-index-worker"
+        ],
+        "artifacts": [
+          "prompt-injection-sentinel"
+        ],
+        "changed_paths": [
+          "sentinel/config.json"
+        ],
+        "database_migration_checks": [],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "runtime_resources"
+            ],
+            "path": "sentinel/config.json"
+          }
+        ],
+        "prompt_runtime_audit_required": false,
+        "real_docker_sandbox_required": false,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "c0852af96507ff1d49ac13b82a103727c6d0aad40107183d63670f5e93f1c033",
+        "unowned_production_paths": [],
+        "verification_suites": [
+          "sentinel-runtime-check"
+        ],
+        "web_build_required": false
+      }
+    },
+    {
+      "id": "news_source_resource",
+      "report": {
+        "affected_services": [
+          "nanobot-server",
+          "session-summary-worker",
+          "outbound-delivery-worker",
+          "semantic-index-worker"
+        ],
+        "artifacts": [
+          "nanobot-runtime"
+        ],
+        "changed_paths": [
+          "resources/news/news_sources.v1.json"
+        ],
+        "database_migration_checks": [],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "news_resources"
+            ],
+            "path": "resources/news/news_sources.v1.json"
+          }
+        ],
+        "prompt_runtime_audit_required": false,
+        "real_docker_sandbox_required": false,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "d794366803963e9ed7c3d0831a6daeeb03e3168d769bb2db49222a0fa614cc78",
+        "unowned_production_paths": [],
+        "verification_suites": [
+          "backend-full",
+          "news-governance"
+        ],
+        "web_build_required": false
+      }
+    },
+    {
+      "id": "root_engineering_config",
+      "report": {
+        "affected_services": [],
+        "artifacts": [],
+        "changed_paths": [
+          "commitlint.config.js",
+          "package-lock.json"
+        ],
+        "database_migration_checks": [],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "operations"
+            ],
+            "path": "commitlint.config.js"
+          },
+          {
+            "descriptor_ids": [
+              "operations"
+            ],
+            "path": "package-lock.json"
+          }
+        ],
+        "prompt_runtime_audit_required": false,
+        "real_docker_sandbox_required": false,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "a03e1993d7f2986c2086179e94cd2bc2e6e4c67a3ec72f1bc2ed55fcec5c5efb",
+        "unowned_production_paths": [],
+        "verification_suites": [
+          "architecture"
+        ],
+        "web_build_required": false
+      }
+    },
+    {
+      "id": "atomic_release_pipeline",
+      "report": {
+        "affected_services": [
+          "nanobot-server",
+          "session-summary-worker",
+          "outbound-delivery-worker",
+          "semantic-index-worker"
+        ],
+        "artifacts": [
+          "nanobot-runtime"
+        ],
+        "changed_paths": [
+          "core/release/artifacts.py",
+          "scripts/build_release_manifest.py",
+          "scripts/deploy_release.py"
+        ],
+        "database_migration_checks": [],
+        "path_impacts": [
+          {
+            "descriptor_ids": [
+              "runtime"
+            ],
+            "path": "core/release/artifacts.py"
+          },
+          {
+            "descriptor_ids": [
+              "deployment",
+              "operations"
+            ],
+            "path": "scripts/build_release_manifest.py"
+          },
+          {
+            "descriptor_ids": [
+              "deployment",
+              "operations"
+            ],
+            "path": "scripts/deploy_release.py"
+          }
+        ],
+        "prompt_runtime_audit_required": false,
+        "real_docker_sandbox_required": false,
+        "registry": {
+          "generation": 1,
+          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+        },
+        "schema_version": 1,
+        "sha256": "607c74700af83bd84a756e16c0f1a4ffe2cc4c93c593a48f1f0e59577008a1fe",
+        "unowned_production_paths": [],
+        "verification_suites": [
+          "architecture",
+          "backend-full",
+          "compose-config",
+          "deployment-contract"
+        ],
+        "web_build_required": false
+      }
+    }
+  ],
+  "registry_sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9",
+  "schema_version": 1
+}

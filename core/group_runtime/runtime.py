@@ -38,6 +38,7 @@ from core.model_provider.decision_runtime import (
     judge_group_proactive,
     judge_group_timing,
 )
+from core.timing_model_policy import TimingModelMode
 from core.group_runtime.state import (
     GateStateSnapshot,
     GroupChatState,
@@ -393,7 +394,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     return response
                 policy = self._resolve_timing_model_policy(state, group_id)
                 transaction = self._begin_gate(group_id, state)
-                if policy.mode == "rules_only":
+                if policy.mode is TimingModelMode.RULES_ONLY:
                     state.force_next_continue = False
                     response = self._apply_policy_scoring_decision(
                         state,
@@ -484,7 +485,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
 
                 if not proactive_prepared:
                     policy = self._resolve_timing_model_policy(state, group_id)
-                    if policy.mode == "rules_only":
+                    if policy.mode is TimingModelMode.RULES_ONLY:
                         transaction = self._begin_gate(group_id, state)
                         response = self._apply_policy_scoring_decision(
                             state,
@@ -533,7 +534,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             if gate_force_direct_score > 0:
                 state.force_next_continue = False
 
-            if getattr(gate_policy, "mode", "enabled") == "shadow":
+            if gate_policy.mode is TimingModelMode.SHADOW:
                 shadow_scoring = self._shadow_scoring(
                     state,
                     tr,
@@ -638,7 +639,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             snapshot = state.take_snapshot()
             policy = self._resolve_timing_model_policy(state, group_id)
             timer_trigger_reason = trigger_reason or state.last_trigger_reason or "timer"
-            if policy.mode == "rules_only":
+            if policy.mode is TimingModelMode.RULES_ONLY:
                 transaction = self._begin_gate(group_id, state)
                 if was_waiting:
                     state.end_wait()
@@ -691,7 +692,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             if was_waiting:
                 state.end_wait()
 
-            if getattr(policy, "mode", "enabled") == "shadow":
+            if policy.mode is TimingModelMode.SHADOW:
                 shadow_scoring = self._shadow_scoring(
                     state,
                     timer_trigger_reason,

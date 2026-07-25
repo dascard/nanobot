@@ -114,6 +114,29 @@ class MemoryProviderDescriptor:
     def supports(self, capability: MemoryProviderCapability) -> bool:
         return capability in self.capabilities
 
+    @property
+    def registry_namespace(self) -> str:
+        return "memory_provider"
+
+    @property
+    def registry_id(self) -> str:
+        return self.id
+
+    @property
+    def registry_dependencies(self) -> tuple[str, ...]:
+        return self.dependencies
+
+    def registry_payload(self) -> Mapping[str, object]:
+        return {
+            "id": self.id,
+            "display_name": self.display_name,
+            "priority": self.priority,
+            "dependencies": list(self.dependencies),
+            "tool_names": list(self.tool_names),
+            "capabilities": sorted(self.capabilities),
+            "failure_policy": self.failure_policy,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryProviderDiagnostic:

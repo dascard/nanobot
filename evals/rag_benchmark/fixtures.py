@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -385,12 +386,27 @@ def _seed_sticker_positive_fixture(db: Session) -> None:
 def _seed_group_memory_positive_fixture(db: Session) -> None:
     now = _db_time(2026, 6, 20, 0, 0, 0)
     meta = {"fixture": FIXTURE_PRESET, "evidence_short_summary": GROUP_MEMORY_QUERY}
+    positive_content = "群体记忆 RAG fixture 正例：本群固定用来验证 group_memory 检索命中。"
+    decoy_content = "群体记忆 RAG fixture 正例：其他群的 decoy 用来验证 group filter 不泄漏。"
+
+    def human_governance(content: str) -> dict[str, object]:
+        return {
+            "approval_source": "human",
+            "governance_mode": "human_managed",
+            "approved_content_hash": hashlib.sha256(
+                f"{content}\0".encode("utf-8")
+            ).hexdigest(),
+            "human_reviewer_id": "rag-fixture-reviewer",
+            "human_reviewed_at": now,
+            "human_action": "accept",
+        }
+
     rows = [
         GroupMemory(
             id=GROUP_MEMORY_ID,
             group_id=GROUP_MEMORY_GROUP_ID,
             memory_type="topic",
-            content="群体记忆 RAG fixture 正例：本群固定用来验证 group_memory 检索命中。",
+            content=positive_content,
             content_hash="fixture-group-memory-positive-001",
             cluster_key="rag fixture group memory",
             evidence_log_ids_json=json.dumps([920101, 920102]),
@@ -405,12 +421,13 @@ def _seed_group_memory_positive_fixture(db: Session) -> None:
             source="fixture",
             meta_json=json.dumps(meta, ensure_ascii=False, sort_keys=True),
             created_at=now,
+            **human_governance(positive_content),
         ),
         GroupMemory(
             id=GROUP_MEMORY_DECOY_ID,
             group_id=GROUP_MEMORY_DECOY_GROUP_ID,
             memory_type="topic",
-            content="群体记忆 RAG fixture 正例：其他群的 decoy 用来验证 group filter 不泄漏。",
+            content=decoy_content,
             content_hash="fixture-group-memory-decoy-001",
             cluster_key="rag fixture group memory decoy",
             evidence_log_ids_json=json.dumps([920201, 920202, 920203]),
@@ -425,6 +442,7 @@ def _seed_group_memory_positive_fixture(db: Session) -> None:
             source="fixture",
             meta_json=json.dumps(meta, ensure_ascii=False, sort_keys=True),
             created_at=now,
+            **human_governance(decoy_content),
         ),
     ]
     db.add_all(rows)

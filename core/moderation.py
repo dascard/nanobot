@@ -3,24 +3,16 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
+from core.content_rules import (
+    ContentRuleAction,
+    ContentRuleEngine,
+    ContentRuleInput,
+    content_rule_descriptors_from_mappings,
+)
+
 logger = logging.getLogger("nanobot.moderation")
-
-
-def _match_rule(pattern: str, message: str, match_type: str = "contains") -> bool:
-    """按 match_type 匹配消息。"""
-    if match_type == "regex":
-        try:
-            return bool(re.search(pattern, message))
-        except re.error:
-            logger.warning("[Moderation] invalid regex pattern: %s", pattern)
-            return False
-    elif match_type == "exact":
-        return message == pattern
-    else:
-        return pattern in message
 
 
 def check_message_moderation(
@@ -37,37 +29,51 @@ def check_message_moderation(
     if not message or not rules:
         return None
 
-    for rule in rules:
-        if not rule.get("enabled", True):
-            continue
-        pattern = str(rule.get("pattern") or "")
-        if not pattern:
-            continue
-
-        # scope 过滤
-        scope = str(rule.get("scope_type") or "session")
-        if scope == "session":
-            rule_stream = str(rule.get("chat_stream_id") or "")
-            # session 规则必须有明确的 chat_stream_id；空 chat_stream_id 不匹配任何消息
-            if not chat_stream_id or not rule_stream or rule_stream != chat_stream_id:
-                continue
-        # scope == "global" → 不限制 chat_stream_id
-
-        match_type = str(rule.get("match_type") or "contains")
-        if _match_rule(pattern, message, match_type):
-            return {
-                "pattern": pattern,
-                "match_type": match_type,
-                "rule_id": rule.get("rule_id"),
-                "category": str(rule.get("category") or "no_learn"),
-                "reason": str(rule.get("reason") or ""),
-                "scope_type": scope,
-                "no_reply": bool(rule.get("no_reply", False)),
-                "no_learn": bool(rule.get("no_learn", True)),
-                "no_context": bool(rule.get("no_context", False)),
-            }
-
-    return None
+    eligible_rules = [
+        rule
+        for rule in rules
+        if rule.get("enabled", True)
+        and str(rule.get("pattern") or "")
+    ]
+    if not eligible_rules:
+        return None
+    try:
+        descriptors, source_by_id = (
+            content_rule_descriptors_from_mappings(eligible_rules)
+        )
+        evaluation = ContentRuleEngine(descriptors).evaluate(
+            ContentRuleInput(
+                message=message,
+                chat_stream_id=chat_stream_id,
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "[Moderation] rule descriptor invalid type=%s",
+            type(exc).__name__,
+        )
+        return None
+    if not evaluation.matches:
+        return None
+    primary = source_by_id[
+        evaluation.matches[0].descriptor.rule_id
+    ]
+    actions = set(evaluation.actions)
+    return {
+        "pattern": str(primary.get("pattern") or ""),
+        "match_type": str(
+            primary.get("match_type") or "contains"
+        ),
+        "rule_id": primary.get("rule_id"),
+        "category": str(primary.get("category") or "no_learn"),
+        "reason": str(primary.get("reason") or ""),
+        "scope_type": str(
+            primary.get("scope_type") or "session"
+        ),
+        "no_reply": ContentRuleAction.NO_REPLY in actions,
+        "no_learn": ContentRuleAction.NO_LEARN in actions,
+        "no_context": ContentRuleAction.NO_CONTEXT in actions,
+    }
 
 
 def check_message_moderation_db(
@@ -90,6 +96,7 @@ def check_message_moderation_db(
                 ContentBlockRule.chat_stream_id == chat_stream_id,
             ),
         )
+        .order_by(ContentBlockRule.id.asc())
         .all()
     )
     if not rows:
@@ -107,6 +114,7 @@ def check_message_moderation_db(
             "no_context": bool(r.no_context),
             "category": r.category or "no_learn",
             "reason": r.reason or "",
+            "source": "legacy_database",
             "enabled": True,
         }
         for r in rows

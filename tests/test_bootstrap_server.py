@@ -95,6 +95,7 @@ async def test_lifespan_calls_bootstrap_facades(monkeypatch):
         calls.append("inside")
         assert app.state.bridge is bridge
         assert app.state.new_api_session is new_api_session
+        assert app.state.composition_root is not None
 
     assert calls == [
         "init_db",
@@ -106,12 +107,13 @@ async def test_lifespan_calls_bootstrap_facades(monkeypatch):
         "init_bridge",
         "legacy_memory",
         "inside",
-        "stop_schedulers",
         "shutdown_bridge",
         "shutdown_new_api_session",
+        "stop_schedulers",
     ]
     assert app.state.bridge is None
     assert app.state.new_api_session is None
+    assert app.state.composition_root is None
 
 
 @pytest.mark.asyncio
@@ -198,10 +200,17 @@ async def test_lifespan_startup_failure_releases_started_resources(monkeypatch):
     monkeypatch.setattr(daily_digest, "close_push_session", fake_close_push_session)
 
     app = SimpleNamespace(state=SimpleNamespace())
-    with pytest.raises(RuntimeError, match="startup failed"):
+    from core.modules import CompositionStartError
+
+    with pytest.raises(
+        CompositionStartError,
+        match=r"runtime\.agent.*RuntimeError",
+    ) as caught:
         async with bootstrap_lifespan.lifespan(app):
             raise AssertionError("启动失败时不能进入 lifespan body")
 
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert str(caught.value.__cause__) == "startup failed"
     assert calls == [
         "init_db",
         "start_sqlite_maintenance",
@@ -211,13 +220,14 @@ async def test_lifespan_startup_failure_releases_started_resources(monkeypatch):
         "start_schedulers",
         "init_new_api_session",
         "network_check",
-        "stop_schedulers",
         "shutdown_new_api_session",
+        "stop_schedulers",
         "close_push_session",
         "stop_sqlite_maintenance:True",
     ]
     assert app.state.bridge is None
     assert app.state.new_api_session is None
+    assert app.state.composition_root is None
 
 
 @pytest.mark.asyncio
@@ -422,6 +432,102 @@ def test_start_schedulers_starts_embedded_session_summary_worker(monkeypatch):
 
     assert "session-summary-worker" in calls
     assert handles.session_summary is not None
+
+
+def test_start_schedulers_never_restores_retired_expression_writer(monkeypatch):
+    """阶段 7B 启动面不得重新创建旧表达学习线程或 handle。"""
+    import bootstrap.schedulers as schedulers
+
+    calls: list[str] = []
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    class Handle:
+        stop_timeout = 5.0
+
+        def stop(self):
+            pass
+
+    def fake_start_thread(*, name, target):
+        del target
+        calls.append(name)
+        return Handle()
+
+    monkeypatch.setenv(
+        "NANOBOT_SESSION_SUMMARY_WORKER_MODE",
+        "disabled",
+    )
+    monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
+    monkeypatch.setattr(
+        schedulers,
+        "_preload_sentinel",
+        lambda _logger: None,
+    )
+
+    handles = schedulers.start_schedulers(
+        testing=False,
+        logger=Logger(),
+    )
+
+    assert "expression-learner" not in calls
+    assert not hasattr(handles, "expression_learner")
+
+
+def test_start_schedulers_wires_group_learning_without_implicit_whitelist(
+    monkeypatch,
+):
+    import bootstrap.schedulers as schedulers
+
+    calls: list[tuple[str, object]] = []
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    class Handle:
+        stop_timeout = 5.0
+
+        def stop(self):
+            pass
+
+    def fake_start_thread(*, name, target):
+        calls.append((name, target))
+        return Handle()
+
+    monkeypatch.setenv(
+        "NANOBOT_SESSION_SUMMARY_WORKER_MODE",
+        "disabled",
+    )
+    monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
+    monkeypatch.setattr(
+        schedulers,
+        "_preload_sentinel",
+        lambda _logger: None,
+    )
+
+    handles = schedulers.start_schedulers(
+        testing=False,
+        logger=Logger(),
+    )
+
+    assert [name for name, _target in calls].count(
+        "group-learning-scheduler"
+    ) == 1
+    target = next(
+        target
+        for name, target in calls
+        if name == "group-learning-scheduler"
+    )
+    assert target is schedulers.group_learning_worker_scheduler
+    assert handles.group_learning is not None
 
 
 @pytest.mark.parametrize("mode", ["external", "disabled"])
@@ -690,6 +796,7 @@ async def test_lifespan_testing_mode_skips_bridge_network_and_scheduler_work(mon
         calls.append("inside")
         assert app.state.bridge is None
         assert app.state.new_api_session is new_api_session
+        assert app.state.composition_root is not None
 
     assert calls == [
         "init_db",
@@ -699,8 +806,9 @@ async def test_lifespan_testing_mode_skips_bridge_network_and_scheduler_work(mon
         "init_new_api_session",
         "legacy_memory",
         "inside",
-        "stop_schedulers",
         "shutdown_new_api_session",
+        "stop_schedulers",
     ]
     assert app.state.bridge is None
     assert app.state.new_api_session is None
+    assert app.state.composition_root is None

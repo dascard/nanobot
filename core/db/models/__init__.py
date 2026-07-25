@@ -1,7 +1,56 @@
 """按子域组织的 ORM 模型；`core.database` 仅保留兼容 re-export。"""
 
+from core.db.models.admin import (
+    AdminAuditLog,
+    AdminIdempotencyRecord,
+    ContentBlockRule,
+    MemoryCleanupRun,
+    RuntimeToolDecision,
+    SystemSetting,
+    ToolOverride,
+    UserBlockRule,
+    WebSearchProviderUsage,
+)
 from core.db.models.chat import ChatLog, ConversationTurn, SensitiveData, User
+from core.db.models.evaluation import (
+    EvalCandidate,
+    EvalRun,
+    EvalRunResult,
+    EvalSampleCursor,
+    ReplyEvalCase,
+    ReplyEvalResult,
+    ReplyEvalRun,
+)
+from core.db.models.group_memory import (
+    ChatStreamConfig,
+    ExpressionMemory,
+    GroupMemory,
+    JargonMemory,
+    StickerDuplicateCandidate,
+    StickerMemory,
+)
+from core.db.models.group_learning import (
+    GroupLearningCandidate,
+    GroupLearningEvidence,
+    GroupLearningRun,
+    GroupLearningSchedule,
+    GroupLearningStreamState,
+)
 from core.db.models.inbound import ChatDeliveryOutbox, InboundMessageClaim
+from core.db.models.knowledge import (
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeSource,
+)
+from core.db.models.observability import (
+    AgentRun,
+    LLMApiRequestLog,
+    PromptFileVersion,
+    PromptRenderLog,
+    ReplyContractCheckLog,
+    RuntimeTelemetryEvent,
+    ToolCall,
+)
 from core.db.models.outbound import (
     OutboundDeliveryAttempt,
     OutboundDeliveryCircuit,
@@ -24,6 +73,11 @@ from core.db.models.session_memory import (
     SessionSummaryJob,
 )
 from core.db.models.scheduling import ScheduledTask
+from core.db.models.semantic import (
+    RagDebugRun,
+    SemanticIndexItem,
+    SemanticIndexJob,
+)
 from core.db.models.sandbox import (
     Asset,
     SandboxAccessGrant,
@@ -36,13 +90,35 @@ from core.db.models.sandbox import (
 )
 
 __all__ = [
+    "AdminAuditLog",
+    "AdminIdempotencyRecord",
+    "AgentRun",
     "Asset",
     "ChatLog",
     "ChatDeliveryOutbox",
+    "ChatStreamConfig",
+    "ContentBlockRule",
     "ConversationTurn",
+    "EvalCandidate",
+    "EvalRun",
+    "EvalRunResult",
+    "EvalSampleCursor",
+    "ExpressionMemory",
+    "GroupLearningCandidate",
+    "GroupLearningEvidence",
+    "GroupLearningRun",
+    "GroupLearningSchedule",
+    "GroupLearningStreamState",
+    "GroupMemory",
     "InboundMessageClaim",
+    "JargonMemory",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
+    "KnowledgeSource",
+    "LLMApiRequestLog",
     "MemoryDigest",
     "MemoryDigestJob",
+    "MemoryCleanupRun",
     "OutboundDeliveryAttempt",
     "OutboundDeliveryCircuit",
     "OutboundDeliveryControl",
@@ -52,8 +128,19 @@ __all__ = [
     "Persona",
     "PersonaBehavior",
     "PersonaFact",
+    "PromptFileVersion",
+    "PromptRenderLog",
     "ProactiveOutreachLease",
     "ProactiveOutreachLog",
+    "RagDebugRun",
+    "ReplyContractCheckLog",
+    "RuntimeTelemetryEvent",
+    "ReplyEvalCase",
+    "ReplyEvalResult",
+    "ReplyEvalRun",
+    "RuntimeToolDecision",
+    "SemanticIndexItem",
+    "SemanticIndexJob",
     "SensitiveData",
     "RollingSessionSummary",
     "SessionSummaryJob",
@@ -62,8 +149,15 @@ __all__ = [
     "SandboxAdminOperation",
     "SandboxProjectSequence",
     "SandboxRun",
+    "StickerDuplicateCandidate",
+    "StickerMemory",
+    "SystemSetting",
     "SystemPrompt",
+    "ToolCall",
+    "ToolOverride",
     "User",
+    "UserBlockRule",
+    "WebSearchProviderUsage",
     "Workspace",
     "WorkspaceAsset",
     "WorkspaceQuotaBinding",

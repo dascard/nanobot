@@ -13,6 +13,12 @@ SESSION_CONFIG_JS = Path(
 REPLY_EVAL_JS = Path("webui/src/features/reply-eval/ReplyEvalPage.jsx")
 TOOLS_JS = Path("webui/src/features/tools/ToolsPage.jsx")
 EVALS_JS = Path("webui/src/features/evals/EvalsPage.jsx")
+GROUP_LEARNING_JS = Path(
+    "webui/src/features/group-learning/GroupLearningPage.jsx"
+)
+GROUP_LEARNING_PANELS_JS = Path(
+    "webui/src/features/group-learning/GroupLearningPanels.jsx"
+)
 
 
 def read_app() -> str:
@@ -34,7 +40,8 @@ def read_ui_sources() -> str:
 def test_admin_layout_uses_grouped_responsive_navigation():
     source = read_app()
 
-    assert "const NAV_SECTIONS = [" in source
+    assert "const BASE_NAV_SECTIONS = [" in source
+    assert "composeNavigationSections(BASE_NAV_SECTIONS)" in source
     assert "const NAV = NAV_SECTIONS.flatMap" in source
     assert "aria-label=\"打开导航\"" in source
     assert "md:hidden" in source
@@ -51,6 +58,24 @@ def test_login_token_input_has_visible_label():
     assert "id=\"admin-token\"" in login_source
     assert "placeholder=\"API 令牌\"" not in login_source
     assert "bg-gradient-to-br" not in login_source
+
+
+def test_db_browser_uses_structured_view_contract_without_sql_editor():
+    source = read_app()
+    db_source = source.split("function DbPage()")[1].split(
+        "// ── Logs ──"
+    )[0]
+
+    assert "api.get('/db/views')" in db_source
+    assert (
+        "api.post(`/db/views/${encodeURIComponent(viewId)}/rows`"
+        in db_source
+    )
+    assert "next_cursor" in db_source
+    assert "selectedMeta.filters" in db_source
+    assert "/db/query" not in db_source
+    assert "SQL 查询" not in db_source
+    assert "SELECT ..." not in db_source
 
 
 def test_prompt_flow_has_mobile_structured_fallback():
@@ -73,6 +98,15 @@ def test_key_filters_have_labels_or_aria_labels():
     assert "Field id=\"session-config-platform-filter\"" in source
     assert "Field id=\"session-config-chat-type-filter\"" in source
     assert "Field id=\"session-config-guidance-filter\"" in source
+
+
+def test_model_routes_page_links_task_and_output_contracts():
+    source = MODELS_JS.read_text(encoding="utf-8")
+
+    assert "r.task_contracts" in source
+    assert "Task / Output Contract" in source
+    assert "contract.output_schema" in source
+    assert "contract.output_failure_policy" in source
 
 
 def test_reply_eval_case_editor_controls_are_labelled():
@@ -237,22 +271,28 @@ def test_webui_scrollbars_use_global_dark_admin_theme():
     assert "var(--scrollbar-thumb-hover)" in css_source
 
 
-def test_memory_page_exposes_group_overview_and_manual_extract():
-    source = read_app()
-    memory_source = source.split("function MemoryPage()")[1].split("// ── Audit ──")[0]
+def test_group_learning_workbench_exposes_governed_management_surfaces():
+    page_source = GROUP_LEARNING_JS.read_text(encoding="utf-8")
+    panel_source = GROUP_LEARNING_PANELS_JS.read_text(encoding="utf-8")
 
-    assert "api.get('/group-memories/overview'" in memory_source
-    assert "api.get(`/group-memories/${encodeURIComponent(target)}/items`" in memory_source
-    assert "api.post(`/group-memories/${encodeURIComponent(groupId)}/extract`" in memory_source
-    assert "提取记忆" in memory_source
-    assert "记忆列表" in memory_source
-    assert "windowHours" in memory_source
-    assert "injectable_count" in memory_source
+    assert "getGroupLearningDescriptors()" in page_source
+    assert "listGroupLearningSessions({ limit: 500 })" in page_source
+    assert "extractGroupLearningSession({" in page_source
+    assert "updateGroupLearningFeature({" in page_source
+    assert "正式记忆" in page_source
+    assert "学习候选" in page_source
+    assert "定时白名单" in page_source
+    assert "运行记录" in page_source
+    assert "reviewGroupLearningCandidate({" in panel_source
+    assert "setGroupLearningRuleActivation({" in panel_source
+    assert "putGroupLearningSchedule({" in panel_source
+    assert "pauseGroupLearningSchedule({" in panel_source
+    assert "Evidence 受限预览" in panel_source
 
 
 def test_session_summary_browser_exposes_llm_regeneration_controls():
     source = read_app()
-    summary_source = source.split("function SessionSummaryBrowser(")[1].split("// ── Memory ──")[0]
+    summary_source = source.split("function SessionSummaryBrowser(")[1].split("// ── Persona ──")[0]
 
     assert "重新生成 LLM 摘要" in summary_source
     assert "生成近期摘要" in summary_source
@@ -268,7 +308,7 @@ def test_session_summary_browser_exposes_llm_regeneration_controls():
 
 def test_long_memory_digest_browser_exposes_generation_metadata():
     source = read_app()
-    summary_source = source.split("function SessionSummaryBrowser(")[1].split("// ── Memory ──")[0]
+    summary_source = source.split("function SessionSummaryBrowser(")[1].split("// ── Persona ──")[0]
 
     assert "summary_type" in summary_source
     assert "source_id" in summary_source
@@ -282,30 +322,26 @@ def test_long_memory_digest_browser_exposes_generation_metadata():
     assert "message_count" in summary_source
 
 
-def test_memory_page_auto_loads_exact_group_input():
-    source = read_app()
-    memory_source = source.split("function MemoryPage()")[1].split("// ── Audit ──")[0]
+def test_group_learning_workbench_only_selects_discovered_canonical_sessions():
+    page_source = GROUP_LEARNING_JS.read_text(encoding="utf-8")
 
-    assert "memoryLoadKeyRef" in memory_source
-    assert "exactOverviewGroup" in memory_source
-    assert "load(exactOverviewGroup.group_id)" in memory_source
-    assert "item.raw_group_id === q" in memory_source
+    assert "item.chat_stream_id === current" in page_source
+    assert "canonical 群 session" in page_source
+    assert "listGroupLearningSessions" in page_source
+    assert "groupId" not in page_source
 
 
-def test_memory_page_exposes_injection_controls_and_preview():
-    source = read_app()
-    memory_source = source.split("function MemoryPage()")[1].split("// ── Audit ──")[0]
+def test_group_learning_workbench_does_not_bypass_governed_writes():
+    page_source = GROUP_LEARNING_JS.read_text(encoding="utf-8")
+    panel_source = GROUP_LEARNING_PANELS_JS.read_text(encoding="utf-8")
+    combined = f"{page_source}\n{panel_source}"
 
-    assert "enableInjection" in memory_source
-    assert "previewInjection" in memory_source
-    assert "group-memories/${encodeURIComponent(groupId)}/injection-config" in memory_source
-    assert "group-memories/${encodeURIComponent(groupId)}/injection-preview" in memory_source
-    assert "updateMemory" in memory_source
-    assert "api.patch(`/group-memories/items/${memoryId}`" in memory_source
-    assert "一键开启注入" in memory_source
-    assert "模拟注入" in memory_source
-    assert "preview 模式只展示预览结果，不会真实注入 prompt。" in memory_source
-    assert "禁用" in memory_source
+    assert "request_id: requestId" in combined
+    assert "reason," in combined
+    assert "Prompt 注入独立控制" in page_source
+    assert "首版只读展示" in panel_source
+    assert "setGroupMemoryInjectionConfig" not in combined
+    assert "updateGroupMemoryItem" not in combined
 
 
 def test_persona_page_exposes_governance_and_injection_preview():
@@ -330,7 +366,8 @@ def test_tools_page_exposes_platform_scope_controls():
 
     assert "tool-platform-select" in source
     assert "指定平台" in source
-    assert "platform:" in source
+    assert "listTools({" in source
+    assert "platform," in source
     assert "scope_type: 'platform'" in source or 'scope_type: \"platform\"' in source
 
 

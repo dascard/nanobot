@@ -581,3 +581,46 @@ def test_lost_lease_cannot_commit_terminal_state(db_session):
     )
     assert operation.status == "running"
     assert operation.lease_token == "replacement-fencing-token"
+
+
+def test_sandbox_operation_lease_checks_attempt_generation(db_session):
+    result = _enqueue_access(
+        db_session,
+        request_id="lease-attempt-request-0001",
+        session_id="private_lease_attempt",
+        capability="off",
+    )
+    db_session.commit()
+    factory = _factory(db_session)
+    claim_db = factory()
+    try:
+        claim = _claim_operation(
+            claim_db,
+            worker_id="same-runner",
+            lease_seconds=180,
+        )
+    finally:
+        claim_db.close()
+    assert claim is not None
+
+    operation = db_session.get(
+        SandboxAdminOperation,
+        result.operation.operation_id,
+    )
+    operation.attempt_count = int(operation.attempt_count) + 1
+    db_session.commit()
+
+    settle_db = factory()
+    try:
+        with pytest.raises(SandboxOperationLeaseLost):
+            _settle_success(settle_db, claim)
+    finally:
+        settle_db.close()
+
+    db_session.expire_all()
+    operation = db_session.get(
+        SandboxAdminOperation,
+        result.operation.operation_id,
+    )
+    assert operation.status == "running"
+    assert operation.attempt_count == claim.attempt_count + 1

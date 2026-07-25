@@ -23,6 +23,7 @@ from core.group_runtime.state import (
     _pending_payload,
     _pending_text_for_scoring,
 )
+from core.timing_model_policy import TimingModelPolicy
 
 logger = logging.getLogger("nanobot.group_runtime")
 
@@ -225,10 +226,12 @@ class GroupRuntimeScoringMixin:
         return response
 
     @staticmethod
-    def _policy_payload(policy) -> dict:
+    def _policy_payload(policy: TimingModelPolicy) -> dict:
+        if not isinstance(policy, TimingModelPolicy):
+            raise TypeError("timing model policy 不满足类型化合同")
         return {
-            "mode": str(getattr(policy, "mode", "enabled") or "enabled"),
-            "source": str(getattr(policy, "source", "default") or "default"),
+            "mode": policy.mode.value,
+            "source": policy.source,
         }
 
     def _resolve_timing_model_policy(self, state: GroupChatState, group_id: str):

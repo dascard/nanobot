@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections.abc import Sequence
 from typing import Literal
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.session_memory import config
 from core.db.models.chat import ConversationTurn
 from core.db.models.session_memory import RollingSessionSummary, SessionSummaryJob
+from core.fencing import lease_deadline, new_fencing_token
 from core.time_utils import db_now_naive, to_db_naive
 
 
@@ -23,6 +24,44 @@ ACTIVE_JOB_STATUSES = frozenset({"pending", "running", "done"})
 
 class SessionSummaryJobRetryConflict(ValueError):
     """只有 failed job 允许由管理端显式重试。"""
+
+
+class SessionSummaryJobLeaseLost(RuntimeError):
+    """会话摘要任务的租约身份、代次、尝试次数或有效期不再匹配。"""
+
+
+@dataclass(frozen=True, slots=True)
+class SessionSummaryJobLease:
+    job_id: int
+    worker_id: str
+    owner_token: str = field(repr=False)
+    generation: int
+    attempt_no: int
+    expires_at: datetime
+    stable_hash: str
+
+    def __post_init__(self) -> None:
+        worker_id = str(self.worker_id or "").strip()
+        owner_token = str(self.owner_token or "").strip()
+        if self.job_id <= 0:
+            raise ValueError("job_id 必须是正整数")
+        if not worker_id or len(worker_id) > 128:
+            raise ValueError("worker_id 必须是 1-128 字符")
+        if not owner_token or len(owner_token) > 128:
+            raise ValueError("owner_token 必须是 1-128 字符")
+        if self.generation <= 0:
+            raise ValueError("generation 必须是正整数")
+        if self.attempt_no <= 0:
+            raise ValueError("attempt_no 必须是正整数")
+        if not isinstance(self.expires_at, datetime):
+            raise TypeError("expires_at 必须是 datetime")
+        object.__setattr__(self, "worker_id", worker_id)
+        object.__setattr__(self, "owner_token", owner_token)
+        object.__setattr__(
+            self,
+            "stable_hash",
+            str(self.stable_hash or "").strip()[:64],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +92,62 @@ def _stable_job_hash(
             "source_turn_ids": source_turn_ids,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+def _normalize_owner(owner: str) -> str:
+    normalized = str(owner or "").strip()
+    if not normalized or len(normalized) > 128:
+        raise ValueError("owner 必须是 1-128 字符")
+    if any(ord(character) < 32 for character in normalized):
+        raise ValueError("owner 不能包含控制字符")
+    return normalized
+
+
+def session_summary_job_lease(
+    job: SessionSummaryJob,
+) -> SessionSummaryJobLease:
+    """把已抢占 ORM 行转换为跨事务传递的不可变租约。"""
+
+    return SessionSummaryJobLease(
+        job_id=int(job.id or 0),
+        worker_id=str(job.locked_by or ""),
+        owner_token=str(job.lease_token or ""),
+        generation=int(job.generation or 0),
+        attempt_no=int(job.attempt_count or 0),
+        expires_at=job.lease_expires_at,
+        stable_hash=str(job.stable_hash or ""),
+    )
+
+
+def assert_summary_job_lease(
+    db: Session,
+    lease: SessionSummaryJobLease,
+    *,
+    now: datetime | None = None,
+) -> SessionSummaryJob:
+    """验证完整 fencing 身份；失败时不泄漏当前 owner 或 token。"""
+
+    if not isinstance(lease, SessionSummaryJobLease):
+        raise TypeError("lease 必须是 SessionSummaryJobLease")
+    checked_at = to_db_naive(now) or db_now_naive()
+    row = (
+        db.query(SessionSummaryJob)
+        .filter(
+            SessionSummaryJob.id == lease.job_id,
+            SessionSummaryJob.status == "running",
+            SessionSummaryJob.locked_by == lease.worker_id,
+            SessionSummaryJob.lease_token == lease.owner_token,
+            SessionSummaryJob.generation == lease.generation,
+            SessionSummaryJob.attempt_count == lease.attempt_no,
+            SessionSummaryJob.lease_expires_at.is_not(None),
+            SessionSummaryJob.lease_expires_at > checked_at,
+        )
+        .populate_existing()
+        .one_or_none()
+    )
+    if row is None:
+        raise SessionSummaryJobLeaseLost("session_summary_job_lease_lost")
+    return row
 
 
 def enqueue_session_summary_job(
@@ -145,6 +240,9 @@ def retry_session_summary_job(db: Session, job_id: int) -> SessionSummaryJob:
     job.next_retry_at = None
     job.locked_by = ""
     job.locked_at = None
+    job.lease_token = ""
+    job.lease_expires_at = None
+    job.finished_at = None
     job.updated_at = db_now_naive()
     db.flush()
     return job
@@ -193,13 +291,17 @@ def claim_summary_job(
     job_id: int,
     *,
     owner: str,
+    lease_seconds: int | float = config.SESSION_SUMMARY_RUNNING_TIMEOUT_SEC,
     now: datetime | None = None,
 ) -> SessionSummaryJob | None:
     """原子抢占 pending job。
 
     多 worker 并发时，只有第一个满足 `status='pending'` 的 UPDATE 会成功。
     """
+    normalized_owner = _normalize_owner(owner)
     now = to_db_naive(now) or db_now_naive()
+    token = new_fencing_token()
+    expires_at = lease_deadline(now, lease_seconds)
     affected = (
         db.query(SessionSummaryJob)
         .filter(
@@ -212,9 +314,14 @@ def claim_summary_job(
         )
         .update({
             "status": "running",
-            "locked_by": owner or "session-summary-worker",
+            "locked_by": normalized_owner,
             "locked_at": now,
+            "lease_token": token,
+            "lease_expires_at": expires_at,
+            "generation": SessionSummaryJob.generation + 1,
+            "attempt_count": SessionSummaryJob.attempt_count + 1,
             "error": "",
+            "finished_at": None,
             "updated_at": now,
         }, synchronize_session=False)
     )
@@ -227,27 +334,47 @@ def claim_summary_job(
 
 def renew_summary_job_lease(
     db: Session,
-    job_id: int,
+    job_id: int | None = None,
     *,
-    owner: str,
+    lease: SessionSummaryJobLease | None = None,
+    owner: str = "",
+    lease_seconds: int | float = config.SESSION_SUMMARY_RUNNING_TIMEOUT_SEC,
     now: datetime | None = None,
 ) -> bool:
-    """仅允许当前 running owner 刷新 locked_at。"""
+    """刷新 running 租约；新任务必须提供完整 fencing identity。"""
 
-    normalized_owner = str(owner or "").strip()
-    if not normalized_owner or len(normalized_owner) > 128:
-        raise ValueError("owner 必须是 1-128 字符")
     renewed_at = to_db_naive(now) or db_now_naive()
-    affected = (
-        db.query(SessionSummaryJob)
-        .filter(
+    expires_at = lease_deadline(renewed_at, lease_seconds)
+    if lease is not None:
+        if job_id is not None and int(job_id) != lease.job_id:
+            raise ValueError("job_id 与 lease 不一致")
+        filters = (
+            SessionSummaryJob.id == lease.job_id,
+            SessionSummaryJob.status == "running",
+            SessionSummaryJob.locked_by == lease.worker_id,
+            SessionSummaryJob.lease_token == lease.owner_token,
+            SessionSummaryJob.generation == lease.generation,
+            SessionSummaryJob.attempt_count == lease.attempt_no,
+            SessionSummaryJob.lease_expires_at.is_not(None),
+            SessionSummaryJob.lease_expires_at > renewed_at,
+        )
+    else:
+        if job_id is None:
+            raise ValueError("必须提供 lease 或 job_id")
+        normalized_owner = _normalize_owner(owner)
+        filters = (
             SessionSummaryJob.id == int(job_id),
             SessionSummaryJob.status == "running",
             SessionSummaryJob.locked_by == normalized_owner,
+            SessionSummaryJob.lease_token == "",
         )
+    affected = (
+        db.query(SessionSummaryJob)
+        .filter(*filters)
         .update(
             {
                 "locked_at": renewed_at,
+                "lease_expires_at": expires_at,
                 "updated_at": renewed_at,
             },
             synchronize_session=False,
@@ -259,20 +386,23 @@ def renew_summary_job_lease(
 
 def acquire_summary_finalize_permit(
     db: Session,
-    job_id: int,
+    job_id: int | None = None,
     *,
-    owner: str,
+    lease: SessionSummaryJobLease | None = None,
+    owner: str = "",
     now: datetime | None = None,
 ) -> FinalizePermit:
-    """续租当前 owner 后，按 active coverage 决定是否允许晋升。"""
+    """续租完整 fencing identity 后，按 active coverage 决定是否晋升。"""
 
-    proposed_job = db.get(SessionSummaryJob, int(job_id))
+    resolved_job_id = lease.job_id if lease is not None else int(job_id or 0)
+    proposed_job = db.get(SessionSummaryJob, resolved_job_id)
     proposed_coverage = int(
         getattr(proposed_job, "covered_until_turn_id", 0) or 0
     )
     if proposed_job is None or not renew_summary_job_lease(
         db,
-        int(job_id),
+        resolved_job_id,
+        lease=lease,
         owner=owner,
         now=now,
     ):
@@ -285,7 +415,7 @@ def acquire_summary_finalize_permit(
         )
 
     db.expire_all()
-    job = db.get(SessionSummaryJob, int(job_id))
+    job = db.get(SessionSummaryJob, resolved_job_id)
     if job is None:
         return FinalizePermit(
             decision="lost_lease",
@@ -370,6 +500,9 @@ def mark_summary_job_obsolete(
     job.next_retry_at = None
     job.locked_by = ""
     job.locked_at = None
+    job.lease_token = ""
+    job.lease_expires_at = None
+    job.finished_at = db_now_naive()
     job.meta_json = json.dumps(meta, ensure_ascii=False)
     job.updated_at = db_now_naive()
     db.flush()
@@ -438,8 +571,21 @@ def recover_stale_running_jobs(
         .filter(
             SessionSummaryJob.status == "running",
             or_(
-                SessionSummaryJob.locked_at.is_(None),
-                SessionSummaryJob.locked_at <= cutoff,
+                and_(
+                    SessionSummaryJob.lease_token != "",
+                    SessionSummaryJob.lease_expires_at.is_not(None),
+                    SessionSummaryJob.lease_expires_at <= now,
+                ),
+                and_(
+                    or_(
+                        SessionSummaryJob.lease_token == "",
+                        SessionSummaryJob.lease_token.is_(None),
+                    ),
+                    or_(
+                        SessionSummaryJob.locked_at.is_(None),
+                        SessionSummaryJob.locked_at <= cutoff,
+                    ),
+                ),
             ),
         )
         .order_by(SessionSummaryJob.id.asc())
@@ -452,11 +598,15 @@ def recover_stale_running_jobs(
         max_retry = max(0, int(job.max_retry or config.SESSION_SUMMARY_MAX_RETRY))
         job.locked_by = ""
         job.locked_at = None
+        job.lease_token = ""
+        job.lease_expires_at = None
+        job.finished_at = None
         job.updated_at = now
         if job.retry_count >= max_retry:
             job.status = "failed"
             job.error = "running_timeout"
             job.next_retry_at = None
+            job.finished_at = now
         else:
             job.status = "pending"
             job.error = "running_timeout_recovered"
@@ -477,7 +627,11 @@ def mark_summary_job_done(
     job.next_retry_at = None
     job.locked_by = ""
     job.locked_at = None
-    job.updated_at = db_now_naive()
+    job.lease_token = ""
+    job.lease_expires_at = None
+    now = db_now_naive()
+    job.finished_at = now
+    job.updated_at = now
     db.flush()
     return job
 
@@ -494,15 +648,19 @@ def mark_summary_job_failed(
     job.error = str(error or "summary_job_failed")[:4000]
     job.locked_by = ""
     job.locked_at = None
+    job.lease_token = ""
+    job.lease_expires_at = None
     now = db_now_naive()
     job.updated_at = now
     max_retry = max(0, int(job.max_retry or config.SESSION_SUMMARY_MAX_RETRY))
     if retryable and job.retry_count < max_retry:
         job.status = "pending"
+        job.finished_at = None
         delay = int(retry_delay_sec if retry_delay_sec is not None else config.SESSION_SUMMARY_RETRY_DELAY_SEC)
         job.next_retry_at = now + timedelta(seconds=max(1, delay))
     else:
         job.status = "failed"
         job.next_retry_at = None
+        job.finished_at = now
     db.flush()
     return job

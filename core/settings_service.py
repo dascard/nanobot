@@ -9,7 +9,8 @@ from threading import RLock
 from collections.abc import Mapping
 
 from core.config_registry import LEGACY_SETTING_ALIASES, SETTING_DEFS, SettingDef
-from core.database import SessionLocal, SystemSetting
+from core.db import SessionLocal, system_setting_repository
+from core.lifecycle import record_compatibility_usage
 from core.settings_specs import SettingSourceName, validate_setting_values
 
 
@@ -25,16 +26,20 @@ class ResolvedSetting:
     source: SettingSource
     origin: str = "default"
     precedence_index: int = -1
+    compatibility_id: str | None = None
 
     def provenance(self) -> dict[str, object]:
         """返回不包含设置值的来源说明。"""
 
-        return {
+        provenance = {
             "key": self.key,
             "source": self.source,
             "origin": self.origin,
             "precedence_index": self.precedence_index,
         }
+        if self.compatibility_id is not None:
+            provenance["compatibility_id"] = self.compatibility_id
+        return provenance
 
 
 def coerce_setting_value(value: object, defn: SettingDef) -> object:
@@ -126,7 +131,9 @@ class SettingsService:
         canonical_key: str,
         legacy_key: str,
         source: SettingSource,
+        compatibility_id: str,
     ) -> None:
+        record_compatibility_usage(compatibility_id)
         warning_key = (canonical_key, source)
         if warning_key in self._warned_legacy_aliases:
             return
@@ -146,6 +153,7 @@ class SettingsService:
         value: object,
         source: SettingSource,
         origin: str,
+        compatibility_id: str | None = None,
     ) -> ResolvedSetting:
         return ResolvedSetting(
             key=key,
@@ -153,6 +161,7 @@ class SettingsService:
             source=source,
             origin=origin,
             precedence_index=defn.source_precedence.index(source),
+            compatibility_id=compatibility_id,
         )
 
     def _resolve_from_sources(
@@ -189,6 +198,7 @@ class SettingsService:
                         canonical_key=key,
                         legacy_key=alias.key,
                         source=source,
+                        compatibility_id=alias.compatibility_id,
                     )
                     return self._resolved(
                         key=key,
@@ -196,6 +206,7 @@ class SettingsService:
                         value=row_map[alias.key].value,
                         source=source,
                         origin=f"system_settings:{alias.key}",
+                        compatibility_id=alias.compatibility_id,
                     )
             elif source == "legacy_environment":
                 if alias is not None and alias.env_name in os.environ:
@@ -203,6 +214,7 @@ class SettingsService:
                         canonical_key=key,
                         legacy_key=alias.env_name,
                         source=source,
+                        compatibility_id=alias.compatibility_id,
                     )
                     return self._resolved(
                         key=key,
@@ -210,6 +222,7 @@ class SettingsService:
                         value=os.environ[alias.env_name],
                         source=source,
                         origin=f"env:{alias.env_name}",
+                        compatibility_id=alias.compatibility_id,
                     )
             elif source == "default":
                 return self._resolved(
@@ -241,7 +254,7 @@ class SettingsService:
             try:
                 db = self._session_factory()
                 try:
-                    rows = db.query(SystemSetting).all()
+                    rows = system_setting_repository(db).list_all()
                     row_map = {r.key: r for r in rows if r.value is not None}
                 finally:
                     db.close()
@@ -321,8 +334,9 @@ class SettingsService:
         """使用调用方 Session 解析单项设置，不跨越其事务边界。"""
 
         defn = self._definitions.get(key)
+        repository = system_setting_repository(db)
         if defn is None:
-            row = db.get(SystemSetting, key)
+            row = repository.get(key)
             if row is not None and row.value is not None:
                 return ResolvedSetting(
                     key=key,
@@ -345,11 +359,7 @@ class SettingsService:
             alias = LEGACY_SETTING_ALIASES.get(key)
             if alias is not None:
                 keys.add(alias.key)
-            rows = (
-                db.query(SystemSetting)
-                .filter(SystemSetting.key.in_(keys))
-                .all()
-            )
+            rows = repository.list_by_keys(tuple(keys))
             row_map = {row.key: row for row in rows if row.value is not None}
         return self._resolve_with_database(key, defn, row_map)
 

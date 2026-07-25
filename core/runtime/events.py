@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -10,6 +11,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Literal, Protocol, runtime_checkable
+
+from core.registry import RegistryBuilder, RegistrySnapshot
+from core.runtime.extensions import (
+    RuntimeExtensionKind,
+    RuntimeFailurePolicy,
+    RuntimeHookDescriptor,
+    RuntimeObserverBinding,
+    RuntimeObserverDispatcher,
+)
+from core.telemetry.contracts import (
+    TelemetryCorrelation,
+    TelemetryProvenance,
+)
 
 
 RuntimeEventPhase = Literal["started", "succeeded", "failed", "state_changed"]
@@ -51,6 +65,8 @@ class RuntimeEventDescriptor:
     domain: str
     phases: tuple[RuntimeEventPhase, ...]
     fields: tuple[RuntimeEventField, ...] = ()
+    owner_module: str = "runtime.agent"
+    version: str = "1.0.0"
 
     def __post_init__(self) -> None:
         name = str(self.name or "").strip()
@@ -59,6 +75,16 @@ class RuntimeEventDescriptor:
             raise RuntimeEventRegistryError(f"事件名必须包含命名空间：{name!r}")
         if not domain:
             raise RuntimeEventRegistryError(f"事件 {name} 的 domain 不能为空")
+        owner_module = str(self.owner_module or "").strip()
+        version = str(self.version or "").strip()
+        if not owner_module:
+            raise RuntimeEventRegistryError(
+                f"事件 {name} 的 owner_module 不能为空"
+            )
+        if not version:
+            raise RuntimeEventRegistryError(
+                f"事件 {name} 的 version 不能为空"
+            )
         phases = tuple(dict.fromkeys(self.phases))
         if not phases:
             raise RuntimeEventRegistryError(f"事件 {name} 至少声明一个 phase")
@@ -70,10 +96,42 @@ class RuntimeEventDescriptor:
         object.__setattr__(self, "domain", domain)
         object.__setattr__(self, "phases", phases)
         object.__setattr__(self, "fields", fields)
+        object.__setattr__(self, "owner_module", owner_module)
+        object.__setattr__(self, "version", version)
 
     @property
     def fields_by_name(self) -> Mapping[str, RuntimeEventField]:
         return MappingProxyType({item.name: item for item in self.fields})
+
+    @property
+    def registry_namespace(self) -> str:
+        return "runtime_event"
+
+    @property
+    def registry_id(self) -> str:
+        return self.name
+
+    @property
+    def registry_dependencies(self) -> tuple[str, ...]:
+        return ()
+
+    def registry_payload(self) -> Mapping[str, object]:
+        return {
+            "name": self.name,
+            "domain": self.domain,
+            "owner_module": self.owner_module,
+            "version": self.version,
+            "phases": list(self.phases),
+            "fields": [
+                {
+                    "name": item.name,
+                    "kind": item.kind,
+                    "required": item.required,
+                    "max_chars": item.max_chars,
+                }
+                for item in self.fields
+            ],
+        }
 
 
 class RuntimeEventRegistry:
@@ -82,12 +140,25 @@ class RuntimeEventRegistry:
     def __init__(self, descriptors: Sequence[RuntimeEventDescriptor] = ()) -> None:
         self._descriptors: dict[str, RuntimeEventDescriptor] = {}
         self._frozen = False
+        self._registry_snapshot: (
+            RegistrySnapshot[RuntimeEventDescriptor] | None
+        ) = None
         for descriptor in descriptors:
             self.register(descriptor)
 
     @property
     def frozen(self) -> bool:
         return self._frozen
+
+    @property
+    def registry_snapshot(
+        self,
+    ) -> RegistrySnapshot[RuntimeEventDescriptor]:
+        if self._registry_snapshot is None:
+            raise RuntimeEventRegistryError(
+                "RuntimeEvent Registry 尚未冻结"
+            )
+        return self._registry_snapshot
 
     def register(self, descriptor: RuntimeEventDescriptor) -> None:
         if self._frozen:
@@ -99,6 +170,14 @@ class RuntimeEventRegistry:
         self._descriptors[descriptor.name] = descriptor
 
     def freeze(self) -> "RuntimeEventRegistry":
+        if self._frozen:
+            return self
+        builder = RegistryBuilder[RuntimeEventDescriptor](
+            "runtime_event"
+        )
+        for name in sorted(self._descriptors):
+            builder.register(self._descriptors[name])
+        self._registry_snapshot = builder.freeze()
         self._frozen = True
         return self
 
@@ -110,21 +189,12 @@ class RuntimeEventRegistry:
             raise RuntimeEventRegistryError(f"事件未注册：{normalized or '<empty>'}") from exc
 
     def list(self) -> tuple[RuntimeEventDescriptor, ...]:
+        if self._registry_snapshot is not None:
+            return tuple(self._registry_snapshot)
         return tuple(self._descriptors[name] for name in sorted(self._descriptors))
 
 
-@dataclass(frozen=True, slots=True)
-class RuntimeEventContext:
-    trace_id: str = ""
-    run_id: str = ""
-    tool_call_id: str = ""
-
-    def __post_init__(self) -> None:
-        for name in ("trace_id", "run_id", "tool_call_id"):
-            value = str(getattr(self, name) or "").strip()
-            if len(value) > 128 or any(ord(char) < 32 for char in value):
-                value = ""
-            object.__setattr__(self, name, value)
+RuntimeEventContext = TelemetryCorrelation
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +205,7 @@ class RuntimeEvent:
     phase: RuntimeEventPhase
     occurred_at: datetime
     context: RuntimeEventContext
+    provenance: TelemetryProvenance
     attributes: Mapping[str, object] = field(default_factory=dict)
     dropped_attribute_count: int = 0
 
@@ -170,6 +241,47 @@ class InMemoryRuntimeEventSink:
             return tuple(self._events)
 
 
+class _RuntimeEventSinkObserver:
+    """旧 Sink Port 到只读 Observer Hook 的兼容 Adapter。"""
+
+    def __init__(self, sink: RuntimeEventSink) -> None:
+        self._sink = sink
+
+    def observe(self, event: object) -> object | None:
+        if not isinstance(event, RuntimeEvent):
+            raise TypeError("RuntimeEvent Observer 只接受 RuntimeEvent")
+        return self._sink.emit(event)
+
+
+def _observer_dispatcher_from_sinks(
+    sinks: Sequence[RuntimeEventSink],
+    *,
+    fail_open: bool,
+) -> RuntimeObserverDispatcher:
+    failure_policy = (
+        RuntimeFailurePolicy.FAIL_OPEN
+        if fail_open
+        else RuntimeFailurePolicy.FAIL_CLOSED
+    )
+    return RuntimeObserverDispatcher(tuple(
+        RuntimeObserverBinding(
+            descriptor=RuntimeHookDescriptor(
+                hook_id=f"runtime.event_sink_{index:04d}",
+                kind=RuntimeExtensionKind.OBSERVER,
+                owner_module="runtime.events",
+                domain="runtime",
+                input_contract="runtime.event.v1",
+                output_contract="none",
+                priority=index,
+                failure_policy=failure_policy,
+                trusted_builtin=True,
+            ),
+            observer=_RuntimeEventSinkObserver(sink),
+        )
+        for index, sink in enumerate(sinks)
+    ))
+
+
 class RuntimeEventEmitter:
     """根据 Descriptor 白名单净化字段，再投递到显式 Sink。"""
 
@@ -195,14 +307,33 @@ class RuntimeEventEmitter:
         now: Callable[[], datetime] | None = None,
         event_id_factory: Callable[[], str] | None = None,
         fail_open: bool = True,
+        observer_dispatcher: RuntimeObserverDispatcher | None = None,
+        artifact_revision: str | None = None,
     ) -> None:
         if not registry.frozen:
             raise RuntimeEventRegistryError("RuntimeEventEmitter 只接受已冻结 Registry")
+        if sinks and observer_dispatcher is not None:
+            raise ValueError("sinks 与 observer_dispatcher 不能同时提供")
         self._registry = registry
-        self._sinks = tuple(sinks)
+        self._observer_dispatcher = (
+            observer_dispatcher
+            if observer_dispatcher is not None
+            else _observer_dispatcher_from_sinks(
+                sinks,
+                fail_open=bool(fail_open),
+            )
+        )
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._event_id_factory = event_id_factory or (lambda: uuid.uuid4().hex)
-        self._fail_open = bool(fail_open)
+        self._artifact_revision = str(
+            artifact_revision
+            if artifact_revision is not None
+            else (
+                os.environ.get("NANOBOT_RUNTIME_REVISION")
+                or os.environ.get("GIT_COMMIT")
+                or ""
+            )
+        ).strip()
 
     def emit(
         self,
@@ -229,15 +360,21 @@ class RuntimeEventEmitter:
             phase=phase,
             occurred_at=occurred_at,
             context=context or RuntimeEventContext(),
+            provenance=TelemetryProvenance(
+                registry_generation=(
+                    self._registry.registry_snapshot.generation
+                ),
+                registry_sha256=(
+                    self._registry.registry_snapshot.sha256
+                ),
+                module_id=descriptor.owner_module,
+                module_version=descriptor.version,
+                artifact_revision=self._artifact_revision,
+            ),
             attributes=sanitized,
             dropped_attribute_count=dropped,
         )
-        for sink in self._sinks:
-            try:
-                sink.emit(event)
-            except Exception:
-                if not self._fail_open:
-                    raise
+        self._observer_dispatcher.dispatch(event)
         return event
 
     def _sanitize_attributes(
@@ -252,8 +389,15 @@ class RuntimeEventEmitter:
             key = str(raw_key or "")
             lowered = key.lower()
             event_field = fields.get(key)
-            if event_field is None or any(
-                part in lowered for part in self._SENSITIVE_KEY_PARTS
+            if event_field is None or (
+                event_field.kind not in {
+                    "boolean",
+                    "count",
+                    "duration_ms",
+                }
+                and any(
+                    part in lowered for part in self._SENSITIVE_KEY_PARTS
+                )
             ):
                 dropped += 1
                 continue

@@ -48,9 +48,19 @@ def _private_decision_payload(decision: Any | None) -> dict[str, Any] | None:
         "action": _decision_attr(decision, "action"),
         "complexity": _decision_attr(decision, "complexity"),
         "effort": _decision_attr(decision, "effort"),
+        "intent": _decision_attr(decision, "intent"),
+        "response_mode": _decision_attr(decision, "response_mode"),
+        "confidence": _decision_attr(decision, "confidence"),
+        "parse_quality": _decision_attr(decision, "parse_quality"),
+        "error_type": _decision_attr(decision, "error_type"),
+        "reason_code": _decision_attr(decision, "reason_code"),
+        "contract_version": _decision_attr(
+            decision,
+            "contract_version",
+        ),
+        "policy_mode": _decision_attr(decision, "policy_mode"),
         # 普通聊天工具只接受 Web 配置；不再透传文本分类产生的工具预设。
         "runtime_preset": "full",
-        "reason": _decision_attr(decision, "reason"),
     }
 
 
@@ -148,7 +158,21 @@ async def call_bridge_non_streaming(
     session_id: str,
     sender_name: str,
     metadata: dict[str, Any],
+    message_contract: Any | None = None,
 ) -> Any:
+    if message_contract is not None:
+        from core.agent_runtime import dispatch_agent_message
+
+        return await dispatch_agent_message(
+            bridge,
+            message_contract,
+            content=enriched_query,
+            runtime_user_id=user_id,
+            runtime_session_id=session_id,
+            sender_name=sender_name,
+            metadata=metadata,
+            stream=False,
+        )
     return await bridge.handle_message(
         enriched_query,
         user_id=user_id,

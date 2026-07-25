@@ -25,29 +25,9 @@ from config import NANOBOT_ADMIN_TOKEN
 
 # Legacy facade：聚合拆分子路由并保留旧导入路径兼容。
 from api.admin.db_browser_routes import (
-    BLOCKED_DB_TABLES as BLOCKED_DB_TABLES,
-    DB_TABLE_GROUPS as DB_TABLE_GROUPS,
-    DB_TABLE_POLICIES as DB_TABLE_POLICIES,
-    DEFAULT_DB_TABLE_POLICY as DEFAULT_DB_TABLE_POLICY,
-    GLOBAL_PREVIEW_ONLY_COLUMNS as GLOBAL_PREVIEW_ONLY_COLUMNS,
-    GLOBAL_REDACT_COLUMNS as GLOBAL_REDACT_COLUMNS,
-    READONLY_TABLES as READONLY_TABLES,
-    READONLY_TABLE_SET as READONLY_TABLE_SET,
-    DbQuery as DbQuery,
-    _available_db_groups as _available_db_groups,
-    _available_readonly_tables as _available_readonly_tables,
-    _db_table_meta as _db_table_meta,
-    _db_table_policy as _db_table_policy,
-    _extract_query_table_names as _extract_query_table_names,
-    _quote_identifier as _quote_identifier,
-    _safe_serialize_cell as _safe_serialize_cell,
-    _serialize_db_rows as _serialize_db_rows,
-    _table_columns as _table_columns,
-    _validate_query_tables_allowed as _validate_query_tables_allowed,
-    _validate_readonly_query as _validate_readonly_query,
-    execute_readonly_query as execute_readonly_query,
-    list_tables as list_tables,
-    query_table as query_table,
+    AdminTableViewQuery as AdminTableViewQuery,
+    list_views as list_views,
+    query_view_rows as query_view_rows,
     router as db_browser_router,
 )
 from api.admin.group_memory_routes import (
@@ -67,6 +47,12 @@ from api.admin.group_memory_routes import (
     group_memory_items as group_memory_items,
     group_memory_update_item as group_memory_update_item,
     router as group_memory_router,
+)
+from api.admin.group_learning_routes import (
+    router as group_learning_router,
+)
+from api.admin.runtime_module_routes import (
+    router as runtime_module_router,
 )
 from api.admin.log_routes import (
     FrontendErrorBody as FrontendErrorBody,
@@ -316,8 +302,10 @@ router.include_router(rag_router)
 router.include_router(session_memory_router)
 router.include_router(chat_config_router)
 router.include_router(sticker_router)
+router.include_router(group_learning_router)
 router.include_router(group_memory_router)
 router.include_router(runtime_router)
+router.include_router(runtime_module_router)
 router.include_router(tool_router)
 router.include_router(model_router)
 router.include_router(web_search_router)
@@ -433,14 +421,30 @@ def _legacy_prompt_routes_removed() -> HTTPException:
     )
 
 
-@router.api_route("/prompts", methods=["GET", "POST", "PUT", "DELETE"])
-@router.api_route("/prompts/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@router.api_route(
+    "/prompts",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    include_in_schema=False,
+)
+@router.api_route(
+    "/prompts/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    include_in_schema=False,
+)
 def legacy_managed_prompt_routes_removed(path: str = "", _auth=Depends(verify_admin)):
     raise _legacy_prompt_routes_removed()
 
 
-@router.api_route("/prompt", methods=["GET", "POST", "PUT", "DELETE"])
-@router.api_route("/prompt/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@router.api_route(
+    "/prompt",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    include_in_schema=False,
+)
+@router.api_route(
+    "/prompt/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    include_in_schema=False,
+)
 def legacy_prompt_routes_removed(path: str = "", _auth=Depends(verify_admin)):
     raise _legacy_prompt_routes_removed()
 
@@ -625,7 +629,12 @@ def list_settings(_auth=Depends(verify_admin)):
 def update_setting(key: str, body: dict, request: Request, db: Session = Depends(get_db),
                    _auth=Depends(verify_admin)):
     from core.config_registry import SETTING_DEFS, canonical_setting_key
-    from core.settings_service import serialize_resolved_setting, settings
+    from core.settings_service import (
+        coerce_setting_value,
+        serialize_resolved_setting,
+        settings,
+    )
+    from core.settings_specs import validate_setting_values
 
     key = canonical_setting_key(key)
     defn = SETTING_DEFS.get(key)
@@ -643,22 +652,10 @@ def update_setting(key: str, body: dict, request: Request, db: Session = Depends
     if raw_value is None:
         raise HTTPException(400, "Missing 'value'")
     try:
-        if defn.value_type == "bool":
-            val = bool(raw_value) if isinstance(raw_value, bool) else str(raw_value).lower() in {"1", "true", "yes", "on"}
-        elif defn.value_type == "int":
-            val = int(raw_value)
-            if defn.min_value is not None and val < defn.min_value:
-                raise HTTPException(400, f"Min: {defn.min_value}")
-            if defn.max_value is not None and val > defn.max_value:
-                raise HTTPException(400, f"Max: {defn.max_value}")
-        elif defn.value_type == "float":
-            val = float(raw_value)
-            if defn.min_value is not None and val < defn.min_value:
-                raise HTTPException(400, f"Min: {defn.min_value}")
-            if defn.max_value is not None and val > defn.max_value:
-                raise HTTPException(400, f"Max: {defn.max_value}")
-        else:
-            val = str(raw_value)
+        val = coerce_setting_value(raw_value, defn)
+        proposed_values = settings.all_values()
+        proposed_values[key] = val
+        validate_setting_values(SETTING_DEFS, proposed_values)
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e))
 

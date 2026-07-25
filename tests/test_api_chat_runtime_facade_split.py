@@ -16,8 +16,15 @@ class _Decision:
     action: str = "reply"
     complexity: int = 5
     effort: str | None = "high"
+    intent: str = "specific_task"
+    response_mode: str = "agent"
+    confidence: float = 0.91
+    parse_quality: str = "schema_valid"
+    error_type: str | None = None
+    reason_code: str = "clear_request"
+    contract_version: str = "private_decision_v2"
+    policy_mode: str = "active"
     runtime_preset: str = "lightweight"
-    reason: str = "测试原因"
 
 
 def _build_text(query: str, files: list[str], max_chars: int) -> str:
@@ -107,8 +114,15 @@ def test_build_chat_runtime_payload_preserves_private_metadata_contract():
             "action": "reply",
             "complexity": 5,
             "effort": "high",
+            "intent": "specific_task",
+            "response_mode": "agent",
+            "confidence": 0.91,
+            "parse_quality": "schema_valid",
+            "error_type": None,
+            "reason_code": "clear_request",
+            "contract_version": "private_decision_v2",
+            "policy_mode": "active",
             "runtime_preset": "full",
-            "reason": "测试原因",
         },
         "effort_constraint": "constraint:high",
         "runtime_preset": "full",

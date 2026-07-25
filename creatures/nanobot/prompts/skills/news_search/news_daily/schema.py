@@ -41,6 +41,7 @@ class NewsItem:
 class SourceConfig:
     name: str
     type: str = "rss"
+    adapter_kind: str = "rss"
     url: str = ""
     trust: float = 0.5
     weight: float = 1.0
@@ -50,6 +51,10 @@ class SourceConfig:
     category_hint: list[str] = field(default_factory=list)
     top_story_eligible: bool = True
     max_items_per_run: int = 8
+    fetch_timeout_seconds: int = 10
+    freshness_policy: str = "request_window"
+    lifecycle: str = "active"
+    domain: str = ""
 
 
 @dataclass

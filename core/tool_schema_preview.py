@@ -6,11 +6,21 @@ import copy
 import importlib as importlib
 import json
 import logging
+from types import MappingProxyType
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from core.group_learning.aspects import (
+    GROUP_ANALYSIS_ASPECT_REGISTRY,
+)
 from core.tool_contracts.ai_daily import ai_daily_parameters_schema
+from core.tool_registration import (
+    TOOL_REGISTRATION_REGISTRY,
+    ToolSchemaProviderPort,
+    get_tool_registration,
+    list_user_tool_registrations,
+)
 from core.tool_registry import get_tool_descriptor
 
 logger = logging.getLogger("nanobot.tool_schema")
@@ -263,6 +273,24 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "group_id": {"type": "string", "description": "被分析群的群号、group_前缀ID、session_id、stream_id或群名；只知道群名时也直接传群名，不要先调用 sql_analysis"},
                 "instructions": {"type": "string", "description": "可选的分析指引"},
                 "window_hours": {"type": "integer", "description": "可选分析时间窗口，默认24小时；传0表示不限制历史范围", "default": 24, "minimum": 0, "maximum": 720},
+                "aspects": {
+                    "type": "array",
+                    "description": (
+                        "可选分析方面。省略时兼容生成话题、称号、金句和质量报告；"
+                        "显式传入时只执行被选择的方面。"
+                    ),
+                    "items": {
+                        "type": "string",
+                        "enum": list(
+                            GROUP_ANALYSIS_ASPECT_REGISTRY.ordered_ids
+                        ),
+                    },
+                    "minItems": 1,
+                    "maxItems": len(
+                        GROUP_ANALYSIS_ASPECT_REGISTRY.ordered_ids
+                    ),
+                    "uniqueItems": True,
+                },
             },
             "required": ["group_id"],
         },
@@ -551,26 +579,28 @@ def _builtin_tool_schema(name: str) -> dict[str, Any] | None:
     }
 
 
-def _metadata_fallback_schema(name: str) -> dict[str, Any]:
-    descriptor = get_tool_descriptor(name)
-    td = descriptor.definition if descriptor is not None else None
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": td.description if td else f"Tool: {name}",
-            "parameters": _with_background_option(name, {
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "Input content for the tool",
-                    }
-                },
-            }),
-        },
-        "source": "metadata_fallback",
-    }
+class CanonicalToolSchemaProvider:
+    """兼容现有静态／KT 内置 Schema 的代码侧 Provider。"""
+
+    @property
+    def provider_id(self) -> str:
+        return "canonical"
+
+    def build_schema(self, tool_name: str) -> dict[str, Any]:
+        schema = (
+            _static_tool_schema(tool_name)
+            or _builtin_tool_schema(tool_name)
+        )
+        if schema is None:
+            raise ValueError(
+                f"tool {tool_name} 缺少 canonical schema"
+            )
+        return schema
+
+
+_SCHEMA_PROVIDERS: dict[str, ToolSchemaProviderPort] = MappingProxyType({
+    "canonical": CanonicalToolSchemaProvider(),
+})
 
 
 def _tool_schema_override_key(name: str) -> str:
@@ -657,28 +687,75 @@ def delete_tool_schema_override(db, name: str) -> bool:
 
 def _add_tool_metadata(schema: dict[str, Any], tool_name: str) -> dict[str, Any]:
     result = copy.deepcopy(schema or {})
-    descriptor = get_tool_descriptor(tool_name)
-    if descriptor is not None and not descriptor.framework_owned:
+    registration = get_tool_registration(tool_name)
+    descriptor = (
+        registration.descriptor
+        if registration is not None
+        else get_tool_descriptor(tool_name)
+    )
+    if (
+        registration is not None
+        and descriptor is not None
+        and not descriptor.framework_owned
+    ):
         td = descriptor.definition
         result["category"] = td.category
         result["risk_level"] = td.risk_level
         result["label"] = td.label
+        snapshot = TOOL_REGISTRATION_REGISTRY.registry_snapshot
+        result["registration"] = {
+            "generation": snapshot.generation,
+            "sha256": snapshot.sha256,
+            "schema_provider_id": registration.schema_provider_id,
+            "lifecycle": registration.lifecycle,
+        }
     return result
 
 
 def _base_tool_schema(name: str) -> dict[str, Any]:
     tool_name = str(name or "").strip()
-    return _static_tool_schema(tool_name) or _builtin_tool_schema(tool_name) or _metadata_fallback_schema(tool_name)
+    registration = get_tool_registration(tool_name)
+    if registration is None or registration.descriptor.framework_owned:
+        raise ValueError(f"unknown tool: {tool_name}")
+    provider = _SCHEMA_PROVIDERS.get(registration.schema_provider_id)
+    if provider is None:
+        raise ValueError(
+            f"tool {tool_name} schema provider 未登记: "
+            f"{registration.schema_provider_id}"
+        )
+    schema = provider.build_schema(tool_name)
+    return _validate_tool_schema(tool_name, schema)
 
 
 def _ensure_known_tool(name: str) -> str:
     tool_name = str(name or "").strip()
     if not tool_name:
         raise ValueError("tool_name required")
-    descriptor = get_tool_descriptor(tool_name)
-    if descriptor is None or descriptor.framework_owned:
+    registration = get_tool_registration(tool_name)
+    if (
+        registration is None
+        or registration.descriptor.framework_owned
+    ):
         raise ValueError(f"unknown tool: {tool_name}")
     return tool_name
+
+
+def validate_registered_tool_schemas() -> None:
+    """启动期验证每个用户工具都能由登记的 Provider 生成同名 Schema。"""
+
+    for registration in list_user_tool_registrations():
+        schema = _base_tool_schema(registration.name)
+        function = schema.get("function")
+        function_name = (
+            str(function.get("name") or "").strip()
+            if isinstance(function, dict)
+            else ""
+        )
+        if function_name != registration.name:
+            raise ValueError(
+                f"tool {registration.name} schema name 漂移: "
+                f"{function_name!r}"
+            )
 
 
 def build_tool_schema(name: str, *, db=None, include_template_overlay: bool = True) -> dict[str, Any]:
@@ -719,6 +796,8 @@ def build_tool_schema_config(db, name: str) -> dict[str, Any]:
     default_schema = _add_tool_metadata(_base_tool_schema(tool_name), tool_name)
     editable_schema = _add_tool_metadata(override or default_schema, tool_name)
     effective_schema = build_tool_schema(tool_name, db=db)
+    registration = get_tool_registration(tool_name)
+    snapshot = TOOL_REGISTRATION_REGISTRY.registry_snapshot
     return {
         "tool": tool_name,
         "default_schema": default_schema,
@@ -726,6 +805,20 @@ def build_tool_schema_config(db, name: str) -> dict[str, Any]:
         "editable_schema": editable_schema,
         "tool_schema": effective_schema,
         "override_present": override is not None,
+        "registration": {
+            "generation": snapshot.generation,
+            "sha256": snapshot.sha256,
+            "schema_provider_id": (
+                registration.schema_provider_id
+                if registration is not None
+                else ""
+            ),
+            "lifecycle": (
+                registration.lifecycle
+                if registration is not None
+                else ""
+            ),
+        },
     }
 
 
@@ -733,8 +826,12 @@ def build_effective_tool_schemas(enabled: dict[str, bool], *, db=None) -> list[d
     """按当前启用工具构造预览 schema；memory subagent 保持元数据兜底。"""
     schemas: list[dict[str, Any]] = []
     for name in sorted(n for n, ok in (enabled or {}).items() if ok):
-        descriptor = get_tool_descriptor(name)
-        if descriptor is None or descriptor.framework_owned:
+        registration = get_tool_registration(name)
+        if (
+            registration is None
+            or registration.descriptor.framework_owned
+            or registration.lifecycle != "active"
+        ):
             logger.warning("Skip unknown runtime tool schema: %s", name)
             continue
         schemas.append(build_tool_schema(name, db=db))

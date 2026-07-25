@@ -178,3 +178,74 @@ def test_admin_chat_config_routes_do_not_import_parent_admin_routes_or_sync_awai
     assert "import api.admin_routes" not in source
     assert "asyncio.run" not in source
     assert "run_awaitable_sync" not in source
+
+
+def test_legacy_learning_switch_writes_are_rejected_with_replacement(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "api.admin_routes.NANOBOT_ADMIN_TOKEN",
+        "split-token",
+    )
+
+    response = client.put(
+        "/api/v1/admin/configs/qq:42:group",
+        json={"enable_expression_learning": 1},
+        headers={"Authorization": "Bearer split-token"},
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "legacy_group_learning_control_retired"
+    assert detail["lifecycle"] == "retired"
+    assert detail["replacement"] == "/api/v1/admin/group-learning"
+    assert detail["fields"] == ["enable_expression_learning"]
+
+
+def test_use_expression_is_only_group_profile_mode_compatibility_alias(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.db.models import ChatStreamConfig
+
+    monkeypatch.setattr(
+        "api.admin_routes.NANOBOT_ADMIN_TOKEN",
+        "split-token",
+    )
+
+    response = client.put(
+        "/api/v1/admin/configs/qq:42:group",
+        json={"use_expression": 1},
+        headers={"Authorization": "Bearer split-token"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["group_profile_mode"] == "on"
+    assert data["use_expression"] is True
+    assert data["enable_expression_learning"] is False
+    assert data["enable_jargon_learning"] is False
+    assert (
+        data["legacy_group_learning_controls"]["lifecycle"]
+        == "retired"
+    )
+    row = db_session.get(ChatStreamConfig, "qq:42:group")
+    assert row.group_profile_mode == "on"
+    assert row.use_expression == 1
+
+    conflict = client.put(
+        "/api/v1/admin/configs/qq:42:group",
+        json={
+            "use_expression": 1,
+            "group_profile_mode": "preview",
+        },
+        headers={"Authorization": "Bearer split-token"},
+    )
+    assert conflict.status_code == 409
+    assert (
+        conflict.json()["detail"]["code"]
+        == "group_profile_compatibility_conflict"
+    )

@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "documentation_commit_gate",
+      "paths": [
+        "docs/architecture/admin-db-query-migration-matrix.md"
+      ],
+      "feature_ids": [],
+      "artifact_profile_ids": []
+    },
+    {
+      "id": "private_timing_preview",
+      "paths": [
+        "core/private_timing_policy.py",
+        "prompts.v2.default/tasks/private_decision.md"
+      ],
+      "feature_ids": [
+        "private_timing_v2"
+      ],
+      "artifact_profile_ids": [
+        "nanobot-runtime"
+      ]
+    },
+    {
+      "id": "news_preview",
+      "paths": [
+        "core/news/signals.py",
+        "resources/news/news_sources.v1.json"
+      ],
+      "feature_ids": [
+        "news_relevance_review"
+      ],
+      "artifact_profile_ids": [
+        "nanobot-runtime"
+      ]
+    },
+    {
+      "id": "group_learning_experimental",
+      "paths": [
+        "app/group_learning/pipeline.py",
+        "core/db/models/group_learning.py"
+      ],
+      "feature_ids": [
+        "group_learning"
+      ],
+      "artifact_profile_ids": [
+        "nanobot-runtime"
+      ]
+    },
+    {
+      "id": "sandbox_host_boundary",
+      "paths": [
+        "core/sandbox/backend.py",
+        "sandboxd/docker_backend.py",
+        "deploy/apparmor/nanobot-sandbox"
+      ],
+      "feature_ids": [
+        "sandbox"
+      ],
+      "artifact_profile_ids": [
+        "nanobot-sandbox-python",
+        "sandboxd"
+      ]
+    },
+    {
+      "id": "web_static_bundle",
+      "paths": [
+        "webui/src/App.jsx",
+        "webui/package-lock.json"
+      ],
+      "feature_ids": [],
+      "artifact_profile_ids": [
+        "webui"
+      ]
+    }
+  ]
+}

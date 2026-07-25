@@ -2,6 +2,7 @@ import hashlib
 import json
 import threading
 import time
+from dataclasses import replace
 from typing import Any
 
 
@@ -19,13 +20,10 @@ def _payload_fingerprint(value: Any) -> tuple[int, str]:
 
 
 def _tool_event_context(tool_call_id: str):
-    from core.runtime.events import RuntimeEventContext
-    from core.tracing_context import get_trace_context
+    from core.runtime.event_bus import current_runtime_event_context
 
-    trace_id, run_id = get_trace_context()
-    return RuntimeEventContext(
-        trace_id=trace_id,
-        run_id=run_id,
+    return replace(
+        current_runtime_event_context(),
         tool_call_id=tool_call_id,
     )
 
@@ -107,7 +105,9 @@ def finish_tool_trace(
             "args_sha256": args_sha256,
             "result_bytes": result_bytes,
             "result_sha256": result_sha256,
+            "result_truncated": False,
             "latency_ms": (time.time() - started) * 1000,
+            "failure_code": "tool_error" if status != "success" else "",
             "error_type": "tool_error" if error else "",
         },
     )

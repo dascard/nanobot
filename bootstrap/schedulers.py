@@ -26,20 +26,20 @@ class SchedulerHandles:
     digest: ThreadHandle | None = None
     scheduled_tasks: ThreadHandle | None = None
     session_summary: ThreadHandle | None = None
-    expression_learner: ThreadHandle | None = None
     eval_sampling: ThreadHandle | None = None
     proactive_outreach: ThreadHandle | None = None
     chat_delivery: ThreadHandle | None = None
+    group_learning: ThreadHandle | None = None
 
     def stop_all(self) -> None:
         for handle in (
             self.digest,
             self.scheduled_tasks,
             self.session_summary,
-            self.expression_learner,
             self.eval_sampling,
             self.proactive_outreach,
             self.chat_delivery,
+            self.group_learning,
         ):
             if handle is not None:
                 handle.stop()
@@ -94,6 +94,27 @@ def chat_delivery_worker_scheduler(stop_event: threading.Event) -> None:
     logger.info("Chat delivery worker scheduler stopped.")
 
 
+def group_learning_worker_scheduler(stop_event: threading.Event) -> None:
+    from app.group_learning.scheduler import run_until_stopped
+    from core.db import SessionLocal
+
+    worker_logger = logging.getLogger(
+        "nanobot.group_learning.scheduler"
+    )
+    worker_logger.info("Group learning scheduler started.")
+    try:
+        run_until_stopped(
+            stop_event,
+            session_factory=SessionLocal,
+        )
+    except Exception as exc:
+        worker_logger.exception(
+            "Group learning scheduler error: %s",
+            exc,
+        )
+    worker_logger.info("Group learning scheduler stopped.")
+
+
 def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandles:
     """启动后台调度器；测试模式只返回空 handles。"""
     if testing:
@@ -103,7 +124,6 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
     from config import get_session_summary_worker_mode
     from core.daily_digest import daily_digest_scheduler, scheduled_task_runner
     from core.eval_sampling.scheduler import eval_sampling_scheduler
-    from core.expression_learner import expression_learner_scheduler
     from core.proactive_outreach import proactive_outreach_scheduler
 
     session_summary_mode = get_session_summary_worker_mode()
@@ -142,12 +162,6 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
 
     _preload_sentinel(logger)
 
-    handles.expression_learner = _start_thread(
-        name="expression-learner",
-        target=expression_learner_scheduler,
-    )
-    logger.info("Expression learner scheduler initialized.")
-
     handles.eval_sampling = _start_thread(
         name="eval-sampling-scheduler",
         target=eval_sampling_scheduler,
@@ -159,5 +173,13 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
         target=proactive_outreach_scheduler,
     )
     logger.info("Proactive outreach recovery scheduler initialized.")
+
+    handles.group_learning = _start_thread(
+        name="group-learning-scheduler",
+        target=group_learning_worker_scheduler,
+    )
+    logger.info(
+        "Group learning scheduler initialized with empty-by-default whitelist."
+    )
 
     return handles

@@ -27,7 +27,7 @@ class ChatPreBridgeServices:
     guardrail_status_from_result: Callable[[dict[str, Any] | None], str]
     is_guardrail_superuser: Callable[[str], bool]
     get_private_gate: Callable[[], Any]
-    get_casual_reply: Callable[[str, bool], str]
+    get_casual_reply: Callable[[str], str]
     private_timing_meta: Callable[[Any | None], dict[str, Any] | None]
     logger: Any
 
@@ -58,7 +58,6 @@ class ChatPreBridgeContinue:
 async def _classify_private_timing(
     req: Any,
     *,
-    is_superuser: bool,
     services: ChatPreBridgeServices,
 ) -> tuple[
     Any | None,
@@ -74,21 +73,12 @@ async def _classify_private_timing(
 
     try:
         private_gate = services.get_private_gate()
-        try:
-            private_decision = await private_gate.classify(
-                req.query,
-                user_id=req.user_id,
-                has_files=bool(req.files),
-                is_superuser=is_superuser,
-            )
-        except TypeError as exc:
-            if "is_superuser" not in str(exc):
-                raise
-            private_decision = await private_gate.classify(
-                req.query,
-                user_id=req.user_id,
-                has_files=bool(req.files),
-            )
+        private_decision = await private_gate.classify(
+            req.query,
+            user_id=req.user_id,
+            session_id=req.session_id,
+            has_files=bool(req.files),
+        )
 
         private_timing_meta = services.private_timing_meta(private_decision)
         if private_decision.action == "no_reply":
@@ -106,25 +96,26 @@ async def _classify_private_timing(
                 None,
             )
 
-        if private_decision.effort == "casual":
-            reply = services.get_casual_reply(req.query, is_superuser)
-            answer = reply if reply else ("你先说事" if req.query else "")
-            return (
-                private_decision,
-                private_timing_meta,
-                ChatPreBridgeEarlyReturn(
-                    status="ok",
-                    answer=answer,
-                    source="casual_template",
-                    intent=private_decision.reason,
-                    guardrail_status="casual_template",
-                    persist_answer=answer,
-                    persist_guardrail_status="casual_template",
-                    persist_timing_meta=private_timing_meta,
-                ),
-                None,
-                None,
-            )
+        if getattr(private_decision, "response_mode", "") == "template":
+            intent = str(getattr(private_decision, "intent", "") or "")
+            reply = services.get_casual_reply(intent)
+            if reply:
+                return (
+                    private_decision,
+                    private_timing_meta,
+                    ChatPreBridgeEarlyReturn(
+                        status="ok",
+                        answer=reply,
+                        source="casual_template",
+                        intent=intent,
+                        guardrail_status="casual_template",
+                        persist_answer=reply,
+                        persist_guardrail_status="casual_template",
+                        persist_timing_meta=private_timing_meta,
+                    ),
+                    None,
+                    None,
+                )
 
         if private_decision.action == "reply_now":
             messages = req.merged_messages or [req.query]
@@ -272,7 +263,6 @@ async def resolve_chat_pre_bridge_decision(
             buffered_files,
         ) = await _classify_private_timing(
             req,
-            is_superuser=is_superuser,
             services=services,
         )
         if early_return is not None:

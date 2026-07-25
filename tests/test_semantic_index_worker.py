@@ -14,6 +14,12 @@ def _local_now() -> datetime:
     return datetime.now()  # noqa: DTZ005
 
 
+def _semantic_lease(job):
+    from core.semantic.jobs import semantic_job_lease
+
+    return semantic_job_lease(job)
+
+
 def _chunk(text_value: str = "8000 端口被占用") -> SemanticChunk:
     return SemanticChunk(
         source_type="memory_digest",
@@ -70,8 +76,7 @@ def test_claim_creates_lease_and_retryable_failure_returns_pending(db_session):
 
     failed = fail_job(
         db_session,
-        job_id=claimed.id,
-        lease_token=claimed.lease_token,
+        lease=_semantic_lease(claimed),
         error="temporary embedding failure",
         retryable=True,
         now=now + timedelta(seconds=1),
@@ -111,8 +116,7 @@ def test_retry_budget_allows_initial_attempt_plus_three_automatic_retries(
         )
         failed = fail_job(
             db_session,
-            job_id=claimed.id,
-            lease_token=claimed.lease_token,
+            lease=_semantic_lease(claimed),
             error="temporary provider failure",
             retryable=True,
             now=attempt_at + timedelta(seconds=1),
@@ -128,8 +132,7 @@ def test_retry_budget_allows_initial_attempt_plus_three_automatic_retries(
     )
     failed = fail_job(
         db_session,
-        job_id=claimed.id,
-        lease_token=claimed.lease_token,
+        lease=_semantic_lease(claimed),
         error="temporary provider failure",
         retryable=True,
         now=final_attempt_at + timedelta(seconds=1),
@@ -214,8 +217,7 @@ def test_manual_retry_failure_grants_only_one_attempt(db_session):
     initial = claim_next_job(db_session, worker_id="worker-initial", now=base)
     terminal = fail_job(
         db_session,
-        job_id=initial.id,
-        lease_token=initial.lease_token,
+        lease=_semantic_lease(initial),
         error="invalid source",
         retryable=False,
         now=base + timedelta(seconds=1),
@@ -236,8 +238,7 @@ def test_manual_retry_failure_grants_only_one_attempt(db_session):
     )
     failed = fail_job(
         db_session,
-        job_id=claimed.id,
-        lease_token=claimed.lease_token,
+        lease=_semantic_lease(claimed),
         error="temporary but manual attempt exhausted",
         retryable=True,
         now=base + timedelta(minutes=2, seconds=1),
@@ -270,8 +271,7 @@ def test_manual_retry_timeout_does_not_return_to_pending(db_session):
     initial = claim_next_job(db_session, worker_id="worker-initial", now=base)
     terminal = fail_job(
         db_session,
-        job_id=initial.id,
-        lease_token=initial.lease_token,
+        lease=_semantic_lease(initial),
         error="invalid source",
         retryable=False,
         now=base + timedelta(seconds=1),
@@ -330,7 +330,7 @@ def test_stale_lease_cannot_heartbeat_finish_or_fail_after_reclaim(db_session):
         lease_seconds=60,
         now=started_at,
     )
-    first_token = first.lease_token
+    first_lease = _semantic_lease(first)
     reclaimed_at = started_at + timedelta(seconds=61)
 
     assert recover_timed_out_jobs(
@@ -348,22 +348,19 @@ def test_stale_lease_cannot_heartbeat_finish_or_fail_after_reclaim(db_session):
 
     assert heartbeat_job(
         db_session,
-        job_id=first.id,
-        lease_token=first_token,
+        lease=first_lease,
         lease_seconds=60,
         now=reclaimed_at + timedelta(seconds=1),
     ) is None
     assert finish_job(
         db_session,
-        job_id=first.id,
-        lease_token=first_token,
+        lease=first_lease,
         status="done",
         now=reclaimed_at + timedelta(seconds=1),
     ) is None
     assert fail_job(
         db_session,
-        job_id=first.id,
-        lease_token=first_token,
+        lease=first_lease,
         error="late worker failure",
         retryable=True,
         now=reclaimed_at + timedelta(seconds=1),
@@ -376,6 +373,40 @@ def test_stale_lease_cannot_heartbeat_finish_or_fail_after_reclaim(db_session):
     assert current.lease_token == second_token
     assert current.attempt_count == 2
     assert current.retry_count == 1
+
+
+def test_semantic_lease_checks_same_owner_attempt_generation(db_session):
+    from core.semantic.jobs import (
+        claim_next_job,
+        enqueue_index_job,
+        heartbeat_job,
+        semantic_job_lease,
+    )
+
+    ensure_semantic_schema(db_session.bind)
+    enqueue_index_job(
+        db_session,
+        source_type="memory_digest",
+        source_id="same-owner-attempt",
+        index_version="fake:v1:v1",
+    )
+    started_at = datetime(2026, 7, 17, 12, 0, 0)  # noqa: DTZ001
+    claimed = claim_next_job(
+        db_session,
+        worker_id="same-worker",
+        lease_seconds=60,
+        now=started_at,
+    )
+    lease = semantic_job_lease(claimed)
+    claimed.attempt_count = int(claimed.attempt_count) + 1
+    db_session.commit()
+
+    assert heartbeat_job(
+        db_session,
+        lease=lease,
+        lease_seconds=60,
+        now=started_at + timedelta(seconds=1),
+    ) is None
 
 
 def test_embedding_failure_marks_done_with_warning(db_session):

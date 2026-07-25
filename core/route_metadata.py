@@ -1,35 +1,37 @@
 """路由元数据——route type / provider alias / url 归一化。
 
-后端、WebUI、诊断接口共享的集中定义，避免多文件重复。
+模型路由定义来自冻结的 ModelRouteDescriptorRegistry；本模块只保留兼容查询
+façade，以及与 Provider URL 兼容有关的辅助函数。
 """
 
-# ── 路由元数据 ──
-ROUTE_METADATA: dict[str, dict] = {
-    "reply":    {"type": "controller", "label": "主回复模型"},
-    "fast":     {"type": "controller", "label": "快速模型（预留）"},
-    "smart":    {"type": "controller", "label": "智能模型（预留）"},
-    "timing_gate":        {"type": "classifier", "label": "TimingGate 分类器"},
-    "timing_proactive":   {"type": "classifier", "label": "主动发言裁判"},
-    "outreach_extract":   {"type": "classifier", "label": "主动外呼话题提炼"},
-    "outreach_judge":     {"type": "classifier", "label": "主动外呼决策"},
-    "outreach_generate":  {"type": "classifier", "label": "主动外呼生成"},
-    "news_daily_quality": {"type": "task",       "label": "AI 日报质量摘要"},
-    "private_decision":   {"type": "classifier", "label": "私聊决策分类器"},
-    "classifier_legacy":  {"type": "classifier", "label": "旧分类器"},
-    "sticker_describe":   {"type": "vision",     "label": "表情包打标"},
-    "session_summary":    {"type": "controller", "label": "近期摘要"},
-    "memory_digest":      {"type": "controller", "label": "长期摘要"},
-}
+from types import MappingProxyType
+
+from core.model_provider.route_registry import (
+    get_model_route_descriptor,
+    list_model_route_descriptors,
+)
+
+
+# ── 路由元数据兼容投影 ──
+ROUTE_METADATA = MappingProxyType({
+    descriptor.route_key: {
+        "type": descriptor.route_type,
+        "label": descriptor.label,
+    }
+    for descriptor in list_model_route_descriptors()
+})
 
 
 def route_type_for(route_key: str) -> str:
     """返回 route_key 对应的 route_type，未知时返回 'unknown'。"""
-    return ROUTE_METADATA.get(route_key, {}).get("type", "unknown")
+    descriptor = get_model_route_descriptor(route_key)
+    return descriptor.route_type if descriptor is not None else "unknown"
 
 
 def route_label_for(route_key: str) -> str:
     """返回 route_key 对应的中文标签。"""
-    return ROUTE_METADATA.get(route_key, {}).get("label", route_key)
+    descriptor = get_model_route_descriptor(route_key)
+    return descriptor.label if descriptor is not None else route_key
 
 
 def route_capability_for(route_key: str) -> str | None:

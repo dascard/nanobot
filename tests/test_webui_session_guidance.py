@@ -17,7 +17,10 @@ def test_admin_navigation_uses_session_strategy_page():
         "import { SessionConfigsPage } from "
         "'./features/session-config/SessionConfigsPage'"
     ) in app
-    assert "{ to: '/configs', label: '会话策略', icon: Gauge }" in app
+    assert (
+        "{ to: '/configs', label: '会话策略', "
+        "icon: Gauge, order: 10 }"
+    ) in app
     assert '<Route path="/configs" element={<SessionConfigsPage />} />' in app
     assert "function ConfigsPage()" not in app
     assert "function ConfigEditModal(" not in app

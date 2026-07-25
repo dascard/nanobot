@@ -876,9 +876,30 @@ def test_default_prompt_v2_tool_templates_cover_runtime_tools():
 
 
 def test_group_analysis_template_describes_real_pipeline():
-    raw = (PROMPT_V2_DEFAULT_DIR / "tools" / "group_analysis" / "usage.md").read_text(encoding="utf-8")
+    path = PROMPT_V2_DEFAULT_DIR / "tools" / "group_analysis" / "usage.md"
+    raw = path.read_text(encoding="utf-8")
+    runtime = (
+        path.parents[2]
+        / "data"
+        / "prompts_v2"
+        / "tools"
+        / "group_analysis"
+        / "usage.md"
+    )
+    if not runtime.exists():
+        runtime = (
+            PROMPT_V2_DEFAULT_DIR.parent
+            / "data"
+            / "prompts_v2"
+            / "tools"
+            / "group_analysis"
+            / "usage.md"
+        )
 
     assert "group_id" in raw
+    assert "`aspects`" in raw
+    assert "topics/expressions/slang/style" in raw
+    assert "topics/titles/quotes/quality" in raw
     assert "window_hours" in raw
     assert "话题总结" in raw
     assert "活跃用户称号" in raw
@@ -887,6 +908,7 @@ def test_group_analysis_template_describes_real_pipeline():
     assert "工具返回的是可直接发送的 HTML 日报" in raw
     assert "并不承诺匿名化" in raw
     assert "显示名" in raw
+    assert runtime.read_text(encoding="utf-8") == raw
 
 
 def test_tool_usage_templates_match_deployed_capabilities():

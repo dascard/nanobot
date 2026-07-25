@@ -219,6 +219,36 @@ def test_canonicalize_legacy_chat_stream_id_only_converts_explicit_aliases(
     assert canonicalize_legacy_chat_stream_id(value) == expected
 
 
+@pytest.mark.parametrize(
+    ("value", "platform", "expected"),
+    [
+        ("group_123", "qq", "qq:123:group"),
+        ("private_456", "web", "web:456:private"),
+        ("web:%E7%BE%A4:group", "qq", "web:%E7%BE%A4:group"),
+        ("123", "qq", None),
+        ("group_", "qq", None),
+        ("qq:%GG:group", "qq", None),
+    ],
+)
+def test_parse_compatibility_identity_only_accepts_explicit_storage_forms(
+    value,
+    platform,
+    expected,
+):
+    from foundation.identity import (
+        parse_compatibility_chat_stream_identity,
+    )
+
+    identity = parse_compatibility_chat_stream_identity(
+        value,
+        legacy_platform=platform,
+    )
+
+    assert (
+        identity.chat_stream_id if identity is not None else None
+    ) == expected
+
+
 def test_expression_memory_normalizer_uses_canonical_identity_contract():
     from core.chat_stream_identity import ChatStreamIdentityError
     from core.expression_memory import normalize_chat_stream_id
@@ -231,3 +261,72 @@ def test_expression_memory_normalizer_uses_canonical_identity_contract():
     )
     with pytest.raises(ChatStreamIdentityError):
         normalize_chat_stream_id("qq:456:group", chat_type="private", platform="qq")
+
+
+def test_core_identity_module_is_foundation_compatibility_facade():
+    from core.chat_stream_identity import ChatStreamIdentity as CoreIdentity
+    from foundation.identity import ChatStreamIdentity
+
+    assert CoreIdentity is ChatStreamIdentity
+
+
+def test_identity_value_objects_do_not_collide_across_platform_or_chat_type():
+    from foundation.identity import resolve_chat_stream_identity
+
+    qq_group = resolve_chat_stream_identity(
+        platform="qq",
+        chat_type="group",
+        session_id="42",
+    )
+    web_group = resolve_chat_stream_identity(
+        platform="web",
+        chat_type="group",
+        session_id="42",
+    )
+    qq_private = resolve_chat_stream_identity(
+        platform="qq",
+        chat_type="private",
+        session_id="42",
+    )
+
+    assert len({
+        qq_group.chat_stream_id,
+        web_group.chat_stream_id,
+        qq_private.chat_stream_id,
+    }) == 3
+    assert qq_group.legacy_runtime_session_id == "group_42"
+    assert qq_private.legacy_runtime_session_id == "42"
+
+
+def test_actor_recipient_and_principal_are_validated_value_objects():
+    from foundation.identity import (
+        ActorIdentity,
+        PlatformId,
+        Principal,
+        RecipientIdentity,
+    )
+
+    platform = PlatformId.parse(" QQ ")
+    actor = ActorIdentity(platform=platform, actor_id="user-1")
+    recipient = RecipientIdentity(
+        platform=platform,
+        recipient_type="group",
+        recipient_id="group-1",
+    )
+    principal = Principal(
+        platform=platform,
+        owner_type="user",
+        owner_id="user-1",
+    )
+
+    assert platform.value == "qq"
+    assert actor.canonical_id == "qq:actor:user-1"
+    assert recipient.canonical_id == "qq:group:group-1"
+    assert principal.canonical_id == "qq:user:user-1"
+
+    with pytest.raises(ValueError):
+        RecipientIdentity(
+            platform=platform,
+            recipient_type="unknown",
+            recipient_id="x",
+        )

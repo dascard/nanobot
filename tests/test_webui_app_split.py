@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 APP_JS = Path("webui/src/App.jsx")
+MANIFEST_JS = Path("webui/src/features/manifest.jsx")
 WEB_SEARCH_API_JS = Path("webui/src/features/web-search/api.js")
 FEATURES = {
     "AgentRunsPage": Path("webui/src/features/agent-runs/AgentRunsPage.jsx"),
@@ -29,20 +30,26 @@ def test_high_complexity_pages_are_not_defined_in_app_js():
 
 
 def test_app_js_imports_split_feature_pages():
-    source = APP_JS.read_text(encoding="utf-8")
+    app_source = APP_JS.read_text(encoding="utf-8")
+    manifest_source = MANIFEST_JS.read_text(encoding="utf-8")
 
-    assert "from './features/agent-runs/AgentRunsPage'" in source
-    assert "from './features/agent-runs/AgentRunDetailPage'" in source
-    assert "from './features/agent-runs/LLMApiLogsPage'" in source
-    assert "from './features/agent-runs/ToolCallsPage'" in source
-    assert "from './features/prompt/PromptPages'" in source
-    assert "from './features/reply-eval/ReplyEvalPage'" in source
-    assert "from './features/models/ModelsPage'" in source
-    assert "from './features/web-search/WebSearchPage'" in source
-    assert "from './features/tools/ToolsPage'" in source
-    assert "from './features/evals/EvalsPage'" in source
-    assert "from './features/generated-images/GeneratedImagesPage'" in source
-    assert "from './features/proactive-outreach/ProactiveOutreachPage'" in source
+    assert "from './features/agent-runs/AgentRunsPage'" in app_source
+    assert "from './features/agent-runs/AgentRunDetailPage'" in app_source
+    assert "from './features/agent-runs/LLMApiLogsPage'" in app_source
+    assert "from './features/agent-runs/ToolCallsPage'" in app_source
+    assert "from './features/reply-eval/ReplyEvalPage'" in app_source
+    assert "from './features/web-search/WebSearchPage'" in app_source
+    assert "from './features/evals/EvalsPage'" in app_source
+    assert "from './features/generated-images/GeneratedImagesPage'" in app_source
+    assert "from './features/proactive-outreach/ProactiveOutreachPage'" in app_source
+
+    assert "import('./prompt/PromptPages')" in manifest_source
+    assert "module.PromptV2TemplatesPage" in manifest_source
+    assert "module.EffectivePromptPreviewPage" in manifest_source
+    assert "import('./models/ModelsPage')" in manifest_source
+    assert "module.ModelsPage" in manifest_source
+    assert "import('./tools/ToolsPage')" in manifest_source
+    assert "module.ToolsPage" in manifest_source
 
 
 def test_app_shell_has_fixed_navigation_and_isolated_scroll_regions():

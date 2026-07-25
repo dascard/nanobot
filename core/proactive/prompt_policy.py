@@ -5,14 +5,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from core.model_provider.route_registry import list_model_route_descriptors
 from core.prompt_v2.task_templates import render_task_messages
 
 
-OUTREACH_TASK_KEYS = frozenset({
-    "outreach_extract",
-    "outreach_judge",
-    "outreach_generate",
-})
+OUTREACH_TASK_KEYS = frozenset(
+    descriptor.route_key
+    for descriptor in list_model_route_descriptors()
+    if descriptor.domain == "proactive_outreach"
+    and descriptor.runtime_task_key is not None
+)
 
 
 def invoke_outreach_task(

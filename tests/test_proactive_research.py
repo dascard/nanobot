@@ -87,6 +87,31 @@ class FakeBridge:
         if self.stop_delay_seconds:
             await asyncio.sleep(self.stop_delay_seconds)
 
+    def research_tool_guards_ready(self) -> bool:
+        manager = getattr(self._agent, "plugins", None)
+        plugins = list(getattr(manager, "_plugins", []) or [])
+        guard_ready = any(
+            getattr(plugin, "name", "") == "nanobot_tool_plan_guard"
+            for plugin in plugins
+        )
+        controller = getattr(self._agent, "controller", None)
+        schema_ready = bool(
+            getattr(
+                controller,
+                "_nanobot_tool_plan_schema_filter_installed",
+                False,
+            )
+        )
+        return guard_ready and schema_ready
+
+    def install_research_budget_guard(self, guard: object) -> bool:
+        manager = getattr(self._agent, "plugins", None)
+        register = getattr(manager, "register", None)
+        if not callable(register):
+            return False
+        register(guard)
+        return True
+
 
 class CancellationResistantBridge(FakeBridge):
     async def handle_message(self, query: str, **kwargs) -> str:
@@ -360,7 +385,7 @@ def test_extract_verified_web_sources_rejects_overlong_url_without_truncating_it
 @pytest.mark.asyncio
 async def test_research_budget_blocks_seventh_exploration_but_never_counts_final_action():
     api = _research_api()
-    from kohakuterrarium.modules.plugin.base import PluginBlockError
+    from core.proactive_research import ResearchToolBlockError
 
     plugin = api.ResearchBudgetPlugin(
         budget=api.ResearchBudget(max_exploration_calls=6),
@@ -384,7 +409,7 @@ async def test_research_budget_blocks_seventh_exploration_but_never_counts_final
 
     await plugin.pre_tool_execute({}, tool_name="reply", job_id="job-reply")
     await plugin.pre_tool_execute({}, tool_name="no_reply", job_id="job-no-reply")
-    with pytest.raises(PluginBlockError):
+    with pytest.raises(ResearchToolBlockError):
         await plugin.pre_tool_execute(
             {"query": "Nanobot 研究伙伴设计"},
             tool_name="web_search",
@@ -398,7 +423,7 @@ async def test_research_budget_blocks_seventh_exploration_but_never_counts_final
 @pytest.mark.asyncio
 async def test_run_proactive_research_budget_exhaustion_is_sticky():
     api = _research_api()
-    from kohakuterrarium.modules.plugin.base import PluginBlockError
+    from core.proactive_research import ResearchToolBlockError
 
     class BudgetBreachBridge(FakeBridge):
         async def handle_message(self, query: str, **kwargs) -> str:
@@ -410,7 +435,7 @@ async def test_run_proactive_research_budget_exhaustion_is_sticky():
                 tool_name="web_search",
                 job_id="first",
             )
-            with pytest.raises(PluginBlockError):
+            with pytest.raises(ResearchToolBlockError):
                 await plugin.pre_tool_execute(
                     args,
                     tool_name="web_search",
@@ -486,11 +511,11 @@ def test_research_budget_rejects_non_finite_or_out_of_range_values(overrides):
 )
 async def test_research_budget_plugin_blocks_every_tool_outside_research_ceiling(tool_name):
     api = _research_api()
-    from kohakuterrarium.modules.plugin.base import PluginBlockError
+    from core.proactive_research import ResearchToolBlockError
 
     plugin = api.ResearchBudgetPlugin(budget=api.ResearchBudget())
 
-    with pytest.raises(PluginBlockError):
+    with pytest.raises(ResearchToolBlockError):
         await plugin.pre_tool_execute({}, tool_name=tool_name, job_id="blocked-tool")
     assert plugin.exploration_calls == 0
 
@@ -1560,14 +1585,14 @@ async def test_reply_tool_dry_run_does_not_record_sticker_usage(monkeypatch):
 @pytest.mark.asyncio
 async def test_research_budget_plugin_blocks_all_subagents_defense_in_depth():
     api = _research_api()
-    from kohakuterrarium.modules.plugin.base import PluginBlockError
+    from core.proactive_research import ResearchToolBlockError
 
     plugin = api.ResearchBudgetPlugin(
         budget=api.ResearchBudget(),
         research_query="Generative Agents memory reflection planning",
     )
 
-    with pytest.raises(PluginBlockError):
+    with pytest.raises(ResearchToolBlockError):
         await plugin.pre_subagent_run(
             "写入持久记忆",
             name="memory_write",
@@ -1579,14 +1604,14 @@ async def test_research_budget_plugin_blocks_all_subagents_defense_in_depth():
 @pytest.mark.asyncio
 async def test_research_query_scope_blocks_unrelated_query_before_budget_or_provider():
     api = _research_api()
-    from kohakuterrarium.modules.plugin.base import PluginBlockError
+    from core.proactive_research import ResearchToolBlockError
 
     plugin = api.ResearchBudgetPlugin(
         budget=api.ResearchBudget(),
         research_query="2026 Python 安全更新报告",
     )
 
-    with pytest.raises(PluginBlockError):
+    with pytest.raises(ResearchToolBlockError):
         await plugin.pre_tool_execute(
             {"query": "2026 Python 安全更新报告赌博"},
             tool_name="web_search",
@@ -1609,14 +1634,14 @@ async def test_research_query_scope_blocks_sensitive_data_before_provider(
     executed_query,
 ):
     api = _research_api()
-    from kohakuterrarium.modules.plugin.base import PluginBlockError
+    from core.proactive_research import ResearchToolBlockError
 
     plugin = api.ResearchBudgetPlugin(
         budget=api.ResearchBudget(),
         research_query="Nanobot agent architecture",
     )
 
-    with pytest.raises(PluginBlockError):
+    with pytest.raises(ResearchToolBlockError):
         await plugin.pre_tool_execute(
             {"query": executed_query},
             tool_name="web_search",
@@ -1628,14 +1653,14 @@ async def test_research_query_scope_blocks_sensitive_data_before_provider(
 @pytest.mark.asyncio
 async def test_research_query_scope_blocks_sensitive_data_without_topic_baseline():
     api = _research_api()
-    from kohakuterrarium.modules.plugin.base import PluginBlockError
+    from core.proactive_research import ResearchToolBlockError
 
     plugin = api.ResearchBudgetPlugin(
         budget=api.ResearchBudget(),
         research_query="",
     )
 
-    with pytest.raises(PluginBlockError):
+    with pytest.raises(ResearchToolBlockError):
         await plugin.pre_tool_execute(
             {"query": "411111 111111 1111"},
             tool_name="web_search",

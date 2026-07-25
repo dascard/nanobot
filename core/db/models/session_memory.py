@@ -77,7 +77,12 @@ class SessionSummaryJob(Base):
     next_retry_at = Column(DateTime, nullable=True)
     locked_by = Column(String, default="")
     locked_at = Column(DateTime, nullable=True)
+    lease_token = Column(String(64), default="")
+    lease_expires_at = Column(DateTime, nullable=True)
+    generation = Column(Integer, default=0)
+    attempt_count = Column(Integer, default=0)
     error = Column(Text, default="")
+    finished_at = Column(DateTime, nullable=True)
     stable_hash = Column(String, index=True, default="")
     meta_json = Column(Text, default="{}")
 

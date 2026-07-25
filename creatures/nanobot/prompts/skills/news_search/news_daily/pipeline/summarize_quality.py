@@ -1,9 +1,17 @@
 """Quality 模式 LLM 摘要——基于 Light Evidence Cards 生成日报 JSON。"""
 
 from collections.abc import Callable
-import json
 import logging
-import re
+
+from core.model_provider.contracts import ModelProviderResponse
+from core.task_runtime import (
+    TaskInvocation,
+    TaskModelCompletion,
+    TaskModelRequest,
+    TaskRuntime,
+    execute_task,
+    thaw_task_value,
+)
 
 logger = logging.getLogger("nanobot.news_daily.quality")
 
@@ -101,13 +109,65 @@ details 的 source_labels 使用卡片中的 "来源名（组）" 格式。
     )
 
 
-def _extract_json(raw: str) -> str:
-    raw = (raw or "").strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw).strip()
-        raw = re.sub(r"```\s*$", "", raw).strip()
-    m = re.search(r"\{[\s\S]*\}", raw)
-    return m.group(0) if m else raw
+class _InjectedModelCallPort:
+    """测试／显式调用方 Adapter；仍完整经过 TaskRuntime 校验。"""
+
+    def __init__(self, model_call: Callable[..., object]) -> None:
+        self._model_call = model_call
+
+    @property
+    def adapter_id(self) -> str:
+        return "news_daily_injected_model_call"
+
+    def complete_task(
+        self,
+        request: TaskModelRequest,
+    ) -> TaskModelCompletion:
+        response = self._model_call(
+            route_key=request.route_key,
+            messages=[
+                dict(message)
+                for message in request.messages
+            ],
+        )
+        if not isinstance(response, ModelProviderResponse):
+            raise TypeError("model_call 必须返回 ModelProviderResponse")
+        return TaskModelCompletion(
+            content=response.content,
+            route_key=request.route_key,
+            usage=response.usage,
+            finish_reason=response.finish_reason,
+        )
+
+
+def _run_quality_task(
+    cards: list[dict],
+    prompt: str,
+    *,
+    model_call: Callable[..., object] | None,
+):
+    source_ids = tuple(
+        int(card["source_id"])
+        for card in cards
+        if type(card.get("source_id")) is int
+        and int(card["source_id"]) > 0
+    )
+    invocation = TaskInvocation(
+        invocation_id="news_daily_quality",
+        route_key="news_daily_quality",
+        input_values={"message": prompt},
+        request_context={"allowed_source_ids": source_ids},
+        idempotency_key=(
+            "news_daily_quality:"
+            + ",".join(str(source_id) for source_id in source_ids)
+        ),
+        timeout_budget_seconds=20.0,
+    )
+    if model_call is not None:
+        return TaskRuntime(
+            _InjectedModelCallPort(model_call),
+        ).execute(invocation)
+    return execute_task(invocation)
 
 
 def summarize_quality(
@@ -119,30 +179,29 @@ def summarize_quality(
     """调用 LLM 生成 quality 日报 JSON。失败返回 fallback。"""
     prompt = build_quality_prompt(cards)
 
-    try:
-        from core.llm_trace_context import llm_trace_scope
-        from core.model_provider.route_runtime import call_model_route_response
+    from core.llm_trace_context import llm_trace_scope
 
-        caller = model_call or call_model_route_response
-        with llm_trace_scope(source="news_daily.summarize_quality"):
-            response = caller(
-                route_key="news_daily_quality",
-                messages=[
-                    {"role": "system", "content": get_quality_system_prompt()},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-        raw = str(getattr(response, "content", "") or "")
-
-        if not raw:
-            logger.warning("[quality] LLM returned empty, using fallback")
-            return fallback
-
-        parsed = json.loads(_extract_json(raw))
-        logger.info("[quality] LLM summary success chars=%d", len(raw))
-        parsed["_quality_source"] = "llm"
-        return parsed if isinstance(parsed, dict) else fallback
-
-    except Exception as e:
-        logger.warning("[quality] LLM summary failed: %s", e)
+    with llm_trace_scope(source="news_daily.summarize_quality"):
+        result = _run_quality_task(
+            cards,
+            prompt,
+            model_call=model_call,
+        )
+    if not result.ok:
+        failure_code = (
+            result.failure.code.value
+            if result.failure is not None
+            else "provider_error"
+        )
+        logger.warning(
+            "[quality] TaskRuntime failed code=%s fallback=true",
+            failure_code,
+        )
         return fallback
+    parsed = thaw_task_value(result.parsed_value)
+    logger.info(
+        "[quality] TaskRuntime success output_bytes=%d",
+        result.raw_output_bytes,
+    )
+    parsed["_quality_source"] = "llm"
+    return parsed

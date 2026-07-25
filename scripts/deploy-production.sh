@@ -10,6 +10,12 @@ if [[ ! "${runtime_image}" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
   exit 2
 fi
 
+release_manifest="${NANOBOT_RELEASE_MANIFEST:-}"
+if [[ -z "${release_manifest}" || ! -f "${release_manifest}" ]]; then
+  echo "生产部署要求 NANOBOT_RELEASE_MANIFEST 指向已验证的 ReleaseManifest。" >&2
+  exit 2
+fi
+
 for runtime_dir in data models sentinel; do
   if [[ ! -d "${runtime_dir}" ]]; then
     echo "缺少运行目录 ${runtime_dir}/；请先执行 scripts/prepare-runtime-directories.sh。" >&2
@@ -17,27 +23,10 @@ for runtime_dir in data models sentinel; do
   fi
 done
 
-compose=(
-  docker compose
-  -f docker-compose.yml
-  -f docker-compose.prod.yml
-)
-
-"${compose[@]}" config --quiet
-"${compose[@]}" pull
-"${compose[@]}" up -d --no-build
-
-health_url="${NANOBOT_DEPLOY_READY_URL:-http://127.0.0.1:8000/api/v1/ready}"
-timeout_seconds="${NANOBOT_DEPLOY_HEALTH_TIMEOUT_SECONDS:-120}"
-deadline=$((SECONDS + timeout_seconds))
-until curl --fail --silent --show-error --max-time 5 "${health_url}" >/dev/null; do
-  if (( SECONDS >= deadline )); then
-    echo "生产部署 readiness 检查超时：${health_url}" >&2
-    "${compose[@]}" ps >&2 || true
-    exit 1
-  fi
-  sleep 2
-done
-
-"${compose[@]}" ps
-echo "生产部署 readiness 检查通过：${runtime_image}"
+exec python scripts/deploy_release.py \
+  --manifest "${release_manifest}" \
+  --state-dir "${NANOBOT_RELEASE_STATE_DIR:-data/release-state}" \
+  --ready-url "${NANOBOT_DEPLOY_READY_URL:-http://127.0.0.1:8000/api/v1/ready}" \
+  --health-timeout-seconds "${NANOBOT_DEPLOY_HEALTH_TIMEOUT_SECONDS:-120}" \
+  --health-interval-seconds "${NANOBOT_DEPLOY_HEALTH_INTERVAL_SECONDS:-2}" \
+  --command-timeout-seconds "${NANOBOT_DEPLOY_COMMAND_TIMEOUT_SECONDS:-600}"

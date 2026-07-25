@@ -1,0 +1,78 @@
+{
+  "results": [
+    {
+      "entities": [
+        "openai"
+      ],
+      "id": "model_release",
+      "known_entities": [
+        "openai"
+      ],
+      "negative_signals": [],
+      "normalized_title": "openai 发布 gpt 5 推理能力与 api 全面升级",
+      "positive_signals": [
+        "ai_model",
+        "ai_platform"
+      ],
+      "relevance_score": 1.0,
+      "review_reason": "unknown_entity",
+      "tokens": [
+        "api",
+        "benchmark",
+        "gpt",
+        "openai"
+      ],
+      "topics": [
+        "benchmark",
+        "model_release",
+        "product"
+      ],
+      "unknown_entities": [
+        "GPT-5"
+      ]
+    },
+    {
+      "entities": [],
+      "id": "medical_non_ai",
+      "known_entities": [],
+      "negative_signals": [
+        "medical_context"
+      ],
+      "normalized_title": "new clinical study improves patient sleep",
+      "positive_signals": [],
+      "relevance_score": 0.0,
+      "review_reason": "boundary",
+      "tokens": [
+        "clinical",
+        "hospital",
+        "improves",
+        "new",
+        "patient",
+        "reports",
+        "result",
+        "sleep",
+        "study",
+        "treatment"
+      ],
+      "topics": [],
+      "unknown_entities": [
+        "A",
+        "New"
+      ]
+    },
+    {
+      "entities": [],
+      "id": "chinese_weather",
+      "known_entities": [],
+      "negative_signals": [],
+      "normalized_title": "今天天气真好",
+      "positive_signals": [],
+      "relevance_score": 0.15,
+      "review_reason": "boundary",
+      "tokens": [],
+      "topics": [],
+      "unknown_entities": []
+    }
+  ],
+  "schema_version": 1
+}

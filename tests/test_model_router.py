@@ -291,7 +291,7 @@ class TestClassifierRouteProviderResolution:
         with pytest.raises(RuntimeError, match="provider disabled: local_llama"):
             call_model_route(route_key="timing_gate", user_message="ping")
 
-    @pytest.mark.parametrize("route_key", ["timing_gate", "private_decision", "classifier_legacy"])
+    @pytest.mark.parametrize("route_key", ["timing_gate", "classifier_legacy"])
     def test_call_model_route_uses_v2_task_template_for_classifier_routes(
         self, route_key, tmp_path, monkeypatch
     ):
@@ -365,7 +365,7 @@ tool_name: {route_key}
         ) == "ok"
 
         messages = captured["payload"]["messages"]
-        if route_key in {"timing_gate", "private_decision", "classifier_legacy"}:
+        if route_key in {"timing_gate", "classifier_legacy"}:
             assert "ping" not in messages[0]["content"]
             assert "TaskPayload" in messages[0]["content"]
             assert messages[1] == {"role": "user", "content": "ping"}

@@ -436,10 +436,10 @@ def get_effort_constraint(effort: str | None) -> str:
     return _core_get_effort_constraint(effort)
 
 
-def _get_casual_reply_for_pre_bridge(query: str, is_superuser: bool) -> str:
+def _get_casual_reply_for_pre_bridge(intent: str) -> str:
     from core.reply_templates import get_casual_reply as _core_get_casual_reply
 
-    return _core_get_casual_reply(query, is_superuser=is_superuser)
+    return _core_get_casual_reply(intent)
 
 
 def _chat_pre_bridge_services() -> chat_pre_bridge_decision.ChatPreBridgeServices:
@@ -808,6 +808,7 @@ def _chat_route_runner_context(
     claim_owner: InboundClaimOwner | None = None,
     claim_key: Any | None = None,
     request_sha256: str = "",
+    message_contract: Any | None = None,
 ) -> chat_route_runner.ChatRouteRunnerContext:
     return chat_route_runner.ChatRouteRunnerContext(
         req=req,
@@ -829,6 +830,7 @@ def _chat_route_runner_context(
         claim_owner=claim_owner,
         claim_key=claim_key,
         request_sha256=request_sha256,
+        message_contract=message_contract,
     )
 
 
@@ -955,6 +957,9 @@ async def proxy_chat(
     统一网关：接收客户端的发问，通过 KT Agent 处理，返回结果并双向落库。
     """
     _normalize_request_client_meta(req, expected_chat_type=_chat_request_type(req))
+    message_contract = (
+        chat_request_contract.normalize_request_message_contract(req)
+    )
     normalized_files = _normalize_files(req.files)
     req.files = normalized_files
     phase_session_factory = (
@@ -1052,7 +1057,7 @@ async def proxy_chat(
             req.session_name,
         )
 
-        is_group = not str(req.session_id).startswith("private_")
+        is_group = message_contract.chat_stream.chat_type == "group"
         is_superuser = (not is_group) and _is_guardrail_superuser(req.user_id)
         db_preparation = await run_session_phase_async(
             lambda phase_db: _prepare_chat_database_phase(
@@ -1169,6 +1174,7 @@ async def proxy_chat(
             claim_owner=claim_owner,
             claim_key=private_claim_key,
             request_sha256=private_request_sha256,
+            message_contract=message_contract,
         )
 
         if req.stream:

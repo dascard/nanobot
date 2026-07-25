@@ -91,8 +91,6 @@ class PromptRuntimeInput:
     is_group: bool = False
     is_super_user: bool = False
     group_profile_context: str = ""
-    expression_context: str = ""
-    jargon_context: str = ""
     tool_schemas: list[dict[str, Any]] = field(default_factory=list)
     debug: dict[str, Any] = field(default_factory=dict)
     audit_failure_policy: str = "fail_fast"
@@ -167,8 +165,6 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         history_header=input.history_header,
         history_messages=input.history_messages,
         group_profile_context=input.group_profile_context,
-        expression_context=input.expression_context,
-        jargon_context=input.jargon_context,
         runtime_tool_prompt=input.runtime_tool_prompt,
         effort_constraint=input.effort_constraint,
         tool_schemas=input.tool_schemas,

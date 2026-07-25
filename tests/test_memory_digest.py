@@ -7,6 +7,55 @@ import pytest
 from core.database import ChatLog, MemoryDigest, RollingSessionSummary
 
 
+def _memory_task_result(
+    *,
+    parsed_value=None,
+    model="actual-summary-model",
+    requested_model="summary-model-v2",
+    request_log_id=321,
+    actual_model_observed=True,
+    failure_code: str = "",
+):
+    from core.task_runtime import (
+        TaskFailureCode,
+        TaskFailureStage,
+        TaskResult,
+        TaskTerminalAction,
+        TaskTypedFailure,
+    )
+
+    failure = (
+        TaskTypedFailure(
+            code=TaskFailureCode(failure_code),
+            stage=TaskFailureStage.PROVIDER,
+            retryable=False,
+            summary="测试失败",
+            terminal_action=TaskTerminalAction.DETERMINISTIC_FALLBACK,
+        )
+        if failure_code
+        else None
+    )
+    return TaskResult(
+        parsed_value=parsed_value,
+        contract_version="memory_digest_v2",
+        route_key="memory_digest",
+        provider="newapi",
+        model=model,
+        attempt_count=1,
+        latency_ms=1,
+        failure=failure,
+        raw_output_sha256=("a" * 64 if not failure else ""),
+        raw_output_bytes=(2 if not failure else 0),
+        validation_diagnostics=(),
+        run_id="taskrun_memory_test",
+        execution_metadata={
+            "requested_model": requested_model,
+            "request_log_id": request_log_id,
+            "actual_model_observed": actual_model_observed,
+        },
+    )
+
+
 def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
     # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
     return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
@@ -803,28 +852,8 @@ def test_default_memory_digest_summarizer_returns_resolved_model_name(monkeypatc
     )
 
     monkeypatch.setattr(
-        "clients.classifier_client.resolve_model_route",
-        lambda _key: {
-            "api_key": "test",
-            "base_url": "http://example.invalid/v1",
-            "temperature": 0.1,
-            "model": "summary-model-v2",
-            "max_tokens": 8192,
-            "enable_thinking": "false",
-        },
-    )
-
-    async def fake_chat_completion(self, **_kwargs):
-        return {
-            "choices": [{"message": {"content": "{}"}}],
-            "model": "actual-summary-model",
-            "_nanobot_requested_model": "summary-model-v2",
-            "_nanobot_request_log_id": 321,
-        }
-
-    monkeypatch.setattr(
-        "clients.new_api_client.NewAPIClient.chat_completion",
-        fake_chat_completion,
+        "core.task_runtime.execute_task",
+        lambda _invocation: _memory_task_result(parsed_value={}),
     )
 
     result = run_async(default_llm_memory_digest_summarizer_async([
@@ -842,28 +871,14 @@ def test_default_memory_digest_summarizer_does_not_invent_actual_model(monkeypat
     from app.memory_digest.llm_builder import default_llm_memory_digest_summarizer_async
 
     monkeypatch.setattr(
-        "clients.classifier_client.resolve_model_route",
-        lambda _key: {
-            "api_key": "test",
-            "base_url": "http://example.invalid/v1",
-            "temperature": 0.1,
-            "model": "requested-summary-model",
-            "max_tokens": 8192,
-            "enable_thinking": "false",
-        },
-    )
-
-    async def fake_chat_completion(self, **_kwargs):
-        return {
-            "choices": [{"message": {"content": "{}"}}],
-            "_nanobot_model_id": "requested-summary-model",
-            "_nanobot_requested_model": "requested-summary-model",
-            "_nanobot_request_log_id": 654,
-        }
-
-    monkeypatch.setattr(
-        "clients.new_api_client.NewAPIClient.chat_completion",
-        fake_chat_completion,
+        "core.task_runtime.execute_task",
+        lambda _invocation: _memory_task_result(
+            parsed_value={},
+            model="unknown",
+            requested_model="requested-summary-model",
+            request_log_id=654,
+            actual_model_observed=False,
+        ),
     )
 
     result = run_async(default_llm_memory_digest_summarizer_async([
@@ -883,30 +898,10 @@ def test_default_memory_digest_summarizer_rejects_length_truncation(monkeypatch)
     )
 
     monkeypatch.setattr(
-        "clients.classifier_client.resolve_model_route",
-        lambda _key: {
-            "api_key": "test",
-            "base_url": "http://example.invalid/v1",
-            "temperature": 0.1,
-            "model": "summary-model-v2",
-            "max_tokens": 8192,
-            "enable_thinking": "false",
-        },
-    )
-
-    async def fake_chat_completion(self, **kwargs):
-        assert kwargs["max_tokens"] == 8192
-        return {
-            "choices": [{
-                "finish_reason": "length",
-                "message": {"content": '{"preview":{"brief":"被截断"}'},
-            }],
-            "model": "actual-summary-model",
-        }
-
-    monkeypatch.setattr(
-        "clients.new_api_client.NewAPIClient.chat_completion",
-        fake_chat_completion,
+        "core.task_runtime.execute_task",
+        lambda _invocation: _memory_task_result(
+            failure_code="output_limit_exceeded",
+        ),
     )
 
     with pytest.raises(

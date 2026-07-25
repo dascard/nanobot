@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
-import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -13,6 +12,7 @@ from sqlalchemy import and_, func, or_, update
 from sqlalchemy.orm import Session
 
 from core.database import SemanticIndexJob
+from core.fencing import new_fencing_token
 from core.semantic.schema import ensure_semantic_schema
 from core.time_utils import db_now_naive, to_db_naive
 
@@ -40,7 +40,7 @@ class SemanticJobLease:
 
     job_id: int
     worker_id: str
-    lease_token: str
+    lease_token: str = field(repr=False)
     lease_expires_at: datetime
     source_revision: str
     attempt_count: int
@@ -158,14 +158,16 @@ def _automatic_retry_available(job: SemanticIndexJob) -> bool:
 
 def _active_lease_predicate(
     *,
-    job_id: int,
-    lease_token: str,
+    lease: SemanticJobLease,
     now: datetime,
 ):
     return and_(
-        SemanticIndexJob.id == int(job_id),
+        SemanticIndexJob.id == int(lease.job_id),
         SemanticIndexJob.status == "running",
-        SemanticIndexJob.lease_token == str(lease_token or ""),
+        SemanticIndexJob.locked_by == lease.worker_id,
+        SemanticIndexJob.lease_token == lease.lease_token,
+        SemanticIndexJob.source_revision == lease.source_revision,
+        SemanticIndexJob.attempt_count == lease.attempt_count,
         SemanticIndexJob.lease_expires_at.is_not(None),
         SemanticIndexJob.lease_expires_at > now,
     )
@@ -225,7 +227,7 @@ def claim_next_job(
     if candidate is None:
         return None
     job_id = int(candidate[0])
-    lease_token = secrets.token_hex(32)
+    lease_token = new_fencing_token()
     claimed_revision = str(candidate[5] or "").strip() or _legacy_source_revision(
         source_type=str(candidate[1] or ""),
         source_id=str(candidate[2] or ""),
@@ -268,8 +270,7 @@ def claim_next_job(
 def heartbeat_job(
     db: Session,
     *,
-    job_id: int,
-    lease_token: str,
+    lease: SemanticJobLease,
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
     now: datetime | None = None,
     commit: bool = True,
@@ -279,8 +280,7 @@ def heartbeat_job(
     result = db.execute(
         update(SemanticIndexJob)
         .where(_active_lease_predicate(
-            job_id=job_id,
-            lease_token=lease_token,
+            lease=lease,
             now=heartbeat_at,
         ))
         .values(
@@ -291,7 +291,7 @@ def heartbeat_job(
     )
     row = _finish_cas(
         db,
-        job_id=job_id,
+        job_id=lease.job_id,
         affected=int(result.rowcount or 0),
         commit=commit,
     )
@@ -308,15 +308,12 @@ def assert_semantic_job_lease(
     row = (
         db.query(SemanticIndexJob)
         .filter(_active_lease_predicate(
-            job_id=lease.job_id,
-            lease_token=lease.lease_token,
+            lease=lease,
             now=checked_at,
         ))
-        .filter(SemanticIndexJob.locked_by == lease.worker_id)
-        .filter(SemanticIndexJob.attempt_count == lease.attempt_count)
         .one_or_none()
     )
-    if row is None or str(row.source_revision or "") != lease.source_revision:
+    if row is None:
         raise SemanticJobLeaseLost("semantic_index_job_lease_lost")
     return row
 
@@ -363,6 +360,15 @@ def recover_timed_out_jobs(
             .where(SemanticIndexJob.id == int(candidate.id or 0))
             .where(SemanticIndexJob.status == "running")
             .where(SemanticIndexJob.lease_token == str(candidate.lease_token or ""))
+            .where(SemanticIndexJob.locked_by == str(candidate.locked_by or ""))
+            .where(
+                SemanticIndexJob.attempt_count
+                == int(candidate.attempt_count or 0)
+            )
+            .where(
+                SemanticIndexJob.source_revision
+                == str(candidate.source_revision or "")
+            )
             .where(expired)
             .values(
                 status="pending" if retryable else "failed",
@@ -389,8 +395,7 @@ def recover_timed_out_jobs(
 def finish_job(
     db: Session,
     *,
-    job_id: int,
-    lease_token: str,
+    lease: SemanticJobLease,
     status: str,
     error: str = "",
     now: datetime | None = None,
@@ -402,8 +407,7 @@ def finish_job(
     result = db.execute(
         update(SemanticIndexJob)
         .where(_active_lease_predicate(
-            job_id=job_id,
-            lease_token=lease_token,
+            lease=lease,
             now=finished_at,
         ))
         .values(
@@ -420,7 +424,7 @@ def finish_job(
     )
     return _finish_cas(
         db,
-        job_id=job_id,
+        job_id=lease.job_id,
         affected=int(result.rowcount or 0),
         commit=commit,
     )
@@ -437,8 +441,7 @@ def settle_semantic_job(
 ) -> SemanticIndexJob:
     row = finish_job(
         db,
-        job_id=lease.job_id,
-        lease_token=lease.lease_token,
+        lease=lease,
         status=status,
         error=error,
         now=now,
@@ -452,8 +455,7 @@ def settle_semantic_job(
 def fail_job(
     db: Session,
     *,
-    job_id: int,
-    lease_token: str,
+    lease: SemanticJobLease,
     error: str,
     retryable: bool = True,
     now: datetime | None = None,
@@ -463,8 +465,7 @@ def fail_job(
     row = (
         db.query(SemanticIndexJob)
         .filter(_active_lease_predicate(
-            job_id=job_id,
-            lease_token=lease_token,
+            lease=lease,
             now=failed_at,
         ))
         .one_or_none()
@@ -483,8 +484,7 @@ def fail_job(
     result = db.execute(
         update(SemanticIndexJob)
         .where(_active_lease_predicate(
-            job_id=job_id,
-            lease_token=lease_token,
+            lease=lease,
             now=failed_at,
         ))
         .values(
@@ -506,7 +506,7 @@ def fail_job(
     )
     return _finish_cas(
         db,
-        job_id=job_id,
+        job_id=lease.job_id,
         affected=int(result.rowcount or 0),
         commit=commit,
     )

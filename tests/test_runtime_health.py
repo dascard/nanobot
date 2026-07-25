@@ -92,14 +92,13 @@ async def test_run_session_phase_async_does_not_block_event_loop():
 
 def test_readiness_requires_startup_database_prompt_and_bridge(monkeypatch):
     from core import runtime_health
-    from nanobot_kt import bridge
 
     runtime_health.mark_starting(testing=False)
     monkeypatch.setattr(runtime_health, "_database_ready", lambda: True)
     monkeypatch.setattr(
-        bridge,
-        "_bridge_lifecycle_state",
-        bridge.BridgeLifecycleState.NEW,
+        runtime_health,
+        "agent_runtime_binding_state",
+        lambda: "stopped",
     )
     initial = runtime_health.readiness_snapshot()
     assert initial["ready"] is False
@@ -112,9 +111,9 @@ def test_readiness_requires_startup_database_prompt_and_bridge(monkeypatch):
     runtime_health.mark_prompt_runtime_ready()
     runtime_health.mark_startup_complete()
     monkeypatch.setattr(
-        bridge,
-        "_bridge_lifecycle_state",
-        bridge.BridgeLifecycleState.RUNNING,
+        runtime_health,
+        "agent_runtime_binding_state",
+        lambda: "running",
     )
     ready = runtime_health.readiness_snapshot()
     assert ready["ready"] is True

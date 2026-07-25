@@ -6,6 +6,70 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 
+_GROUP_MEMORY_CANONICAL_IDENTITY_VERSION = (
+    "20260723_group_memory_canonical_identity"
+)
+
+
+def _legacy_group_memory_engine(
+    rows: list[dict],
+    *,
+    include_canonical_column: bool = False,
+):
+    from core.schema_migrations import MIGRATIONS
+
+    engine = create_engine("sqlite:///:memory:")
+    canonical_column = (
+        ", chat_stream_id TEXT"
+        if include_canonical_column
+        else ""
+    )
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations ("
+            "version TEXT PRIMARY KEY, name TEXT NOT NULL, "
+            "applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(
+            text(
+                "INSERT INTO schema_migrations(version, name) "
+                "VALUES (:version, :name)"
+            ),
+            [
+                {"version": version, "name": name}
+                for version, name, _migration in MIGRATIONS
+                if version != _GROUP_MEMORY_CANONICAL_IDENTITY_VERSION
+            ],
+        )
+        conn.execute(text(
+            "CREATE TABLE group_memories ("
+            "id INTEGER PRIMARY KEY, group_id TEXT NOT NULL, "
+            "memory_type TEXT NOT NULL, content_hash TEXT NOT NULL"
+            f"{canonical_column})"
+        ))
+        if rows:
+            column_names = [
+                "id",
+                "group_id",
+                "memory_type",
+                "content_hash",
+            ]
+            if include_canonical_column:
+                column_names.append("chat_stream_id")
+            placeholders = ", ".join(
+                f":{column_name}" for column_name in column_names
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO group_memories("
+                    + ", ".join(column_names)
+                    + f") VALUES ({placeholders})"
+                ),
+                rows,
+            )
+    return engine
+
+
 def test_sqlite_path_from_database_url_respects_configured_database_path(tmp_path):
     from core.database import sqlite_path_from_database_url
 
@@ -64,6 +128,7 @@ def test_schema_migrations_records_applied_versions():
         "workspace_quota_bindings",
         "sandbox_admin_operations",
         "sandbox_project_sequences",
+        "admin_idempotency_records",
     } <= set(inspector.get_table_names())
     rss_columns = [col["name"] for col in inspector.get_columns("rolling_session_summaries")]
     assert "covered_until_turn_id" in rss_columns
@@ -140,6 +205,23 @@ def test_schema_migrations_records_applied_versions():
         "lease_expires_at",
         "next_attempt_at",
     } <= operation_columns
+    admin_idempotency_columns = {
+        column["name"]
+        for column in inspector.get_columns(
+            "admin_idempotency_records"
+        )
+    }
+    assert {
+        "request_id",
+        "action",
+        "target_id",
+        "request_sha256",
+        "status",
+        "result_json",
+        "error_code",
+        "created_at",
+        "updated_at",
+    } <= admin_idempotency_columns
 
     with engine.connect() as conn:
         rows = conn.execute(text("SELECT version FROM schema_migrations ORDER BY version")).fetchall()
@@ -396,6 +478,88 @@ def test_memory_digest_jobs_migration_is_idempotent_and_enforces_source_key():
                 ),
                 values,
             )
+
+
+def test_session_summary_fencing_migration_requeues_legacy_running_once():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE session_summary_jobs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "session_id TEXT NOT NULL, "
+            "user_id TEXT DEFAULT '', "
+            "chat_type TEXT DEFAULT 'private', "
+            "covered_from_turn_id INTEGER DEFAULT 0, "
+            "covered_until_turn_id INTEGER DEFAULT 0, "
+            "source_turn_ids_json TEXT DEFAULT '[]', "
+            "previous_summary_id INTEGER, "
+            "fallback_summary_id INTEGER, "
+            "result_summary_id INTEGER, "
+            "status TEXT DEFAULT 'pending', "
+            "retry_count INTEGER DEFAULT 0, "
+            "max_retry INTEGER DEFAULT 3, "
+            "next_retry_at DATETIME, "
+            "locked_by TEXT DEFAULT '', "
+            "locked_at DATETIME, "
+            "error TEXT DEFAULT '', "
+            "stable_hash TEXT DEFAULT '', "
+            "meta_json TEXT DEFAULT '{}', "
+            "created_at DATETIME, "
+            "updated_at DATETIME)"
+        ))
+        conn.execute(text(
+            "INSERT INTO session_summary_jobs("
+            "id, session_id, status, retry_count, max_retry, "
+            "locked_by, locked_at, error, updated_at"
+            ") VALUES ("
+            "1, 'legacy-running', 'running', 1, 3, "
+            "'legacy-worker', '2026-07-23 01:00:00', "
+            "'legacy-running', '2026-07-23 01:00:00'"
+            ")"
+        ))
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("session_summary_jobs")
+    }
+    assert {
+        "lease_token",
+        "lease_expires_at",
+        "generation",
+        "attempt_count",
+        "finished_at",
+    } <= columns
+
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT status, retry_count, locked_by, locked_at, "
+            "lease_token, lease_expires_at, generation, attempt_count, "
+            "error, next_retry_at, finished_at "
+            "FROM session_summary_jobs WHERE id = 1"
+        )).mappings().one()
+        migration_count = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE version = '20260723_session_summary_job_fencing'"
+        )).scalar_one()
+
+    assert row["status"] == "pending"
+    assert row["retry_count"] == 1
+    assert row["locked_by"] == ""
+    assert row["locked_at"] is None
+    assert row["lease_token"] == ""
+    assert row["lease_expires_at"] is None
+    assert row["generation"] == 0
+    assert row["attempt_count"] == 0
+    assert row["error"] == "migration_requeued_legacy_running"
+    assert row["next_retry_at"] is not None
+    assert row["finished_at"] is None
+    assert migration_count == 1
 
 
 def test_semantic_index_reconcile_v2_migrates_legacy_jobs_idempotently():
@@ -1004,3 +1168,207 @@ def test_sandbox_tool_override_migration_removes_only_sandbox_tools():
 
     assert rows == ["memory_query"]
     assert version_count == 1
+
+
+def test_runtime_telemetry_event_migration_is_idempotent_and_indexed():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    assert "runtime_telemetry_events" in inspector.get_table_names()
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("runtime_telemetry_events")
+    }
+    assert {
+        "event_id",
+        "name",
+        "domain",
+        "phase",
+        "occurred_at",
+        "request_id",
+        "session_id",
+        "turn_id",
+        "trace_id",
+        "run_id",
+        "task_id",
+        "task_run_id",
+        "job_id",
+        "tool_call_id",
+        "delivery_id",
+        "parent_job_id",
+        "registry_generation",
+        "registry_sha256",
+        "module_id",
+        "module_version",
+        "artifact_revision",
+        "failure_code",
+        "attributes_json",
+        "dropped_attribute_count",
+    } <= columns
+    indexes = {
+        index["name"]
+        for index in inspector.get_indexes("runtime_telemetry_events")
+    }
+    assert {
+        "ix_runtime_telemetry_name_time",
+        "ix_runtime_telemetry_job_time",
+        "ix_runtime_telemetry_task_time",
+    } <= indexes
+    with engine.connect() as conn:
+        version_count = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE version = '20260723_runtime_telemetry_events'"
+        )).scalar_one()
+    assert version_count == 1
+
+
+def test_group_memory_canonical_identity_migration_backfills_and_is_idempotent():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = _legacy_group_memory_engine([
+        {
+            "id": 1,
+            "group_id": "group_42",
+            "memory_type": "topic",
+            "content_hash": "hash-1",
+        },
+        {
+            "id": 2,
+            "group_id": "qq:43:group",
+            "memory_type": "style",
+            "content_hash": "hash-2",
+        },
+        {
+            "id": 3,
+            "group_id": "研发:一组",
+            "memory_type": "event",
+            "content_hash": "hash-3",
+        },
+    ])
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT id, chat_stream_id, group_id "
+            "FROM group_memories ORDER BY id"
+        )).fetchall()
+        version_count = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM schema_migrations "
+                "WHERE version = :version"
+            ),
+            {"version": _GROUP_MEMORY_CANONICAL_IDENTITY_VERSION},
+        ).scalar_one()
+
+    assert rows == [
+        (1, "qq:42:group", "group_42"),
+        (2, "qq:43:group", "group_43"),
+        (
+            3,
+            "qq:%E7%A0%94%E5%8F%91%3A%E4%B8%80%E7%BB%84:group",
+            "group_研发:一组",
+        ),
+    ]
+    assert version_count == 1
+    indexes = {
+        index["name"]: index
+        for index in inspect(engine).get_indexes("group_memories")
+    }
+    canonical_index = indexes["uq_group_memory_canonical_hash"]
+    assert canonical_index["unique"] == 1
+    assert canonical_index["column_names"] == [
+        "chat_stream_id",
+        "memory_type",
+        "content_hash",
+    ]
+
+
+def test_group_memory_canonical_identity_migration_rejects_alias_collision_atomically():
+    from core.schema_migrations import (
+        SchemaMigrationValidationError,
+        run_schema_migrations,
+    )
+
+    engine = _legacy_group_memory_engine([
+        {
+            "id": 1,
+            "group_id": "group_sensitive-room",
+            "memory_type": "topic",
+            "content_hash": "same-hash",
+        },
+        {
+            "id": 2,
+            "group_id": "sensitive-room",
+            "memory_type": "topic",
+            "content_hash": "same-hash",
+        },
+    ])
+
+    with pytest.raises(
+        SchemaMigrationValidationError,
+        match="canonical 身份冲突",
+    ) as caught:
+        run_schema_migrations(engine)
+
+    assert "sensitive-room" not in str(caught.value)
+    assert "chat_stream_id" not in {
+        column["name"]
+        for column in inspect(engine).get_columns("group_memories")
+    }
+    with engine.connect() as conn:
+        version_count = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM schema_migrations "
+                "WHERE version = :version"
+            ),
+            {"version": _GROUP_MEMORY_CANONICAL_IDENTITY_VERSION},
+        ).scalar_one()
+        rows = conn.execute(text(
+            "SELECT id, group_id FROM group_memories ORDER BY id"
+        )).fetchall()
+    assert version_count == 0
+    assert rows == [
+        (1, "group_sensitive-room"),
+        (2, "sensitive-room"),
+    ]
+
+
+def test_group_memory_canonical_identity_migration_rejects_existing_projection_conflict():
+    from core.schema_migrations import (
+        SchemaMigrationValidationError,
+        run_schema_migrations,
+    )
+
+    engine = _legacy_group_memory_engine(
+        [{
+            "id": 1,
+            "group_id": "group_sensitive-room",
+            "memory_type": "topic",
+            "content_hash": "hash-1",
+            "chat_stream_id": "web:other-room:group",
+        }],
+        include_canonical_column=True,
+    )
+
+    with pytest.raises(
+        SchemaMigrationValidationError,
+        match="身份投影不一致",
+    ) as caught:
+        run_schema_migrations(engine)
+
+    assert "sensitive-room" not in str(caught.value)
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT chat_stream_id, group_id FROM group_memories"
+        )).one()
+    assert row == (
+        "web:other-room:group",
+        "group_sensitive-room",
+    )

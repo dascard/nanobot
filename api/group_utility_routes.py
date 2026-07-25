@@ -5,7 +5,7 @@ import logging
 import sys
 import time as _time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,10 @@ from core.context_builder import (
 from core.database import User, get_db, release_clean_session_transaction
 from core.group_runtime.ids import normalize_group_session_id as _normalize_group_session_id
 from core.identity import build_identity_vars
+from core.lifecycle import (
+    COMPATIBILITY_REGISTRY,
+    record_compatibility_usage,
+)
 from nanobot_kt.bridge import get_bridge as _default_get_bridge
 
 logger = logging.getLogger("nanobot.routes.group_utility")
@@ -104,8 +108,21 @@ class GroupTimingTimerRequest(BaseModel):
 
 
 @router.post("/group_timing")
-async def group_timing_deprecated(req: GroupTimingRequest, _auth=Depends(verify_token)):
+async def group_timing_deprecated(
+    req: GroupTimingRequest,
+    response: Response,
+    _auth=Depends(verify_token),
+):
     """[DEPRECATED] 使用 /group/message 替代。"""
+    descriptor = COMPATIBILITY_REGISTRY.require(
+        "endpoint.group_timing"
+    )
+    record_compatibility_usage(descriptor.compatibility_id)
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = (
+        f'<{descriptor.canonical_replacement}>; '
+        'rel="successor-version"'
+    )
     logger.warning("[DEPRECATED] /group_timing called by group=%s — migrate to /group/message", req.group_id)
     from core.timing_runtime import get_group_runtime
 

@@ -10,24 +10,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.admin.common import audit, client_ip, verify_admin
+from api.admin.contract_models import (
+    ToolListResponse,
+    ToolMutationResponse,
+    ToolOverrideBody,
+    ToolTargetsResponse,
+    ToolUpdateBody,
+)
+from api.endpoint_contracts import standard_error_responses
 from core.database import ChatLog, ChatStreamConfig, ConversationTurn, SystemSetting, User, get_db
 
 logger = logging.getLogger("nanobot.admin")
 router = APIRouter(prefix="/tools", tags=["admin-tools"])
-
-
-class ToolUpdateBody(BaseModel):
-    private_default: bool | None = None
-    private_superuser_default: bool | None = None
-    group_default: bool | None = None
-    lightweight_default: bool | None = None
-
-
-class ToolOverrideBody(BaseModel):
-    scope_type: str  # "group" | "user" | "chat_type" | "platform"
-    scope_id: str
-    enabled: bool
-    reason: str = ""
 
 
 class ToolSchemaOverrideBody(BaseModel):
@@ -88,7 +82,12 @@ def _tool_target_label(name: str, target_id: str, fallback: str) -> str:
     return fallback or clean_id
 
 
-@router.get("")
+@router.get(
+    "",
+    operation_id="adminToolsList",
+    response_model=ToolListResponse,
+    responses=standard_error_responses(401, 422),
+)
 async def list_tools(chat_type: str = "group", group_id: str = "",
                      user_id: str = "", platform: str = "qq",
                      runtime_preset: str = "full",
@@ -103,7 +102,11 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
     except Exception as e:
         logger.warning("[Tools] registry probe failed: %s", e, exc_info=True)
 
-    from core.tool_registry import SANDBOX_TOOL_NAMES, list_user_tool_descriptors
+    from core.tool_registration import (
+        TOOL_REGISTRATION_REGISTRY,
+        list_user_tool_registrations,
+    )
+    from core.tool_registry import SANDBOX_TOOL_NAMES
     from core.runtime_tool_service import (
         normalize_tool_chat_type,
         normalize_tool_platform,
@@ -136,6 +139,12 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
                 "kt_loaded": info.get("kt_loaded", []),
                 "missing_meta": info.get("missing_meta", []),
                 "missing_kt": info.get("missing_kt", []),
+                "declared_yaml": info.get("declared_yaml", []),
+                "projected": info.get("projected", []),
+                "removed_declared": info.get("removed_declared", []),
+                "added_projected": info.get("added_projected", []),
+                "generation": info.get("generation"),
+                "sha256": info.get("sha256", ""),
             }
             kt_loaded = set(info.get("kt_loaded", []))
     except Exception:
@@ -168,11 +177,12 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             override_state = {}
 
     items = []
-    descriptors = sorted(
-        list_user_tool_descriptors(),
-        key=lambda item: item.definition.label,
+    registrations = sorted(
+        list_user_tool_registrations(),
+        key=lambda item: item.descriptor.definition.label,
     )
-    for descriptor in descriptors:
+    for registration in registrations:
+        descriptor = registration.descriptor
         name = descriptor.name
         td = descriptor.definition
         registered = name in kt_loaded if kt_loaded else None
@@ -200,6 +210,13 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             "registered": registered,
             "is_subagent": is_subagent,
             "sandbox_managed": name in SANDBOX_TOOL_NAMES,
+            "registration_lifecycle": registration.lifecycle,
+            "execution_port_id": (
+                registration.execution_binding.port_id
+                if registration.execution_binding is not None
+                else ""
+            ),
+            "schema_provider_id": registration.schema_provider_id,
         })
     bridge_count = 0
     try:
@@ -212,10 +229,23 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             "registry_empty": bool(registry_available and len(kt_loaded) == 0),
             "bridge_count": bridge_count,
             "runtime_preset": runtime_preset,
-            "platform": platform}
+            "platform": platform,
+            "tool_registration": {
+                "generation": (
+                    TOOL_REGISTRATION_REGISTRY.registry_snapshot.generation
+                ),
+                "sha256": (
+                    TOOL_REGISTRATION_REGISTRY.registry_snapshot.sha256
+                ),
+            }}
 
 
-@router.get("/targets")
+@router.get(
+    "/targets",
+    operation_id="adminToolTargetsList",
+    response_model=ToolTargetsResponse,
+    responses=standard_error_responses(401, 422),
+)
 def list_tool_targets(scope_type: str = "group", search: str = "", limit: int = 50,
                       db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """列出工具覆盖可选择的真实群聊/私聊目标。"""
@@ -473,7 +503,18 @@ def delete_tool_schema_override_api(tool_name: str, request: Request,
     return build_tool_schema_config(db, tool_name)
 
 
-@router.put("/{tool_name}")
+@router.put(
+    "/{tool_name}",
+    operation_id="adminToolDefaultsUpdate",
+    response_model=ToolMutationResponse,
+    responses=standard_error_responses(
+        400,
+        401,
+        404,
+        409,
+        422,
+    ),
+)
 def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
                          request: Request, db: Session = Depends(get_db),
                          _auth=Depends(verify_admin)):
@@ -516,11 +557,17 @@ def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
                     raise TypeError("tool.lightweight_set must be a list")
                 lightweight_set = {str(x) for x in parsed_lightweight_set if str(x).strip()}
             else:
-                from core.runtime_tool_service import _DEFAULT_LIGHTWEIGHT_SET
-                lightweight_set = set(_DEFAULT_LIGHTWEIGHT_SET)
+                from core.tool_registration import (
+                    get_default_lightweight_tool_names,
+                )
+                lightweight_set = set(
+                    get_default_lightweight_tool_names()
+                )
         except (json.JSONDecodeError, TypeError):
-            from core.runtime_tool_service import _DEFAULT_LIGHTWEIGHT_SET
-            lightweight_set = set(_DEFAULT_LIGHTWEIGHT_SET)
+            from core.tool_registration import (
+                get_default_lightweight_tool_names,
+            )
+            lightweight_set = set(get_default_lightweight_tool_names())
         if body.lightweight_default:
             lightweight_set.add(tool_name)
         else:
@@ -540,7 +587,18 @@ def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
     return {"ok": True, "tool": tool_name}
 
 
-@router.put("/{tool_name}/override")
+@router.put(
+    "/{tool_name}/override",
+    operation_id="adminToolOverrideSet",
+    response_model=ToolMutationResponse,
+    responses=standard_error_responses(
+        400,
+        401,
+        404,
+        409,
+        422,
+    ),
+)
 def set_tool_override(tool_name: str, body: ToolOverrideBody,
                       request: Request, db: Session = Depends(get_db),
                       _auth=Depends(verify_admin)):
@@ -591,7 +649,17 @@ def set_tool_override(tool_name: str, body: ToolOverrideBody,
     return {"ok": True, "tool": tool_name}
 
 
-@router.delete("/{tool_name}/override")
+@router.delete(
+    "/{tool_name}/override",
+    operation_id="adminToolOverrideDelete",
+    response_model=ToolMutationResponse,
+    responses=standard_error_responses(
+        401,
+        404,
+        409,
+        422,
+    ),
+)
 def delete_tool_override(tool_name: str, request: Request, scope_type: str = "",
                          scope_id: str = "", db: Session = Depends(get_db),
                          _auth=Depends(verify_admin)):

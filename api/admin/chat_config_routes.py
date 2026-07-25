@@ -20,6 +20,12 @@ from core.chat_stream_identity import (
     parse_canonical_chat_stream_id,
     resolve_chat_stream_identity,
 )
+from core.content_rules import (
+    ContentRuleAction,
+    ContentRuleMatchKind,
+    ContentRuleScope,
+    validate_web_content_rule,
+)
 from core.database import (
     AdminAuditLog,
     ChatStreamConfig,
@@ -34,6 +40,12 @@ from core.session_guidance import (
 from core.time_utils import db_now_naive
 
 router = APIRouter(tags=["admin-chat-config"])
+
+_GROUP_LEARNING_REPLACEMENT = "/api/v1/admin/group-learning"
+_LEGACY_LEARNING_FIELDS = (
+    "enable_expression_learning",
+    "enable_jargon_learning",
+)
 
 
 class BlockRuleCreate(BaseModel):
@@ -99,6 +111,44 @@ class ConfigUpsert(ConfigUpdate):
     session_guidance: str
 
 
+def _validate_content_rule_payload(
+    *,
+    pattern: str,
+    match_type: str,
+    scope_type: str,
+    chat_stream_id: str,
+    no_reply: int,
+    no_learn: int,
+    no_context: int,
+) -> None:
+    flags = {
+        "no_reply": no_reply,
+        "no_learn": no_learn,
+        "no_context": no_context,
+    }
+    if any(value not in {0, 1} for value in flags.values()):
+        raise HTTPException(400, "内容规则动作字段只允许 0/1")
+    actions = tuple(
+        action
+        for field, action in (
+            ("no_reply", ContentRuleAction.NO_REPLY),
+            ("no_learn", ContentRuleAction.NO_LEARN),
+            ("no_context", ContentRuleAction.NO_CONTEXT),
+        )
+        if flags[field] == 1
+    )
+    try:
+        validate_web_content_rule(
+            pattern=pattern,
+            match_kind=ContentRuleMatchKind(match_type),
+            scope=ContentRuleScope(scope_type),
+            scope_id=chat_stream_id,
+            actions=actions,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 def _block_dict(r: UserBlockRule) -> dict:
     return {
         "id": r.id, "user_id": r.user_id, "target_type": r.target_type,
@@ -142,15 +192,26 @@ def _identity_summary(chat_stream_id: str) -> dict:
 
 
 def _config_dict(r: ChatStreamConfig) -> dict:
+    group_profile_mode = str(r.group_profile_mode or "off")
     result = {
         "chat_stream_id": r.chat_stream_id,
         "talk_value": r.talk_value,
         "mentioned_bot_reply": bool(r.mentioned_bot_reply),
-        "use_expression": bool(r.use_expression),
-        "enable_expression_learning": bool(r.enable_expression_learning),
-        "enable_jargon_learning": bool(r.enable_jargon_learning),
-        "group_profile_mode": r.group_profile_mode or "off",
+        "use_expression": group_profile_mode == "on",
+        "enable_expression_learning": False,
+        "enable_jargon_learning": False,
+        "group_profile_mode": group_profile_mode,
         "planner_smooth": r.planner_smooth,
+        "legacy_group_learning_controls": {
+            "lifecycle": "retired",
+            "replacement": _GROUP_LEARNING_REPLACEMENT,
+            "write_behavior": "rejected",
+            "use_expression": {
+                "lifecycle": "compatibility_alias",
+                "canonical_field": "group_profile_mode",
+            },
+            "retired_fields": list(_LEGACY_LEARNING_FIELDS),
+        },
     }
     result.update(_identity_summary(r.chat_stream_id))
     result.update(_guidance_summary(
@@ -200,11 +261,21 @@ def _config_default(sid: str) -> dict:
         "chat_stream_id": sid,
         "talk_value": 0.5,
         "mentioned_bot_reply": True,
-        "use_expression": True,
-        "enable_expression_learning": True,
-        "enable_jargon_learning": True,
+        "use_expression": False,
+        "enable_expression_learning": False,
+        "enable_jargon_learning": False,
         "group_profile_mode": "off",
         "planner_smooth": 3,
+        "legacy_group_learning_controls": {
+            "lifecycle": "retired",
+            "replacement": _GROUP_LEARNING_REPLACEMENT,
+            "write_behavior": "rejected",
+            "use_expression": {
+                "lifecycle": "compatibility_alias",
+                "canonical_field": "group_profile_mode",
+            },
+            "retired_fields": list(_LEGACY_LEARNING_FIELDS),
+        },
     }
     result.update(_identity_summary(sid))
     result.update(_guidance_summary(""))
@@ -301,10 +372,15 @@ def list_content_block_rules(scope_type: str = "", enabled: str = "", category: 
 @router.post("/content-block-rules")
 def create_content_block_rule(body: ContentBlockRuleCreate, request: Request,
                                db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    if body.match_type not in ("contains", "exact", "regex"):
-        raise HTTPException(400, "match_type 必须是 contains/exact/regex")
-    if body.scope_type not in ("global", "session"):
-        raise HTTPException(400, "scope_type 必须是 global/session")
+    _validate_content_rule_payload(
+        pattern=body.pattern,
+        match_type=body.match_type,
+        scope_type=body.scope_type,
+        chat_stream_id=body.chat_stream_id,
+        no_reply=body.no_reply,
+        no_learn=body.no_learn,
+        no_context=body.no_context,
+    )
     rule = ContentBlockRule(**body.model_dump())
     db.add(rule)
     db.commit()
@@ -318,10 +394,62 @@ def update_content_block_rule(rule_id: int, body: ContentBlockRuleUpdate, reques
     row = db.query(ContentBlockRule).filter(ContentBlockRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "Not found")
-    if body.match_type is not None and body.match_type not in ("contains", "exact", "regex"):
-        raise HTTPException(400, "match_type 必须是 contains/exact/regex")
-    if body.scope_type is not None and body.scope_type not in ("global", "session"):
-        raise HTTPException(400, "scope_type 必须是 global/session")
+    only_disables_legacy_regex = (
+        str(row.match_type or "") == "regex"
+        and body.enabled == 0
+        and all(
+            getattr(body, field) is None
+            for field in (
+                "pattern",
+                "match_type",
+                "scope_type",
+                "chat_stream_id",
+                "no_reply",
+                "no_learn",
+                "no_context",
+                "category",
+                "reason",
+            )
+        )
+    )
+    if not only_disables_legacy_regex:
+        _validate_content_rule_payload(
+            pattern=(
+                body.pattern
+                if body.pattern is not None
+                else str(row.pattern or "")
+            ),
+            match_type=(
+                body.match_type
+                if body.match_type is not None
+                else str(row.match_type or "contains")
+            ),
+            scope_type=(
+                body.scope_type
+                if body.scope_type is not None
+                else str(row.scope_type or "session")
+            ),
+            chat_stream_id=(
+                body.chat_stream_id
+                if body.chat_stream_id is not None
+                else str(row.chat_stream_id or "")
+            ),
+            no_reply=(
+                body.no_reply
+                if body.no_reply is not None
+                else int(row.no_reply or 0)
+            ),
+            no_learn=(
+                body.no_learn
+                if body.no_learn is not None
+                else int(row.no_learn or 0)
+            ),
+            no_context=(
+                body.no_context
+                if body.no_context is not None
+                else int(row.no_context or 0)
+            ),
+        )
     int_fields = ("no_reply", "no_learn", "no_context", "enabled")
     updates = {}
     for field in ("pattern", "match_type", "scope_type", "chat_stream_id", "category", "reason"):
@@ -357,6 +485,16 @@ def toggle_content_block_rule(rule_id: int, request: Request,
     row = db.query(ContentBlockRule).filter(ContentBlockRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "Not found")
+    if not row.enabled:
+        _validate_content_rule_payload(
+            pattern=str(row.pattern or ""),
+            match_type=str(row.match_type or "contains"),
+            scope_type=str(row.scope_type or "session"),
+            chat_stream_id=str(row.chat_stream_id or ""),
+            no_reply=int(row.no_reply or 0),
+            no_learn=int(row.no_learn or 0),
+            no_context=int(row.no_context or 0),
+        )
     row.enabled = 0 if row.enabled else 1
     db.commit()
     audit_request(db, request, "toggle_content_block_rule", "content_block_rule", rule_id)
@@ -545,6 +683,22 @@ def _apply_config_update(
     body: ConfigUpdate,
     request: Request,
 ) -> dict:
+    retired_writes = [
+        field
+        for field in _LEGACY_LEARNING_FIELDS
+        if getattr(body, field) is not None
+    ]
+    if retired_writes:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "legacy_group_learning_control_retired",
+                "message": "旧表达／黑话学习开关已退役",
+                "fields": retired_writes,
+                "lifecycle": "retired",
+                "replacement": _GROUP_LEARNING_REPLACEMENT,
+            },
+        )
     normalized_guidance = (
         _normalized_guidance_or_422(body.session_guidance)
         if body.session_guidance is not None
@@ -558,6 +712,48 @@ def _apply_config_update(
                 status_code=400,
                 detail=f"invalid group_profile_mode: {normalized_group_profile_mode}",
             )
+    compatibility_mode: str | None = None
+    if body.use_expression is not None:
+        compatibility_mode = "on" if bool(body.use_expression) else "off"
+        if (
+            normalized_group_profile_mode is not None
+            and normalized_group_profile_mode != compatibility_mode
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "group_profile_compatibility_conflict",
+                    "message": (
+                        "use_expression 与 group_profile_mode 冲突"
+                    ),
+                    "canonical_field": "group_profile_mode",
+                },
+            )
+        normalized_group_profile_mode = compatibility_mode
+        from core.lifecycle import record_compatibility_usage
+
+        record_compatibility_usage(
+            "schema.chat_config_use_expression"
+        )
+    if body.enable_group_profile is not None:
+        deprecated_mode = (
+            "on" if bool(body.enable_group_profile) else "off"
+        )
+        if (
+            normalized_group_profile_mode is not None
+            and normalized_group_profile_mode != deprecated_mode
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "group_profile_compatibility_conflict",
+                    "message": (
+                        "enable_group_profile 与 group_profile_mode 冲突"
+                    ),
+                    "canonical_field": "group_profile_mode",
+                },
+            )
+        normalized_group_profile_mode = deprecated_mode
 
     try:
         row = db.query(ChatStreamConfig).filter(
@@ -572,9 +768,6 @@ def _apply_config_update(
         safe_values: dict[str, object] = {}
         int_fields = (
             "mentioned_bot_reply",
-            "use_expression",
-            "enable_expression_learning",
-            "enable_jargon_learning",
             "planner_smooth",
         )
         for field in ("talk_value",) + int_fields:
@@ -588,12 +781,20 @@ def _apply_config_update(
 
         if normalized_group_profile_mode is not None:
             row.group_profile_mode = normalized_group_profile_mode
+            row.use_expression = int(
+                normalized_group_profile_mode == "on"
+            )
             changed_fields.append("group_profile_mode")
             safe_values["group_profile_mode"] = normalized_group_profile_mode
-        elif body.enable_group_profile is not None:
-            row.group_profile_mode = "on" if body.enable_group_profile else "off"
-            changed_fields.append("group_profile_mode")
-            safe_values["group_profile_mode"] = row.group_profile_mode
+            if compatibility_mode is not None:
+                changed_fields.append("use_expression")
+                safe_values["use_expression"] = bool(
+                    row.use_expression
+                )
+        else:
+            row.use_expression = int(
+                str(row.group_profile_mode or "off") == "on"
+            )
 
         if normalized_guidance is not None:
             row.session_guidance = normalized_guidance

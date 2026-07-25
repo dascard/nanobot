@@ -1,0 +1,245 @@
+{
+  "admin_table_views": {
+    "extra_fields_forbidden": true,
+    "registry": {
+      "generation": 1,
+      "namespace": "admin_table_view",
+      "sha256": "b489a9e6ecd1b1c488dda70a4e423529b8665951b0f1a3b9d967a72c93fa2f7c"
+    },
+    "request_fields": [
+      "cursor",
+      "filters",
+      "limit"
+    ],
+    "views": [
+      {
+        "id": "sensitive_table",
+        "registered": false,
+        "view_id": "sensitive_data"
+      },
+      {
+        "allowed_columns": [
+          "id",
+          "name",
+          "history_clear_at",
+          "created_at"
+        ],
+        "default_sort": {
+          "column": "id",
+          "direction": "desc",
+          "tie_breaker": null
+        },
+        "filters": [
+          "id",
+          "name"
+        ],
+        "forbidden_columns_visible": [],
+        "id": "users",
+        "preview_only_columns": [],
+        "redact_columns": [],
+        "registered": true,
+        "view_id": "users"
+      },
+      {
+        "allowed_columns": [
+          "id",
+          "trace_id",
+          "run_id",
+          "source",
+          "provider",
+          "model",
+          "url",
+          "method",
+          "request_preview",
+          "status",
+          "response_status",
+          "response_preview",
+          "latency_ms",
+          "finished_at",
+          "error",
+          "request_lint_json",
+          "actual_sent_tools_json",
+          "runtime_enabled_tools_json",
+          "runtime_disabled_tools_json",
+          "framework_injected_tools_json",
+          "created_at"
+        ],
+        "default_sort": {
+          "column": "id",
+          "direction": "desc",
+          "tie_breaker": null
+        },
+        "filters": [
+          "id",
+          "trace_id",
+          "run_id",
+          "source",
+          "provider",
+          "model",
+          "status"
+        ],
+        "forbidden_columns_visible": [],
+        "id": "llm_logs",
+        "preview_only_columns": [
+          "request_preview",
+          "response_preview",
+          "error",
+          "request_lint_json",
+          "actual_sent_tools_json",
+          "runtime_enabled_tools_json",
+          "runtime_disabled_tools_json",
+          "framework_injected_tools_json"
+        ],
+        "redact_columns": [],
+        "registered": true,
+        "view_id": "llm_api_request_logs"
+      }
+    ]
+  },
+  "prompt_nodes": [
+    {
+      "descriptor": {
+        "authority": "application_policy",
+        "dependencies": [],
+        "domain": "identity",
+        "editable": true,
+        "failure_policy": "fail_closed",
+        "owner_module": "core.prompt_v2",
+        "phase": "identity",
+        "section_id": "identity_context",
+        "source_precedence": [
+          "runtime",
+          "default"
+        ],
+        "trust": "trusted_instruction"
+      },
+      "id": "canonical_identity",
+      "validation": {
+        "status": "success"
+      }
+    },
+    {
+      "descriptor": {
+        "authority": "data",
+        "dependencies": [],
+        "domain": "extension_context",
+        "editable": true,
+        "failure_policy": "skip_optional",
+        "owner_module": "extension",
+        "phase": "context",
+        "section_id": "third_party_context",
+        "source_precedence": [
+          "runtime",
+          "default"
+        ],
+        "trust": "untrusted_data"
+      },
+      "id": "unknown_extension",
+      "validation": {
+        "status": "success"
+      }
+    },
+    {
+      "descriptor": {
+        "authority": "data",
+        "dependencies": [],
+        "domain": "extension_context",
+        "editable": true,
+        "failure_policy": "skip_optional",
+        "owner_module": "extension",
+        "phase": "context",
+        "section_id": "third_party_context",
+        "source_precedence": [
+          "runtime",
+          "default"
+        ],
+        "trust": "untrusted_data"
+      },
+      "id": "authority_escalation",
+      "validation": {
+        "error_type": "PromptSectionDescriptorError",
+        "status": "error",
+        "summary": "Prompt section descriptor third_party_context.authority 由代码侧固定为 'data'，Flow 不能声明 'platform_security'"
+      }
+    }
+  ],
+  "publication_text": [
+    {
+      "id": "verified_url",
+      "validation_error": ""
+    },
+    {
+      "id": "unverified_url",
+      "validation_error": "unverified_url"
+    },
+    {
+      "id": "dangerous_scheme",
+      "validation_error": "unverified_url"
+    },
+    {
+      "id": "outbound_control",
+      "validation_error": "unsafe_control_syntax"
+    }
+  ],
+  "qq_messages": [
+    {
+      "id": "plain_text",
+      "message": "普通回复",
+      "warnings": []
+    },
+    {
+      "id": "untrusted_file_cq",
+      "message": "下载：（文件消息已拒绝，请使用资产下载链接）",
+      "warnings": []
+    },
+    {
+      "id": "structured_image",
+      "message": "[CQ:image,file=https://example.com/a&#91;1&#93;&amp;x.png]",
+      "warnings": []
+    }
+  ],
+  "sandbox_paths": [
+    {
+      "id": "nested_file",
+      "result": {
+        "components": [
+          "reports",
+          "summary.csv"
+        ],
+        "status": "success"
+      }
+    },
+    {
+      "id": "empty_root",
+      "result": {
+        "components": [],
+        "status": "success"
+      }
+    },
+    {
+      "id": "parent_escape",
+      "result": {
+        "code": "invalid_path",
+        "status": "error",
+        "summary": "工作区相对路径无效或不可安全访问"
+      }
+    },
+    {
+      "id": "absolute",
+      "result": {
+        "code": "invalid_path",
+        "status": "error",
+        "summary": "工作区相对路径无效或不可安全访问"
+      }
+    },
+    {
+      "id": "windows_separator",
+      "result": {
+        "code": "invalid_path",
+        "status": "error",
+        "summary": "工作区相对路径无效或不可安全访问"
+      }
+    }
+  ],
+  "schema_version": 1
+}

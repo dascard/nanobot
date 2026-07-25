@@ -12,6 +12,7 @@ import time
 import os
 import fnmatch
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Any
 from collections.abc import AsyncIterator, Mapping
 
@@ -36,8 +37,10 @@ from core.model_provider import (
     ProviderCapability,
     ProviderDescriptor,
 )
-from core.runtime.event_bus import emit_runtime_event
-from core.runtime.events import RuntimeEventContext
+from core.runtime.event_bus import (
+    current_runtime_event_context,
+    emit_runtime_event,
+)
 from foundation.llm.model_options import apply_enable_thinking_to_payload
 from foundation.llm.messages import format_openai_messages as format_openai_messages
 from foundation.llm.request_sanitizer import sanitize_payload_messages
@@ -1016,9 +1019,11 @@ class NewAPIClient:
                         _source = _source or _s
                     except Exception:
                         pass
-                event_context = RuntimeEventContext(
-                    trace_id=_trace_id,
-                    run_id=_run_id,
+                base_event_context = current_runtime_event_context()
+                event_context = replace(
+                    base_event_context,
+                    trace_id=_trace_id or base_event_context.trace_id,
+                    run_id=_run_id or base_event_context.run_id,
                 )
                 event_attributes = _model_event_attributes(
                     provider=self.registry_provider,
@@ -1346,9 +1351,11 @@ class NewAPIClient:
                 _source = _source or _s
             except Exception:
                 pass
-        event_context = RuntimeEventContext(
-            trace_id=_trace_id,
-            run_id=_run_id,
+        base_event_context = current_runtime_event_context()
+        event_context = replace(
+            base_event_context,
+            trace_id=_trace_id or base_event_context.trace_id,
+            run_id=_run_id or base_event_context.run_id,
         )
         event_attributes = _model_event_attributes(
             provider=self.registry_provider,

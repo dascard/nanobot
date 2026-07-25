@@ -11,10 +11,56 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.admin.common import audit, audit_request, client_ip, verify_admin
-from core.database import SystemSetting, get_db
+from core.db import get_db, system_setting_repository
+from core.model_provider.route_registry import (
+    ModelRouteExecutionMode,
+    ModelRouteNotFoundError,
+    list_model_route_descriptors,
+    model_route_registry_snapshot,
+    require_model_route_descriptor,
+    resolve_model_route_key,
+)
+from core.settings_admin_service import (
+    SystemSettingCommandService,
+    SystemSettingQueryService,
+    SystemSettingWrite,
+)
 
 logger = logging.getLogger("nanobot.admin")
 router = APIRouter(tags=["admin-models"])
+
+
+def _setting_query(db: Session) -> SystemSettingQueryService:
+    return SystemSettingQueryService(system_setting_repository(db))
+
+
+def _setting_command(db: Session) -> SystemSettingCommandService:
+    return SystemSettingCommandService(system_setting_repository(db))
+
+
+def _task_contract_views(
+    task_contract_keys: tuple[str, ...],
+) -> list[dict[str, object]]:
+    from core.prompt_v2.task_contracts import get_task_contract
+
+    views: list[dict[str, object]] = []
+    for task_key in task_contract_keys:
+        contract = get_task_contract(task_key)
+        if contract is None:
+            raise RuntimeError(
+                f"模型路由引用了未登记 Task Contract: {task_key}"
+            )
+        views.append({
+            "task_key": contract.task_key,
+            "owner_module": contract.owner_module,
+            "domain": contract.domain,
+            "output_contract_id": contract.output_contract_id,
+            "output_schema": contract.output_schema,
+            "output_failure_policy": contract.output_failure_policy,
+            "template_failure_policy": contract.template_failure_policy,
+            "source_precedence": list(contract.source_precedence),
+        })
+    return views
 
 
 # ═══════════════════════════════════════════
@@ -45,14 +91,37 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     providers = [provider_public(p) for p in raw_providers]
 
     # ── Routes ──
-    from core.route_metadata import ROUTE_METADATA, route_label_for
     routes = {}
-    for rk in ROUTE_METADATA:
+    for descriptor in list_model_route_descriptors():
+        rk = descriptor.route_key
         r = resolve_model_route(rk)
         entry = {
             "route_key": rk,
-            "label": route_label_for(rk),
+            "label": descriptor.label,
             "route_type": r.get("route_type", "unknown"),
+            "owner": descriptor.owner,
+            "domain": descriptor.domain,
+            "setting_prefix": descriptor.setting_prefix,
+            "model_setting_key": descriptor.model_setting_key,
+            "fallback_route": descriptor.fallback_route,
+            "fallback_scope": descriptor.fallback_scope,
+            "required_provider_capabilities": sorted(
+                capability.value
+                for capability
+                in descriptor.required_provider_capabilities
+            ),
+            "candidate_policy_id": descriptor.candidate_policy_id,
+            "circuit_breaker_policy_id": (
+                descriptor.circuit_breaker_policy_id
+            ),
+            "task_contract_keys": list(descriptor.task_contract_keys),
+            "task_contracts": _task_contract_views(
+                descriptor.task_contract_keys
+            ),
+            "output_contract_id": descriptor.output_contract_id,
+            "trace_policy_id": descriptor.trace_policy_id,
+            "lifecycle": descriptor.lifecycle.value,
+            "slo": descriptor.slo.metadata(),
             "provider_id": r["provider_id"],
             "model": r["model"],
             "api_key_configured": r["api_key_configured"],
@@ -64,8 +133,8 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
             "source": r.get("source", "provider"),
             "editable": True,
         }
-        if r.get("inherited_from"):
-            entry["inherited_from"] = r["inherited_from"]
+        if descriptor.inherits_from:
+            entry["inherited_from"] = descriptor.inherits_from
             entry["overridden_fields"] = r.get("overridden_fields", {})
         if rk == "classifier_legacy":
             entry["note"] = "兼容旧 reply/no_reply 分类路径；正常群聊优先使用 TimingGate"
@@ -113,9 +182,14 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
         sentinel_configured = False
         sentinel_load_state = "unavailable"
 
+    route_registry = model_route_registry_snapshot()
     return {
         "providers": providers,
         "routes": routes,
+        "route_registry": {
+            "generation": route_registry.generation,
+            "sha256": route_registry.sha256,
+        },
         "local_components": {
             "persona_embed": {
                 "model": "BAAI/bge-base-zh-v1.5",
@@ -263,39 +337,39 @@ def update_model_provider(
 
     prefix = f"model.providers.{provider_id}"
     written = {}
+    prepared: list[SystemSettingWrite] = []
     fields = {"base_url": body.base_url, "api_key": body.api_key}
     for field, value in fields.items():
         if value is None:
             continue
         key = f"{prefix}.{field}"
-        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-        if not row:
-            row = SystemSetting(key=key, value=str(value), description=f"provider {provider_id} {field}")
-            db.add(row)
-        else:
-            row.value = str(value)
+        prepared.append(SystemSettingWrite(
+            key=key,
+            value=str(value),
+            description=f"provider {provider_id} {field}",
+        ))
         written[key] = str(value)
     if body.enabled is not None:
         key = f"{prefix}.enabled"
         val = "1" if body.enabled else "0"
-        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-        if not row:
-            row = SystemSetting(key=key, value=val, description=f"provider {provider_id} enabled")
-            db.add(row)
-        else:
-            row.value = val
+        prepared.append(SystemSettingWrite(
+            key=key,
+            value=val,
+            description=f"provider {provider_id} enabled",
+        ))
         written[key] = val
     if body.registry_provider is not None:
         key = f"{prefix}.registry_provider"
         val = str(body.registry_provider).strip()
-        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-        if not row:
-            row = SystemSetting(key=key, value=val, description=f"provider {provider_id} registry_provider")
-            db.add(row)
-        else:
-            row.value = val
+        prepared.append(SystemSettingWrite(
+            key=key,
+            value=val,
+            description=(
+                f"provider {provider_id} registry_provider"
+            ),
+        ))
         written[key] = val
-    db.commit()
+    _setting_command(db).upsert_many(prepared)
     audit(db, "update_provider", "provider", provider_id, _redact(written), ip_address=client_ip(request))
     settings.invalidate()
     return {
@@ -341,6 +415,8 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
     from clients.classifier_client import list_providers, build_provider_catalog
 
     results = []
+    writes: list[SystemSettingWrite] = []
+    setting_query = _setting_query(db)
     for p in list_providers():
         base_url = p["base_url"].rstrip("/")
         if not base_url:
@@ -364,17 +440,16 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
                 "models": models, "updated_at": datetime.now(timezone.utc).isoformat(),
                 "last_refresh_ok": True, "last_error": "",
             }, ensure_ascii=False)
-            row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-            if not row:
-                row = SystemSetting(key=key, value=val, description=f"model catalog for {p['id']}")
-                db.add(row)
-            else:
-                row.value = val
+            writes.append(SystemSettingWrite(
+                key=key,
+                value=val,
+                description=f"model catalog for {p['id']}",
+            ))
             results.append({"provider": p["id"], "models": models, "ok": True})
         except Exception as e:
             key = f"model.catalog.{p['id']}"
             old_models = []
-            old_row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+            old_row = setting_query.get(key)
             if old_row:
                 try:
                     old_models = json.loads(old_row.value or "{}").get("models", [])
@@ -384,13 +459,13 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
                 "models": old_models, "updated_at": datetime.now(timezone.utc).isoformat(),
                 "last_refresh_ok": False, "last_error": str(e)[:300],
             }, ensure_ascii=False)
-            if not old_row:
-                row = SystemSetting(key=key, value=val, description=f"model catalog for {p['id']}")
-                db.add(row)
-            else:
-                old_row.value = val
+            writes.append(SystemSettingWrite(
+                key=key,
+                value=val,
+                description=f"model catalog for {p['id']}",
+            ))
             results.append({"provider": p["id"], "models": old_models, "ok": False, "error": str(e)[:300]})
-    db.commit()
+    _setting_command(db).upsert_many(writes)
     return {"results": results, "catalog": build_provider_catalog(db)}
 
 
@@ -482,7 +557,7 @@ def _resolve_route_value(stage: str, db: Session) -> tuple[str, str, str]:
     key = meta["key"]
 
     # 检查 DB 是否有覆盖
-    db_row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    db_row = _setting_query(db).get(key)
     if db_row and db_row.value is not None:
         return db_row.value, "db_override", True
 
@@ -533,13 +608,11 @@ def patch_model_route(
         if not registry.get_model_info(body.value):
             raise HTTPException(404, f"model not found in catalog: {body.value}")
 
-    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-    if not row:
-        row = SystemSetting(key=key, value=body.value, description=defn.description)
-        db.add(row)
-    else:
-        row.value = body.value
-    db.commit()
+    _setting_command(db).upsert(
+        key=key,
+        value=body.value,
+        description=defn.description,
+    )
     audit(db, "update_model_route", "route", stage, {"value": body.value},
            ip_address=client_ip(request))
     settings.invalidate()
@@ -548,32 +621,24 @@ def patch_model_route(
 
 # ── 模型路由编辑（完整字段）──
 
-# route_key → setting prefix 映射（reply/fast/smart 使用 model.*；classifier 使用 model.route.*）
+# 以下名称保留一个兼容周期，内容完全由冻结 Registry 投影，不能手工维护 route 集合。
 _ROUTE_SETTING_MAP: dict[str, str] = {
-    "reply": "model.reply",
-    "fast": "model.fast",
-    "smart": "model.smart",
-    "session_summary": "model.session_summary",
-    "memory_digest": "model.memory_digest",
+    descriptor.route_key: descriptor.model_setting_key
+    for descriptor in list_model_route_descriptors()
+    if descriptor.execution_mode is ModelRouteExecutionMode.CHAT_COMPLETION
 }
-# classifier routes: route_key 直接对应 model.route.<key>
-_CLASSIFIER_ROUTE_KEYS = {
-    "timing_gate",
-    "timing_proactive",
-    "outreach_extract",
-    "outreach_judge",
-    "outreach_generate",
-    "news_daily_quality",
-    "private_decision",
-    "classifier_legacy",
-    "sticker_describe",
-}
-# frontend 友好名称 → 后端 route_key
+_CLASSIFIER_ROUTE_KEYS = frozenset(
+    descriptor.route_key
+    for descriptor in list_model_route_descriptors()
+    if descriptor.execution_mode
+    is ModelRouteExecutionMode.ROUTE_COMPLETION
+)
 _ROUTE_ALIAS: dict[str, str] = {
-    "vision": "sticker_describe",
+    alias: descriptor.route_key
+    for descriptor in list_model_route_descriptors()
+    for alias in descriptor.aliases
 }
-
-_CHAT_ROUTES = {"reply", "fast", "smart", "session_summary", "memory_digest"}
+_CHAT_ROUTES = frozenset(_ROUTE_SETTING_MAP)
 
 
 def _resolve_route_key(route_key: str) -> tuple[str, str, bool]:
@@ -581,10 +646,18 @@ def _resolve_route_key(route_key: str) -> tuple[str, str, bool]:
 
     返回 (setting_prefix, route_key_for_db, is_classifier_route)。
     """
-    route_key = _ROUTE_ALIAS.get(route_key, route_key)
-    if route_key in _CHAT_ROUTES:
-        return _ROUTE_SETTING_MAP[route_key], route_key, False
-    return f"model.route.{route_key}", route_key, True
+    canonical = resolve_model_route_key(route_key)
+    descriptor = require_model_route_descriptor(canonical)
+    is_classifier = (
+        descriptor.execution_mode
+        is ModelRouteExecutionMode.ROUTE_COMPLETION
+    )
+    prefix = (
+        descriptor.setting_prefix
+        if is_classifier
+        else descriptor.model_setting_key
+    )
+    return prefix, canonical, is_classifier
 
 
 def _redact(v: dict) -> dict:
@@ -612,11 +685,14 @@ def edit_model_route(
     from core.config_registry import SETTING_DEFS
     from core.settings_service import coerce_setting_value, settings
 
-    prefix, db_key, is_classifier = _resolve_route_key(route_key)
-    if is_classifier:
-        if db_key not in _CLASSIFIER_ROUTE_KEYS:
-            raise HTTPException(404, f"unknown route: {route_key}")
-    elif prefix not in SETTING_DEFS:
+    try:
+        prefix, db_key, is_classifier = _resolve_route_key(route_key)
+    except ModelRouteNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown route: {route_key}",
+        ) from exc
+    if not is_classifier and prefix not in SETTING_DEFS:
         raise HTTPException(404, f"unknown route: {route_key}")
 
     written = {}
@@ -634,7 +710,7 @@ def edit_model_route(
     else:
         allowed = {"provider", "model", "api_key", "timeout", "temperature", "max_tokens", "enable_thinking"}
 
-    prepared: list[tuple[str, str, str]] = []
+    prepared: list[SystemSettingWrite] = []
     for field, value in fields.items():
         if value is None or field not in allowed:
             continue
@@ -669,17 +745,13 @@ def edit_model_route(
                 raise HTTPException(status_code=422, detail=str(e)) from e
         else:
             stored_value = str(value)
-        prepared.append((key, stored_value, desc))
-
-    for key, stored_value, desc in prepared:
-        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-        if not row:
-            row = SystemSetting(key=key, value=stored_value, description=desc)
-            db.add(row)
-        else:
-            row.value = stored_value
+        prepared.append(SystemSettingWrite(
+            key=key,
+            value=stored_value,
+            description=desc,
+        ))
         written[key] = stored_value
-    db.commit()
+    _setting_command(db).upsert_many(prepared)
     audit(db, "edit_model_route", "route", route_key, _redact(written), ip_address=client_ip(request))
     settings.invalidate()
     # 清除 image_summary 30s route cache（invalidate 后清理，避免并发重建旧缓存）
@@ -712,7 +784,13 @@ async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(ver
     from core.llm_trace_context import llm_trace_scope
 
     t0 = time.time()
-    route_key = _ROUTE_ALIAS.get(route_key, route_key)
+    try:
+        route_key = resolve_model_route_key(route_key)
+    except ModelRouteNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown route: {route_key}",
+        ) from exc
     route = resolve_model_route(route_key)
     try:
         ensure_model_route_enabled(route_key, route)
@@ -822,9 +900,47 @@ def get_resolved_route(route_key: str, _auth=Depends(verify_admin)):
     from clients.classifier_client import resolve_model_route
     from nanobot_kt.bridge import _registry_provider_for_route
 
+    try:
+        route_key = resolve_model_route_key(route_key)
+    except ModelRouteNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown route: {route_key}",
+        ) from exc
     route = resolve_model_route(route_key)
+    descriptor = require_model_route_descriptor(route_key)
+    registry_snapshot = model_route_registry_snapshot()
     return {
         "route_key": route_key,
+        "route_registry_generation": registry_snapshot.generation,
+        "route_registry_sha256": registry_snapshot.sha256,
+        "label": descriptor.label,
+        "owner": descriptor.owner,
+        "domain": descriptor.domain,
+        "route_type": descriptor.route_type,
+        "setting_prefix": descriptor.setting_prefix,
+        "model_setting_key": descriptor.model_setting_key,
+        "model_fallback_setting_key": (
+            descriptor.model_fallback_setting_key
+        ),
+        "fallback_route": descriptor.fallback_route,
+        "fallback_scope": descriptor.fallback_scope,
+        "required_provider_capabilities": sorted(
+            capability.value
+            for capability in descriptor.required_provider_capabilities
+        ),
+        "candidate_policy_id": descriptor.candidate_policy_id,
+        "circuit_breaker_policy_id": (
+            descriptor.circuit_breaker_policy_id
+        ),
+        "task_contract_keys": list(descriptor.task_contract_keys),
+        "task_contracts": _task_contract_views(
+            descriptor.task_contract_keys
+        ),
+        "output_contract_id": descriptor.output_contract_id,
+        "trace_policy_id": descriptor.trace_policy_id,
+        "lifecycle": descriptor.lifecycle.value,
+        "slo": descriptor.slo.metadata(),
         "provider_id": route.get("provider_id", ""),
         "registry_provider": _registry_provider_for_route(route.get("provider_id", "")),
         "base_url": route.get("base_url", ""),
@@ -849,14 +965,17 @@ def list_available_models(route_key: str = "", base_url_override: str = "",
     import urllib.request as _ur
     import urllib.error as _ure
 
-    route_key = _ROUTE_ALIAS.get(route_key, route_key)
-
-    from clients.classifier_client import resolve_model_route, _resolve_classifier_route
-    effective_route_key = route_key or "timing_gate"
-    if effective_route_key in _CHAT_ROUTES or effective_route_key in _CLASSIFIER_ROUTE_KEYS:
-        route = resolve_model_route(effective_route_key)
-    else:
-        route = _resolve_classifier_route(effective_route_key)
+    from clients.classifier_client import resolve_model_route
+    try:
+        effective_route_key = resolve_model_route_key(
+            route_key or "timing_gate"
+        )
+    except ModelRouteNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown route: {route_key}",
+        ) from exc
+    route = resolve_model_route(effective_route_key)
 
     provider_id = str(route.get("provider_id", "") or "")
     if provider_id and route.get("provider_enabled") is False:

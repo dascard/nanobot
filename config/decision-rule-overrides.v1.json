@@ -1,0 +1,1646 @@
+{
+  "schema_version": 1,
+  "groups": [
+    {
+      "group_id": "review.semantic-candidates.2026-07-23",
+      "match": {
+        "category": "natural_language_semantic"
+      },
+      "expected_count": 79,
+      "expected_rule_ids_sha256": "a284cbf6761887959d706c006067af4693303016b77e0abe8eab6ae8f8567dac",
+      "override": {
+        "category": "natural_language_semantic",
+        "disposition": "model_signal_only",
+        "review_status": "reviewed",
+        "reason": "人工复核：自然语言字面量只能作为候选信号，最终语义必须由结构化模型任务或人工结论产生"
+      }
+    },
+    {
+      "group_id": "review.compatibility-candidates.2026-07-23",
+      "match": {
+        "category": "compatibility"
+      },
+      "expected_count": 136,
+      "expected_rule_ids_sha256": "04f362900f3f8550380306f2bb6f01f153abab2a978757263bd2e7abbccb038a",
+      "override": {
+        "category": "compatibility",
+        "disposition": "compatibility_migration",
+        "review_status": "reviewed",
+        "reason": "人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役"
+      }
+    },
+    {
+      "group_id": "review.news-core-protocol.2026-07-23",
+      "match": {
+        "path_glob": "core/news/*.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 14,
+      "expected_rule_ids_sha256": "aaa5c5a68266be634ed7626ceb8315cb94acfdef899ad7abc1a3e557d90ca9d5",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：新闻核心模块中的模式、结构化审核字段与来源描述符校验属于确定性协议合同"
+      }
+    },
+    {
+      "group_id": "review.news-core-config.2026-07-23",
+      "match": {
+        "path_glob": "core/news/*.py",
+        "category": "configurable_policy"
+      },
+      "expected_count": 9,
+      "expected_rule_ids_sha256": "3f293d24ec64369b48aab7e501f6e2b165ca001c66793a73317baaf2657a9a49",
+      "override": {
+        "category": "configurable_policy",
+        "disposition": "configure",
+        "review_status": "reviewed",
+        "reason": "人工复核：新闻权重、边界、批量大小和阈值属于集中 Policy 的可配置数值合同"
+      }
+    },
+    {
+      "group_id": "review.news-core-security.2026-07-23",
+      "match": {
+        "path_glob": "core/news/*.py",
+        "category": "security_invariant"
+      },
+      "expected_count": 2,
+      "expected_rule_ids_sha256": "9d6c8b1dc0d36b8905d62db3d15796059a04756ef5fe398b03ac3612e59d5be7",
+      "override": {
+        "category": "security_invariant",
+        "disposition": "preserve",
+        "review_status": "reviewed",
+        "reason": "人工复核：新闻核心模块自动识别出的安全边界必须保守保留，再由逐项覆盖纠正误分类"
+      }
+    },
+    {
+      "group_id": "review.news-request-protocol.2026-07-23",
+      "match": {
+        "path": "core/tool_contracts/ai_daily.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 12,
+      "expected_rule_ids_sha256": "500b0d31e4752ce09e27fbf9c29bda651a6f9d414c9853a228996d5a243d20c6",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：NewsRequest 的标准化、缓存模式和 request kind 分支属于类型化请求协议"
+      }
+    },
+    {
+      "group_id": "review.news-request-config.2026-07-23",
+      "match": {
+        "path": "core/tool_contracts/ai_daily.py",
+        "category": "configurable_policy"
+      },
+      "expected_count": 6,
+      "expected_rule_ids_sha256": "a83f2faf2c6135b8e98a2af2e482fb4d10493d3850ccd839d82cdbcf62bdc29c",
+      "override": {
+        "category": "configurable_policy",
+        "disposition": "configure",
+        "review_status": "reviewed",
+        "reason": "人工复核：NewsRequest 的枚举、长度和数量边界属于可配置合同"
+      }
+    },
+    {
+      "group_id": "review.news-pipeline-config.2026-07-23",
+      "match": {
+        "path": "creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/config.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 2,
+      "expected_rule_ids_sha256": "7fa1f302a1f28dff6f8623def65806400a933b85d8dea7e4bc7cf4cb360785b4",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "resource",
+        "review_status": "reviewed",
+        "reason": "人工复核：旧配置投影到 News Policy／Source Registry 的映射属于兼容资源"
+      }
+    },
+    {
+      "group_id": "review.news-source-adapter-protocol.2026-07-23",
+      "match": {
+        "path": "creatures/nanobot/prompts/skills/news_search/news_daily/sources/official.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 5,
+      "expected_rule_ids_sha256": "98c340f921b20dddc73f683ebb4196e6fe4aa7d89ad570841cd32888ef178209",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：来源 adapter_kind 到固定 Provider 的选择属于显式 Descriptor 协议"
+      }
+    },
+    {
+      "group_id": "review.news-source-adapter-config.2026-07-23",
+      "match": {
+        "path": "creatures/nanobot/prompts/skills/news_search/news_daily/sources/official.py",
+        "category": "configurable_policy"
+      },
+      "expected_count": 2,
+      "expected_rule_ids_sha256": "c68fd0ea761471dd1d4066d1ea28cb0651548e748f89c2c6cce9dfd0f4f03868",
+      "override": {
+        "category": "configurable_policy",
+        "disposition": "configure",
+        "review_status": "reviewed",
+        "reason": "人工复核：来源 mode 数量只用于构造兼容投影，属于可配置来源策略"
+      }
+    },
+    {
+      "group_id": "review.news-source-adapter-data.2026-07-23",
+      "match": {
+        "path": "creatures/nanobot/prompts/skills/news_search/news_daily/sources/official.py",
+        "category": "data_consistency"
+      },
+      "expected_count": 2,
+      "expected_rule_ids_sha256": "4dd21e1c86ca8a406aa24076d09e034e16702798eea8b3f85d9ee74f19606916",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：搜索来源投影必须与 Descriptor modes 保持一致"
+      }
+    },
+    {
+      "group_id": "review.news-daily-pipeline-protocol.2026-07-23",
+      "match": {
+        "path": "creatures/nanobot/prompts/skills/news_search/news_daily/tool.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 8,
+      "expected_rule_ids_sha256": "a93cad1239526be8ed53acb46850a893718702036a3eaeb6b2f7947a3f9840c2",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：日报 pipeline mode、缓存和结构化阶段分支属于显式执行协议"
+      }
+    },
+    {
+      "group_id": "review.news-daily-pipeline-config.2026-07-23",
+      "match": {
+        "path": "creatures/nanobot/prompts/skills/news_search/news_daily/tool.py",
+        "category": "configurable_policy"
+      },
+      "expected_count": 7,
+      "expected_rule_ids_sha256": "27f497f720f2572f8c771ed0e018a08ca696ecfa1a68503012e2021e92f06463",
+      "override": {
+        "category": "configurable_policy",
+        "disposition": "configure",
+        "review_status": "reviewed",
+        "reason": "人工复核：日报候选数、配额和阶段阈值属于集中可配置 Policy"
+      }
+    },
+    {
+      "group_id": "review.news-search-backend-protocol.2026-07-23",
+      "match": {
+        "path": "creatures/nanobot/prompts/skills/news_search/search_backend.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 7,
+      "expected_rule_ids_sha256": "86082355f96f0aed51350c12e3f59e8ec6c4b5729a3bb4268ae8bd7a7db877f9",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：搜索后端仅按 NewsRequest 的显式 freshness 和执行模式分支"
+      }
+    },
+    {
+      "group_id": "review.task-validator-protocol.2026-07-23",
+      "match": {
+        "path": "core/task_runtime/validators.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 11,
+      "expected_rule_ids_sha256": "d481bb41f8ee1c091e5a946c6f92231029c1eb6d6baef667198710f147d55325",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：Task 输出合同 ID、字段集合、枚举及群学习合同分派属于结构化协议"
+      }
+    },
+    {
+      "group_id": "review.task-validator-config.2026-07-23",
+      "match": {
+        "path": "core/task_runtime/validators.py",
+        "category": "configurable_policy",
+        "detectors": [
+          "python.numeric_control_flow"
+        ]
+      },
+      "expected_count": 6,
+      "expected_rule_ids_sha256": "4784e3e54b4e6bc146ae4e7a4e52e7ebf403c03049f3ce5281dc3513763bd6a9",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：Task 证据、来源和目标 ID 必须为正整数，属于结构化合同有效状态校验"
+      }
+    },
+    {
+      "group_id": "review.task-validator-target-actions.2026-07-24",
+      "match": {
+        "path": "core/task_runtime/validators.py",
+        "category": "configurable_policy",
+        "detectors": [
+          "python.literal_collection"
+        ]
+      },
+      "expected_count": 1,
+      "expected_rule_ids_sha256": "a61c5ecc585c5e0e040cfad809ae5ccff7be473c6b89005d426d581d6379e0f3",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：需要目标记忆 ID 的群学习动作集合属于版本化输出协议"
+      }
+    },
+    {
+      "group_id": "review.config-registry-protocol.2026-07-23",
+      "match": {
+        "path": "core/config_registry.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 9,
+      "expected_rule_ids_sha256": "9f77124a791931144953c77b5373c8a64259ac6a8e0f14b1b2dcce8c6f340f64",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：受管设置的枚举和值格式校验属于类型化配置合同"
+      }
+    },
+    {
+      "group_id": "review.behavior-baseline-protocol.2026-07-23",
+      "match": {
+        "path": "scripts/build_behavior_baseline.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 6,
+      "expected_rule_ids_sha256": "31c4cff9fad7812d739480c80769ff37ecfec2e2b0b389f314a40ef63c54dfa3",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议"
+      }
+    },
+    {
+      "group_id": "review.behavior-baseline-config.2026-07-23",
+      "match": {
+        "path": "scripts/build_behavior_baseline.py",
+        "category": "configurable_policy"
+      },
+      "expected_count": 4,
+      "expected_rule_ids_sha256": "d9d3e4d944f4ea70f45e1372c2ce8ee23701ae315f5c38c23ca5f6c772245ed1",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：行为快照分类和结构数量属于 Golden 数据一致性合同"
+      }
+    },
+    {
+      "group_id": "review.behavior-baseline-security.2026-07-23",
+      "match": {
+        "path": "scripts/build_behavior_baseline.py",
+        "category": "security_invariant"
+      },
+      "expected_count": 2,
+      "expected_rule_ids_sha256": "f30752689ab205772d3f76708d989a81c105db0aecf00fed21c6b4f77ab59c77",
+      "override": {
+        "category": "security_invariant",
+        "disposition": "preserve",
+        "review_status": "reviewed",
+        "reason": "人工复核：Golden 禁止符号链接和宿主路径泄露的检查属于安全边界"
+      }
+    },
+    {
+      "group_id": "review.endpoint-contract-protocol.2026-07-23",
+      "match": {
+        "path": "api/endpoint_contracts.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 17,
+      "expected_rule_ids_sha256": "ce5e494f94202ba539a6dc4ed3fd23d1ffa95210a61eefa13feba9be3179642c",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：端点 ID、HTTP 方法、路径、分页与 OpenAPI 投影判断属于 Endpoint Contract 的确定性协议语法，不承担业务语义判断"
+      }
+    },
+    {
+      "group_id": "review.openapi-client-generator-protocol.2026-07-23",
+      "match": {
+        "path": "scripts/generate_openapi_client.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 16,
+      "expected_rule_ids_sha256": "a05e2bdf90a4572df7b046019da5260e8d20ecfe274b2c10d188bece39fe72a7",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：Schema 到 TypeScript 的类型投影、参数位置和漂移检查属于生成器协议语法，不承担业务语义判断"
+      }
+    },
+    {
+      "group_id": "review.generated-admin-client-resources.2026-07-23",
+      "match": {
+        "path": "webui/src/api/generated/adminClient.ts",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 26,
+      "expected_rule_ids_sha256": "10374ef1f6fc10331e3c4bbf2f2d0f80a453a497216e2a3d3a2f77617acb8e17",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "resource",
+        "review_status": "reviewed",
+        "reason": "人工复核：客户端路由字面量由 Endpoint Registry 和 OpenAPI 生成器管理，是不可手工编辑的公开协议资源"
+      }
+    },
+    {
+      "group_id": "review.group-memory-route-resources.2026-07-23",
+      "match": {
+        "path": "api/admin/group_memory_routes.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 8,
+      "expected_rule_ids_sha256": "54ff3cb6391d5dd491a14bff89b9a5d13c174b26c1f739c5525fb35a0daa7fd3",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "resource",
+        "review_status": "reviewed",
+        "reason": "人工复核：群记忆路由和 operation ID 由 Endpoint Registry 管理，是显式版本化的公开协议资源"
+      }
+    },
+    {
+      "group_id": "review.tool-route-resources.2026-07-23",
+      "match": {
+        "path": "api/admin/tool_routes.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 41,
+      "expected_rule_ids_sha256": "edcf05900da533d2220bdb45a93c85ab2c30fef242bbcf735c8f3f115ca47bf9",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "resource",
+        "review_status": "reviewed",
+        "reason": "人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源"
+      }
+    },
+    {
+      "group_id": "review.log-route-resources.2026-07-23",
+      "match": {
+        "path": "api/admin/log_routes.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 13,
+      "expected_rule_ids_sha256": "ea436c4b9e5df6132833f37dd03a5ab0cd036af368cace00de84e6b963bd3856",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "resource",
+        "review_status": "reviewed",
+        "reason": "人工复核：审计与日志路由、日志文件名和行格式判断是版本化协议与资源语法，不承担业务语义判断"
+      }
+    },
+    {
+      "group_id": "review.telemetry-http-contract.2026-07-23",
+      "match": {
+        "path": "api/telemetry_middleware.py"
+      },
+      "expected_count": 6,
+      "expected_rule_ids_sha256": "33547d51bd7bc3143401ef9d088e4df35ae742715f1b2bb70fa1735c23d0eb50",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：Request ID 字符边界、ASGI HTTP 消息和 5xx 范围属于 HTTP Telemetry 的确定性协议合同"
+      }
+    },
+    {
+      "group_id": "review.telemetry-lazy-exports.2026-07-23",
+      "match": {
+        "path": "core/telemetry/__init__.py"
+      },
+      "expected_count": 2,
+      "expected_rule_ids_sha256": "463f19e3b39c77ea44e38d3d579896a46374754f3030edc541c58c57ea2e1f05",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：惰性导出名称是为解除包初始化环而冻结的公开模块协议"
+      }
+    },
+    {
+      "group_id": "review.telemetry-contract-validation.2026-07-23",
+      "match": {
+        "path": "core/telemetry/contracts.py"
+      },
+      "expected_count": 13,
+      "expected_rule_ids_sha256": "4c1c1af122e5221a6d04eb198d1b5d898f4742891c560303ef819fbc48e471aa",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：关联标识、Registry provenance、指标名、label 和 bucket 校验是版本化 Telemetry 合同，不承担业务语义判断"
+      }
+    },
+    {
+      "group_id": "review.telemetry-job-state-projection.2026-07-23",
+      "match": {
+        "path": "core/telemetry/job_observer.py"
+      },
+      "expected_count": 5,
+      "expected_rule_ids_sha256": "31483a7a251bbb614c2e72427fc356ef86ea9c2d3078f4dd4fba536d236d2e5d",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：Job 状态、重试、租约和关联字段到生命周期事件的映射是持久化状态机的一致性投影"
+      }
+    },
+    {
+      "group_id": "review.telemetry-persistence-sanitization.2026-07-23",
+      "match": {
+        "path": "core/telemetry/persistence.py"
+      },
+      "expected_count": 4,
+      "expected_rule_ids_sha256": "06a14f6f40445cc26bc1119bfc29343b3eeae54488dd4c4995a98d9076eee49a",
+      "override": {
+        "category": "security_invariant",
+        "disposition": "preserve",
+        "review_status": "reviewed",
+        "reason": "人工复核：敏感键、控制字符和字段长度的二次过滤用于阻止正文、凭据和日志注入进入 Telemetry 账本"
+      }
+    },
+    {
+      "group_id": "review.telemetry-runtime-lifecycle.2026-07-23",
+      "match": {
+        "path": "core/telemetry/runtime.py"
+      },
+      "expected_count": 3,
+      "expected_rule_ids_sha256": "da96ca1c6bc4ef18a27d3a5bd51f32cdcad30408321d3acdb4ac8d2eea9396e4",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：队列容量关系和测试生命周期分支是 Telemetry Runtime 的确定性有效状态合同"
+      }
+    },
+    {
+      "group_id": "review.task-slo-protocol.2026-07-23",
+      "match": {
+        "path": "core/task_runtime/slo.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 4,
+      "expected_rule_ids_sha256": "204163a3e6b906cf5b043038f2efda52e1834f695495213261ad433bd7d185a6",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：SLO 语义版本、Route／Task 绑定和 invocation SLO 引用属于版本化 Task 合同语法"
+      }
+    },
+    {
+      "group_id": "review.task-slo-data-contract.2026-07-23",
+      "match": {
+        "path": "core/task_runtime/slo.py",
+        "category": "configurable_policy"
+      },
+      "expected_count": 4,
+      "expected_rule_ids_sha256": "1df6efbe26de701d22642db743d9af8560fc900d306b6e290dbac64c369f3720",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：SLO 正数、比率和控制字符校验是 Descriptor 的确定性有效状态合同"
+      }
+    },
+    {
+      "group_id": "review.task-slo-manifest-protocol.2026-07-23",
+      "match": {
+        "path": "scripts/build_task_slo_manifest.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 2,
+      "expected_rule_ids_sha256": "0d3adcf23b49c576001e36062fc56beb4d71283aefca688173c285058f567f16",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：Manifest Schema 版本和脚本入口是确定性的生成器协议"
+      }
+    },
+    {
+      "group_id": "review.task-slo-manifest-data-contract.2026-07-23",
+      "match": {
+        "path": "scripts/build_task_slo_manifest.py",
+        "category": "configurable_policy"
+      },
+      "expected_count": 4,
+      "expected_rule_ids_sha256": "0e175f681d1d4c318d8a62519556c75bb3eb62159cbee1d3d16b83065c53f059",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：数值合法性、唯一基线和观测覆盖判断属于 Manifest 的确定性数据合同"
+      }
+    },
+    {
+      "group_id": "review.task-slo-manifest-observability-gate.2026-07-23",
+      "match": {
+        "path": "scripts/build_task_slo_manifest.py",
+        "category": "security_invariant"
+      },
+      "expected_count": 2,
+      "expected_rule_ids_sha256": "ac00107e97e2fe93d2b904c9b556ecd05f1cabda72f68bdf8c4468f371aceb31",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：Token 覆盖是否存在只决定 SLO 观测完备性，不是凭据或权限安全边界"
+      }
+    },
+    {
+      "group_id": "review.group-governance-protocol.2026-07-24",
+      "match": {
+        "path": "core/db/group_learning_governance_adapter.py",
+        "category": "protocol_syntax"
+      },
+      "expected_count": 22,
+      "expected_rule_ids_sha256": "3247b08f399c97d9b7509751f9e35ec548391ebc3c5a8a368da77dba4cf54914",
+      "override": {
+        "category": "protocol_syntax",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同"
+      }
+    },
+    {
+      "group_id": "review.group-governance-data.2026-07-24",
+      "match": {
+        "path": "core/db/group_learning_governance_adapter.py",
+        "category": "data_consistency"
+      },
+      "expected_count": 12,
+      "expected_rule_ids_sha256": "45e05dbfb37fcc8d4f46beffc63fc898f3f40625eb836e916e26541232ae5d07",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束"
+      }
+    },
+    {
+      "group_id": "review.group-governance-numeric-data.2026-07-24",
+      "match": {
+        "path": "core/db/group_learning_governance_adapter.py",
+        "category": "configurable_policy"
+      },
+      "expected_count": 1,
+      "expected_rule_ids_sha256": "319493dfe99ab94fb4205aa66d48276044653193f23ef3c8e5a20f3202c7d75b",
+      "override": {
+        "category": "data_consistency",
+        "disposition": "policy",
+        "review_status": "reviewed",
+        "reason": "人工复核：只有正整数 ChatLog ID 才能进入正式记忆 evidence 列表，属于持久化数据合同"
+      }
+    }
+  ],
+  "overrides": {
+    "decision.0e9980040d8b1baa0cc2": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：群分析按冻结 Aspect ID 选择固定 Task 分支，属于结构化执行协议，不判断自然语言语义"
+    },
+    "decision.bfb268e779387baaf4c7": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：报告按已校验 Aspect 集合决定固定区块可见性，属于结构化渲染协议"
+    },
+    "decision.59cb358a76ba12d9efe3": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：只有 Descriptor 明确声明的数值型敏感名称字段可作为计数进入 Telemetry，字符串仍被拒绝"
+    },
+    "decision.621495fe37d8f9feff13": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：模型 usage 只接受非负整数，防止非法 Token 统计污染 SLO 账本"
+    },
+    "decision.5d8e8a4ea5c401b9b048": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：模型 usage 的浮点数只有非负且为整数时才可投影为 Token 计数"
+    },
+    "decision.31bce1e4037ac9d15e34": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：task_slo.by_invocation.v1 是 ResiliencePolicy 与逐 Task SLO 的版本化绑定协议"
+    },
+    "decision.747ababddff7a2f6d3ae": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：HTTP 错误状态范围下界属于协议定义，不是可配置业务阈值"
+    },
+    "decision.874691bdedd7bc88a772": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：HTTP 错误状态范围上界属于协议定义，不是可配置业务阈值"
+    },
+    "decision.c068f423a6617e3b74c8": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Registry generation 必须为正是统一 Registry Kernel 的一致性合同"
+    },
+    "decision.77fd685a00732a247514": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：transient 到稳定 Delivery failure code 的映射属于投递结果协议"
+    },
+    "decision.617cd0e49725ae5e7f67": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：ambiguous 到稳定 Delivery failure code 的映射属于投递结果协议"
+    },
+    "decision.84fdcf3e4c8920610e6d": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：success 不产生失败码是投递 Telemetry 的确定性协议"
+    },
+    "decision.cdaec5e6db56a86a5263": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Tool 执行状态到稳定 failure code 的映射属于工具追踪协议"
+    },
+    "decision.35c9f8bfc4189e1f95de": {
+      "category": "compatibility",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：group_ 是入口 Adapter 明确支持的旧身份前缀，只用于兼容归一和用量观测"
+    },
+    "decision.cc15727203840059c661": {
+      "category": "compatibility",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：private_ 是入口 Adapter 明确支持的旧身份前缀，只用于兼容归一和用量观测"
+    },
+    "decision.31f2cca00767b7828fe0": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：零使用天数必须为正是 Compatibility 移除门禁自身的数据合同"
+    },
+    "decision.e5f7fbcd8ae13e087d4e": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：至少跨过一次完整发布是 Compatibility 移除门禁自身的数据合同"
+    },
+    "decision.681cb4a02a176eecb94d": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：拒绝控制字符用于阻止兼容元数据污染日志和协议字段"
+    },
+    "decision.099e1d343bb37a50a359": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：拒绝控制字符用于保护 Feature 生命周期元数据合同"
+    },
+    "decision.48d58a7342b7e4a1053f": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：force_disabled 是 Tool Descriptor 的确定性可用性状态，不是自然语言判断"
+    },
+    "decision.384d1bec4bfe2f1324dc": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：retired 是 ToolRegistration 的类型化生命周期状态，必须与 Feature tombstone 一致"
+    },
+    "decision.0f3971b83caf88152f6e": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：模块生命周期枚举是确定性状态合同，不是旧兼容路径"
+    },
+    "decision.51c34ffa0c7759509179": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：归档是画像事实状态，不是自然语言语义判断"
+    },
+    "decision.6bef7f69b6fb4e670dc4": {
+      "category": "configurable_policy",
+      "disposition": "configure",
+      "review_status": "reviewed",
+      "reason": "人工复核：相关度下限是检索策略阈值，应进入类型化策略配置"
+    },
+    "decision.2650cad6573be55a3a47": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：非正相关度是检索结果有效性边界"
+    },
+    "decision.1b2c68eeec60dd2c029c": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：正则解析分类器的结构化输出兼容格式"
+    },
+    "decision.a91a03bfaba448933166": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：未指定值属于模型输出合同"
+    },
+    "decision.43bf656b8781ca81f20e": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：未指定标签属于模型输出合同"
+    },
+    "decision.baaa5fe18b85e158d74c": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：自由文本是标签属于待迁移的旧模型输出格式"
+    },
+    "decision.72d7232428298b311379": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：自由文本否标签属于待迁移的旧模型输出格式"
+    },
+    "decision.9e8edaf0af8157d0cefa": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：自由文本类型标签属于待迁移的旧模型输出格式"
+    },
+    "decision.215f3c0d2b679b98779a": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：自由文本类型标签属于待迁移的旧模型输出格式"
+    },
+    "decision.1ce4afb6625ef2be5218": {
+      "category": "data_consistency",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：评测标签是版本化数据枚举"
+    },
+    "decision.f486d36ca3e3d367b1db": {
+      "category": "data_consistency",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：评测标签是版本化数据枚举"
+    },
+    "decision.b7f8eca4a6a55434cf4b": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：允许更新字段属于配置写入合同"
+    },
+    "decision.5cf5ed11ac072f47bbb8": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：布尔配置字段属于配置写入合同"
+    },
+    "decision.f1e67e7508250a78b757": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：表达记忆激活状态属于持久化状态机"
+    },
+    "decision.a71df7669a44a64e3ff3": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：空场景是持久化查询条件"
+    },
+    "decision.fb3fade640bb79f3db9c": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：黑话记忆激活状态属于持久化状态机"
+    },
+    "decision.60013418eaf1d57b0775": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：布尔自由文本属于待迁移的旧模型输出格式"
+    },
+    "decision.cdfcded1abe02424c174": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：布尔自由文本属于待迁移的旧模型输出格式"
+    },
+    "decision.9098360a8ece82182a47": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：归档是画像事实状态"
+    },
+    "decision.bb4cf418e64eca54e487": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：确认是画像事实置信状态"
+    },
+    "decision.2c03a5274e6680b15679": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：可能是画像事实置信状态"
+    },
+    "decision.6361fa3c335324cf3796": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：归档过滤属于画像事实状态机"
+    },
+    "decision.f2794cd3228202c78c1b": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：归档过滤属于画像事实状态机"
+    },
+    "decision.27343a3750713218e28c": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：必填字段集合属于结构化模型输出合同"
+    },
+    "decision.29a02e1fca6eb9c1d30f": {
+      "category": "presentation",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：错误摘要是面向运维的稳定展示资源"
+    },
+    "decision.91c634adb80d1ecbf975": {
+      "category": "presentation",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：错误摘要是面向运维的稳定展示资源"
+    },
+    "decision.0525b77c9409cd4996f3": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：SQL 关键字集合用于约束迁移表达式语法"
+    },
+    "decision.454fe9e3797fdbb266e4": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：摘要行是受控研究输出协议"
+    },
+    "decision.b2841372bad4bc21fc17": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：时间行是受控研究输出协议"
+    },
+    "decision.a140cddf1176cf199482": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：结果标记只能出现一次是输出合同约束"
+    },
+    "decision.ab8fd5ab790104d7e8bb": {
+      "category": "presentation",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：图片占位符属于群消息展示协议"
+    },
+    "decision.96141c78627e27780a46": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：topics 是群分析分支 ID"
+    },
+    "decision.23d013cec4216d13b53b": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：HTML 产物标记用于排除非聊天正文"
+    },
+    "decision.dd89fed3f17f69ed0506": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：内部错误和控制前缀不得进入群学习输入"
+    },
+    "decision.32fc0076b928d58a991b": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：布尔文本是环境配置解析协议"
+    },
+    "decision.08d587f311efba3c0f2a": {
+      "category": "natural_language_semantic",
+      "disposition": "model_signal_only",
+      "review_status": "reviewed",
+      "reason": "人工复核：AI 产品、基础设施和发布词典只生成新闻候选信号，不得直接删除或激活候选"
+    },
+    "decision.f6426987ba81519061e1": {
+      "category": "natural_language_semantic",
+      "disposition": "model_signal_only",
+      "review_status": "reviewed",
+      "reason": "人工复核：医学词典只生成冲突信号，最终相关性由结构化审核决定"
+    },
+    "decision.6764f255842767f57c4f": {
+      "category": "natural_language_semantic",
+      "disposition": "model_signal_only",
+      "review_status": "reviewed",
+      "reason": "人工复核：娱乐词典只生成负向候选信号，不能作为新闻删除规则"
+    },
+    "decision.6d794813d482fafad127": {
+      "category": "natural_language_semantic",
+      "disposition": "model_signal_only",
+      "review_status": "reviewed",
+      "reason": "人工复核：实体候选正则只提取待审核实体，不判断实体是否属于 AI 领域"
+    },
+    "decision.8d5974f30c0798279db5": {
+      "category": "natural_language_semantic",
+      "disposition": "model_signal_only",
+      "review_status": "reviewed",
+      "reason": "人工复核：实体候选扫描只产生模型审核输入，不承担最终相关性决策"
+    },
+    "decision.cd332429bec9ff4ea92b": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：新闻窗口和配额必须为正是 NewsRankingPolicy 的有效状态合同"
+    },
+    "decision.ce36104017a83296f347": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：来源 Descriptor 禁止控制字符，防止资源、日志和错误字段注入"
+    },
+    "decision.d14c600def9446d104b2": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：新闻来源只允许 HTTPS，是固定来源 Registry 的网络安全边界"
+    },
+    "decision.fd178d9435cb25bc92c2": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：retired 来源不可启用是 Source Descriptor 生命周期合同"
+    },
+    "decision.5dbb986af4d5063d9ae9": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：retired 来源不可被 operator override 重新启用"
+    },
+    "decision.c0730144a414f31fecc7": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Runtime 来源选择必须排除 retired 生命周期状态"
+    },
+    "decision.2316ddeb4c680ee1b664": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：审核结果只能关联当前批次候选 ID，属于批量结果一致性合同"
+    },
+    "decision.a26b805acc9e440cc5b0": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：只有结构化 clear_non_ai 高置信证据才允许删除候选，是审核后置门禁"
+    },
+    "decision.bcb652b23577a49941f8": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：共享 message 变量适用的 Task key 集合属于 Prompt Runtime 类型化协议"
+    },
+    "decision.c87ac3347587a598844f": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：字符归一化正则不负责新闻语义判断"
+    },
+    "decision.f2c76128db458ea43cf4": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：中文字符检测用于分词归一化"
+    },
+    "decision.67b137d5e489af505eff": {
+      "category": "protocol_syntax",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：新闻来源路径是版本化来源 Descriptor"
+    },
+    "decision.ab01960aab19a781c9a5": {
+      "category": "protocol_syntax",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：新闻来源路径是版本化来源 Descriptor"
+    },
+    "decision.99b844ed51f6a0de622e": {
+      "category": "protocol_syntax",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：新闻来源路径是版本化来源 Descriptor"
+    },
+    "decision.77c9af1275e146efb0aa": {
+      "category": "protocol_syntax",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：新闻来源路径是版本化来源 Descriptor"
+    },
+    "decision.d3fade95ef68e096d67f": {
+      "category": "protocol_syntax",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：新闻来源路径是版本化来源 Descriptor"
+    },
+    "decision.cb68f2210f2b88a24fc0": {
+      "category": "protocol_syntax",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：来源过滤查询参数属于版本化来源 Descriptor"
+    },
+    "decision.50096ae1ad5b83a6ddcb": {
+      "category": "protocol_syntax",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：新闻来源路径是版本化来源 Descriptor"
+    },
+    "decision.2ba6d3c5ab48b51f11a3": {
+      "category": "presentation",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：早报标题清理属于来源展示适配"
+    },
+    "decision.2e10141a425c73e6258c": {
+      "category": "presentation",
+      "disposition": "resource",
+      "review_status": "reviewed",
+      "reason": "人工复核：视频版文案清理属于来源展示适配"
+    },
+    "decision.40c41c355e89e6e06c9f": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：中文日期正则属于确定性日期协议解析"
+    },
+    "decision.1b90a2987a58c29841b4": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：月日正则属于确定性日期协议解析"
+    },
+    "decision.b76cf87b1c5280f4a7cc": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：相对日期词解析属于查询时间边界"
+    },
+    "decision.f79a15f86b8d7619a16e": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：基准脚本解析旧分类器自由文本输出"
+    },
+    "decision.95d704747a0dd4f3c7c2": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：基准脚本解析旧分类器自由文本输出"
+    },
+    "decision.2f43e5f6dcbf71bac210": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：基准脚本解析旧分类器自由文本输出"
+    },
+    "decision.a9d674ed469b84f766a2": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：基准脚本解析旧分类器自由文本输出"
+    },
+    "decision.d9eddbad37ff3c6e846d": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：基准脚本解析旧分类器自由文本输出"
+    },
+    "decision.d742c571ef6ef1b0a850": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：基准脚本解析旧分类器自由文本输出"
+    },
+    "decision.09d65209ccdfccaad727": {
+      "category": "protocol_syntax",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：基准脚本解析旧分类器自由文本输出"
+    },
+    "decision.23ecc2b371c622eae62c": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Observer 无返回值属于只读 Hook 的确定性输出合同"
+    },
+    "decision.3b68c7f2229895f995a3": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：同一 Transform Pipeline 的输入输出合同必须唯一"
+    },
+    "decision.9e3fcd85f7abb856573d": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Hook priority 范围属于 Descriptor 结构约束，不是运行时业务阈值"
+    },
+    "decision.f5dd293ca1efea29b368": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：控制字符拒绝属于类型化配置来源标识的语法边界"
+    },
+    "decision.0abdb1fef12979b214c8": {
+      "category": "compatibility",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：只允许关闭既有 Web regex 是旧规则迁移期的单向兼容门禁"
+    },
+    "decision.15c1c99ed6a6b24f1d80": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：规则模式的绝对长度上限用于限制资源消耗，不允许由调用方放宽"
+    },
+    "decision.1ed15908ad21eddb34fd": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：0/1 动作字段到类型化动作的映射属于持久化合同"
+    },
+    "decision.31a9a74fdd1323069170": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Web 规则模式的 256 字符上限是不可提升的安全子集边界"
+    },
+    "decision.368607204813f3b42d9b": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：单条规则性能预算的绝对范围用于阻止无界执行"
+    },
+    "decision.37ea401471d40f8bd07d": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：private 是 UserBlockRule 的类型化目标范围"
+    },
+    "decision.4a64db4ae63b370b1b28": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：语义版本正则只验证 Descriptor 版本协议"
+    },
+    "decision.4f2f06d72561e2d42d5c": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：priority 的整数范围属于 Descriptor 排序合同"
+    },
+    "decision.50bb4f62e618965de530": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：规则输入的绝对长度范围用于阻止无界内容扫描"
+    },
+    "decision.6ca795304a0ab7091053": {
+      "category": "compatibility",
+      "disposition": "compatibility_migration",
+      "review_status": "reviewed",
+      "reason": "人工复核：识别既有 regex 仅用于执行旧规则单向关闭迁移"
+    },
+    "decision.72ade8a82a0c25b2ec76": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：group 是 ContentRuleInput 的类型化会话范围"
+    },
+    "decision.8f7959bd73d986244532": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：group 是 UserBlockRule 的类型化目标范围"
+    },
+    "decision.9434b86100aa0af01deb": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：all 是 UserBlockRule 的类型化全局范围"
+    },
+    "decision.951e860c60ac9a2cf250": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Web 规则拒绝 NUL 用于保护存储和匹配边界"
+    },
+    "decision.9630ae61ef5b505f1aa9": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Descriptor 模式拒绝 NUL 用于保护存储和匹配边界"
+    },
+    "decision.9786eee8f3f8de8d4b45": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：非正命中数表示规则未命中，属于 Engine 结果合同"
+    },
+    "decision.98636769c55b8c6ac665": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：负数据库 ID 不能进入稳定规则标识"
+    },
+    "decision.ac1e7a8e9d2a4332ba9a": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：仅群目标需要归一 group_id，属于身份作用域合同"
+    },
+    "decision.b5bd4bb7517586b2f11f": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：单条规则命中数绝对上限用于阻止无界匹配"
+    },
+    "decision.cbabe82b15aa83c9bab9": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Web 动作字段只接受 0/1 是持久化请求合同"
+    },
+    "decision.cd60cb94c8e3d6ed9610": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Descriptor 版本必须满足语义版本协议"
+    },
+    "decision.f87702232219263645d0": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：规则元数据拒绝控制字符用于保护日志和 Registry 字段"
+    },
+    "decision.fce5c5f05101248d6ef6": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：private/group 是规则可声明的完整会话类型集合"
+    },
+    "decision.04e5697d0194b27165c0": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：仅正 backoff 才调用 sleeper 是 ResiliencePolicy 的确定性执行合同"
+    },
+    "decision.11110b4d548865c3ec1f": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：总 timeout 必须为正是韧性预算结构约束"
+    },
+    "decision.14dae40398c816db6436": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：attempt 序号必须为正是退避计算输入合同"
+    },
+    "decision.1fbbc4f68f832c70c81a": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：韧性策略元数据拒绝控制字符用于保护 Registry 和日志字段"
+    },
+    "decision.37a8412d827b23eaa481": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：单次 timeout 必须为正是韧性预算结构约束"
+    },
+    "decision.3c30e6c017b48fa4e909": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：backoff 不能为负是退避算法结构约束"
+    },
+    "decision.48d0990bc488a036240b": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：jitter 样本范围属于随机源输入合同"
+    },
+    "decision.84728d3f3cf8c2c13464": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：jitter ratio 范围属于退避策略结构约束"
+    },
+    "decision.90a867d5c507b97f5f32": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：HTTP 401/403 到 authorization 的映射来自协议状态码，不读取响应正文"
+    },
+    "decision.afd44b292bcde0705677": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：多次 attempt 必须声明可重试分类或错误码，避免无条件重试"
+    },
+    "decision.b3bb7abadad8452a73e9": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：backoff multiplier 下限属于退避算法结构约束"
+    },
+    "decision.d4cf87acef7db0a8dd7b": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：正则只验证 ResiliencePolicy Descriptor 的语义版本"
+    },
+    "decision.e082cb5e85a1c83776df": {
+      "category": "protocol_syntax",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：ResiliencePolicy 版本必须满足语义版本协议"
+    },
+    "decision.c8cd8446ddad9607838b": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Memory Digest worker 标识长度是租约身份边界，必须确定性校验"
+    },
+    "decision.904300631f07db0dd374": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Memory Digest 结算必须匹配原 claim 的 worker 身份"
+    },
+    "decision.5683b56428f3e2195cd1": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Memory Digest 结算必须匹配不可伪造的 lease token"
+    },
+    "decision.01b6e54bbad6dbe94ba2": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Memory Digest 结算必须匹配 claim 的 attempt 代次"
+    },
+    "decision.6206e9cb497a74d55fe1": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Memory Digest 结算必须匹配 claim 的 source revision"
+    },
+    "decision.af88d31aed6bfa0ced76": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Session Summary 租约必须引用正整数 Job ID"
+    },
+    "decision.1a75897e116913a36720": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Session Summary worker 标识长度是租约身份边界"
+    },
+    "decision.522439ed9bcfaa72612a": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Session Summary owner token 长度是租约身份边界"
+    },
+    "decision.098b9f4a28efbe32ae1e": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Session Summary 租约 generation 必须为正整数"
+    },
+    "decision.f968a3ff01c2d16f5998": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Session Summary 租约 attempt 必须为正整数"
+    },
+    "decision.406932fd9dc169cdc889": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Session Summary owner 标识长度是租约身份边界"
+    },
+    "decision.317d03057a1893b1e705": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Session Summary owner 标识拒绝控制字符以保护日志和租约字段"
+    },
+    "decision.791e19451dfebfc53171": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：只有 running Session Summary 才能被活动租约结算"
+    },
+    "decision.3992c0a53f0ba068fb65": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：历史 running 记录不得伪造空 lease token 为活动租约"
+    },
+    "decision.8a32ab1d64e852342f00": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Session Summary 迁移只重排历史 running 状态"
+    },
+    "decision.874839ca1aeebc331744": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：只有携带 lease token 的历史 running 记录才可能表示活动租约"
+    },
+    "decision.639f0598afb68d1fe512": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：迁移后历史 running 记录不得保留空 token 的伪租约"
+    },
+    "decision.f1e1ec136afe7c4efb48": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Job Lease Adapter 只能投影 decision=claimed 的活动 claim"
+    },
+    "decision.077238be2c52247773ca": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Job 合同元数据清除控制字符以保护日志、Registry 和追踪字段"
+    },
+    "decision.6849527ffbfcdc3e8705": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：通用 JobLease generation 必须为正整数"
+    },
+    "decision.9cff6bb6edb46dbe2570": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：通用 JobLease attempt 必须为正整数"
+    },
+    "decision.ec2452e3e1ae3d76ef0d": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：JobRecord generation 不得为负数"
+    },
+    "decision.6e37463c89de4c5090c7": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：JobRecord attempt_count 不得为负数"
+    },
+    "decision.fca1c28f8a344d215324": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Sandbox Admin worker 标识长度是租约身份边界"
+    },
+    "decision.a503906d57422ab73da4": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Semantic Index 回收必须匹配原 worker 身份"
+    },
+    "decision.87908051fec41570f536": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Semantic Index 回收必须匹配原 lease token"
+    },
+    "decision.92c29c9b8de46e8092e1": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Semantic Index 回收必须匹配原 attempt 代次"
+    },
+    "decision.d447d701ca26918ff978": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Semantic Index 回收必须匹配原 source revision"
+    },
+    "decision.9eca082101b144c19f32": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：Sandbox Admin 操作结果必须匹配活动租约 generation"
+    },
+    "decision.27fed8eca6b6f2f3183b": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：群记忆概览必须选择时间更晚的注入记录，属于稳定投影的一致性规则"
+    },
+    "decision.09dd7ffbc67d6074ec8d": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：群记忆 SQL Adapter 按 canonical chat_stream_id 精确匹配授权数据"
+    },
+    "decision.e154553f30d12cb8e801": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：系统设置键长度上限是持久化合同，不交由模型或运行时策略决定"
+    },
+    "decision.e253efa286db6e7150f8": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：数据库 Port 合同禁止依赖 SQLAlchemy 和 core 实现层，是架构依赖方向门禁"
+    },
+    "decision.060fee0095598c4b9624": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：数据库 Adapter 禁止反向依赖 API、KT 和外部交付层，是架构依赖方向门禁"
+    },
+    "decision.95823a34cc5efe2effba": {
+      "category": "natural_language_semantic",
+      "disposition": "model_signal_only",
+      "review_status": "reviewed",
+      "reason": "人工复核：群学习定义规则的正则编译只验证候选提取器，不能直接激活正式记忆"
+    },
+    "decision.18b4f62d24a33f1b07aa": {
+      "category": "natural_language_semantic",
+      "disposition": "model_signal_only",
+      "review_status": "reviewed",
+      "reason": "人工复核：群表达短语正则只能产出待审核候选，不能直接写入或注入 GroupMemory"
+    },
+    "decision.03cf38a64f5aa675363e": {
+      "category": "natural_language_semantic",
+      "disposition": "model_signal_only",
+      "review_status": "reviewed",
+      "reason": "人工复核：群学习定义模式的运行时编译只服务候选提取，最终语义由模型或人工审核"
+    },
+    "decision.35043f9f5092b32a71d5": {
+      "category": "natural_language_semantic",
+      "disposition": "model_signal_only",
+      "review_status": "reviewed",
+      "reason": "人工复核：群学习正则匹配只能生成 candidate/evidence 信号，不能自动激活正式记忆"
+    }
+  }
+}

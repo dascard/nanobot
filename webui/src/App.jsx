@@ -4,8 +4,6 @@ import axios from 'axios'
 import {
   Activity,
   BarChart3,
-  Bot,
-  Brain,
   Clock3,
   Database,
   FileText,
@@ -23,7 +21,6 @@ import {
   Shield,
   Tags,
   Users,
-  Wrench,
   X,
 } from 'lucide-react'
 
@@ -44,11 +41,7 @@ import { AgentRunsPage } from './features/agent-runs/AgentRunsPage'
 import { ToolCallsPage } from './features/agent-runs/ToolCallsPage'
 import { LLMApiLogsPage } from './features/agent-runs/LLMApiLogsPage'
 import { ModelRepliesTab } from './features/logs/ModelRepliesTab'
-import { ModelsPage } from './features/models/ModelsPage'
-import { PromptV2TemplatesPage, EffectivePromptPreviewPage } from './features/prompt/PromptPages'
 import { ReplyEvalPage } from './features/reply-eval/ReplyEvalPage'
-import { SandboxPage } from './features/sandbox/SandboxPage'
-import { ToolsPage } from './features/tools/ToolsPage'
 import { EvalsPage } from './features/evals/EvalsPage'
 import { GeneratedImagesPage } from './features/generated-images/GeneratedImagesPage'
 import { RagDebugPage } from './features/rag/RagDebugPage'
@@ -56,6 +49,10 @@ import { RagBenchmarkPage } from './features/rag/RagBenchmarkPage'
 import { WebSearchPage } from './features/web-search/WebSearchPage'
 import { ProactiveOutreachPage } from './features/proactive-outreach/ProactiveOutreachPage'
 import { SessionConfigsPage } from './features/session-config/SessionConfigsPage'
+import {
+  WEB_FEATURE_ROUTES,
+  composeNavigationSections,
+} from './features/manifest'
 
 function formatApiError(error, fallback = '请求失败') {
   const detail = error?.response?.data?.detail
@@ -158,15 +155,19 @@ function Login({ onLogin }) {
 }
 
 // ── Layout ──
-const NAV_SECTIONS = [
+const BASE_NAV_SECTIONS = [
   {
+    id: 'overview',
     title: '总览',
+    order: 10,
     items: [
       { to: '/', label: '首页总览', end: true, icon: Home },
     ],
   },
   {
+    id: 'runtime',
     title: '运行链路',
+    order: 20,
     items: [
       { to: '/agent-runs', label: '运行追踪', icon: Activity },
       { to: '/llm-api-logs', label: 'LLM API 日志', icon: Network },
@@ -179,44 +180,48 @@ const NAV_SECTIONS = [
     ],
   },
   {
+    id: 'prompt',
     title: 'Prompt',
-    items: [
-      { to: '/prompt-preview', label: '运行预览' },
-      { to: '/prompt-templates', label: '模板' },
-    ],
+    order: 30,
+    items: [],
   },
   {
+    id: 'models_tools',
     title: '模型与工具',
+    order: 40,
     items: [
-      { to: '/models', label: '模型', icon: Bot },
-      { to: '/web-search', label: '搜索 API', icon: Search },
-      { to: '/tools', label: '工具管理', icon: Wrench },
-      { to: '/sandbox', label: 'Sandbox 管理', icon: Shield },
-      { to: '/evals', label: 'Eval 评测', icon: BarChart3 },
+      { to: '/web-search', label: '搜索 API', icon: Search, order: 40 },
+      { to: '/evals', label: 'Eval 评测', icon: BarChart3, order: 50 },
     ],
   },
   {
+    id: 'data_governance',
     title: '数据治理',
+    order: 50,
     items: [
-      { to: '/groups', label: '群聊运行', icon: Users },
-      { to: '/memory', label: '群体记忆', icon: Brain },
-      { to: '/persona', label: '用户画像', icon: Users },
-      { to: '/generated-images', label: '生成图片', icon: Images },
-      { to: '/stickers', label: '表情包', icon: Tags },
-      { to: '/stickers/duplicates', label: '去重工作台', icon: Search },
-      { to: '/db', label: '数据库', icon: Database },
+      { to: '/groups', label: '群聊运行', icon: Users, order: 10 },
+      { to: '/session-summaries/recent', label: '近期摘要', icon: FileText, order: 30 },
+      { to: '/session-summaries/long', label: '长期摘要', icon: FileText, order: 40 },
+      { to: '/persona', label: '用户画像', icon: Users, order: 50 },
+      { to: '/generated-images', label: '生成图片', icon: Images, order: 60 },
+      { to: '/stickers', label: '表情包', icon: Tags, order: 70 },
+      { to: '/stickers/duplicates', label: '去重工作台', icon: Search, order: 80 },
+      { to: '/db', label: '数据库', icon: Database, order: 90 },
     ],
   },
   {
+    id: 'system',
     title: '系统',
+    order: 60,
     items: [
-      { to: '/configs', label: '会话策略', icon: Gauge },
-      { to: '/blocks', label: '屏蔽', icon: Shield },
-      { to: '/settings', label: '设置', icon: Settings },
-      { to: '/audit', label: '审计', icon: FileText },
+      { to: '/configs', label: '会话策略', icon: Gauge, order: 10 },
+      { to: '/blocks', label: '屏蔽', icon: Shield, order: 20 },
+      { to: '/settings', label: '设置', icon: Settings, order: 30 },
+      { to: '/audit', label: '审计', icon: FileText, order: 40 },
     ],
   },
 ]
+const NAV_SECTIONS = composeNavigationSections(BASE_NAV_SECTIONS)
 const NAV = NAV_SECTIONS.flatMap(section => section.items)
 
 function NavContent({ version, onLogout, onNavigate }) {
@@ -1586,35 +1591,69 @@ function DbResultTable({ data, tableName, onExpand }) {
 }
 
 function DbPage() {
-  const [tables, setTables] = useState([])
+  const [views, setViews] = useState([])
   const [groups, setGroups] = useState([])
-  const [tableMeta, setTableMeta] = useState({})
-  const [tableSearch, setTableSearch] = useState('')
+  const [viewSearch, setViewSearch] = useState('')
   const [sel, setSel] = useState('')
-  const [rows, setRows] = useState({ columns: [], rows: [], total: 0, page: 1, limit: 50, has_next: false })
+  const [rows, setRows] = useState({ columns: [], rows: [], total: 0, limit: 50, has_next: false, next_cursor: null })
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState(50)
-  const [loadingTable, setLoadingTable] = useState(false)
+  const [cursorHistory, setCursorHistory] = useState([null])
+  const [filterValues, setFilterValues] = useState({})
+  const [loadingView, setLoadingView] = useState(false)
   const [expandedCell, setExpandedCell] = useState(null)
-  const [sql, setSql] = useState('')
-  const [sqlResult, setSqlResult] = useState(null)
   useEffect(() => {
-    api.get('/db/tables').then(r => {
-      const nextTables = r.data.tables || []
-      setTables(nextTables)
-      setGroups(r.data.groups || [{ key: 'all', label: '全部表', tables: nextTables }])
-      setTableMeta(r.data.table_meta || {})
-    })
+    api.get('/db/views')
+      .then(r => {
+        setViews(r.data.views || [])
+        setGroups(r.data.groups || [])
+      })
+      .catch(e => alert(formatApiError(e, '加载数据库视图失败')))
   }, [])
-  const queryTable = (t, nextPage = 1, nextLimit = limit) => {
-    setSel(t)
+  const viewById = Object.fromEntries(views.map(view => [view.view_id, view]))
+  const selectedMeta = viewById[sel] || {}
+  const activeFilters = values => Object.fromEntries(
+    Object.entries(values || {}).filter(([, value]) => String(value ?? '').trim() !== ''),
+  )
+  const loadView = (viewId, cursor, nextPage, nextLimit, nextFilters) => {
+    setSel(viewId)
     setPage(nextPage)
     setLimit(nextLimit)
-    setLoadingTable(true)
-    api.get(`/db/tables/${t}`, { params: { page: nextPage, limit: nextLimit } })
+    setLoadingView(true)
+    api.post(`/db/views/${encodeURIComponent(viewId)}/rows`, {
+      filters: activeFilters(nextFilters),
+      cursor,
+      limit: nextLimit,
+    })
       .then(r => setRows(r.data))
-      .catch(e => alert(e.response?.data?.detail || e.message))
-      .finally(() => setLoadingTable(false))
+      .catch(e => alert(formatApiError(e, '加载数据库视图失败')))
+      .finally(() => setLoadingView(false))
+  }
+  const selectView = viewId => {
+    const view = viewById[viewId] || {}
+    const nextLimit = Math.min(Number(view.default_limit || 50), Number(view.max_limit || 200))
+    setFilterValues({})
+    setCursorHistory([null])
+    loadView(viewId, null, 1, nextLimit, {})
+  }
+  const applyFilters = () => {
+    setCursorHistory([null])
+    loadView(sel, null, 1, limit, filterValues)
+  }
+  const changeLimit = nextLimit => {
+    setCursorHistory([null])
+    loadView(sel, null, 1, nextLimit, filterValues)
+  }
+  const nextPage = () => {
+    if (!rows.next_cursor) return
+    setCursorHistory(previous => [...previous, rows.next_cursor])
+    loadView(sel, rows.next_cursor, page + 1, limit, filterValues)
+  }
+  const previousPage = () => {
+    if (page <= 1) return
+    const previousCursor = cursorHistory[page - 2] || null
+    setCursorHistory(previous => previous.slice(0, -1))
+    loadView(sel, previousCursor, page - 1, limit, filterValues)
   }
   const backupDb = async () => {
     try {
@@ -1627,26 +1666,21 @@ function DbPage() {
       URL.revokeObjectURL(url)
     } catch (e) { alert(e.response?.data?.detail || e.message) }
   }
-  const normalizedSearch = tableSearch.trim().toLowerCase()
+  const normalizedSearch = viewSearch.trim().toLowerCase()
   const filteredGroups = groups.map(g => ({
     ...g,
-    tables: (g.tables || []).filter(t => {
-      const meta = tableMeta[t] || {}
-      return !normalizedSearch || t.toLowerCase().includes(normalizedSearch) || String(meta.description || '').toLowerCase().includes(normalizedSearch)
+    view_ids: (g.view_ids || []).filter(viewId => {
+      const view = viewById[viewId] || {}
+      return !normalizedSearch || viewId.toLowerCase().includes(normalizedSearch) || String(view.description || '').toLowerCase().includes(normalizedSearch)
     }),
-  })).filter(g => g.tables.length)
-  const selectedMeta = tableMeta[sel] || rows.table_meta || {}
-  const runSql = () => {
-    api.post('/db/query', { query: sql })
-      .then(r => setSqlResult(r.data))
-      .catch(e => alert(e.response?.data?.detail || e.message))
-  }
+  })).filter(g => g.view_ids.length)
+  const limitOptions = [25, 50, 100, 200].filter(value => value <= Number(selectedMeta.max_limit || 200))
   return (
     <div>
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-bold">数据库浏览</h1>
-          <p className="text-sm text-slate-500">只读白名单表浏览，敏感列按后端策略预览或脱敏。</p>
+          <p className="text-sm text-slate-500">只读结构化视图；字段、过滤、排序、分页和脱敏策略均由后端 Registry 声明。</p>
         </div>
         <button onClick={backupDb} className="inline-flex items-center justify-center rounded-lg bg-slate-700 px-3 py-1.5 text-xs hover:bg-slate-600">下载备份</button>
       </div>
@@ -1655,22 +1689,23 @@ function DbPage() {
           <div className="relative min-w-0 md:w-80">
             <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
             <input
-              value={tableSearch}
-              onChange={e => setTableSearch(e.target.value)}
-              placeholder="搜索表"
+              value={viewSearch}
+              onChange={e => setViewSearch(e.target.value)}
+              placeholder="搜索视图"
+              aria-label="搜索数据库视图"
               className="w-full rounded-lg border border-slate-700 bg-slate-950 py-2 pl-8 pr-3 text-sm outline-none focus:border-emerald-500"
             />
           </div>
-          <div className="text-xs text-slate-500">{tables.length} 张白名单表</div>
+          <div className="text-xs text-slate-500">{views.length} 个代码登记视图</div>
         </div>
         <div className="space-y-3">
           {filteredGroups.map(group => (
-            <div key={group.key}>
+            <div key={group.group_id}>
               <div className="mb-1 text-[11px] font-medium text-slate-500">{group.label}</div>
               <div className="flex flex-wrap gap-1.5">
-                {group.tables.map(t => <button key={t} onClick={() => queryTable(t, 1, limit)}
-                  title={tableMeta[t]?.description || t}
-                  className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${sel === t ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{t}</button>)}
+                {group.view_ids.map(viewId => <button key={viewId} onClick={() => selectView(viewId)}
+                  title={viewById[viewId]?.description || viewId}
+                  className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${sel === viewId ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{viewId}</button>)}
               </div>
             </div>
           ))}
@@ -1678,40 +1713,46 @@ function DbPage() {
       </Card>
       {sel && (
         <Card className="mb-4">
+          {(selectedMeta.filters || []).length > 0 && (
+            <div className="border-b border-slate-800 p-3">
+              <div className="mb-2 text-xs font-medium text-slate-400">登记过滤器（精确匹配）</div>
+              <div className="flex flex-wrap items-end gap-2">
+                {(selectedMeta.filters || []).map(filter => (
+                  <label key={filter.filter_id} className="grid gap-1 text-xs text-slate-500">
+                    <span>{filter.filter_id}</span>
+                    <input
+                      value={filterValues[filter.filter_id] || ''}
+                      onChange={e => setFilterValues(previous => ({ ...previous, [filter.filter_id]: e.target.value }))}
+                      placeholder={filter.value_type}
+                      className="w-40 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-300 outline-none focus:border-emerald-500"
+                    />
+                  </label>
+                ))}
+                <button onClick={applyFilters} disabled={loadingView}
+                  className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-600 disabled:opacity-40">应用过滤</button>
+              </div>
+            </div>
+          )}
           <div className="flex flex-col gap-3 border-b border-slate-800 p-3 md:flex-row md:items-center md:justify-between">
             <div className="min-w-0">
               <div className="text-sm font-medium text-slate-200">{sel}</div>
-              <div className="mt-0.5 text-xs text-slate-500">{selectedMeta.description || '只读数据表'} · {rows.total || 0} rows</div>
+              <div className="mt-0.5 text-xs text-slate-500">{selectedMeta.description || '只读数据视图'} · {rows.total || 0} rows · owner {selectedMeta.owner || '-'}</div>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <select value={limit} onChange={e => queryTable(sel, 1, Number(e.target.value))}
+              <select value={limit} onChange={e => changeLimit(Number(e.target.value))}
                 className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-300">
-                {[25, 50, 100, 200].map(n => <option key={n} value={n}>{n}/页</option>)}
+                {limitOptions.map(n => <option key={n} value={n}>{n}/页</option>)}
               </select>
-              <button onClick={() => queryTable(sel, Math.max(1, page - 1), limit)} disabled={page <= 1 || loadingTable}
+              <button onClick={previousPage} disabled={page <= 1 || loadingView}
                 className="rounded-lg bg-slate-800 px-3 py-1.5 text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-40">上一页</button>
               <span className="min-w-14 text-center text-slate-500">第 {page} 页</span>
-              <button onClick={() => queryTable(sel, page + 1, limit)} disabled={!rows.has_next || loadingTable}
+              <button onClick={nextPage} disabled={!rows.has_next || loadingView}
                 className="rounded-lg bg-slate-800 px-3 py-1.5 text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-40">下一页</button>
             </div>
           </div>
-          {loadingTable ? <Spinner /> : <DbResultTable data={rows} tableName={sel} onExpand={setExpandedCell} />}
+          {loadingView ? <Spinner /> : <DbResultTable data={rows} tableName={sel} onExpand={setExpandedCell} />}
         </Card>
       )}
-      <Card className="p-4">
-        <h2 className="mb-1 text-sm font-medium text-slate-300">SQL 查询 (只读)</h2>
-        <p className="mb-2 text-xs text-slate-500">仅允许查询后端白名单表；结果会应用同一套脱敏、BLOB 占位和截断预览策略。</p>
-        <textarea value={sql} onChange={e => setSql(e.target.value)} rows={3} placeholder="SELECT ..."
-          className="mb-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-sm outline-none focus:border-emerald-500" />
-        <button onClick={runSql}
-          className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium hover:bg-emerald-500">运行</button>
-        {sqlResult && (
-          <div className="mt-3">
-            <div className="mb-1 text-xs text-slate-500">{sqlResult.row_count} rows</div>
-            <DbResultTable data={sqlResult} tableName="sql_query" onExpand={setExpandedCell} />
-          </div>
-        )}
-      </Card>
       {expandedCell && (
         <Modal wide onClose={() => setExpandedCell(null)}>
           <div className="flex items-start justify-between border-b border-slate-800 p-4">
@@ -2177,395 +2218,6 @@ function SessionSummaryBrowser({ mode }) {
   )
 }
 
-// ── Memory ──
-function MemoryPage() {
-  const [memoryTab, setMemoryTab] = useState('group')
-  const [groupId, setGroupId] = useState('')
-  const [memType, setMemType] = useState('')
-  const [overview, setOverview] = useState([])
-  const [memories, setMemories] = useState([])
-  const [overviewLoading, setOverviewLoading] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [extracting, setExtracting] = useState(false)
-  const [windowHours, setWindowHours] = useState(24)
-  const [instructions, setInstructions] = useState('')
-  const [lastExtractResult, setLastExtractResult] = useState(null)
-  const [expandedEvidence, setExpandedEvidence] = useState(null)
-  const [injectionPreview, setInjectionPreview] = useState(null)
-  const [injectionLoading, setInjectionLoading] = useState(false)
-  const [memoryUpdatingId, setMemoryUpdatingId] = useState(null)
-  const memoryLoadKeyRef = useRef('')
-
-  const loadOverview = useCallback(() => {
-    setOverviewLoading(true)
-    return api.get('/group-memories/overview')
-      .then(r => setOverview(r.data.items || []))
-      .finally(() => setOverviewLoading(false))
-  }, [])
-
-  const load = useCallback((targetGroupId = groupId) => {
-    const target = String(targetGroupId || '').trim()
-    if (!target) return Promise.resolve()
-    setLoading(true)
-    const params = memType ? { memory_type: memType } : {}
-    const loadKey = `${target}|${memType || ''}`
-    memoryLoadKeyRef.current = loadKey
-    return api.get(`/group-memories/${encodeURIComponent(target)}/items`, { params })
-      .then(r => setMemories(r.data.memories || []))
-      .catch(e => {
-        if (memoryLoadKeyRef.current === loadKey) memoryLoadKeyRef.current = ''
-        throw e
-      })
-      .finally(() => setLoading(false))
-  }, [groupId, memType])
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => { loadOverview() }, 0)
-    return () => window.clearTimeout(timer)
-  }, [loadOverview])
-
-  const exactOverviewGroup = overview.find(item => {
-    const q = groupId.trim()
-    return q && (item.group_id === q || item.raw_group_id === q || item.stream_id === q)
-  })
-
-  useEffect(() => {
-    if (!exactOverviewGroup || extracting) return
-    const loadKey = `${exactOverviewGroup.group_id}|${memType || ''}`
-    if (memoryLoadKeyRef.current === loadKey) return
-    load(exactOverviewGroup.group_id)
-  }, [exactOverviewGroup, extracting, load, memType])
-
-  const handleGroupIdChange = value => {
-    setGroupId(value)
-    setExpandedEvidence(null)
-    setLastExtractResult(null)
-    setInjectionPreview(null)
-    setMemories([])
-    memoryLoadKeyRef.current = ''
-  }
-
-  const selectGroup = item => {
-    setGroupId(item.group_id)
-    setExpandedEvidence(null)
-    setLastExtractResult(null)
-    setInjectionPreview(null)
-    load(item.group_id)
-  }
-
-  const enableInjection = async () => {
-    if (!groupId || injectionLoading) return
-    setInjectionLoading(true)
-    try {
-      const r = await api.put(`/group-memories/${encodeURIComponent(groupId)}/injection-config`, {
-        group_profile_mode: 'on',
-      })
-      setInjectionPreview({ ...(injectionPreview || {}), group_profile_mode: r.data.group_profile_mode, chat_stream_id: r.data.chat_stream_id })
-      await loadOverview()
-    } catch (e) {
-      alert(e.response?.data?.detail || e.message)
-    } finally {
-      setInjectionLoading(false)
-    }
-  }
-
-  const previewInjection = async () => {
-    if (!groupId || injectionLoading) return
-    setInjectionLoading(true)
-    try {
-      const r = await api.post(`/group-memories/${encodeURIComponent(groupId)}/injection-preview`, {
-        user_input: instructions || '当前群聊消息',
-      })
-      setInjectionPreview(r.data)
-    } catch (e) {
-      alert(e.response?.data?.detail || e.message)
-    } finally {
-      setInjectionLoading(false)
-    }
-  }
-
-  const updateMemory = async (memoryId, patch) => {
-    if (!memoryId || memoryUpdatingId) return
-    setMemoryUpdatingId(memoryId)
-    try {
-      const r = await api.patch(`/group-memories/items/${memoryId}`, patch)
-      const updated = r.data.memory
-      setMemories(items => items.map(item => item.id === memoryId ? updated : item))
-      setInjectionPreview(null)
-      await loadOverview()
-    } catch (e) {
-      alert(e.response?.data?.detail || e.message)
-    } finally {
-      setMemoryUpdatingId(null)
-    }
-  }
-
-  const editMemoryContent = memory => {
-    const content = prompt('编辑群体记忆内容', memory.content || '')
-    if (content == null) return
-    updateMemory(memory.id, { content })
-  }
-
-  const runExtract = async () => {
-    if (!groupId || extracting) return
-    setExtracting(true)
-    setLastExtractResult(null)
-    try {
-      const r = await api.post(`/group-memories/${encodeURIComponent(groupId)}/extract`, {
-        window_hours: Number(windowHours),
-        instructions,
-      })
-      setLastExtractResult(r.data)
-      if (Array.isArray(r.data.memories)) {
-        setMemories(r.data.memories)
-      }
-      const resultGroupId = r.data.group_id || groupId
-      setGroupId(resultGroupId)
-      await Promise.all([loadOverview(), load(resultGroupId)])
-    } catch (e) {
-      alert(e.response?.data?.detail || e.message)
-    } finally {
-      setExtracting(false)
-    }
-  }
-
-  const stats = {
-    groups: overview.length,
-    withMemory: overview.filter(x => Number(x.memory_count || 0) > 0).length,
-    injectable: overview.reduce((sum, x) => sum + Number(x.injectable_count || 0), 0),
-    empty: overview.filter(x => Number(x.memory_count || 0) === 0).length,
-  }
-  const filteredOverview = overview.filter(item => {
-    const q = groupId.trim().toLowerCase()
-    if (!q) return true
-    return String(item.group_id || '').toLowerCase().includes(q) ||
-      String(item.session_name || '').toLowerCase().includes(q) ||
-      String(item.raw_group_id || '').toLowerCase().includes(q)
-  })
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-white">群体记忆</h1>
-          <p className="mt-1 text-xs text-slate-500">查看群聊记忆覆盖，并按 session_id 浏览近期摘要与长期摘要。</p>
-        </div>
-        <button onClick={loadOverview}
-          className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50"
-          disabled={overviewLoading}>
-          <RefreshCw className={`h-3.5 w-3.5 ${overviewLoading ? 'animate-spin' : ''}`} />
-          刷新概览
-        </button>
-      </div>
-
-      <div className="flex rounded-lg border border-slate-800 bg-slate-950 p-1">
-        {[
-          ['group', '群体记忆'],
-          ['recent', '近期摘要'],
-          ['long', '长期摘要'],
-        ].map(([key, label]) => (
-          <button key={key} onClick={() => setMemoryTab(key)}
-            className={`rounded-md px-3 py-1.5 text-xs transition-colors ${memoryTab === key ? 'bg-emerald-500/15 text-emerald-300' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'}`}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {memoryTab === 'group' ? (
-        <>
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-        <MiniStat label="已发现群" value={stats.groups} />
-        <MiniStat label="已有记忆" value={stats.withMemory} tone="blue" />
-        <MiniStat label="可注入项" value={stats.injectable} tone="emerald" />
-        <MiniStat label="待提取群" value={stats.empty} tone="amber" />
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-        <Card className="min-h-[520px] overflow-hidden">
-          <div className="border-b border-slate-800 p-3">
-            <label className="block text-[11px] font-medium text-slate-400">
-              搜索或输入 group_id
-              <input value={groupId} onChange={e => handleGroupIdChange(e.target.value)} placeholder="group_123456 / 群名"
-                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
-            </label>
-          </div>
-          <div className="max-h-[620px] overflow-y-auto">
-            {overviewLoading ? <Spinner /> : filteredOverview.length === 0 ? (
-              <div className="px-4 py-10 text-center text-xs text-slate-600">没有匹配的群</div>
-            ) : filteredOverview.map(item => {
-              const selected = item.group_id === groupId || item === exactOverviewGroup
-              return (
-                <button key={item.group_id} onClick={() => selectGroup(item)}
-                  className={`w-full border-b border-slate-800/70 px-3 py-3 text-left transition-colors ${selected ? 'bg-emerald-500/10' : 'hover:bg-slate-800/50'}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-slate-100">{item.session_name || item.group_id}</div>
-                      <div className="mt-0.5 text-[11px] text-slate-500">{item.group_id}</div>
-                    </div>
-                    <Badge tone={Number(item.injectable_count || 0) > 0 ? 'emerald' : Number(item.memory_count || 0) > 0 ? 'blue' : 'amber'}>
-                      {item.memory_count || 0}
-                    </Badge>
-                  </div>
-                  <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-slate-500">
-                    <span>日志 {item.log_count || 0}</span>
-                    <span>注入 {item.injectable_count || 0}</span>
-                    <span>{item.group_profile_mode || 'off'}</span>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </Card>
-
-        <div className="min-w-0 space-y-4">
-          <Card className="p-3">
-            <div className="grid gap-3 lg:grid-cols-[1fr_140px_140px_auto]">
-              <label className="block text-[11px] font-medium text-slate-400">
-                当前群
-                <input value={groupId} onChange={e => handleGroupIdChange(e.target.value)} placeholder="group_id"
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
-              </label>
-              <label className="block text-[11px] font-medium text-slate-400">
-                类型
-                <select value={memType} onChange={e => setMemType(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500">
-                  <option value="">全部类型</option>
-                  {['topic', 'slang', 'style', 'relationship', 'event', 'preference'].map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </label>
-              <label className="block text-[11px] font-medium text-slate-400">
-                提取窗口
-                <select value={windowHours} onChange={e => setWindowHours(Number(e.target.value))}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500">
-                  <option value={24}>24 小时</option>
-                  <option value={168}>7 天</option>
-                  <option value={720}>30 天</option>
-                  <option value={0}>全部历史</option>
-                </select>
-              </label>
-              <div className="flex items-end gap-2">
-                <button onClick={() => load()} disabled={!groupId || loading}
-                  className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50">查询</button>
-                <button onClick={enableInjection} disabled={!groupId || injectionLoading}
-                  className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50">一键开启注入</button>
-                <button onClick={previewInjection} disabled={!groupId || injectionLoading}
-                  className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50">模拟注入</button>
-                <button onClick={runExtract} disabled={!groupId || extracting}
-                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50">
-                  {extracting ? '提取中...' : '提取记忆'}
-                </button>
-              </div>
-            </div>
-            <label className="mt-3 block text-[11px] font-medium text-slate-400">
-              提取指引
-              <input value={instructions} onChange={e => setInstructions(e.target.value)}
-                placeholder="可选，例如：只提取稳定事实，忽略临时玩笑"
-                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
-            </label>
-            {lastExtractResult && (
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-5">
-                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-400">原始 {lastExtractResult.raw_count}</div>
-                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-400">清洗 {lastExtractResult.deduped_count}</div>
-                <div className="rounded-lg bg-slate-950 px-3 py-2 text-emerald-300">新增 {lastExtractResult.stats?.new || 0}</div>
-                <div className="rounded-lg bg-slate-950 px-3 py-2 text-blue-300">更新 {lastExtractResult.stats?.updated || 0}</div>
-                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-300">可注入 {lastExtractResult.injectable_count}</div>
-              </div>
-            )}
-            {injectionPreview && (
-              <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={injectionPreview.group_profile_mode === 'on' ? 'emerald' : injectionPreview.group_profile_mode === 'preview' ? 'blue' : 'slate'}>
-                    注入 {injectionPreview.group_profile_mode || 'off'}
-                  </Badge>
-                  <span className="text-slate-400">selected {(injectionPreview.group_memory_ids || []).length}</span>
-                  <span className="text-slate-500">chars {injectionPreview.group_memory_context_chars || 0}</span>
-                  {injectionPreview.chat_stream_id && <span className="text-slate-500">{injectionPreview.chat_stream_id}</span>}
-                </div>
-                {Array.isArray(injectionPreview.group_memory_ids) && injectionPreview.group_memory_ids.length > 0 && (
-                  <div className="mt-2 text-slate-400">注入 ID: {injectionPreview.group_memory_ids.join(', ')}</div>
-                )}
-                {injectionPreview.group_profile_mode === 'preview' && (
-                  <div className="mt-2 text-blue-300">preview 模式只展示预览结果，不会真实注入 prompt。</div>
-                )}
-                {Array.isArray(injectionPreview.group_memory_skipped) && injectionPreview.group_memory_skipped.length > 0 && (
-                  <div className="mt-2 text-slate-500">
-                    跳过: {injectionPreview.group_memory_skipped.slice(0, 5).map(x => `${x.id}:${x.reason}`).join(' / ')}
-                  </div>
-                )}
-                {injectionPreview.group_memory_context && (
-                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded border border-slate-800 bg-slate-900 p-2 text-[11px] leading-4 text-slate-300">
-                    {injectionPreview.group_memory_context}
-                  </pre>
-                )}
-              </div>
-            )}
-          </Card>
-
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-medium text-slate-200">记忆列表</h2>
-              <p className="mt-1 text-[11px] text-slate-500">当前筛选结果 {memories.length} 条</p>
-            </div>
-            {lastExtractResult && <Badge tone="emerald">本次可注入 {lastExtractResult.injectable_count}</Badge>}
-          </div>
-
-          {loading ? <Spinner /> : memories.length === 0 ? <div className="rounded-lg border border-slate-800 py-16 text-center text-sm text-slate-600">{groupId ? '暂无记忆；提取后会显示在这里，也可以点查询刷新' : '从左侧选择群或输入 group_id'}</div> : (
-            <Card className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead><tr className="border-b border-slate-800 text-left text-slate-500">
-                  <th className="px-3 py-2">id</th><th className="px-3 py-2">类型</th><th className="px-3 py-2">内容</th><th className="px-3 py-2">confidence</th><th className="px-3 py-2">证据</th><th className="px-3 py-2">decay</th><th className="px-3 py-2">来源</th><th className="px-3 py-2">策略</th><th className="px-3 py-2">状态</th><th className="px-3 py-2">更新</th><th className="px-3 py-2">操作</th>
-                </tr></thead>
-                <tbody>
-                  {memories.map(m => (
-                    <tr key={m.id} className="border-b border-slate-800/50 align-top">
-                      <td className="px-3 py-2 text-slate-500">{m.id}</td>
-                      <td className="px-3 py-2"><Badge>{m.memory_type}</Badge></td>
-                      <td className="max-w-[520px] px-3 py-2 text-slate-200">{m.content}</td>
-                      <td className="px-3 py-2">{Number(m.confidence).toFixed(2)}</td>
-                      <td className="px-3 py-2"><button onClick={() => setExpandedEvidence(expandedEvidence === m.id ? null : m.id)} className="text-xs text-slate-500 underline hover:text-emerald-400">{m.evidence_count}</button></td>
-                      <td className="px-3 py-2">{Number(m.decay_score).toFixed(2)}</td>
-                      <td className="px-3 py-2 text-slate-500">{m.source}</td>
-                      <td className="px-3 py-2"><Badge tone={m.inject_policy === 'auto' ? 'emerald' : m.inject_policy === 'manual_only' ? 'blue' : 'slate'}>{m.inject_policy || 'auto'}</Badge></td>
-                      <td className="px-3 py-2">{m.status === 'active' ? <Badge tone="emerald">active</Badge> : m.status === 'archived' ? <Badge tone="slate">archived</Badge> : <Badge tone="amber">{m.status}</Badge>}</td>
-                      <td className="px-3 py-2 text-xs text-slate-500">{m.updated_at}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap gap-1">
-                          <button onClick={() => editMemoryContent(m)} disabled={memoryUpdatingId === m.id}
-                            className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800 disabled:opacity-50">编辑</button>
-                          {m.status === 'disabled' ? (
-                            <button onClick={() => updateMemory(m.id, { status: 'active', inject_policy: 'auto', disabled_reason: '' })} disabled={memoryUpdatingId === m.id}
-                              className="rounded border border-emerald-700 px-2 py-1 text-[11px] text-emerald-300 hover:bg-emerald-950 disabled:opacity-50">恢复</button>
-                          ) : (
-                            <button onClick={() => updateMemory(m.id, { status: 'disabled', inject_policy: 'never', disabled_reason: 'web_admin_disabled' })} disabled={memoryUpdatingId === m.id}
-                              className="rounded border border-red-800 px-2 py-1 text-[11px] text-red-300 hover:bg-red-950 disabled:opacity-50">禁用</button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
-          )}
-          {expandedEvidence && (() => {
-            const m = memories.find(x => x.id === expandedEvidence)
-            return m ? (
-              <Card className="p-3">
-                <div className="mb-2 text-xs text-slate-500">证据日志 ID 列表</div>
-                <JsonBlock value={m.evidence_log_ids_json} className="max-h-48" />
-              </Card>
-            ) : null
-          })()}
-        </div>
-      </div>
-        </>
-      ) : (
-        <SessionSummaryBrowser mode={memoryTab} />
-      )}
-    </div>
-  )
-}
-
 // ── Persona ──
 function PersonaPage() {
   const [users, setUsers] = useState([])
@@ -2885,11 +2537,10 @@ export default function App() {
           <Route path="/stickers" element={<StickersPage />} />
           <Route path="/stickers/duplicates" element={<StickerDedupPage />} />
           <Route path="/blocks" element={<BlocksPage />} />
-          <Route path="/tools" element={<ToolsPage />} />
-          <Route path="/sandbox" element={<SandboxPage />} />
           <Route path="/configs" element={<SessionConfigsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/session-summaries/recent" element={<SessionSummaryBrowser mode="recent" />} />
+          <Route path="/session-summaries/long" element={<SessionSummaryBrowser mode="long" />} />
           <Route path="/persona" element={<PersonaPage />} />
           <Route path="/generated-images" element={<GeneratedImagesPage />} />
           <Route path="/reply-eval" element={<ReplyEvalPage />} />
@@ -2899,16 +2550,27 @@ export default function App() {
           <Route path="/db" element={<DbPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />
-          <Route path="/prompt-preview" element={<EffectivePromptPreviewPage />} />
           <Route path="/prompt-v2-templates" element={<Navigate to="/prompt-templates" replace />} />
-          <Route path="/prompt-templates" element={<PromptV2TemplatesPage />} />
           <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />
           <Route path="/agent-runs" element={<AgentRunsPage />} />
           <Route path="/llm-api-logs" element={<LLMApiLogsPage />} />
           <Route path="/tool-calls" element={<ToolCallsPage />} />
-          <Route path="/models" element={<ModelsPage />} />
           <Route path="/web-search" element={<WebSearchPage />} />
           <Route path="/audit" element={<AuditPage />} />
+          {WEB_FEATURE_ROUTES.map(feature => {
+            const FeatureComponent = feature.component
+            return (
+              <Route
+                key={feature.featureId}
+                path={feature.route}
+                element={(
+                  <React.Suspense fallback={<Spinner />}>
+                    <FeatureComponent />
+                  </React.Suspense>
+                )}
+              />
+            )
+          })}
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Layout>

@@ -50,6 +50,22 @@ jobs:
       - name: 检查架构边界
         run: python scripts/check_architecture.py
 
+      - name: 检查 OpenAPI 与生成客户端漂移
+        run: python scripts/generate_openapi_client.py --check
+
+      - name: 检查 Release Impact Golden
+        run: python scripts/build_release_impact.py --check-golden
+
+      - name: 检查 Verification Plan Golden
+        run: python scripts/build_verification_plan.py --check-golden
+
+      - name: 检查决策规则清单漂移
+        continue-on-error: true
+        run: python scripts/audit_decision_rules.py --check
+
+      - name: 检查语义 Task SLO Manifest 漂移
+        run: python scripts/build_task_slo_manifest.py --check
+
       - name: 检查 Python 致命静态错误
         run: python -m ruff check --select E9,F63,F7,F82 .
 
@@ -65,6 +81,9 @@ jobs:
         run: >-
           python -c 'from core.prompt_v2.template_registry import
           init_prompt_v2_runtime_dir; init_prompt_v2_runtime_dir()'
+
+      - name: 检查架构行为 Golden 漂移
+        run: python scripts/build_behavior_baseline.py --check
 
       - name: 运行完整测试
         run: python -m pytest tests/ -v

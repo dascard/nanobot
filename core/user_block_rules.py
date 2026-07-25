@@ -5,28 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from core.content_rules import (
+    ContentRuleAction,
+    ContentRuleEngine,
+    ContentRuleInput,
+    user_block_rule_descriptor,
+)
 from core.database import UserBlockRule
 from core.group_runtime.ids import normalize_group_session_id
-
-
-def _matches_user_block_rule(
-    rule: Any,
-    *,
-    target_type: str,
-    group_id: str,
-    group_id_normalizer: Callable[[str], str],
-) -> bool:
-    rule_target_type = getattr(rule, "target_type", "")
-    if rule_target_type not in (target_type, "all"):
-        return False
-
-    rule_group_id = getattr(rule, "group_id", "")
-    if rule_target_type == "group" and rule_group_id:
-        norm_group = group_id_normalizer(group_id) if group_id else ""
-        if norm_group and group_id_normalizer(str(rule_group_id)) != norm_group:
-            return False
-
-    return True
 
 
 def is_user_blocked(
@@ -42,12 +28,29 @@ def is_user_blocked(
         rule_model.user_id == user_id,
         rule_model.enabled == 1,
     ).all()
-    return any(
-        _matches_user_block_rule(
-            rule,
-            target_type=target_type,
-            group_id=group_id,
-            group_id_normalizer=group_id_normalizer,
+    if not rules:
+        return False
+    try:
+        descriptors = tuple(
+            user_block_rule_descriptor(
+                rule,
+                index=index,
+                group_id_normalizer=group_id_normalizer,
+            )
+            for index, rule in enumerate(rules)
         )
-        for rule in rules
+    except (TypeError, ValueError):
+        return False
+    normalized_group_id = (
+        group_id_normalizer(group_id)
+        if target_type == "group" and group_id
+        else ""
     )
+    result = ContentRuleEngine(descriptors).evaluate(
+        ContentRuleInput(
+            user_id=user_id,
+            chat_type=target_type,
+            group_id=normalized_group_id,
+        )
+    )
+    return ContentRuleAction.BLOCK in result.actions

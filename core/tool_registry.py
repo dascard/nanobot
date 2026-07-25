@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Mapping
 
+from core.registry import RegistryBuilder, RegistrySnapshot
+
 
 @dataclass(frozen=True)
 class ToolDef:
@@ -55,16 +57,70 @@ class ToolDescriptor:
     def supports_background(self) -> bool:
         return self.execution_policy == "foreground_or_background"
 
+    @property
+    def registry_namespace(self) -> str:
+        return "tool"
+
+    @property
+    def registry_id(self) -> str:
+        return self.name
+
+    @property
+    def registry_dependencies(self) -> tuple[str, ...]:
+        return ()
+
+    def registry_payload(self) -> Mapping[str, object]:
+        return {
+            "name": self.name,
+            "definition": {
+                "label": self.definition.label,
+                "category": self.definition.category,
+                "risk_level": self.definition.risk_level,
+                "private_default": self.definition.private_default,
+                "group_default": self.definition.group_default,
+                "description": self.definition.description,
+                "force_enabled": self.definition.force_enabled,
+                "force_disabled": self.definition.force_disabled,
+                "force_disabled_group": (
+                    self.definition.force_disabled_group
+                ),
+                "supports_background": (
+                    self.definition.supports_background
+                ),
+            },
+            "availability_policy": self.availability_policy,
+            "execution_policy": self.execution_policy,
+            "trace_policy": self.trace_policy,
+            "prompt_template_keys": list(self.prompt_template_keys),
+            "prompt_source_precedence": list(
+                self.prompt_source_precedence
+            ),
+            "prompt_editable": self.prompt_editable,
+            "owner_module": self.owner_module,
+            "domain": self.domain,
+            "framework_owned": self.framework_owned,
+        }
+
 
 class ToolDescriptorRegistry:
     """启动后只读的工具描述符快照。"""
 
     def __init__(self, descriptors: Mapping[str, ToolDescriptor]):
         self._descriptors = MappingProxyType(dict(descriptors))
+        builder = RegistryBuilder[ToolDescriptor]("tool")
+        for name in sorted(self._descriptors):
+            builder.register(self._descriptors[name])
+        self._registry_snapshot: RegistrySnapshot[ToolDescriptor] = (
+            builder.freeze()
+        )
 
     @property
     def frozen(self) -> bool:
         return True
+
+    @property
+    def registry_snapshot(self) -> RegistrySnapshot[ToolDescriptor]:
+        return self._registry_snapshot
 
     @classmethod
     def from_metadata(
@@ -158,7 +214,7 @@ class ToolDescriptorRegistry:
         return self._descriptors.get(str(name or "").strip())
 
     def values(self) -> tuple[ToolDescriptor, ...]:
-        return tuple(self._descriptors[name] for name in sorted(self._descriptors))
+        return tuple(self._registry_snapshot)
 
     def snapshot(self) -> Mapping[str, ToolDescriptor]:
         return self._descriptors

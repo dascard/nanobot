@@ -1,3 +1,4 @@
+import hashlib
 import json
 import time
 from datetime import datetime
@@ -245,23 +246,33 @@ def test_group_memory_case_results_include_time_and_metadata(client, tmp_path, m
     db_path = tmp_path / "benchmark.db"
     _engine, db = _file_db(db_path)
     _seed_memory_case(db)
+    content = "小说《灵歌》完结与番外讨论"
+    reviewed_at = _db_time(2026, 5, 27, 21, 30, 0)
     db.add(GroupMemory(
         id=1,
         group_id="group_1",
         memory_type="topic",
-        content="小说《灵歌》完结与番外讨论",
+        content=content,
         content_hash="gm1",
         evidence_log_ids_json="[11, 12]",
         confidence=0.8,
         evidence_count=2,
         first_seen=_db_time(2026, 5, 1, 10, 0, 0),
         last_seen=_db_time(2026, 5, 27, 21, 0, 0),
-        updated_at=_db_time(2026, 5, 27, 21, 30, 0),
+        updated_at=reviewed_at,
         decay_score=0.9,
         status="active",
         inject_policy="auto",
         source="group_analysis",
         injected_count=3,
+        approval_source="human",
+        governance_mode="human_managed",
+        approved_content_hash=hashlib.sha256(
+            f"{content}\0".encode("utf-8")
+        ).hexdigest(),
+        human_reviewer_id="rag-benchmark-reviewer",
+        human_reviewed_at=reviewed_at,
+        human_action="accept",
     ))
     db.commit()
     db.close()

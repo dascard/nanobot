@@ -11,7 +11,12 @@
 import logging
 
 from core.database import ChatLog, MemoryDigest, SessionLocal
-from core.daily_digest import _format_log_line, _build_progressive_layers, _to_day
+from core.daily_digest import (
+    _build_progressive_layers,
+    _format_log_line,
+    _normalize_chatlog_session_id,
+    _to_day,
+)
 
 logger = logging.getLogger("nanobot.data_clean")
 
@@ -24,11 +29,10 @@ def _regenerate_digest(logs: list[ChatLog]) -> tuple[str, str, str]:
 
 
 def _normalize_session(log: ChatLog) -> str:
-    sid = (log.session_id or "").strip()
-    uid = (log.user_id or "").strip()
-    if uid.startswith("group_"):
-        return sid if sid.startswith("group_") else uid
-    return sid
+    return _normalize_chatlog_session_id(
+        log.session_id,
+        log.user_id,
+    )
 
 
 def clean_memory_digests(dry_run: bool = True) -> dict:

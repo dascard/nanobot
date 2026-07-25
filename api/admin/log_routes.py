@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.admin.common import verify_admin
+from api.admin.contract_models import AuditLogListResponse
+from api.endpoint_contracts import standard_error_responses
 from core.database import AdminAuditLog, get_db
 
 logger = logging.getLogger("nanobot.admin")
@@ -42,7 +44,12 @@ def _data_dir() -> str:
     return os.path.join(_project_root(), "data")
 
 
-@router.get("/audit-logs")
+@router.get(
+    "/audit-logs",
+    operation_id="adminAuditLogsList",
+    response_model=AuditLogListResponse,
+    responses=standard_error_responses(401, 422),
+)
 def list_audit_logs(
     page: int = 1, limit: int = 50,
     action: str = "", target_type: str = "", since: str = "",

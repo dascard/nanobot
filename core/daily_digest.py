@@ -33,8 +33,14 @@ from app.memory_digest.jobs import (
 from app.memory_digest.llm_builder import build_memory_digest_with_llm, build_memory_digest_with_llm_async
 from app.memory_digest.renderer import render_recall_card
 from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
+from core.chat_stream_identity import (
+    identity_storage_aliases,
+    parse_compatibility_chat_stream_identity,
+    resolve_chat_stream_identity,
+)
 from core.context_builder import sanitize_prompt_text
 from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
+from core.group_runtime.ids import normalize_group_session_id
 from core.outbound_transport import (
     DeliveryOutcome,
     deliver_qq_push_with_session,
@@ -50,7 +56,6 @@ from core.scheduled_task_outbound import (
 )
 from core.settings_service import settings
 from core.time_utils import db_now_naive
-
 logger = logging.getLogger("nanobot.daily_digest")
 
 # QQbot / NoneBot 侧默认监听 8082；若部署环境不同，可通过环境变量覆盖。
@@ -142,17 +147,21 @@ def _scheduled_task_metadata(task: ScheduledTask) -> dict:
 
 
 def _normalize_group_session_id(group_id: str) -> str:
-    group_id = str(group_id or "").strip()
-    if not group_id:
-        return ""
-    return group_id if group_id.startswith("group_") else f"group_{group_id}"
+    return normalize_group_session_id(group_id)
 
 
 def _normalize_chatlog_session_id(session_id: str, user_id: str = "") -> str:
     sid = (session_id or "").strip()
     uid = (user_id or "").strip()
-    if uid.startswith("group_"):
-        return sid if sid.startswith("group_") else uid
+    session_identity = parse_compatibility_chat_stream_identity(sid)
+    user_identity = parse_compatibility_chat_stream_identity(uid)
+    if (
+        session_identity is not None
+        and session_identity.chat_type == "group"
+    ):
+        return session_identity.legacy_runtime_session_id
+    if user_identity is not None and user_identity.chat_type == "group":
+        return user_identity.legacy_runtime_session_id
     return sid
 
 
@@ -160,19 +169,21 @@ def _session_filter_aliases(session_id: str | None) -> set[str]:
     sid = str(session_id or "").strip()
     if not sid:
         return set()
-    aliases = {sid}
-    if sid.startswith("group_"):
-        raw = sid.removeprefix("group_")
-        if raw:
-            aliases.add(raw)
-    elif sid.isdigit():
-        aliases.add(f"group_{sid}")
-    return aliases
+    identity = parse_compatibility_chat_stream_identity(sid)
+    if identity is None:
+        return {sid}
+    return set(identity_storage_aliases(
+        identity,
+        include_raw_group_id=identity.chat_type == "group",
+    ))
 
 
 def _group_push_target_id(session_id: str) -> str:
-    session_id = _normalize_group_session_id(session_id)
-    return session_id.removeprefix("group_")
+    return resolve_chat_stream_identity(
+        platform="qq",
+        chat_type="group",
+        session_id=session_id,
+    ).external_session_id
 
 
 _HTML_SIGNATURES = ("<!doctype", "<html", "<article", "<div class=", "```html")
@@ -1386,10 +1397,10 @@ async def push_envelope_to_qq_outcome_with_session(
 
 
 async def _generate_task_message(task: ScheduledTask) -> str | None:
-    """通过 KT Agent 执行定时任务，让模型拥有真实工具调用能力。"""
-    from nanobot_kt.bridge import NanobotBridge
+    """通过隔离 Agent Gateway 执行定时任务，让模型拥有真实工具调用能力。"""
+    from core.agent_runtime.gateway import create_isolated_agent_gateway
 
-    bridge = NanobotBridge()
+    bridge = create_isolated_agent_gateway()
     try:
         await bridge.start()
         response = await asyncio.wait_for(

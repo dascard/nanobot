@@ -6,21 +6,20 @@ from core.time_utils import db_now_naive
 from ..schema import NewsItem, fallback_digest
 
 
-CATEGORY_MAP = {
-    "openai_news": "模型发布", "huggingface_blog": "开源/工具",
-    "mit_ai": "研究/AI", "techcrunch_ai": "行业/AI",
-    "theverge_ai": "消费AI", "juya_ai_daily": "每日汇总",
-    "Juya AI Daily": "每日汇总", "deepseek_news": "模型/API",
-    "qwen_blog": "模型发布", "mistral_news": "模型发布",
-    "anthropic_news": "模型发布", "google_deepmind_news": "研究/模型",
-    "arxiv_ai": "AI论文", "arxiv_cl": "NLP论文",
+SOURCE_GROUP_LABEL = {
+    "core_provider": "官方",
+    "core_platform": "平台",
+    "research": "研究",
+    "ai_media": "媒体",
+    "curated": "策展",
+    "community": "社区",
 }
-
-SOURCE_GROUP_LABEL = {"official": "官方", "research": "研究", "media": "媒体", "curated": "策展", "community": "社区"}
 
 
 def _item_label(item):
-    return CATEGORY_MAP.get(item.source_name, SOURCE_GROUP_LABEL.get("official" if item.trust > 0.85 else "media", "资讯"))
+    if item.category_hint:
+        return "/".join(item.category_hint[:2])
+    return SOURCE_GROUP_LABEL.get(item.source_group, "资讯")
 
 
 def _has_cjk(text: str) -> bool:
@@ -47,14 +46,11 @@ def _top_story_score(item: NewsItem) -> int:
         score += 4
     elif item.published_at:
         score += 1
-    if item.source_name in {"openai_news", "deepseek_news", "qwen_blog", "anthropic_news", "mistral_news", "Juya AI Daily", "juya_ai_daily"}:
+    if item.top_story_eligible:
         score += 3
     if _has_cjk(text):
         score += 2
-    if re.search(r"(发布|上线|更新|开源|API|Codex|DeepSeek|Qwen|Claude|Gemini|OpenAI)", text, re.I):
-        score += 2
-    if re.search(r"(Mastering|Techniques|Visibility|Scheduling)", text, re.I):
-        score -= 2
+    score += round(item.relevance * 2)
     return score
 
 

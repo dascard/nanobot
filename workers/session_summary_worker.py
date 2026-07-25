@@ -12,7 +12,13 @@ from typing import Any
 from uuid import uuid4
 
 from app.session_memory import config
-from app.session_memory.jobs import claim_summary_job, fetch_pending_summary_jobs, recover_stale_running_jobs
+from app.session_memory.jobs import (
+    SessionSummaryJobLease,
+    claim_summary_job,
+    fetch_pending_summary_jobs,
+    recover_stale_running_jobs,
+    session_summary_job_lease,
+)
 from app.session_memory.llm_summarizer import (
     process_claimed_session_summary_job_short_transactions,
     process_claimed_session_summary_job_short_transactions_async,
@@ -47,19 +53,23 @@ def _ensure_schema_ready() -> None:
     _schema_ready = True
 
 
-def _claim_next_job(*, owner: str, limit: int | None = None) -> tuple[int | None, int]:
+def _claim_next_job(
+    *,
+    owner: str,
+    limit: int | None = None,
+) -> tuple[SessionSummaryJobLease | None, int]:
     db = SessionLocal()
     try:
         recovered = recover_stale_running_jobs(db, limit=limit)
         jobs = fetch_pending_summary_jobs(db, limit=limit)
-        claimed_id: int | None = None
+        claimed_lease: SessionSummaryJobLease | None = None
         for job in jobs:
             claimed = claim_summary_job(db, int(job.id or 0), owner=owner)
             if claimed is not None:
-                claimed_id = int(claimed.id or 0)
+                claimed_lease = session_summary_job_lease(claimed)
                 break
         db.commit()
-        return claimed_id, recovered
+        return claimed_lease, recovered
     except Exception:
         db.rollback()
         raise
@@ -78,20 +88,19 @@ def run_once(
     max_jobs = max(1, int(limit or config.SESSION_SUMMARY_JOB_BATCH_SIZE))
     stats = {"processed": 0, "done": 0, "failed": 0, "recovered": 0}
     while stats["processed"] < max_jobs:
-        job_id, recovered = _claim_next_job(
+        lease, recovered = _claim_next_job(
             owner=resolved_owner,
             limit=max_jobs,
         )
         stats["recovered"] += recovered
-        if not job_id:
+        if lease is None:
             break
 
         stats["processed"] += 1
         ok = process_claimed_session_summary_job_short_transactions(
             SessionLocal,
-            job_id=job_id,
+            lease=lease,
             summarizer=summarizer,
-            owner=resolved_owner,
         )
         if ok:
             stats["done"] += 1
@@ -111,20 +120,19 @@ async def run_once_async(
     max_jobs = max(1, int(limit or config.SESSION_SUMMARY_JOB_BATCH_SIZE))
     stats = {"processed": 0, "done": 0, "failed": 0, "recovered": 0}
     while stats["processed"] < max_jobs:
-        job_id, recovered = _claim_next_job(
+        lease, recovered = _claim_next_job(
             owner=resolved_owner,
             limit=max_jobs,
         )
         stats["recovered"] += recovered
-        if not job_id:
+        if lease is None:
             break
 
         stats["processed"] += 1
         ok = await process_claimed_session_summary_job_short_transactions_async(
             SessionLocal,
-            job_id=job_id,
+            lease=lease,
             summarizer=summarizer,
-            owner=resolved_owner,
         )
         if ok:
             stats["done"] += 1
@@ -206,6 +214,15 @@ def run_until_stopped(
 
 
 def main() -> None:
+    from bootstrap.model_runtime import (
+        start_model_runtime,
+        stop_model_runtime,
+    )
+    from core.telemetry.runtime import (
+        start_telemetry_runtime,
+        stop_telemetry_runtime,
+    )
+
     parser = argparse.ArgumentParser(description="Nanobot session summary worker")
     parser.add_argument("--loop", action="store_true", help="常驻轮询 pending session summary jobs")
     parser.add_argument("--interval", type=float, default=10.0, help="loop 模式轮询间隔秒数")
@@ -214,11 +231,25 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
-    if args.loop:
-        run_forever(owner=args.owner, limit=args.limit, interval=args.interval)
-        return
-    result = _run_coroutine_in_new_loop(run_once_async(owner=args.owner, limit=args.limit))
-    logger.info("session summary worker once: %s", result)
+    telemetry_handle = start_telemetry_runtime()
+    try:
+        start_model_runtime()
+        try:
+            if args.loop:
+                run_forever(
+                    owner=args.owner,
+                    limit=args.limit,
+                    interval=args.interval,
+                )
+                return
+            result = _run_coroutine_in_new_loop(
+                run_once_async(owner=args.owner, limit=args.limit)
+            )
+            logger.info("session summary worker once: %s", result)
+        finally:
+            stop_model_runtime()
+    finally:
+        stop_telemetry_runtime(telemetry_handle)
 
 
 if __name__ == "__main__":

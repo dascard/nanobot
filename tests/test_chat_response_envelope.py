@@ -46,6 +46,7 @@ def test_proxy_chat_returns_standard_envelope_and_filtered_reply_meta(client, mo
     assert data["meta"]["session_id"] == "private_envelope_user"
     assert data["meta"]["platform"] == "web"
     assert data["meta"]["chat_type"] == "private"
+    assert data["meta"]["chat_stream_id"] == "web:envelope_user:private"
     assert data["meta"]["unprocessed_logs"] >= 0
 
 
@@ -55,13 +56,22 @@ def test_proxy_chat_no_reply_returns_empty_standard_envelope(client, monkeypatch
     class NoReplyGate:
         async def classify(self, *args, **kwargs):
             return PrivateDecision(
-                "no_reply",
-                "unit_test_no_reply",
-                1.0,
-                "unit_test",
+                action="no_reply",
+                effort="short",
+                intent="other",
+                response_mode="none",
+                confidence=1.0,
+                parse_quality="schema_valid",
+                error_type=None,
+                conflicting_signals=(),
+                material_state="none",
+                reason_code="unit_test_no_reply",
+                contract_version="private_decision_v2",
+                task_run_id="taskrun_unit_test",
                 complexity=0,
-                effort="silent",
-                runtime_preset="none",
+                timing_scoring={"stage": "unit_test"},
+                policy_mode="active",
+                policy_source="unit_test",
             )
 
     monkeypatch.setattr("core.private_timing.get_private_gate", lambda: NoReplyGate())

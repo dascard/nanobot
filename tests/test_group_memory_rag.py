@@ -6,6 +6,17 @@ def _local_now() -> datetime:
     return datetime.now()  # noqa: DTZ005
 
 
+def _human_governance():
+    return {
+        "approval_source": "human",
+        "governance_mode": "human_managed",
+        "approved_content_hash": "a" * 64,
+        "human_reviewer_id": "admin-1",
+        "human_reviewed_at": _local_now(),
+        "human_action": "create",
+    }
+
+
 class FixedGroupReranker:
     def __init__(self, scores):
         self.scores = scores
@@ -41,6 +52,7 @@ def _memory(db, **kwargs):
         "status": "active",
         "inject_policy": "auto",
         "last_seen": _local_now(),
+        **_human_governance(),
     }
     defaults.update(kwargs)
     row = GroupMemory(**defaults)
@@ -106,6 +118,43 @@ def test_old_but_relevant_memory_can_be_selected(db_session):
     )
 
     assert old.id in result.selected_ids
+
+
+def test_group_memory_retrieval_isolated_by_canonical_platform(db_session):
+    from app.group_memory.retrieval_service import (
+        GroupMemoryRetrievalService,
+    )
+
+    qq = _memory(
+        db_session,
+        chat_stream_id="qq:shared:group",
+        group_id="group_shared",
+        content="共同主题：本地模型量化",
+        content_hash="gm-platform-qq",
+    )
+    web = _memory(
+        db_session,
+        chat_stream_id="web:shared:group",
+        group_id="web:shared:group",
+        content="共同主题：本地模型量化",
+        content_hash="gm-platform-web",
+    )
+    db_session.commit()
+
+    service = GroupMemoryRetrievalService(db_session)
+    qq_result = service.select(
+        group_id="shared",
+        platform="qq",
+        current_user_input="本地模型量化",
+    )
+    web_result = service.select(
+        group_id="shared",
+        platform="web",
+        current_user_input="本地模型量化",
+    )
+
+    assert qq_result.selected_ids == [qq.id]
+    assert web_result.selected_ids == [web.id]
 
 
 def test_disabled_or_manual_memory_never_injected(db_session):

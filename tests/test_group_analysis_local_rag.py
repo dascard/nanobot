@@ -66,7 +66,7 @@ def _messages(count=20, *, keyword_every=1):
 
 
 def test_group_analysis_reranks_bundles_before_neighbor_expansion():
-    from creatures.nanobot.prompts.skills.group_analysis.local_rag import select_group_analysis_context
+    from app.group_analysis.local_rag import select_group_analysis_context
 
     messages = _messages(12, keyword_every=1)
     reranker = IdentityRerankerProvider({
@@ -94,7 +94,7 @@ def test_group_analysis_reranks_bundles_before_neighbor_expansion():
 
 def test_group_analysis_builds_temporary_bundles_not_index_items(db_session):
     from core.database import SemanticIndexItem
-    from creatures.nanobot.prompts.skills.group_analysis.local_rag import select_group_analysis_context
+    from app.group_analysis.local_rag import select_group_analysis_context
 
     select_group_analysis_context(_messages(30), query="RAG", bundle_size=5)
 
@@ -102,7 +102,7 @@ def test_group_analysis_builds_temporary_bundles_not_index_items(db_session):
 
 
 def test_group_analysis_neighbor_expansion_preserves_context():
-    from creatures.nanobot.prompts.skills.group_analysis.local_rag import select_group_analysis_context
+    from app.group_analysis.local_rag import select_group_analysis_context
 
     messages = _messages(15, keyword_every=100)
     messages[7]["content"] = "关键讨论：RAG 局部检索"
@@ -124,7 +124,7 @@ def test_group_analysis_neighbor_expansion_preserves_context():
 
 
 def test_group_analysis_does_not_change_group_stats():
-    from creatures.nanobot.prompts.skills.group_analysis.preprocess import build_analysis_payload
+    from app.group_analysis.preprocess import build_analysis_payload
 
     messages = _messages(40, keyword_every=10)
     logs = [
@@ -150,7 +150,7 @@ def test_group_analysis_does_not_change_group_stats():
 
 
 def test_group_analysis_limits_embedding_to_lexical_top_candidates():
-    from creatures.nanobot.prompts.skills.group_analysis.local_rag import select_group_analysis_context
+    from app.group_analysis.local_rag import select_group_analysis_context
 
     embedding = CountingEmbeddingProvider()
     messages = _messages(350, keyword_every=1)
@@ -168,7 +168,7 @@ def test_group_analysis_limits_embedding_to_lexical_top_candidates():
 
 
 def test_group_analysis_temporary_embedding_uses_query_cosine_score():
-    from creatures.nanobot.prompts.skills.group_analysis.local_rag import select_group_analysis_context
+    from app.group_analysis.local_rag import select_group_analysis_context
 
     messages = _messages(6, keyword_every=1)
     messages[0]["content"] = "目标主题 RAG 方案"
@@ -189,7 +189,9 @@ def test_group_analysis_temporary_embedding_uses_query_cosine_score():
 
 
 def test_group_analysis_non_thematic_daily_does_not_enable_rag():
-    from creatures.nanobot.prompts.skills.group_analysis.local_rag import should_use_group_analysis_local_rag
+    from app.group_analysis.local_rag import (
+        should_use_group_analysis_local_rag,
+    )
 
     assert should_use_group_analysis_local_rag("") is False
     assert should_use_group_analysis_local_rag("生成群日报") is False
@@ -197,14 +199,16 @@ def test_group_analysis_non_thematic_daily_does_not_enable_rag():
 
 
 def test_group_analysis_thematic_instruction_enables_rag():
-    from creatures.nanobot.prompts.skills.group_analysis.local_rag import should_use_group_analysis_local_rag
+    from app.group_analysis.local_rag import (
+        should_use_group_analysis_local_rag,
+    )
 
     assert should_use_group_analysis_local_rag("重点分析 RAG 检索和 reranker 的讨论") is True
     assert should_use_group_analysis_local_rag("只看关于端口冲突的部分") is True
 
 
 def test_group_analysis_budget_preserves_high_score_groups():
-    from creatures.nanobot.prompts.skills.group_analysis.local_rag import select_group_analysis_context
+    from app.group_analysis.local_rag import select_group_analysis_context
 
     messages = _messages(18, keyword_every=100)
     for idx in range(0, 3):

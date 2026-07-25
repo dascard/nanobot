@@ -2,9 +2,22 @@ from __future__ import annotations
 
 import json
 import time
+from types import MappingProxyType
 from typing import Any
 
 from core.prompt_v2.audit import PromptAuditError, audit_prompt_plan
+from core.prompt_v2.contribution_registry import (
+    PROMPT_CONTRIBUTION_REGISTRY,
+    PromptContributionDescriptor,
+    PromptContributionRenderContext,
+    PromptContributionRenderResult,
+    PromptContributionRendererPort,
+    contribution_for_node,
+    render_prompt_contribution,
+    require_prompt_renderer,
+    resolve_prompt_contributions,
+    validate_prompt_contribution_inputs,
+)
 from core.prompt_v2.context_adapters import (
     build_current_user_event,
     build_persona_reference,
@@ -27,7 +40,6 @@ from core.prompt_v2.schema import (
 from core.prompt_v2.section_descriptors import (
     PromptSectionDescriptor,
     descriptor_for_node,
-    descriptors_for_ordered_nodes,
     validate_descriptor_source,
 )
 from core.prompt_v2.section_renderer import (
@@ -63,6 +75,60 @@ def _extract_marked_sections(text: str, start: str, end: str) -> tuple[list[str]
     return sections, rest
 
 
+class _TemplateContributionRenderer:
+    """把现有模板加载器适配到稳定 Renderer Port。"""
+
+    @property
+    def renderer_id(self) -> str:
+        return "template"
+
+    def render(
+        self,
+        context: PromptContributionRenderContext,
+    ) -> PromptContributionRenderResult:
+        template_key = str(context.node.get("template_key") or "").strip()
+        template = load_template(template_key)
+        rendered = render_scoped_template(
+            template_key,
+            template.body,
+            dict(context.template_values),
+        ).strip()
+        if template.resolution is None:
+            raise RuntimeError(f"Prompt 模板缺少来源解析记录: {template_key}")
+        return PromptContributionRenderResult(
+            content=rendered,
+            template_path=str(template.path),
+            active_source=template.resolution.active_source,
+            template_resolution=template.resolution.to_dict(),
+        )
+
+
+class _RuntimeContributionRenderer:
+    """把请求级 runtime section 适配到稳定 Renderer Port。"""
+
+    @property
+    def renderer_id(self) -> str:
+        return "runtime"
+
+    def render(
+        self,
+        context: PromptContributionRenderContext,
+    ) -> PromptContributionRenderResult:
+        runtime_key = str(context.node.get("runtime_key") or "").strip()
+        return PromptContributionRenderResult(
+            content=context.runtime_sections.get(runtime_key, ""),
+            active_source="request",
+        )
+
+
+def _prompt_contribution_renderers(
+) -> MappingProxyType[str, PromptContributionRendererPort]:
+    return MappingProxyType({
+        "template": _TemplateContributionRenderer(),
+        "runtime": _RuntimeContributionRenderer(),
+    })
+
+
 async def compile_prompt_plan(
     request: PromptCompileRequest | dict[str, Any],
     *,
@@ -82,11 +148,20 @@ async def compile_prompt_plan(
         if request_view is not None
         else str(request.get("chat_type") or "private").strip().lower() or "private"
     )
+    prompt_key = (
+        request_view.normalized_prompt_key
+        if request_view is not None
+        else str(request.get("prompt_key") or "").strip()
+    )
     started = time.perf_counter()
     emit_runtime_event(
         "prompt.compile",
         "started",
-        attributes={"platform": platform, "chat_type": chat_type},
+        attributes={
+            "prompt_key": prompt_key,
+            "platform": platform,
+            "chat_type": chat_type,
+        },
     )
 
     try:
@@ -100,6 +175,7 @@ async def compile_prompt_plan(
             "prompt.compile",
             "failed",
             attributes={
+                "prompt_key": prompt_key,
                 "platform": platform,
                 "chat_type": chat_type,
                 "latency_ms": (time.perf_counter() - started) * 1000,
@@ -111,6 +187,7 @@ async def compile_prompt_plan(
         "prompt.compile",
         "succeeded",
         attributes={
+            "prompt_key": prompt_key,
             "platform": platform,
             "chat_type": chat_type,
             "message_count": len(plan.messages),
@@ -160,21 +237,33 @@ async def _compile_prompt_plan_locked(
         group_context = combine_group_context_sections(
             "\n\n".join(group_profile_sections),
             request.group_profile_context,
-            request.expression_context,
-            request.jargon_context,
         )
     runtime_tool_prompt = _clean_runtime_tool_prompt(request.runtime_tool_prompt)
     current_user = build_current_user_event(request)
     flow_state = load_flow()
-    ordered_nodes = ordered_nodes_for_chat(flow_state.flow, chat_type, platform=platform)
-    ordered_descriptors = descriptors_for_ordered_nodes(
+    selected_nodes = ordered_nodes_for_chat(
         flow_state.flow,
-        ordered_nodes,
         chat_type,
         platform=platform,
     )
+    contribution_resolution = resolve_prompt_contributions(
+        flow_state.flow,
+        selected_nodes,
+        chat_type=chat_type,
+        platform=platform,
+    )
+    selected_nodes_by_id = {
+        str(node.get("id") or "").strip(): node
+        for node in selected_nodes
+    }
+    ordered_nodes = [
+        selected_nodes_by_id[contribution_id]
+        for contribution_id in contribution_resolution.ordered_ids
+    ]
+    contributions_by_node_id = dict(contribution_resolution.descriptors)
     descriptors_by_node_id = {
-        descriptor.section_id: descriptor for descriptor in ordered_descriptors
+        descriptor_id: contribution.section_descriptor
+        for descriptor_id, contribution in contributions_by_node_id.items()
     }
     flow_sections: list[PromptFlowSection] = []
     warnings: list[str] = []
@@ -206,6 +295,11 @@ async def _compile_prompt_plan_locked(
         "current_user_event",
     }
     current_user_flow_section: PromptFlowSection | None = None
+    contribution_renderers = _prompt_contribution_renderers()
+    contribution_input_variables = MappingProxyType({
+        **vars(request),
+        **template_values,
+    })
 
     def append_section(
         section_id: str,
@@ -247,10 +341,12 @@ async def _compile_prompt_plan_locked(
         node_type: str,
         template_key: str = "",
         runtime_key: str = "",
+        active_source: str = "request",
         origin: PromptFlowOrigin = "flow",
         status: PromptFlowStatus,
         message_indexes: list[int] | None = None,
         descriptor: PromptSectionDescriptor | None = None,
+        contribution: PromptContributionDescriptor | None = None,
     ) -> PromptFlowSection:
         resolved_descriptor = descriptor or descriptor_for_node(
             {
@@ -260,8 +356,30 @@ async def _compile_prompt_plan_locked(
                 "runtime_key": runtime_key,
             }
         )
+        resolved_contribution = contribution or contributions_by_node_id.get(
+            node_id
+        ) or contribution_for_node({
+            "id": node_id,
+            "type": node_type,
+            "template_key": template_key,
+            "runtime_key": runtime_key,
+        })
         metadata = resolved_descriptor.to_dict()
         metadata.pop("section_id", None)
+        contribution_metadata = resolved_contribution.metadata()
+        for field in (
+            "section_id",
+            "owner_module",
+            "domain",
+            "phase",
+            "authority",
+            "trust",
+            "dependencies",
+            "source_precedence",
+            "editable",
+            "failure_policy",
+        ):
+            contribution_metadata.pop(field, None)
         return {
             "node_id": node_id,
             "node_type": node_type,
@@ -270,6 +388,9 @@ async def _compile_prompt_plan_locked(
             "origin": origin,
             "status": status,
             "message_indexes": list(message_indexes or []),
+            "active_source": active_source,
+            "contribution_generation": contribution_resolution.generation,
+            **contribution_metadata,
             **metadata,
         }
 
@@ -277,10 +398,29 @@ async def _compile_prompt_plan_locked(
         node_id = str(node.get("id") or "").strip()
         node_type = str(node.get("type") or "").strip()
         descriptor = descriptors_by_node_id.get(node_id) or descriptor_for_node(node)
+        contribution = contributions_by_node_id.get(node_id) or contribution_for_node(
+            node
+        )
+        renderer = require_prompt_renderer(
+            contribution_renderers,
+            contribution,
+        )
+        render_context = PromptContributionRenderContext(
+            descriptor=contribution,
+            node=node,
+            template_values=template_values,
+            runtime_sections=runtime_sections,
+            input_variables=contribution_input_variables,
+        )
+        validate_prompt_contribution_inputs(render_context)
         if node_type == "template":
             template_key = str(node.get("template_key") or "").strip()
             try:
-                template = load_template(template_key)
+                render_result = render_prompt_contribution(
+                    renderer,
+                    render_context,
+                )
+                rendered = str(render_result.content or "").strip()
             except FileNotFoundError:
                 if descriptor.failure_policy == "fail_closed":
                     raise
@@ -291,17 +431,13 @@ async def _compile_prompt_plan_locked(
                         node_id=node_id,
                         node_type=node_type,
                         template_key=template_key,
+                        active_source="unresolved",
                         status="missing_template",
                         descriptor=descriptor,
+                        contribution=contribution,
                     )
                 )
                 continue
-            try:
-                rendered = render_scoped_template(
-                    template_key,
-                    template.body,
-                    template_values,
-                ).strip()
             except Exception:
                 if descriptor.failure_policy == "fail_closed":
                     raise
@@ -312,28 +448,34 @@ async def _compile_prompt_plan_locked(
                         node_id=node_id,
                         node_type=node_type,
                         template_key=template_key,
+                        active_source="unresolved",
                         status="missing_template",
                         descriptor=descriptor,
+                        contribution=contribution,
                     )
                 )
                 continue
-            template_paths[node_id] = str(template.path)
-            if template.resolution is None:
+            template_paths[node_id] = render_result.template_path
+            if render_result.template_resolution is None:
                 raise RuntimeError(f"Prompt 模板缺少来源解析记录: {template_key}")
             validate_descriptor_source(
                 descriptor,
-                template.resolution.active_source,
+                render_result.active_source,
             )
-            template_resolutions[node_id] = template.resolution.to_dict()
+            template_resolutions[node_id] = dict(
+                render_result.template_resolution
+            )
             message_indexes = append_section(node_id, rendered, descriptor)
             flow_sections.append(
                 section_metadata(
                     node_id=node_id,
                     node_type=node_type,
                     template_key=template_key,
+                    active_source=render_result.active_source,
                     status="emitted" if message_indexes else "empty",
                     message_indexes=message_indexes,
                     descriptor=descriptor,
+                    contribution=contribution,
                 )
             )
             if node_id in {"group_policy", "private_policy"}:
@@ -341,7 +483,11 @@ async def _compile_prompt_plan_locked(
             continue
 
         runtime_key = str(node.get("runtime_key") or "").strip()
-        content = runtime_sections.get(runtime_key, "")
+        render_result = render_prompt_contribution(
+            renderer,
+            render_context,
+        )
+        content = render_result.content
         if runtime_key in singleton_runtime_keys and runtime_key in seen_runtime_keys:
             warnings.append(f"flow duplicated singleton runtime node {runtime_key}; skipped node {node_id}")
             hash_section(section_hashes, node_id, content)
@@ -350,8 +496,10 @@ async def _compile_prompt_plan_locked(
                     node_id=node_id,
                     node_type=node_type,
                     runtime_key=runtime_key,
+                    active_source=render_result.active_source,
                     status="skipped_duplicate",
                     descriptor=descriptor,
+                    contribution=contribution,
                 )
             )
             continue
@@ -371,6 +519,7 @@ async def _compile_prompt_plan_locked(
             node_id=node_id,
             node_type=node_type,
             runtime_key=runtime_key,
+            active_source=render_result.active_source,
             status=(
                 "emitted"
                 if message_indexes or runtime_key == "current_user_event"
@@ -378,6 +527,7 @@ async def _compile_prompt_plan_locked(
             ),
             message_indexes=message_indexes,
             descriptor=descriptor,
+            contribution=contribution,
         )
         flow_sections.append(section)
         if runtime_key == "current_user_event":
@@ -480,6 +630,18 @@ async def _compile_prompt_plan_locked(
         "has_group_context": bool(group_context),
         "tool_schema_count": len(request.tool_schemas or []),
         "template_resolutions": template_resolutions,
+        "prompt_contribution_registry": {
+            "namespace": contribution_resolution.registry_snapshot.namespace,
+            "generation": contribution_resolution.generation,
+            "sha256": contribution_resolution.sha256,
+            "canonical_sha256": (
+                PROMPT_CONTRIBUTION_REGISTRY.registry_snapshot.sha256
+            ),
+            "ordered_ids": [
+                str(section.get("contribution_id") or "")
+                for section in flow_sections
+            ],
+        },
         "request_prompt_sha256": metrics.prompt_sha256,
         "session_guidance_chat_stream_id": str(
             request.session_guidance_chat_stream_id or ""

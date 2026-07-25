@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core.database import ChatLog, ChatStreamConfig, ConversationTurn, GroupMemory, PersonaFact, StickerMemory, User, get_db
+from core.db import get_db as canonical_get_db
 from server import app
 from tests.sqlite_test_utils import install_base_schema
 
@@ -42,6 +43,7 @@ def client(tmp_path, monkeypatch):
     original_settings_factory = settings._session_factory
     settings.set_session_factory(TestingSessionLocal)
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[canonical_get_db] = override_get_db
     try:
         yield TestClient(app)
     finally:
@@ -180,6 +182,21 @@ class TestSettingsAudit:
         assert "value" not in detail
         assert detail["changed"] is True
         assert detail["fingerprint"] == hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12]
+
+    def test_private_timing_threshold_write_rejects_invalid_pair(
+        self,
+        client,
+        auth_header,
+    ):
+        response = client.put(
+            "/api/v1/admin/settings/"
+            "private_timing.decision_confidence_threshold",
+            json={"value": 0.9},
+            headers=auth_header,
+        )
+
+        assert response.status_code == 400
+        assert "不能大于 template_confidence_threshold" in response.text
 
 
 class TestSettingsResponseContract:
@@ -654,8 +671,15 @@ class TestPrivateBlockFlow:
         assert r.json().get("status") == "silent"
 
         # 通过 DB browser 验证 ChatLog 内容
-        r2 = client.get("/api/v1/admin/db/tables/chat_logs?limit=5",
-                        headers=auth_header)
+        r2 = client.post(
+            "/api/v1/admin/db/views/chat_logs/rows",
+            json={
+                "filters": {"user_id": "blocked_usr"},
+                "cursor": None,
+                "limit": 5,
+            },
+            headers=auth_header,
+        )
         assert r2.status_code == 200
         rows = r2.json()["rows"]
         row = next((r for r in rows if r.get("user_id") == "blocked_usr"), None)
@@ -753,10 +777,18 @@ class TestObservabilityAPI:
                     "injectable_count": 1,
                 }
 
-        async def fake_extract(db, group_id, *, window_hours=24, instructions=""):
+        async def fake_extract(
+            db,
+            group_id,
+            *,
+            window_hours=24,
+            instructions="",
+            aspects=None,
+        ):
             assert group_id == "group_7788"
             assert window_hours == 24
             assert instructions == "只提取稳定事实"
+            assert aspects == ["topics"]
             return FakeResult()
 
         monkeypatch.setattr(
@@ -766,7 +798,11 @@ class TestObservabilityAPI:
 
         data = _ok(client.post(
             "/api/v1/admin/groups/group_7788/memories/extract",
-            json={"window_hours": 24, "instructions": "只提取稳定事实"},
+            json={
+                "window_hours": 24,
+                "instructions": "只提取稳定事实",
+                "aspects": ["topics"],
+            },
             headers=auth_header,
         ))
 
@@ -777,10 +813,32 @@ class TestObservabilityAPI:
     def test_group_memory_extract_alias_avoids_group_detail_shadow(self, client, auth_header, monkeypatch):
         class FakeResult:
             def to_dict(self):
-                return {"ok": True, "group_id": "group_7788", "stats": {"new": 1}}
+                return {
+                    "ok": True,
+                    "group_id": "group_7788",
+                    "group_name": "测试群",
+                    "window_hours": 24,
+                    "raw_count": 3,
+                    "eligible_count": 3,
+                    "deduped_count": 3,
+                    "message_count": 3,
+                    "source_log_count": 3,
+                    "stats": {"new": 1},
+                    "memory_count": 0,
+                    "active_count": 0,
+                    "injectable_count": 0,
+                }
 
-        async def fake_extract(db, group_id, *, window_hours=24, instructions=""):
+        async def fake_extract(
+            db,
+            group_id,
+            *,
+            window_hours=24,
+            instructions="",
+            aspects=None,
+        ):
             assert group_id == "group_7788"
+            assert aspects is None
             return FakeResult()
 
         monkeypatch.setattr(
@@ -840,6 +898,11 @@ class TestObservabilityAPI:
                 decay_score=1.0,
                 status="active",
                 inject_policy="auto",
+                approval_source="model",
+                governance_mode="automatic",
+                approved_content_hash="a" * 64,
+                model_review_run_id="task_preview_topic",
+                model_contract_version="group_memory_learning_v1",
                 last_seen=now,
             ))
             db.add(GroupMemory(

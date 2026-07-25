@@ -2,13 +2,24 @@ from pathlib import Path
 
 
 APP_JS = Path("webui/src/App.jsx")
+MANIFEST_JS = Path("webui/src/features/manifest.jsx")
 PROMPT_JS = Path("webui/src/features/prompt/PromptPages.jsx")
 CSS = Path("webui/src/index.css")
 DIST = Path("webui/dist")
 
 
 def read_prompt_sources() -> str:
-    return APP_JS.read_text(encoding="utf-8") + "\n" + PROMPT_JS.read_text(encoding="utf-8")
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (APP_JS, MANIFEST_JS, PROMPT_JS)
+    )
+
+
+def _manifest_feature_source(feature_id: str) -> str:
+    source = MANIFEST_JS.read_text(encoding="utf-8")
+    marker = f"featureId: '{feature_id}'"
+    block = source.split(marker, 1)[1]
+    return block.split("featureId:", 1)[0]
 
 
 def read_dist_sources() -> str:
@@ -21,10 +32,16 @@ def read_dist_sources() -> str:
 
 
 def test_prompt_runtime_is_primary_prompt_nav_entry():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = MANIFEST_JS.read_text(encoding="utf-8")
+    preview = _manifest_feature_source("prompt.runtime.preview")
+    templates = _manifest_feature_source("prompt.runtime.templates")
 
-    assert "{ to: '/prompt-preview', label: '运行预览' }" in source
-    assert "{ to: '/prompt-templates', label: '模板' }" in source
+    assert "route: '/prompt-preview'" in preview
+    assert "navGroup: 'prompt'" in preview
+    assert "label: '运行预览'" in preview
+    assert "route: '/prompt-templates'" in templates
+    assert "navGroup: 'prompt'" in templates
+    assert "label: '模板'" in templates
     assert "label: 'V2 运行预览'" not in source
     assert "label: 'V2 模板'" not in source
     assert "{ to: '/prompts', label: 'V1 模板 / 对比' }" not in source
@@ -34,26 +51,32 @@ def test_prompt_runtime_is_primary_prompt_nav_entry():
 
 def test_prompt_preview_defaults_to_canonical_prompt_and_prompt_path_redirects():
     source = read_prompt_sources()
+    preview = _manifest_feature_source("prompt.runtime.preview")
+    templates = _manifest_feature_source("prompt.runtime.templates")
 
     assert "engine: 'prompt'" in source
     assert '<Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />' in source
     assert '<Route path="/prompt-legacy"' not in source
     assert '<Route path="/prompts"' not in source
-    assert '<Route path="/prompt-templates" element={<PromptV2TemplatesPage />} />' in source
+    assert "route: '/prompt-preview'" in preview
+    assert "module.EffectivePromptPreviewPage" in preview
+    assert "route: '/prompt-templates'" in templates
+    assert "module.PromptV2TemplatesPage" in templates
+    assert "WEB_FEATURE_ROUTES.map" in source
     assert '<Route path="/prompt-v2-templates" element={<Navigate to="/prompt-templates" replace />} />' in source
 
 
 def test_legacy_prompt_pages_are_removed_from_webui():
     app_source = APP_JS.read_text(encoding="utf-8")
+    manifest_source = MANIFEST_JS.read_text(encoding="utf-8")
     prompt_source = PROMPT_JS.read_text(encoding="utf-8")
-    prompt_import = next(
-        line for line in app_source.splitlines()
-        if "features/prompt/PromptPages" in line
-    )
-    prompt_import_names = prompt_import.split("import", 1)[1].split("from", 1)[0]
 
-    assert "PromptPage" not in prompt_import_names
-    assert "ManagedPromptsPage" not in prompt_import_names
+    assert "features/prompt/PromptPages" not in app_source
+    assert "import('./prompt/PromptPages')" in manifest_source
+    assert "module.EffectivePromptPreviewPage" in manifest_source
+    assert "module.PromptV2TemplatesPage" in manifest_source
+    assert "default: module.PromptPage," not in manifest_source
+    assert "module.ManagedPromptsPage" not in manifest_source
     assert "<PromptPage" not in app_source
     assert "<ManagedPromptsPage" not in app_source
     assert "export function PromptPage()" not in prompt_source

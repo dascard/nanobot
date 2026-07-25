@@ -17,8 +17,6 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 from urllib.parse import parse_qsl, unquote_to_bytes, urlsplit
 
-from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError
-
 from core.model_provider.response_normalization import strip_think_blocks
 from core.proactive_diagnostics import (
     generation_failure_from_exception,
@@ -234,8 +232,12 @@ def _contains_outbound_control_syntax(value: str) -> bool:
     return bool(_OUTBOUND_CONTROL_PATTERN.search(str(value or "")))
 
 
-class ResearchBudgetPlugin(BasePlugin):
-    """对研究探索工具实施并发安全的硬调用上限。"""
+class ResearchToolBlockError(RuntimeError):
+    """研究预算或安全策略拒绝工具调用。"""
+
+
+class ResearchBudgetPlugin:
+    """框架无关的研究探索预算守卫。"""
 
     name = "nanobot_research_budget"
     priority = 1
@@ -251,7 +253,9 @@ class ResearchBudgetPlugin(BasePlugin):
     async def pre_tool_execute(self, args: dict, **kwargs: Any) -> dict | None:
         tool_name = str(kwargs.get("tool_name") or "")
         if tool_name not in _RESEARCH_ALLOWED_TOOLS:
-            raise PluginBlockError(f"研究预设不允许调用工具 {tool_name or '<empty>'}")
+            raise ResearchToolBlockError(
+                f"研究预设不允许调用工具 {tool_name or '<empty>'}"
+            )
         if tool_name not in _EXPLORATION_TOOLS:
             return None
         if tool_name == "web_search":
@@ -262,7 +266,9 @@ class ResearchBudgetPlugin(BasePlugin):
                 or len(executed_query) > _MAX_EXECUTED_QUERY_CHARS
                 or _contains_sensitive_search_data(executed_query)
             ):
-                raise PluginBlockError("研究搜索 query 不满足公开检索契约")
+                raise ResearchToolBlockError(
+                    "研究搜索 query 不满足公开检索契约"
+                )
             if self.research_query:
                 from core.web_search.relevance import judge_executed_query_relevance
 
@@ -270,13 +276,17 @@ class ResearchBudgetPlugin(BasePlugin):
                     self.research_query,
                     executed_query,
                 ).ok:
-                    raise PluginBlockError("研究搜索 query 超出原始研究主题")
+                    raise ResearchToolBlockError(
+                        "研究搜索 query 超出原始研究主题"
+                    )
         async with self._lock:
             limit = max(0, int(self.budget.max_exploration_calls))
             if self.exploration_calls >= limit:
                 self.blocked_calls += 1
                 self.exhausted = True
-                raise PluginBlockError(f"研究探索调用已达到上限 {limit}")
+                raise ResearchToolBlockError(
+                    f"研究探索调用已达到上限 {limit}"
+                )
             self.exploration_calls += 1
         return None
 
@@ -284,7 +294,9 @@ class ResearchBudgetPlugin(BasePlugin):
         """研究预设不允许任何 SubAgent，避免绕过 ToolCall 工具上限。"""
 
         name = str(kwargs.get("name") or "")
-        raise PluginBlockError(f"研究预设不允许调用子 Agent {name or '<empty>'}")
+        raise ResearchToolBlockError(
+            f"研究预设不允许调用子 Agent {name or '<empty>'}"
+        )
 
     async def snapshot(self) -> dict[str, int | bool]:
         async with self._lock:
@@ -712,23 +724,25 @@ def _default_source_loader(trace_id: str) -> list[Any]:
 
 
 def _install_budget_plugin(bridge: Any, plugin: ResearchBudgetPlugin) -> bool:
-    agent = getattr(bridge, "_agent", None)
-    manager = getattr(agent, "plugins", None)
-    if manager is None or not hasattr(manager, "register"):
+    installer = getattr(
+        bridge,
+        "install_research_budget_guard",
+        None,
+    )
+    if not callable(installer):
         return False
     try:
-        manager.register(plugin)
+        return bool(installer(plugin))
     except Exception:
         return False
-    return True
 
 
 def _research_runtime_guards_ready(bridge: Any) -> bool:
-    agent = getattr(bridge, "_agent", None)
+    status = getattr(bridge, "research_tool_guards_ready", None)
+    if not callable(status):
+        return False
     try:
-        from nanobot_kt.tool_runtime import tool_plan_runtime_status
-
-        return bool(tool_plan_runtime_status(agent).get("ready"))
+        return bool(status())
     except Exception:
         return False
 
@@ -814,9 +828,11 @@ async def run_proactive_research(
         )
 
     if bridge_factory is None:
-        from nanobot_kt.bridge import NanobotBridge
+        from core.agent_runtime.gateway import (
+            create_research_agent_runtime,
+        )
 
-        bridge_factory = NanobotBridge
+        bridge_factory = create_research_agent_runtime
     bridge: Any | None = None
     lifecycle_task: asyncio.Task[tuple[str, list[Any], str]] | None = None
     budget_plugin = ResearchBudgetPlugin(

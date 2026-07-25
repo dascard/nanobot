@@ -139,8 +139,8 @@ def _services(
             gate_calls,
         )
 
-    def get_casual_reply(query: str, is_superuser: bool) -> str:
-        calls.setdefault("casual", []).append((query, is_superuser))
+    def get_casual_reply(intent: str) -> str:
+        calls.setdefault("casual", []).append(intent)
         return casual_reply
 
     def private_timing_meta(value: Any | None) -> dict[str, Any] | None:
@@ -248,20 +248,34 @@ async def test_private_no_reply_returns_early_outcome_without_guardrail_or_buffe
     assert result.persist_answer == ""
     assert result.persist_guardrail_status is None
     assert result.persist_timing_meta == {"action": "no_reply", "effort": "none", "reason": "无需回复"}
-    assert gate_calls == [
-        {"query": "嗯", "kwargs": {"user_id": "u-pre-bridge", "has_files": False, "is_superuser": True}}
-    ]
+    assert gate_calls == [{
+        "query": "嗯",
+        "kwargs": {
+            "user_id": "u-pre-bridge",
+            "session_id": "private_u-pre-bridge",
+            "has_files": False,
+        },
+    }]
     assert store.begin_calls == []
     assert "get_guardrail" not in calls
 
 
 @pytest.mark.asyncio
-async def test_private_casual_returns_template_or_fallback_without_guardrail_or_buffer():
+async def test_private_template_uses_structured_intent_without_original_query():
     from api.chat_pre_bridge_decision import ChatPreBridgeEarlyReturn, resolve_chat_pre_bridge_decision
 
-    decision = SimpleNamespace(action="reply_later", effort="casual", reason="寒暄")
-    services, store, calls, gate_calls = _services(decision=decision, casual_reply="")
-    req = _request(query="在吗")
+    decision = SimpleNamespace(
+        action="reply_now",
+        effort="casual",
+        intent="identity_probe",
+        response_mode="template",
+        reason="casual_exchange",
+    )
+    services, store, calls, gate_calls = _services(
+        decision=decision,
+        casual_reply="你猜",
+    )
+    req = _request(query="请介绍一下你自己")
 
     result = await resolve_chat_pre_bridge_decision(
         req,
@@ -272,16 +286,107 @@ async def test_private_casual_returns_template_or_fallback_without_guardrail_or_
 
     assert isinstance(result, ChatPreBridgeEarlyReturn)
     assert result.status == "ok"
-    assert result.answer == "你先说事"
+    assert result.answer == "你猜"
     assert result.source == "casual_template"
-    assert result.intent == "寒暄"
+    assert result.intent == "identity_probe"
     assert result.guardrail_status == "casual_template"
-    assert result.persist_answer == "你先说事"
+    assert result.persist_answer == "你猜"
     assert result.persist_guardrail_status == "casual_template"
-    assert result.persist_timing_meta == {"action": "reply_later", "effort": "casual", "reason": "寒暄"}
-    assert calls["casual"] == [("在吗", False)]
+    assert result.persist_timing_meta == {
+        "action": "reply_now",
+        "effort": "casual",
+        "reason": "casual_exchange",
+    }
+    assert calls["casual"] == ["identity_probe"]
     assert store.begin_calls == []
     assert "get_guardrail" not in calls
+
+
+@pytest.mark.asyncio
+async def test_private_missing_template_falls_back_to_normal_agent():
+    from api.chat_pre_bridge_decision import (
+        ChatPreBridgeContinue,
+        resolve_chat_pre_bridge_decision,
+    )
+
+    decision = SimpleNamespace(
+        action="reply_now",
+        effort="casual",
+        intent="identity_probe",
+        response_mode="template",
+        reason="casual_exchange",
+    )
+    store = FakeStore()
+    store.snapshot_result = chat_private_buffer.PrivateBufferSnapshot(
+        messages=["请介绍一下你自己"],
+        files=[],
+        guardrail_task=asyncio.create_task(
+            asyncio.to_thread(lambda: {"status": "safe"})
+        ),
+    )
+    services, store, calls, _gate_calls = _services(
+        decision=decision,
+        store=store,
+        casual_reply="",
+    )
+
+    result = await resolve_chat_pre_bridge_decision(
+        _request(query="请介绍一下你自己"),
+        is_group=False,
+        is_superuser=False,
+        services=services,
+    )
+
+    assert isinstance(result, ChatPreBridgeContinue)
+    assert calls["casual"] == ["identity_probe"]
+    assert result.private_decision is decision
+
+
+@pytest.mark.asyncio
+async def test_superuser_flag_is_not_forwarded_to_private_semantic_classifier():
+    from api.chat_pre_bridge_decision import resolve_chat_pre_bridge_decision
+
+    decision = SimpleNamespace(
+        action="no_reply",
+        effort="short",
+        intent="acknowledgement",
+        response_mode="none",
+        reason="no_conversation_intent",
+    )
+    services, _store, _calls, gate_calls = _services(decision=decision)
+    req = _request(query="收到")
+
+    await resolve_chat_pre_bridge_decision(
+        req,
+        is_group=False,
+        is_superuser=True,
+        services=services,
+    )
+    await resolve_chat_pre_bridge_decision(
+        req,
+        is_group=False,
+        is_superuser=False,
+        services=services,
+    )
+
+    assert gate_calls == [
+        {
+            "query": "收到",
+            "kwargs": {
+                "user_id": "u-pre-bridge",
+                "session_id": "private_u-pre-bridge",
+                "has_files": False,
+            },
+        },
+        {
+            "query": "收到",
+            "kwargs": {
+                "user_id": "u-pre-bridge",
+                "session_id": "private_u-pre-bridge",
+                "has_files": False,
+            },
+        },
+    ]
 
 
 @pytest.mark.asyncio

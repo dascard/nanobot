@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 from typing import Any, Literal, Sequence
 
+from core.registry import RegistryBuilder, RegistrySnapshot
+
 
 PromptSectionPhase = Literal[
     "platform",
@@ -70,6 +72,21 @@ class PromptSectionDescriptor:
         data["dependencies"] = list(self.dependencies)
         data["source_precedence"] = list(self.source_precedence)
         return data
+
+    @property
+    def registry_namespace(self) -> str:
+        return "prompt_section"
+
+    @property
+    def registry_id(self) -> str:
+        return self.section_id
+
+    @property
+    def registry_dependencies(self) -> tuple[str, ...]:
+        return self.dependencies
+
+    def registry_payload(self) -> dict[str, Any]:
+        return self.to_dict()
 
 
 def _descriptor(
@@ -204,12 +221,13 @@ _CANONICAL_DESCRIPTORS = MappingProxyType({
     ),
     "group_context": _descriptor(
         "group_context",
-        owner_module="core.prompt_v2.compiler",
-        domain="group_context",
+        owner_module="app.group_memory",
+        domain="group_memory",
         phase="context",
         authority="data",
         trust="untrusted_data",
         editable=False,
+        failure_policy="skip_optional",
     ),
     "effort_constraint": _descriptor(
         "effort_constraint",
@@ -264,6 +282,19 @@ _CANONICAL_BY_RUNTIME_KEY = MappingProxyType({
     )
 })
 
+
+def _build_prompt_section_registry(
+) -> RegistrySnapshot[PromptSectionDescriptor]:
+    builder = RegistryBuilder[PromptSectionDescriptor](
+        "prompt_section"
+    )
+    for descriptor_id in sorted(_CANONICAL_DESCRIPTORS):
+        builder.register(_CANONICAL_DESCRIPTORS[descriptor_id])
+    return builder.freeze()
+
+
+PROMPT_SECTION_REGISTRY = _build_prompt_section_registry()
+
 _DECLARATION_FIELDS = (
     "owner_module",
     "domain",
@@ -279,10 +310,7 @@ _DECLARATION_FIELDS = (
 def list_canonical_section_descriptors() -> tuple[PromptSectionDescriptor, ...]:
     """返回代码侧冻结的 canonical section 描述符。"""
 
-    return tuple(
-        _CANONICAL_DESCRIPTORS[key]
-        for key in sorted(_CANONICAL_DESCRIPTORS)
-    )
+    return tuple(PROMPT_SECTION_REGISTRY)
 
 
 def descriptor_for_template_key(

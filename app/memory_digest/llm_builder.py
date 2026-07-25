@@ -383,73 +383,87 @@ def build_llm_digest_messages(
 async def default_llm_memory_digest_summarizer_async(
     messages: list[dict[str, str]],
 ) -> MemoryDigestLlmOutput:
-    from config import NEW_API_KEY
-    from clients.new_api_client import NewAPIClient
-    from clients.classifier_client import resolve_model_route
+    import asyncio
 
-    route = resolve_model_route("memory_digest")
-    client = NewAPIClient(
-        api_key=route.get("api_key") or NEW_API_KEY,
-        base_url=route.get("base_url") or "",
+    from core.task_runtime import (
+        TaskInvocation,
+        execute_task,
+        thaw_task_value,
     )
-    response = await client.chat_completion(
-        messages=messages,
-        temperature=float(route.get("temperature", 0.1)),
-        manual_model=route.get("model", ""),
-        max_tokens=int(route.get("max_tokens", 8192)),
-        llm_source="memory_digest",
-        enable_thinking=route.get("enable_thinking", "false"),
+
+    messages_sha256 = hashlib.sha256(
+        json.dumps(
+            messages,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    result = await asyncio.to_thread(
+        execute_task,
+        TaskInvocation(
+            invocation_id="memory_digest",
+            route_key="memory_digest",
+            input_values={},
+            rendered_messages=tuple(messages),
+            idempotency_key=f"memory_digest:{messages_sha256}",
+            timeout_budget_seconds=180.0,
+        ),
     )
-    if isinstance(response, dict) and response.get("error"):
-        raw_requested_models = response.get("_nanobot_requested_models")
-        if not isinstance(raw_requested_models, (list, tuple)):
-            raw_requested_models = [
-                response.get("_nanobot_requested_model")
-                or response.get("_nanobot_model_id")
-                or route.get("model")
-                or ""
-            ]
-        raw_request_log_ids = response.get("_nanobot_request_log_ids")
-        if not isinstance(raw_request_log_ids, (list, tuple)):
-            raw_request_log_ids = [response.get("_nanobot_request_log_id")]
-        raise MemoryDigestModelError(
-            str(response.get("detail") or response.get("error")),
-            requested_models=raw_requested_models,
-            request_log_ids=raw_request_log_ids,
+    requested_model = str(
+        result.execution_metadata.get("requested_model")
+        or result.model
+        or "unknown"
+    ).strip() or "unknown"
+    raw_request_log_id = result.execution_metadata.get("request_log_id")
+    request_log_id = (
+        int(raw_request_log_id)
+        if type(raw_request_log_id) is int
+        and raw_request_log_id > 0
+        else None
+    )
+    if not result.ok:
+        failure_code = (
+            result.failure.code.value
+            if result.failure is not None
+            else "provider_error"
         )
-    try:
-        raw_log_id = response.get("_nanobot_request_log_id")
-        request_log_id = (
-            int(raw_log_id)
-            if isinstance(raw_log_id, int)
-            and not isinstance(raw_log_id, bool)
-            and raw_log_id > 0
-            else None
-        )
-        observed_model = str(response.get("model") or "").strip()
-        requested_model = str(
-            response.get("_nanobot_requested_model")
-            or response.get("_nanobot_model_id")
-            or route.get("model")
-            or "unknown"
-        ).strip() or "unknown"
-        finish_reason = str(
-            response["choices"][0].get("finish_reason") or ""
-        ).strip().lower()
-        if finish_reason in {"length", "max_tokens"}:
+        if failure_code == "output_limit_exceeded":
             raise MemoryDigestCapacityError(
                 requested_models=[requested_model],
-                request_log_ids=[request_log_id] if request_log_id else [],
+                request_log_ids=(
+                    [request_log_id]
+                    if request_log_id is not None
+                    else []
+                ),
             )
-        return MemoryDigestLlmOutput(
-            content=str(response["choices"][0]["message"].get("content") or ""),
-            model=observed_model or "unknown",
-            requested_model=requested_model,
-            request_log_id=request_log_id,
-            actual_model_observed=bool(observed_model),
+        raise MemoryDigestModelError(
+            f"task_runtime_failed:{failure_code}",
+            requested_models=[requested_model],
+            request_log_ids=(
+                [request_log_id]
+                if request_log_id is not None
+                else []
+            ),
         )
-    except (AttributeError, IndexError, KeyError, TypeError) as exc:
-        raise MemoryDigestModelError("llm_response_missing_content") from exc
+    payload = thaw_task_value(result.parsed_value)
+    return MemoryDigestLlmOutput(
+        content=json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        model=result.model or "unknown",
+        requested_model=requested_model,
+        request_log_id=request_log_id,
+        actual_model_observed=bool(
+            result.execution_metadata.get(
+                "actual_model_observed",
+                bool(result.model),
+            )
+        ),
+    )
 
 
 def default_llm_memory_digest_summarizer(messages: list[dict[str, str]]) -> str:

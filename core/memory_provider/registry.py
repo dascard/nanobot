@@ -23,6 +23,7 @@ from core.memory_provider.contracts import (
     MemoryToolCall,
     MemoryToolSchemaContext,
 )
+from core.registry import RegistryBuilder, RegistrySnapshot
 
 
 class MemoryProviderRegistryError(RuntimeError):
@@ -66,10 +67,23 @@ class MemoryProviderRegistry:
         self._registrations: dict[str, MemoryProviderRegistration] = {}
         self._ordered_ids: tuple[str, ...] = ()
         self._frozen = False
+        self._registry_snapshot: (
+            RegistrySnapshot[MemoryProviderDescriptor] | None
+        ) = None
 
     @property
     def frozen(self) -> bool:
         return self._frozen
+
+    @property
+    def registry_snapshot(
+        self,
+    ) -> RegistrySnapshot[MemoryProviderDescriptor]:
+        if self._registry_snapshot is None:
+            raise MemoryProviderRegistryError(
+                "Memory Provider Registry 尚未冻结"
+            )
+        return self._registry_snapshot
 
     def register(
         self,
@@ -102,6 +116,14 @@ class MemoryProviderRegistry:
             return self
         self._validate_tool_ownership()
         self._ordered_ids = self._resolve_order()
+        builder = RegistryBuilder[MemoryProviderDescriptor](
+            "memory_provider"
+        )
+        for provider_id in sorted(self._registrations):
+            builder.register(
+                self._registrations[provider_id].descriptor
+            )
+        self._registry_snapshot = builder.freeze()
         self._frozen = True
         return self
 

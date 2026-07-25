@@ -79,8 +79,13 @@ def get_group_talk_value(session_id: str) -> float:
     try:
         from core.expression_memory import get_stream_config, normalize_chat_stream_id
 
-        raw = session_id.removeprefix("group_")
-        cfg = get_stream_config(normalize_chat_stream_id(raw, chat_type="group", platform="qq"))
+        cfg = get_stream_config(
+            normalize_chat_stream_id(
+                session_id,
+                chat_type="group",
+                platform="qq",
+            )
+        )
         return float(cfg.get("talk_value", 0.5))
     except Exception as exc:
         logger.debug(

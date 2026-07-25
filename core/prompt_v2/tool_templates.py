@@ -89,7 +89,23 @@ def _get_tool_template_policy_uncached(tool_name: str, values: dict[str, Any] | 
     name = str(tool_name or "").strip()
     if not name:
         return None
-    for key in (f"tools/{name}/usage", name):
+    from core.tool_registration import get_tool_registration
+
+    registration = get_tool_registration(name)
+    if registration is not None:
+        preferred_keys = tuple(
+            key
+            for key in registration.prompt_template_keys
+            if key.endswith("/usage")
+        )
+        candidate_keys = (
+            *preferred_keys,
+            *registration.prompt_template_keys,
+        )
+    else:
+        # 兼容管理端预览尚未登记的临时模板；生产 ToolPlan 不会消费此分支。
+        candidate_keys = (f"tools/{name}/usage", name)
+    for key in candidate_keys:
         direct = _policy_from_key(key, values)
         if direct and direct.tool_name == name:
             return direct
@@ -174,8 +190,23 @@ def collect_tool_template_resolutions(
             if name:
                 names.add(name)
     for name in sorted(names):
+        from core.tool_registration import get_tool_registration
+
+        registration = get_tool_registration(name)
+        if registration is None:
+            continue
+        usage_key = next(
+            (
+                key
+                for key in registration.prompt_template_keys
+                if key.endswith("/usage")
+            ),
+            "",
+        )
+        if not usage_key:
+            continue
         try:
-            template = load_template(f"tools/{name}/usage")
+            template = load_template(usage_key)
         except (FileNotFoundError, ValueError):
             continue
         if template.resolution is None:

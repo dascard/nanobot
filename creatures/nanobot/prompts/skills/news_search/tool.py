@@ -17,8 +17,10 @@ from core.time_utils import db_now_naive
 from core.tool_contracts.ai_daily import (
     AiDailyRequest,
     AiDailyRequestError,
+    NewsRequest,
     ai_daily_parameters_schema,
     parse_ai_daily_request,
+    parse_news_search_request,
 )
 from nanobot_kt.reply_contract import build_rich_tool_result
 from . import runtime_cache as _runtime_cache
@@ -69,9 +71,6 @@ _NEWS_SEARCH_CACHE = _runtime_cache._NEWS_SEARCH_CACHE
 _NEWS_SEARCH_CACHE_LOCK = _runtime_cache._NEWS_SEARCH_CACHE_LOCK
 
 JUYA_RSS_URL = _search_backend.JUYA_RSS_URL
-RSS_KEYWORDS = _search_backend.RSS_KEYWORDS
-# 只有日报/早报/简报才用 Juya RSS 快路径（"最新/新闻/资讯"太宽泛）
-DAILY_DIGEST_KEYWORDS = _runtime_cache.DAILY_DIGEST_KEYWORDS
 
 RSS_SOURCES = _search_backend.RSS_SOURCES
 
@@ -325,36 +324,8 @@ def _is_daily_digest_query(query: str) -> bool:
     return _runtime_cache._is_daily_digest_query(query)
 
 
-def _is_rss_first_query(query: str) -> bool:
-    return _search_backend._is_rss_first_query(query)
-
-
-def _should_use_juya_direct(query: str) -> bool:
-    return _search_backend._should_use_juya_direct(query)
-
-
-def _is_news_query(query: str) -> bool:
-    return _search_backend._is_news_query(query)
-
-
-def _infer_timelimit(query: str) -> str | None:
-    return _search_backend._infer_timelimit(query)
-
-
-def _is_urgent_news_query(query: str) -> bool:
-    return _search_backend._is_urgent_news_query(query)
-
-
-def _tokenize_query(query: str) -> list[str]:
-    return _search_backend._tokenize_query(query)
-
-
 def _extract_item_date(item: Any) -> str:
     return _search_backend._extract_item_date(item)
-
-
-def _is_recent_enough(raw_date: str, hours: int = 72) -> bool:
-    return _search_backend._is_recent_enough(raw_date, hours=hours)
 
 
 def _normalize_search_result(item: dict[str, Any], *, strategy: str) -> dict[str, Any]:
@@ -362,11 +333,8 @@ def _normalize_search_result(item: dict[str, Any], *, strategy: str) -> dict[str
 
 
 def _filter_stale_news_results(results: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
-    return _search_backend._filter_stale_news_results(results, query)
-
-
-def _match_query(item: dict[str, Any], query: str) -> bool:
-    return _search_backend._match_query(item, query)
+    request = parse_news_search_request(query, max_results=max(1, len(results)))
+    return _search_backend._filter_stale_news_results(results, request)
 
 
 def _fetch_rss_source(source: dict[str, Any], max_results: int) -> list[dict[str, Any]]:
@@ -386,7 +354,8 @@ def _fetch_juya_rss(max_results: int, target_date: str | None = None) -> list[di
 
 
 def _build_query_variants(query: str) -> list[str]:
-    return _search_backend._build_query_variants(query)
+    request = parse_news_search_request(query)
+    return _search_backend._build_query_variants(request, deep=False)
 
 
 def _news_search_cache_key(
@@ -424,16 +393,34 @@ class WebTools:
     last_error: str = ""
 
     @staticmethod
-    def search(query: str, max_results: int = 5, deep: bool = False) -> list[dict]:
-        results, last_error = _search_backend.search(
+    def search(
+        query: str,
+        max_results: int = 5,
+        deep: bool = False,
+        *,
+        request: NewsRequest | None = None,
+    ) -> list[dict]:
+        typed_request = request or parse_news_search_request(
             query,
             max_results=max_results,
+        )
+
+        def _rss_adapter(
+            current_request: NewsRequest,
+            limit: int,
+        ) -> list[dict[str, Any]]:
+            return _fetch_multi_rss(
+                query=current_request.query,
+                max_results=limit,
+            )
+
+        results, last_error = _search_backend.search_news(
+            typed_request,
             deep=deep,
             ddg_enabled=NEWS_SEARCH_DDG_ENABLED,
             ddgs_factory=DDGS,
             ddgs_kwargs_fn=_ddgs_kwargs,
-            multi_rss_fetcher=_fetch_multi_rss,
-            juya_fetcher=_fetch_juya_rss,
+            multi_rss_fetcher=_rss_adapter,
         )
         WebTools.last_error = last_error
         return results
@@ -502,40 +489,35 @@ def search_and_extract_news_v2(
 
     # 1. 搜索
     search_results = []
-    juya_attempted = False
-    juya_hit = False
-    juya_used = False
-
-    rss_first = _should_use_juya_direct(query)
-    target_date = _extract_date(query)
-    logger.info("[news_v2] route query=%r rss_first=%s target=%s mode=%s",
-                query[:60], rss_first, target_date or "latest", mode)
-
-    if rss_first:
-        juya_attempted = True
-        juya_raw = _fetch_juya_rss(max_results=max_results, target_date=target_date)
-        juya_hit = bool(juya_raw)
-        logger.info("[news_v2] juya attempted rss_count=%d titles=%s",
-                    len(juya_raw or []),
-                    [x.get("title","")[:40] for x in (juya_raw or [])[:3]])
-        if juya_raw:
-            juya_used = True
-            search_results = juya_raw
-
+    request = parse_news_search_request(
+        query,
+        max_results=max_results,
+    )
+    logger.info(
+        "[news_v2] route kind=%s freshness=%s mode=%s",
+        request.request_kind,
+        request.freshness,
+        mode,
+    )
+    search_results = WebTools.search(
+        query,
+        max_results=max_results,
+        deep=(mode == "deep"),
+        request=request,
+    )
     if not search_results:
-        search_results = WebTools.search(query, max_results=max_results, deep=(mode == "deep"))
-    if not search_results:
-        logger.info("[news_v2] no search results, fallback juya=%s/%s/%s",
-                    juya_attempted, juya_hit, juya_used)
+        logger.info("[news_v2] no search results")
         return render_html(FALLBACK_DIGEST)
 
     # 2. Evidence Pipeline
     evidence_sources = _normalize_for_evidence(search_results, query)
     cards, _ = build_evidence_pipeline(evidence_sources, query, max_sources=max_results)
     if not cards:
-        logger.info("[news_v2] no cards juya=%s/%s/%s raw=%d norm=%d",
-                    juya_attempted, juya_hit, juya_used,
-                    len(search_results), len(evidence_sources))
+        logger.info(
+            "[news_v2] no cards raw=%d norm=%d",
+            len(search_results),
+            len(evidence_sources),
+        )
         return render_html(FALLBACK_DIGEST)
 
     # 3. LLM 结构化生成
@@ -567,9 +549,9 @@ def search_and_extract_news_v2(
 
     ok, v_issues = validate_digest(digest, cards)
     logger.info(
-        "[news_v2] done %.1fs mode=%s juya_att=%s/hit=%s/used=%s "
-        "raw=%d norm=%d cards=%d html=%d validator=%s",
-        _t.time()-t0, mode, juya_attempted, juya_hit, juya_used,
+        "[news_v2] done %.1fs mode=%s raw=%d norm=%d "
+        "cards=%d html=%d validator=%s",
+        _t.time()-t0, mode,
         len(search_results), len(evidence_sources), len(cards), len(html),
         "PASS" if ok else f"WARN:{v_issues}",
     )
