@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`35b8904eef449e8fd7beb7831685abf033249aa6`
-- 规则总数：5801
+- 源提交：`708fa3fb90b4b072b359da4c2a74dabcafc41272`
+- 规则总数：5868
 - 扫描错误：0
 - 人工复核队列：687
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,19 +12,19 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 131 |
-| `configurable_policy` | 1112 |
+| `configurable_policy` | 1133 |
 | `data_consistency` | 427 |
 | `natural_language_semantic` | 29 |
 | `presentation` | 5 |
-| `protocol_syntax` | 3339 |
-| `security_invariant` | 758 |
+| `protocol_syntax` | 3389 |
+| `security_invariant` | 754 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `scripts/manage-sandbox-production.sh` | 193 |
 | `core/schema_migrations.py` | 188 |
+| `scripts/manage-sandbox-production.sh` | 175 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
 | `core/proactive_research.py` | 82 |
@@ -56,7 +56,9 @@
 | `core/scheduled_task_outbound.py` | 39 |
 | `creatures/nanobot/prompts/skills/news_search/evidence.py` | 38 |
 | `app/session_memory/admin_browser.py` | 37 |
+| `core/release/production_preflight.py` | 37 |
 | `app/group_analysis/preprocess.py` | 36 |
+| `core/release/deployment.py` | 36 |
 | `core/sticker_preview.py` | 36 |
 | `core/db/group_learning_governance_adapter.py` | 35 |
 | `core/group_runtime/runtime.py` | 33 |
@@ -86,10 +88,10 @@
 | `api/admin/eval_routes.py` | 24 |
 | `app/session_memory/jobs.py` | 24 |
 | `core/outbound_transport.py` | 24 |
+| `core/release/artifacts.py` | 24 |
 | `core/runtime_tool_service.py` | 24 |
 | `core/outbound_delivery_service.py` | 23 |
 | `api/admin/sandbox_routes.py` | 22 |
-| `core/release/artifacts.py` | 22 |
 | `api/admin/proactive_outreach_routes.py` | 21 |
 | `app/session_memory/rolling_summary.py` | 21 |
 | `core/db/group_learning_command_adapter.py` | 21 |
@@ -202,7 +204,6 @@
 | `core/eval_sampling/timing_signal_audit.py` | 10 |
 | `core/model_provider/route_registry.py` | 10 |
 | `core/outbound/projection.py` | 10 |
-| `core/release/deployment.py` | 10 |
 | `core/runtime/events.py` | 10 |
 | `core/sandbox/admin_service.py` | 10 |
 | `core/sandbox/tool_service.py` | 10 |
@@ -222,6 +223,7 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/normalize_v2.py` | 9 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/official.py` | 9 |
 | `foundation/identity/normalization.py` | 9 |
+| `scripts/deploy_release.py` | 9 |
 | `api/admin/group_memory_routes.py` | 8 |
 | `api/admin/trace_routes.py` | 8 |
 | `api/routes.py` | 8 |
@@ -236,6 +238,7 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/freshness.py` | 8 |
 | `scripts/build_task_slo_manifest.py` | 8 |
 | `scripts/check-sandbox-data-disk.sh` | 8 |
+| `scripts/manage-prompt-runtime-production.sh` | 8 |
 | `api/admin/web_search_routes.py` | 7 |
 | `api/memory_routes.py` | 7 |
 | `core/client_meta.py` | 7 |
@@ -260,6 +263,7 @@
 | `creatures/nanobot/prompts/skills/news_search/search_backend.py` | 7 |
 | `sandboxd/config.py` | 7 |
 | `scripts/manage_prompt_templates.py` | 7 |
+| `scripts/verify_prompt_runtime_release.py` | 7 |
 | `webui/src/features/manifest.jsx` | 7 |
 | `workers/session_summary_worker.py` | 7 |
 | `api/chat_request_contract.py` | 6 |
@@ -304,7 +308,6 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/diversify.py` | 5 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/validate.py` | 5 |
 | `nanobot_kt/prompt_runtime.py` | 5 |
-| `scripts/deploy_release.py` | 5 |
 | `scripts/manage_prompt_flow.py` | 5 |
 | `webui/src/features/generated-images/GeneratedImagesPage.jsx` | 5 |
 | `workers/chat_delivery_worker.py` | 5 |
@@ -415,6 +418,7 @@
 | `nanobot_kt/tool_registration_adapter.py` | 2 |
 | `nanobot_kt/tool_runtime.py` | 2 |
 | `scripts/build_release_impact.py` | 2 |
+| `scripts/deploy-production.sh` | 2 |
 | `scripts/rag_write_test_report.py` | 2 |
 | `server.py` | 2 |
 | `webui/src/features/agent-runs/AgentRunDetailPage.jsx` | 2 |
@@ -466,7 +470,6 @@
 | `creatures/nanobot/prompts/skills/web_search/tool.py` | 1 |
 | `foundation/llm/tool_policy.py` | 1 |
 | `nanobot_kt/model_attempts.py` | 1 |
-| `scripts/deploy-production.sh` | 1 |
 | `scripts/run_proactive_outreach_simulation.py` | 1 |
 | `scripts/sandbox-smoke-test.sh` | 1 |
 | `webui/src/api/client.js` | 1 |

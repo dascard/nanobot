@@ -319,6 +319,7 @@ tar --create --file "${partial_dir}/assets.tar" \
   echo "backup_risk_marker=${risk_marker}"
   echo "backup_max_bytes=${max_bytes}"
   echo "system_min_free_bytes=${system_min_free_bytes}"
+  echo "quiesced=true"
   echo "runtime_included=false"
   echo "input_staging_included=false"
 } >"${partial_dir}/manifest.txt"

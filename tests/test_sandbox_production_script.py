@@ -105,7 +105,7 @@ def _run_promote_release_harness(
     tmp_path: Path,
     *,
     release_ref: str = "origin/release-candidates/sandbox-control-plane",
-    runtime_stage: bool = True,
+    control_plane_stage: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     source = SCRIPT.read_text(encoding="utf-8")
     start = source.index("promote_release_command() {")
@@ -113,9 +113,10 @@ def _run_promote_release_harness(
     promote_function = source[start:end]
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    runtime_marker = state_dir / "runtime-deployed"
-    if runtime_stage:
-        runtime_marker.write_text("runtime\n", encoding="utf-8")
+    control_plane_marker = state_dir / "control-plane-ready"
+    if control_plane_stage:
+        (state_dir / "smoke-passed").write_text("smoke\n", encoding="utf-8")
+        control_plane_marker.write_text("control-plane\n", encoding="utf-8")
     config_capture = tmp_path / "config.capture"
     release = "6" * 40
     harness = f"""
@@ -129,7 +130,8 @@ require_root() {{ :; }}
 load_config() {{ :; }}
 require_stage() {{ [[ -f "${{STATE_DIR}}/$1" ]] || die "missing stage: $1"; }}
 assert_release_checkout_current() {{ printf 'CHECKOUT_OK\n'; }}
-assert_runtime_current() {{ printf 'RUNTIME_OK\n'; }}
+    assert_smoke_current() {{ printf 'SMOKE_OK\n'; }}
+    assert_control_plane_current() {{ printf 'CONTROL_PLANE_OK\n'; }}
 assert_release_published() {{ printf 'PUBLISHED %s %s\n' "$1" "$2"; }}
 validate_config_values() {{ :; }}
 write_config() {{ printf '%s\n%s\n' "${{RELEASE}}" "${{RELEASE_REF}}" >"${{CONFIG_CAPTURE}}"; }}
@@ -145,7 +147,7 @@ promote_release_command promote-release "$@"
         text=True,
         check=False,
     )
-    return result, config_capture, runtime_marker
+    return result, config_capture, control_plane_marker
 
 
 def _run_runtime_release_validation_harness(
@@ -398,7 +400,18 @@ def test_update_release_can_reuse_unchanged_image_before_smoke():
     assert "runtime-deployed" in source
 
 
-def test_runtime_only_deploy_reuses_control_plane_and_preserves_feature_state():
+def test_local_image_build_keeps_separate_twenty_gib_reserve():
+    source = SCRIPT.read_text(encoding="utf-8")
+    body = source.split("check_build_disk_gate() {", 1)[1].split(
+        "\nassert_prepared_storage_current() {", 1
+    )[0]
+
+    assert 'readonly BUILD_RESERVE_BYTES="21474836480"' in source
+    assert "SYSTEM_MIN_FREE_BYTES + BUILD_RESERVE_BYTES" in body
+    assert "20 GiB 本地构建余量" in body
+
+
+def test_runtime_deploy_commands_are_retired_in_favor_of_release_manifest():
     source = SCRIPT.read_text(encoding="utf-8")
     help_result = subprocess.run(
         [str(SCRIPT), "--help"],
@@ -411,44 +424,21 @@ def test_runtime_only_deploy_reuses_control_plane_and_preserves_feature_state():
         "\nkill_switch_command() {",
         1,
     )[0]
-    shared_body = source.split("deploy_runtime_release() {", 1)[1].split(
-        "\ndeploy_command() {",
-        1,
+    deploy_body = source.split("deploy_command() {", 1)[1].split(
+        "\ndeploy_runtime_command() {", 1
     )[0]
 
     assert help_result.returncode == 0, help_result.stderr
     assert "deploy-runtime" in help_result.stdout
-    assert "--release <40 位提交>" in help_result.stdout
-    assert "assert_smoke_current" in runtime_body
-    assert "assert_control_plane_current" in runtime_body
-    assert "validate_runtime_release_target" in runtime_body
-    assert "build_image_command" not in runtime_body
-    assert "smoke_command" not in runtime_body
-    assert "install_control_plane_command" not in runtime_body
-    assert "sandbox_feature_snapshot" in shared_body
-    assert "assert_sandbox_feature_snapshot" in shared_body
-    assert "configure_application_env_off" in shared_body
-    assert 'if [[ "${feature_policy}" == "off" ]]' in shared_body
-    assert "rollback_runtime_only_deploy" in shared_body
-    assert "rollback_control_plane_after_deploy_failure" not in shared_body
-
-
-def test_runtime_only_release_gate_accepts_runtime_fast_forward(tmp_path):
-    result = _run_runtime_release_validation_harness(tmp_path)
-
-    assert result.returncode == 0, result.stderr
-    assert "PUBLISHED" in result.stdout
-
-
-def test_runtime_only_release_gate_rejects_control_plane_change(tmp_path):
-    result = _run_runtime_release_validation_harness(
-        tmp_path,
-        control_plane_changed=True,
-    )
-
-    assert result.returncode != 0
-    assert "sandboxd/app.py" in result.stderr
-    assert "需要完整 Sandbox 验收" in result.stderr
+    assert "已停用" in help_result.stdout
+    assert "scripts/deploy-production.sh" in help_result.stdout
+    assert "scripts/deploy-production.sh" in runtime_body
+    assert "scripts/deploy-production.sh" in deploy_body
+    assert "docker-build.sh" not in source
+    assert "docker-build.sh" not in runtime_body
+    assert "docker-build.sh" not in deploy_body
+    assert "deploy_runtime_release" not in runtime_body
+    assert "deploy_runtime_release" not in deploy_body
 
 
 def test_runtime_marker_can_track_release_independently_from_control_plane(
@@ -515,7 +505,7 @@ def test_control_plane_activates_new_release_only_after_preparation():
         1,
     )[0]
     install_body = source.split("install_control_plane_command() {", 1)[1].split(
-        "\nupsert_env_value() {",
+        "\nadmin_api() {",
         1,
     )[0]
 
@@ -545,43 +535,16 @@ def test_release_tree_normalizes_quota_helper_permissions():
     assert '== "0:0:755"' in body
 
 
-def test_deploy_migrates_runtime_identity_only_after_backup():
+def test_control_plane_install_hands_off_to_release_manifest_deployer():
     source = SCRIPT.read_text(encoding="utf-8")
-    deploy_body = source.split("deploy_runtime_release() {", 1)[1].split(
-        "\ndeploy_command() {",
-        1,
-    )[0]
-    prepare_body = source.split("prepare_runtime_bind_mounts() {", 1)[1].split(
-        "\ncapture_nonfixed_containers() {",
-        1,
+    install_body = source.split("install_control_plane_command() {", 1)[1].split(
+        "\nadmin_api() {", 1
     )[0]
 
-    assert deploy_body.index("coordinated_backup") < deploy_body.index(
-        "prepare_runtime_bind_mounts"
-    )
-    assert deploy_body.index("prepare_runtime_bind_mounts") < deploy_body.index(
-        '"${REPO_ROOT}/scripts/docker-build.sh"'
-    )
-    assert 'readonly RUNTIME_UID="10001"' in source
-    assert 'readonly RUNTIME_GID="10001"' in source
-    assert 'NANOBOT_RUNTIME_UID="${RUNTIME_UID}"' in prepare_body
-    assert 'NANOBOT_RUNTIME_GID="${RUNTIME_GID}"' in prepare_body
-    assert 'NANOBOT_RUNTIME_HOST_READ_GID="${runtime_host_read_gid}"' in prepare_body
-    assert 'runtime_user="$(deploy_user)"' not in prepare_body
-    assert "--fix-existing" in prepare_body
-    assert "docker compose up -d --force-recreate" in prepare_body
-
-
-def test_deploy_failure_rolls_back_runtime_and_control_plane():
-    source = SCRIPT.read_text(encoding="utf-8")
-    rollback_body = source.split("rollback_failed_deploy() {", 1)[1].split(
-        "\ndeploy_command() {",
-        1,
-    )[0]
-
-    assert "force_feature_flags_off" in rollback_body
-    assert "rollback_runtime_after_deploy_failure" in rollback_body
-    assert "rollback_control_plane_after_deploy_failure" in rollback_body
+    assert "scripts/deploy-production.sh" in install_body
+    assert "OCI digest" in install_body
+    assert "ReleaseManifest" in install_body
+    assert "sudo %s deploy" not in install_body
 
 
 def test_activate_release_tree_atomically_switches_managed_forward_release(tmp_path):
@@ -682,27 +645,27 @@ def test_update_release_can_pin_explicit_remote_candidate_ref(tmp_path):
     assert smoke_check.read_text(encoding="utf-8") == "checked\n"
 
 
-def test_promote_release_keeps_hash_and_stage_when_master_contains_candidate(
+def test_promote_release_keeps_hash_and_control_plane_when_master_contains_candidate(
     tmp_path,
 ):
-    result, config_capture, runtime_marker = _run_promote_release_harness(tmp_path)
+    result, config_capture, control_plane_marker = _run_promote_release_harness(tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert f"PUBLISHED {'6' * 40} origin/master" in result.stdout
     assert config_capture.read_text(encoding="utf-8") == (
         f"{'6' * 40}\norigin/master\n"
     )
-    assert runtime_marker.read_text(encoding="utf-8") == "runtime\n"
+    assert control_plane_marker.read_text(encoding="utf-8") == "control-plane\n"
 
 
-def test_promote_release_refuses_before_runtime_deploy(tmp_path):
-    result, config_capture, _runtime_marker = _run_promote_release_harness(
+def test_promote_release_refuses_before_control_plane_is_ready(tmp_path):
+    result, config_capture, _control_plane_marker = _run_promote_release_harness(
         tmp_path,
-        runtime_stage=False,
+        control_plane_stage=False,
     )
 
     assert result.returncode != 0
-    assert "runtime-deployed" in result.stderr
+    assert "smoke-passed" in result.stderr
     assert not config_capture.exists()
 
 

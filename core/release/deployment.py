@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+import json
 from pathlib import Path
+import shutil
 import time
 from typing import Protocol
 
@@ -25,19 +27,29 @@ SERVICE_CONTAINERS: Mapping[str, str] = {
     "outbound-delivery-worker": "nanobot-outbound-delivery-worker",
     "semantic-index-worker": "nanobot-semantic-index-worker",
 }
-COMPOSE_BASE = (
-    "docker",
-    "compose",
-    "-f",
-    "docker-compose.yml",
-    "-f",
-    "docker-compose.prod.yml",
-)
+COMPOSE_FILES = ("docker-compose.yml", "docker-compose.prod.yml")
+SYSTEM_MIN_FREE_BYTES = 60 * 1024 * 1024 * 1024
 _INSPECT_FORMAT = (
     '{{.Config.Image}}|{{.Image}}|'
     '{{index .Config.Labels "org.opencontainers.image.revision"}}|'
     '{{if .State.Health}}{{.State.Health.Status}}'
     "{{else}}missing{{end}}"
+)
+_NONFIXED_INSPECT_FORMAT = "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"
+_SECURITY_INSPECT_FORMAT = (
+    "{{.Config.User}}|{{.HostConfig.ReadonlyRootfs}}|"
+    "{{json .HostConfig.CapDrop}}|{{json .HostConfig.SecurityOpt}}|"
+    "{{.HostConfig.Privileged}}|{{.HostConfig.PidsLimit}}|"
+    "{{.HostConfig.Memory}}|{{.HostConfig.NanoCpus}}|"
+    "{{range .Mounts}}{{.Destination}}={{.RW}};{{end}}"
+)
+_FEATURE_ENV_KEYS = (
+    "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
+    "NANOBOT_SANDBOX_ENABLED",
+    "NANOBOT_SANDBOX_EXEC_ENABLED",
+    "NANOBOT_SANDBOX_GROUP_ENABLED",
+    "NANOBOT_GROUP_LEARNING_ENABLED",
+    "GROUP_MEMORY_INJECTION_ENABLED",
 )
 
 
@@ -233,7 +245,11 @@ class AtomicRuntimeDeployer:
         *,
         runner: CommandRunner,
         state_store: ReleaseStateStore,
+        compose_env_file: Path,
         ready_url: str,
+        system_min_free_bytes: int = SYSTEM_MIN_FREE_BYTES,
+        pull_reserve_bytes: int = 5 * 1024 * 1024 * 1024,
+        disk_free_bytes: Callable[[], int] | None = None,
         health_attempts: int = 60,
         health_interval_seconds: float = 2.0,
         sleep: Callable[[float], None] = time.sleep,
@@ -241,9 +257,19 @@ class AtomicRuntimeDeployer:
     ) -> None:
         if health_attempts <= 0:
             raise ValueError("health_attempts 必须是正整数")
+        if system_min_free_bytes < SYSTEM_MIN_FREE_BYTES:
+            raise ValueError("system_min_free_bytes 不能低于 60 GiB")
+        if pull_reserve_bytes <= 0:
+            raise ValueError("pull_reserve_bytes 必须是正整数")
         self.runner = runner
         self.state_store = state_store
+        self.compose_env_file = Path(compose_env_file)
         self.ready_url = ready_url
+        self.system_min_free_bytes = system_min_free_bytes
+        self.pull_reserve_bytes = pull_reserve_bytes
+        self.disk_free_bytes = disk_free_bytes or (
+            lambda: shutil.disk_usage("/").free
+        )
         self.health_attempts = health_attempts
         self.health_interval_seconds = health_interval_seconds
         self.sleep = sleep
@@ -275,11 +301,251 @@ class AtomicRuntimeDeployer:
         image_reference: str,
         operation: str,
     ) -> CommandResult:
+        compose_base: list[str] = [
+            "docker",
+            "compose",
+            "--project-name",
+            "nanobot",
+            "--env-file",
+            str(self.compose_env_file),
+        ]
+        for compose_file in COMPOSE_FILES:
+            compose_base.extend(("-f", compose_file))
         return self._run(
-            (*COMPOSE_BASE, *arguments),
+            (*compose_base, *arguments),
             image_reference=image_reference,
             operation=operation,
         )
+
+    @staticmethod
+    def _environment_bool(value: str, *, key: str) -> bool:
+        normalized = str(value).strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+        raise DeploymentVerificationError(
+            f"当前 Runtime 的 {key} 不是合法布尔值"
+        )
+
+    def _assert_runtime_feature_environment_off(self) -> None:
+        result = self._run(
+            (
+                "docker",
+                "inspect",
+                "--format",
+                "{{json .Config.Env}}",
+                "nanobot-server",
+            ),
+            operation="读取 Runtime Feature 环境边界",
+        )
+        try:
+            raw_values = json.loads(result.stdout)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise DeploymentVerificationError(
+                "无法解析当前 Runtime Feature 环境边界"
+            ) from exc
+        if not isinstance(raw_values, list):
+            raise DeploymentVerificationError(
+                "当前 Runtime Feature 环境边界格式无效"
+            )
+        environment: dict[str, str] = {}
+        for item in raw_values:
+            key, separator, value = str(item).partition("=")
+            if separator and key in _FEATURE_ENV_KEYS:
+                environment[key] = value
+        enabled = sorted(
+            key
+            for key in _FEATURE_ENV_KEYS
+            if self._environment_bool(environment.get(key, "false"), key=key)
+        )
+        if enabled:
+            raise DeploymentVerificationError(
+                "当前 Runtime Feature 硬开关尚未全部关闭："
+                + ", ".join(enabled)
+            )
+
+    def _assert_no_active_sandboxes(self) -> None:
+        result = self._run(
+            (
+                "docker",
+                "ps",
+                "--format",
+                "{{.Names}}",
+                "--filter",
+                "label=com.nanobot.sandbox=true",
+                "--filter",
+                "label=com.nanobot.managed-by=sandboxd",
+            ),
+            operation="检查活动 Sandbox 容器",
+        )
+        if result.stdout.strip():
+            raise DeploymentVerificationError(
+                "仍有活动 Sandbox 容器，拒绝切换 Runtime"
+            )
+
+    def _snapshot_nonfixed_containers(self) -> tuple[str, ...]:
+        result = self._run(
+            (
+                "docker",
+                "ps",
+                "-a",
+                "--format",
+                _NONFIXED_INSPECT_FORMAT,
+            ),
+            operation="记录非固定容器白名单快照",
+        )
+        fixed_names = set(SERVICE_CONTAINERS.values())
+        snapshot: list[str] = []
+        for line in result.stdout.splitlines():
+            fields = line.split("\t", 3)
+            if len(fields) != 4 or not all(fields):
+                raise DeploymentVerificationError(
+                    "容器白名单快照格式无效"
+                )
+            if fields[1] not in fixed_names:
+                snapshot.append(line)
+        return tuple(sorted(snapshot))
+
+    def _assert_nonfixed_containers_unchanged(
+        self,
+        expected: tuple[str, ...],
+    ) -> None:
+        if self._snapshot_nonfixed_containers() != expected:
+            raise DeploymentVerificationError(
+                "非 Nanobot 固定容器的 ID、名称、镜像或状态发生变化"
+            )
+
+    def _assert_pre_pull_disk_gate(self) -> None:
+        if self.disk_free_bytes() < (
+            self.system_min_free_bytes + self.pull_reserve_bytes
+        ):
+            raise DeploymentVerificationError(
+                "拉取前磁盘不足以保留系统水位与镜像拉取／解包预算"
+            )
+
+    def _assert_runtime_disk_gate(self) -> None:
+        if self.disk_free_bytes() < self.system_min_free_bytes:
+            raise DeploymentVerificationError(
+                "Runtime 操作后根分区可用空间低于 60 GiB"
+            )
+
+    def _assert_runtime_security_boundaries(self) -> None:
+        for service in FIXED_RUNTIME_SERVICES:
+            container = SERVICE_CONTAINERS[service]
+            result = self._run(
+                (
+                    "docker",
+                    "inspect",
+                    "--format",
+                    _SECURITY_INSPECT_FORMAT,
+                    container,
+                ),
+                operation=f"检查 {service} Runtime 安全边界",
+            )
+            fields = result.stdout.strip().split("|", 8)
+            if len(fields) != 9:
+                raise DeploymentVerificationError(
+                    f"{service} Runtime 安全字段缺失"
+                )
+            (
+                user,
+                readonly_rootfs,
+                cap_drop_raw,
+                security_opt_raw,
+                privileged,
+                pids_limit,
+                memory_limit,
+                nano_cpus,
+                mounts_raw,
+            ) = fields
+            try:
+                cap_drop = json.loads(cap_drop_raw)
+                security_opt = json.loads(security_opt_raw)
+                positive_limits = all(
+                    int(value) > 0
+                    for value in (pids_limit, memory_limit, nano_cpus)
+                )
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise DeploymentVerificationError(
+                    f"{service} Runtime 安全字段格式无效"
+                ) from exc
+            if (
+                user != "10001:10001"
+                or readonly_rootfs != "true"
+                or privileged != "false"
+                or not isinstance(cap_drop, list)
+                or "ALL" not in cap_drop
+                or not isinstance(security_opt, list)
+                or not any(
+                    str(option).startswith("no-new-privileges")
+                    for option in security_opt
+                )
+                or not positive_limits
+            ):
+                raise DeploymentVerificationError(
+                    f"{service} Runtime 最小权限或资源限制未生效"
+                )
+            mounts: dict[str, bool] = {}
+            for item in mounts_raw.split(";"):
+                if not item:
+                    continue
+                destination, separator, writable = item.partition("=")
+                if not separator or writable not in {"true", "false"}:
+                    raise DeploymentVerificationError(
+                        f"{service} Runtime 挂载字段格式无效"
+                    )
+                mounts[destination] = writable == "true"
+            if "/var/run/docker.sock" in mounts or "/srv/nanobot" in mounts:
+                raise DeploymentVerificationError(
+                    f"{service} Runtime 暴露了禁止的宿主控制面"
+                )
+            if service == "nanobot-server":
+                if mounts.get("/run/nanobot-sandboxd") is not False:
+                    raise DeploymentVerificationError(
+                        "nanobot-server 必须只读挂载 sandboxd UDS 目录"
+                    )
+                required_prompt_mounts = (
+                    "/var/lib/nanobot/prompt-runtime/live",
+                    "/var/lib/nanobot/prompt-runtime/state",
+                    "/var/lib/nanobot/prompt-runtime/backups",
+                )
+                if any(mounts.get(path) is not True for path in required_prompt_mounts):
+                    raise DeploymentVerificationError(
+                        "nanobot-server 未读写挂载外置 Prompt Runtime"
+                    )
+            elif "/run/nanobot-sandboxd" in mounts:
+                raise DeploymentVerificationError(
+                    f"{service} 不得访问 sandboxd UDS"
+                )
+            if service == "session-summary-worker":
+                worker_prompt_mounts = (
+                    "/var/lib/nanobot/prompt-runtime/live",
+                    "/var/lib/nanobot/prompt-runtime/state",
+                )
+                if any(
+                    mounts.get(path) is not False
+                    for path in worker_prompt_mounts
+                ):
+                    raise DeploymentVerificationError(
+                        "session-summary-worker 必须只读挂载外置 Prompt Runtime"
+                    )
+
+    def _assert_static_preconditions(self) -> tuple[str, ...]:
+        self._assert_pre_pull_disk_gate()
+        self._assert_no_active_sandboxes()
+        self._assert_runtime_feature_environment_off()
+        return self._snapshot_nonfixed_containers()
+
+    def _assert_postconditions(
+        self,
+        expected_nonfixed: tuple[str, ...],
+    ) -> None:
+        self._assert_runtime_disk_gate()
+        self._assert_no_active_sandboxes()
+        self._assert_runtime_feature_environment_off()
+        self._assert_runtime_security_boundaries()
+        self._assert_nonfixed_containers_unchanged(expected_nonfixed)
 
     def _observe(self) -> RuntimeObservation:
         references: set[str] = set()
@@ -347,6 +613,40 @@ class AtomicRuntimeDeployer:
         ):
             raise DeploymentVerificationError(
                 "实际 Runtime 身份与 ReleaseManifest 不一致"
+            )
+
+    def _assert_pulled_artifact_identity(
+        self,
+        artifact: ArtifactManifest,
+    ) -> None:
+        result = self._run(
+            (
+                "docker",
+                "image",
+                "inspect",
+                "--format",
+                '{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{json .RepoDigests}}',
+                artifact.oci_image_reference,
+            ),
+            operation="校验已拉取 Runtime 身份",
+        )
+        fields = result.stdout.strip().split("|", 2)
+        if len(fields) != 3:
+            raise DeploymentVerificationError("已拉取 Runtime 身份字段缺失")
+        try:
+            repo_digests = json.loads(fields[2])
+        except json.JSONDecodeError as exc:
+            raise DeploymentVerificationError(
+                "已拉取 Runtime RepoDigest 格式无效"
+            ) from exc
+        if (
+            fields[0] != artifact.oci_image_id
+            or fields[1] != artifact.source.git_full_commit
+            or not isinstance(repo_digests, list)
+            or artifact.oci_image_reference not in repo_digests
+        ):
+            raise DeploymentVerificationError(
+                "已拉取 Runtime 的 Image ID、revision 或 RepoDigest 与 ArtifactManifest 不一致"
             )
 
     def _check_ready(self) -> None:
@@ -417,7 +717,12 @@ class AtomicRuntimeDeployer:
             created_at=observed_at,
         )
 
-    def _rollback(self, previous: ReleaseManifest) -> None:
+    def _rollback(
+        self,
+        previous: ReleaseManifest,
+        *,
+        expected_nonfixed: tuple[str, ...],
+    ) -> None:
         artifact = previous.runtime_artifact
         self._compose(
             (
@@ -431,6 +736,7 @@ class AtomicRuntimeDeployer:
             operation="整体恢复前一 Runtime",
         )
         self._wait_for_runtime(artifact)
+        self._assert_postconditions(expected_nonfixed)
         self.state_store.abort()
 
     def _remove_superseded_image(
@@ -474,6 +780,7 @@ class AtomicRuntimeDeployer:
                 "新目标 Release 必须使用 provenance=built"
             )
 
+        nonfixed_before = self._assert_static_preconditions()
         current_observation = self._observe()
         observed_release = self._observed_release(
             current_observation
@@ -490,6 +797,7 @@ class AtomicRuntimeDeployer:
             try:
                 self._wait_for_runtime(target_artifact)
                 self._verify_schema_head(target_artifact)
+                self._assert_postconditions(nonfixed_before)
                 self.state_store.commit()
             except DeploymentError:
                 self.state_store.abort()
@@ -519,6 +827,8 @@ class AtomicRuntimeDeployer:
                 image_reference=target_artifact.oci_image_reference,
                 operation="拉取目标 Runtime",
             )
+            self._assert_runtime_disk_gate()
+            self._assert_pulled_artifact_identity(target_artifact)
             containers_may_have_changed = True
             self._compose(
                 (
@@ -533,13 +843,17 @@ class AtomicRuntimeDeployer:
             )
             self._wait_for_runtime(target_artifact)
             self._verify_schema_head(target_artifact)
+            self._assert_postconditions(nonfixed_before)
             self.state_store.commit()
         except DeploymentError as exc:
             if not containers_may_have_changed:
                 self.state_store.abort()
                 raise
             try:
-                self._rollback(previous)
+                self._rollback(
+                    previous,
+                    expected_nonfixed=nonfixed_before,
+                )
             except DeploymentError as rollback_exc:
                 raise AtomicDeploymentError(
                     "目标 Release 失败，且整体回滚未通过验证",

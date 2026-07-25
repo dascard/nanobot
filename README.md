@@ -156,50 +156,58 @@ WebUI 管理接口使用 `NANOBOT_ADMIN_TOKEN` 登录。
 docker compose up -d --build
 ```
 
-生产环境不从工作树现场构建，也不接受浮动 tag。CI 在镜像推送后必须先生成
-`ArtifactManifest` 和 `ReleaseManifest`；Manifest 会绑定源码／KT 提交、依赖与
-Prompt Hash、Schema migration head、SBOM、验证结果和 OCI digest。以下示例假定
-SBOM 与验证结果已经由 CI 写入 `data/release-evidence/`：
+生产环境不从工作树现场构建，也不接受浮动 tag。`Runtime 不可变发布` workflow
+只会在同一 master SHA 的 backend、frontend 与 Eval PR Gate 全部成功后构建并推送
+GHCR 镜像，生成 SBOM、`ArtifactManifest`、`ReleaseManifest` 和验证结果。服务器应把
+该 workflow artifact 下载到独立发布树；生产 checkout 只作为现有 `.env`、数据库和
+模型目录来源，不再执行构建、迁移或部署脚本。
+下载后先在独立发布树根目录执行 `sha256sum -c runtime-release-<sha>.tar.sha256`，再解包
+tar；归档会恢复固定的 `data/release-evidence/<sha>/` 相对路径，不能把证据文件散放或
+改名。
 
 ```bash
-sudo NANOBOT_RUNTIME_UID=10001 NANOBOT_RUNTIME_GID=10001 \
+export NANOBOT_PRODUCTION_ROOT='/home/dascard/bot/nanobot'
+export NANOBOT_RUNTIME_IMAGE='ghcr.io/<owner>/nanobot-runtime@sha256:<64位摘要>'
+export NANOBOT_RELEASE_MANIFEST="$PWD/data/release-evidence/<sha>/release.json"
+
+sudo NANOBOT_PRODUCTION_ROOT="${NANOBOT_PRODUCTION_ROOT}" \
+  NANOBOT_RUNTIME_UID=10001 NANOBOT_RUNTIME_GID=10001 \
   scripts/prepare-runtime-directories.sh
+sudo scripts/manage-prompt-runtime-production.sh prepare
 
-export NANOBOT_RUNTIME_IMAGE='registry.example/nanobot@sha256:<64位摘要>'
-export NANOBOT_RUNTIME_IMAGE_ID='sha256:<64位镜像配置摘要>'
+# audit → plan/resolve → 人工审查 → apply 后，绑定目标 digest 生成回执。
+sudo NANOBOT_RUNTIME_IMAGE="${NANOBOT_RUNTIME_IMAGE}" \
+  NANOBOT_RELEASE_MANIFEST="${NANOBOT_RELEASE_MANIFEST}" \
+  scripts/manage-prompt-runtime-production.sh verify-release
 
-python scripts/build_release_manifest.py artifact \
-  --profile nanobot-runtime \
-  --input python_lock=requirements-prod.lock \
-  --input web_lock=webui/package-lock.json \
-  --input prompt_defaults=prompts.v2.default \
-  --image-reference "${NANOBOT_RUNTIME_IMAGE}" \
-  --image-id "${NANOBOT_RUNTIME_IMAGE_ID}" \
-  --sbom-file data/release-evidence/nanobot-runtime.spdx.json \
-  --dependency-manifest-file requirements-prod.lock \
-  --verification-suite backend-full \
-  --verification-suite frontend-lint-build \
-  --verification-results data/release-evidence/verification-results.json \
-  --output data/release-evidence/runtime-artifact.json
-
-python scripts/build_release_manifest.py release \
-  --artifact data/release-evidence/runtime-artifact.json \
-  --output data/release-evidence/release.json
-
-export NANOBOT_RELEASE_MANIFEST='data/release-evidence/release.json'
-scripts/deploy-production.sh
+export NANOBOT_PROMPT_AUDIT_RECEIPT='/var/lib/nanobot/prompt-runtime/receipts/<回执>.json'
+export NANOBOT_COORDINATED_BACKUP_DIR='/var/backups/nanobot-sandbox/<本维护窗口备份>'
+sudo NANOBOT_PRODUCTION_ROOT="${NANOBOT_PRODUCTION_ROOT}" \
+  NANOBOT_RUNTIME_IMAGE="${NANOBOT_RUNTIME_IMAGE}" \
+  NANOBOT_RELEASE_MANIFEST="${NANOBOT_RELEASE_MANIFEST}" \
+  NANOBOT_PROMPT_AUDIT_RECEIPT="${NANOBOT_PROMPT_AUDIT_RECEIPT}" \
+  NANOBOT_COORDINATED_BACKUP_DIR="${NANOBOT_COORDINATED_BACKUP_DIR}" \
+  scripts/deploy-production.sh
 ```
 
 生产覆盖文件 `docker-compose.prod.yml` 会移除本地 `build` 配置并强制校验 digest。
-部署入口会先核对 Manifest 与镜像，再把四个固定服务作为不可拆分单元切换；任一
-worker、readiness、Runtime revision 或 Schema migration head 验证失败时，会把
-四个服务全部恢复到前一镜像。`data/release-state/` 保存
-`current.json`、`pending.json`、`rollback.json` 和历史 ReleaseManifest，用于中断
-恢复；它不保存环境变量、Token 或业务正文。
+它还会把 Prompt Runtime 挂载到仓库外 `/var/lib/nanobot/prompt-runtime/`，并用绝对
+路径挂载生产 data、models 与 sentinel，避免失败 Git 更新改变 live Prompt。部署入口
+先核对 Manifest、协调备份、Prompt 回执、Feature kill switch、活动 Sandbox 和
+pull-only 磁盘水位，再把四个固定服务作为不可拆分单元切换；任一 worker、readiness、
+Runtime revision、Schema migration head 或非 Nanobot 容器快照验证失败时，会把四个
+服务全部恢复到前一镜像。`/var/lib/nanobot/release-state/` 保存 `current.json`、
+`pending.json`、`rollback.json` 和历史 ReleaseManifest，用于中断恢复；它不保存环境
+变量、Token 或业务正文。
+前端生产依赖审计当前仍报告 React Router RSC 模式同一 advisory 对应的 2 个 high
+包节点；本项目只使用 BrowserRouter SPA，不启用 RSC 或 data-router action，并有静态
+回归守卫。Axios 与 form-data 已升级到修复版本。CI 会记录完整 audit 并阻断 Critical；
+这 2 个 high 必须在发布报告中继续单列，不能写成“漏洞已全部修复”。React Router 8
+要求 Node 22，不能在未调整并验证 Node 20 CI 基线前强行升级。
 四个固定服务均以非 root 用户运行，使用只读根文件系统、`cap_drop=ALL`、
 `no-new-privileges`、PID/CPU/内存限制和受限 tmpfs。服务端 `/api/v1/health`
 只表示进程存活，`/api/v1/ready` 才用于 Compose 与部署 readiness；worker 会等待
-服务端 readiness 通过。生产主机上的 `data/`、`models/`、`sentinel/` 必须预先存在，
+服务端 readiness 通过。生产根目录下的 `data/`、`models/`、`sentinel/` 必须预先存在，
 不得依赖 Docker 自动创建 root 所有的目录。
 已有部署如果存在其他 UID/GID 所有的数据库或模型文件，脚本会先失败并报告首个路径；
 完成停服和备份后，才可显式增加 `--fix-existing` 迁移所有权。
@@ -335,13 +343,17 @@ Admin DB Browser 只面向管理员调试使用：
 prompts.v2.default/
 ```
 
-运行时可编辑模板位于：
+开发环境的兼容运行时副本位于：
 
 ```text
 data/prompts_v2/
 ```
 
-服务启动时会通过 `bootstrap/prompt_runtime.py` 初始化运行时模板目录，只复制缺失模板，不覆盖已有运行时修改。修改对话组装、历史注入、工具契约或任务 prompt 时，需要同步检查默认模板、运行时模板和变量白名单。
+生产环境不使用上述 checkout 内目录，而是通过
+`NANOBOT_PROMPT_RUNTIME_DIR=/var/lib/nanobot/prompt-runtime/live/runtime` 使用仓库外
+可变状态。升级必须执行 audit → plan/resolve → 人工审查 → apply，并由目标 digest
+生成审计回执；初始化和迁移只复制或显式处理，不静默覆盖管理员修改。修改对话组装、
+历史注入、工具契约或任务 prompt 时，仍需同步检查 canonical 默认模板和变量白名单。
 
 常用检查：
 

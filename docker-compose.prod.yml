@@ -2,15 +2,52 @@ services:
   nanobot-server:
     image: ${NANOBOT_RUNTIME_IMAGE:?生产部署必须设置 NANOBOT_RUNTIME_IMAGE=仓库/镜像@sha256:摘要}
     build: !reset null
+    env_file: !override
+      - ${NANOBOT_PRODUCTION_ENV_FILE:?生产部署必须设置 NANOBOT_PRODUCTION_ENV_FILE}
+    environment:
+      NANOBOT_PROMPT_DEFAULT_DIR: /app/prompts.v2.default
+      NANOBOT_PROMPT_RUNTIME_DIR: /var/lib/nanobot/prompt-runtime/live/runtime
+      NANOBOT_PROMPT_TEMPLATE_STATE_DIR: /var/lib/nanobot/prompt-runtime/state
+      NANOBOT_PROMPT_BACKUP_DIR: /var/lib/nanobot/prompt-runtime/backups
+      NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED: "false"
+      NANOBOT_SANDBOX_ENABLED: "false"
+      NANOBOT_SANDBOX_EXEC_ENABLED: "false"
+      NANOBOT_SANDBOX_GROUP_ENABLED: "false"
+      NANOBOT_GROUP_LEARNING_ENABLED: "false"
+      GROUP_MEMORY_INJECTION_ENABLED: "false"
+    volumes: !override
+      - ${NANOBOT_PRODUCTION_DATA_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_DATA_DIR}:/app/data
+      - ${NANOBOT_PRODUCTION_SENTINEL_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_SENTINEL_DIR}:/app/sentinel
+      - ${NANOBOT_PRODUCTION_MODELS_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_MODELS_DIR}:/app/models
+      - /run/nanobot-sandboxd:/run/nanobot-sandboxd:ro
+      - ${NANOBOT_PROMPT_HOST_ROOT:?生产部署必须设置 NANOBOT_PROMPT_HOST_ROOT}/live:/var/lib/nanobot/prompt-runtime/live
+      - ${NANOBOT_PROMPT_HOST_ROOT:?生产部署必须设置 NANOBOT_PROMPT_HOST_ROOT}/state:/var/lib/nanobot/prompt-runtime/state
+      - ${NANOBOT_PROMPT_HOST_ROOT:?生产部署必须设置 NANOBOT_PROMPT_HOST_ROOT}/backups:/var/lib/nanobot/prompt-runtime/backups
 
   session-summary-worker:
     image: ${NANOBOT_RUNTIME_IMAGE:?生产部署必须设置 NANOBOT_RUNTIME_IMAGE=仓库/镜像@sha256:摘要}
     build: !reset null
+    environment:
+      NANOBOT_PROMPT_DEFAULT_DIR: /app/prompts.v2.default
+      NANOBOT_PROMPT_RUNTIME_DIR: /var/lib/nanobot/prompt-runtime/live/runtime
+      NANOBOT_PROMPT_TEMPLATE_STATE_DIR: /var/lib/nanobot/prompt-runtime/state
+    volumes: !override
+      - ${NANOBOT_PRODUCTION_DATA_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_DATA_DIR}:/app/data
+      - ${NANOBOT_PRODUCTION_SENTINEL_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_SENTINEL_DIR}:/app/sentinel
+      - ${NANOBOT_PRODUCTION_MODELS_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_MODELS_DIR}:/app/models
+      - ${NANOBOT_PROMPT_HOST_ROOT:?生产部署必须设置 NANOBOT_PROMPT_HOST_ROOT}/live:/var/lib/nanobot/prompt-runtime/live:ro
+      - ${NANOBOT_PROMPT_HOST_ROOT:?生产部署必须设置 NANOBOT_PROMPT_HOST_ROOT}/state:/var/lib/nanobot/prompt-runtime/state:ro
 
   outbound-delivery-worker:
     image: ${NANOBOT_RUNTIME_IMAGE:?生产部署必须设置 NANOBOT_RUNTIME_IMAGE=仓库/镜像@sha256:摘要}
     build: !reset null
+    volumes: !override
+      - ${NANOBOT_PRODUCTION_DATA_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_DATA_DIR}:/app/data
 
   semantic-index-worker:
     image: ${NANOBOT_RUNTIME_IMAGE:?生产部署必须设置 NANOBOT_RUNTIME_IMAGE=仓库/镜像@sha256:摘要}
     build: !reset null
+    volumes: !override
+      - ${NANOBOT_PRODUCTION_DATA_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_DATA_DIR}:/app/data
+      - ${NANOBOT_PRODUCTION_SENTINEL_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_SENTINEL_DIR}:/app/sentinel
+      - ${NANOBOT_PRODUCTION_MODELS_DIR:?生产部署必须设置 NANOBOT_PRODUCTION_MODELS_DIR}:/app/models

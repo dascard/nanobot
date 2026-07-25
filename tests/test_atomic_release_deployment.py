@@ -64,8 +64,11 @@ def _release(
             oci_image_reference=image_reference,
             oci_image_id=image_id,
             sbom_path="artifacts/runtime.spdx.json",
+            sbom_sha256="5" * 64,
             dependency_manifest_path="requirements-prod.lock",
+            dependency_manifest_sha256="6" * 64,
             verification_suites=("backend-full",),
+            verification_results_path="artifacts/verification-results.json",
             verification_results_sha256="4" * 64,
             built_at=created_at,
             builder_version="release-manifest-v1",
@@ -90,6 +93,14 @@ class _FakeRunner:
         target,
         fail_service: str | None = None,
         mixed_current: bool = False,
+        feature_environment: tuple[str, ...] = (),
+        nonfixed_snapshot: tuple[str, ...] = (
+            "abc123\tdatabase\tpostgres:16\tUp 2 hours",
+        ),
+        nonfixed_snapshot_after_switch: tuple[str, ...] | None = None,
+        active_sandbox_names: tuple[str, ...] = (),
+        pulled_image_id: str | None = None,
+        insecure_target_runtime: bool = False,
     ):
         from core.release.deployment import CommandResult
 
@@ -99,12 +110,65 @@ class _FakeRunner:
         self.current = self.previous
         self.fail_service = fail_service
         self.mixed_current = mixed_current
+        self.feature_environment = feature_environment
+        self.nonfixed_snapshot = nonfixed_snapshot
+        self.nonfixed_snapshot_after_switch = nonfixed_snapshot_after_switch
+        self.active_sandbox_names = active_sandbox_names
+        self.pulled_image_id = pulled_image_id
+        self.insecure_target_runtime = insecure_target_runtime
         self.commands: list[_Command] = []
 
     def run(self, args, *, environment=None):
         command = tuple(args)
         env = dict(environment or {})
         self.commands.append(_Command(command, env))
+
+        if (
+            command[:3] == ("docker", "inspect", "--format")
+            and command[3] == "{{json .Config.Env}}"
+        ):
+            import json
+
+            return self._result_type(
+                0,
+                json.dumps(list(self.feature_environment)) + "\n",
+                "",
+            )
+
+        if (
+            command[:3] == ("docker", "inspect", "--format")
+            and "ReadonlyRootfs" in command[3]
+        ):
+            container = command[-1]
+            mounts = "/app/data=true;"
+            if container == "nanobot-server":
+                mounts += (
+                    "/run/nanobot-sandboxd=false;"
+                    "/var/lib/nanobot/prompt-runtime/live=true;"
+                    "/var/lib/nanobot/prompt-runtime/state=true;"
+                    "/var/lib/nanobot/prompt-runtime/backups=true;"
+                )
+            elif container == "nanobot-session-summary-worker":
+                mounts += (
+                    "/var/lib/nanobot/prompt-runtime/live=false;"
+                    "/var/lib/nanobot/prompt-runtime/state=false;"
+                )
+            output = "|".join((
+                (
+                    "0:0"
+                    if self.insecure_target_runtime and self.current == self.target
+                    else "10001:10001"
+                ),
+                "true",
+                '["ALL"]',
+                '["no-new-privileges:true"]',
+                "false",
+                "128",
+                "536870912",
+                "500000000",
+                mounts,
+            ))
+            return self._result_type(0, output + "\n", "")
 
         if command[:3] == ("docker", "inspect", "--format"):
             container = command[-1]
@@ -130,6 +194,15 @@ class _FakeRunner:
             ))
             return self._result_type(0, output + "\n", "")
 
+        if command[:3] == ("docker", "image", "inspect"):
+            artifact = self.target
+            output = "|".join((
+                self.pulled_image_id or artifact.oci_image_id,
+                artifact.source.git_full_commit,
+                f'["{artifact.oci_image_reference}"]',
+            ))
+            return self._result_type(0, output + "\n", "")
+
         if "compose" in command and "up" in command:
             reference = env["NANOBOT_RUNTIME_IMAGE"]
             if reference == self.target.oci_image_reference:
@@ -142,6 +215,21 @@ class _FakeRunner:
 
         if command and command[0] == "curl":
             return self._result_type(0, "", "")
+        if command[:3] == ("docker", "ps", "-a"):
+            snapshot = self.nonfixed_snapshot
+            if (
+                self.current == self.target
+                and self.nonfixed_snapshot_after_switch is not None
+            ):
+                snapshot = self.nonfixed_snapshot_after_switch
+            return self._result_type(
+                0,
+                "\n".join(snapshot) + "\n",
+                "",
+            )
+        if command[:2] == ("docker", "ps") and "--format" in command:
+            output = "\n".join(self.active_sandbox_names)
+            return self._result_type(0, output + ("\n" if output else ""), "")
         if command[:3] == ("docker", "ps", "-aq"):
             return self._result_type(0, "", "")
         if command[:3] == ("docker", "image", "rm"):
@@ -162,7 +250,9 @@ def _deployer(tmp_path: Path, runner: _FakeRunner):
     return AtomicRuntimeDeployer(
         runner=runner,
         state_store=ReleaseStateStore(tmp_path / "release-state"),
+        compose_env_file=tmp_path / "production.env",
         ready_url="http://127.0.0.1:8000/api/v1/ready",
+        disk_free_bytes=lambda: 100 * 1024 * 1024 * 1024,
         health_attempts=1,
         sleep=lambda _seconds: None,
         now=lambda: "2026-07-23T12:00:00+00:00",
@@ -199,6 +289,12 @@ def test_successful_release_switches_all_services_and_rotates_state(
     ]
     assert len(up_commands) == 1
     assert up_commands[0].args[-4:] == SERVICES
+    assert up_commands[0].args[:4] == (
+        "docker",
+        "compose",
+        "--project-name",
+        "nanobot",
+    )
     assert up_commands[0].environment["NANOBOT_RUNTIME_IMAGE"] == (
         target.runtime_artifact.oci_image_reference
     )
@@ -356,6 +452,101 @@ def test_observed_manifest_cannot_be_used_as_new_target(tmp_path: Path):
     assert runner.commands == []
 
 
+def test_enabled_runtime_feature_blocks_before_any_compose_mutation(tmp_path):
+    from core.release.deployment import DeploymentVerificationError
+
+    previous = _release(marker="a", provenance="observed")
+    target = _release(marker="b")
+    runner = _FakeRunner(
+        previous=previous,
+        target=target,
+        feature_environment=(
+            "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED=true",
+        ),
+    )
+
+    with pytest.raises(DeploymentVerificationError, match="硬开关"):
+        _deployer(tmp_path, runner).deploy(target)
+
+    assert not any("compose" in command.args for command in runner.commands)
+
+
+def test_active_sandbox_blocks_before_any_compose_mutation(tmp_path):
+    from core.release.deployment import DeploymentVerificationError
+
+    previous = _release(marker="a", provenance="observed")
+    target = _release(marker="b")
+    runner = _FakeRunner(
+        previous=previous,
+        target=target,
+        active_sandbox_names=("nanobot-sandbox-active",),
+    )
+
+    with pytest.raises(DeploymentVerificationError, match="活动 Sandbox"):
+        _deployer(tmp_path, runner).deploy(target)
+
+    assert not any("compose" in command.args for command in runner.commands)
+
+
+def test_nonfixed_container_change_rolls_back_all_runtime_services(tmp_path):
+    from core.release.deployment import AtomicDeploymentError
+
+    previous = _release(marker="a", provenance="observed")
+    target = _release(marker="b")
+    runner = _FakeRunner(
+        previous=previous,
+        target=target,
+        nonfixed_snapshot_after_switch=(
+            "changed\tdatabase\tpostgres:16\tUp 2 hours",
+        ),
+    )
+
+    with pytest.raises(AtomicDeploymentError) as caught:
+        _deployer(tmp_path, runner).deploy(target)
+
+    assert caught.value.rollback_succeeded is True
+    assert runner.current == previous.runtime_artifact
+
+
+def test_pulled_image_id_mismatch_fails_before_container_switch(tmp_path):
+    from core.release.deployment import DeploymentVerificationError
+
+    previous = _release(marker="a", provenance="observed")
+    target = _release(marker="b")
+    runner = _FakeRunner(
+        previous=previous,
+        target=target,
+        pulled_image_id="sha256:" + "f" * 64,
+    )
+
+    with pytest.raises(DeploymentVerificationError, match="Image ID"):
+        _deployer(tmp_path, runner).deploy(target)
+
+    assert runner.current == previous.runtime_artifact
+    assert not any(
+        "compose" in command.args and "up" in command.args
+        for command in runner.commands
+    )
+
+
+def test_runtime_security_boundary_failure_rolls_back_all_services(tmp_path):
+    from core.release.deployment import AtomicDeploymentError
+
+    previous = _release(marker="a", provenance="observed")
+    target = _release(marker="b")
+    runner = _FakeRunner(
+        previous=previous,
+        target=target,
+        insecure_target_runtime=True,
+    )
+
+    with pytest.raises(AtomicDeploymentError) as caught:
+        _deployer(tmp_path, runner).deploy(target)
+
+    assert caught.value.rollback_succeeded is True
+    assert runner.current == previous.runtime_artifact
+
+
 def test_deploy_cli_requires_manifest_to_match_runtime_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -376,6 +567,7 @@ def test_deploy_cli_requires_manifest_to_match_runtime_environment(
         str(manifest),
         "--state-dir",
         str(tmp_path / "state"),
+        *(_required_cli_arguments(tmp_path)),
     ]) == 2
 
 
@@ -389,6 +581,7 @@ def test_deploy_cli_invokes_atomic_deployer_after_validation(
         DeploymentResult,
     )
     from scripts.deploy_release import main
+    import core.release.production_preflight as preflight
 
     target = _release(marker="b")
     manifest = tmp_path / "release.json"
@@ -398,6 +591,43 @@ def test_deploy_cli_invokes_atomic_deployer_after_validation(
         target.runtime_artifact.oci_image_reference,
     )
     observed: list[str] = []
+    production_root = tmp_path / "production"
+    production_root.mkdir()
+    for directory in ("data", "models", "sentinel"):
+        (production_root / directory).mkdir()
+    (production_root / ".env").write_text("\n", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    monkeypatch.setattr(
+        preflight,
+        "validate_production_paths",
+        lambda **_kwargs: {
+            "environment_file": production_root / ".env",
+            "data_dir": production_root / "data",
+            "models_dir": production_root / "models",
+            "sentinel_dir": production_root / "sentinel",
+            "prompt_host_root": tmp_path / "prompt",
+        },
+    )
+    monkeypatch.setattr(preflight, "validate_pull_disk_gate", lambda **_kwargs: 1)
+    monkeypatch.setattr(
+        preflight,
+        "validate_release_source_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_release_artifact_evidence",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(preflight, "validate_coordinated_backup", lambda **_kwargs: {})
+    monkeypatch.setattr(preflight, "validate_prompt_audit_receipt", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        preflight,
+        "validate_database_feature_kill_switches",
+        lambda _path: None,
+    )
 
     def fake_deploy(_self, release):
         observed.append(release.release_id)
@@ -413,7 +643,8 @@ def test_deploy_cli_invokes_atomic_deployer_after_validation(
         "--manifest",
         str(manifest),
         "--state-dir",
-        str(tmp_path / "state"),
+        str(state_dir),
+        *(_required_cli_arguments(tmp_path, production_root=production_root)),
         "--health-timeout-seconds",
         "1",
         "--health-interval-seconds",
@@ -462,3 +693,29 @@ def test_subprocess_runner_merges_only_explicit_environment_overrides(
     assert kwargs["env"]["NANOBOT_RUNTIME_IMAGE"] == "immutable"
     assert kwargs["timeout"] == 9
     assert "shell" not in kwargs
+
+
+def _required_cli_arguments(
+    tmp_path: Path,
+    *,
+    production_root: Path | None = None,
+) -> tuple[str, ...]:
+    root = production_root or tmp_path / "production"
+    return (
+        "--production-root",
+        str(root),
+        "--compose-env-file",
+        str(root / ".env"),
+        "--database",
+        str(root / "data/nanobot.db"),
+        "--sandbox-data-root",
+        str(tmp_path / "sandbox-data"),
+        "--backup-dir",
+        str(tmp_path / "backup"),
+        "--backup-risk-marker",
+        "single_disk_logical_rollback_only",
+        "--prompt-host-root",
+        str(tmp_path / "prompt"),
+        "--prompt-audit-receipt",
+        str(tmp_path / "prompt/receipts/audit.json"),
+    )

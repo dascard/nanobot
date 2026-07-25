@@ -270,6 +270,32 @@ def test_production_compose_requires_immutable_runtime_image():
         assert "build: !reset null" in block
 
 
+def test_production_compose_uses_external_prompt_runtime_and_absolute_mounts():
+    compose = Path("docker-compose.prod.yml").read_text(encoding="utf-8")
+    server = _service_block(compose, "nanobot-server")
+    summary_worker = _service_block(compose, "session-summary-worker")
+
+    assert "NANOBOT_PRODUCTION_ENV_FILE" in server
+    assert "NANOBOT_PRODUCTION_DATA_DIR" in server
+    assert "NANOBOT_PRODUCTION_MODELS_DIR" in server
+    assert "NANOBOT_PRODUCTION_SENTINEL_DIR" in server
+    assert "NANOBOT_PROMPT_HOST_ROOT" in server
+    assert "/var/lib/nanobot/prompt-runtime/live/runtime" in server
+    assert "./data:/app/data" not in server
+    assert "./data/prompts_v2" not in server
+    assert "/var/lib/nanobot/prompt-runtime/live:ro" in summary_worker
+    assert "/var/lib/nanobot/prompt-runtime/state:ro" in summary_worker
+    for key in (
+        "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
+        "NANOBOT_SANDBOX_ENABLED",
+        "NANOBOT_SANDBOX_EXEC_ENABLED",
+        "NANOBOT_SANDBOX_GROUP_ENABLED",
+        "NANOBOT_GROUP_LEARNING_ENABLED",
+        "GROUP_MEMORY_INJECTION_ENABLED",
+    ):
+        assert f'{key}: "false"' in server
+
+
 def test_compose_services_apply_runtime_hardening_and_resource_limits():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
@@ -344,6 +370,17 @@ def test_runtime_image_labels_the_exact_source_revision():
     assert 'LABEL org.opencontainers.image.revision="${GIT_FULL_COMMIT}"' in dockerfile
 
 
+def test_runtime_image_applies_kt_patch_without_dirtying_host_submodule():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
+
+    assert "AS kt-source" in dockerfile
+    assert "stream-message-flag.patch" in dockerfile
+    assert "git apply --check" in dockerfile
+    assert "COPY --from=kt-source" in dockerfile
+    assert "!patches/kohakuterrarium/stream-message-flag.patch" in dockerignore
+
+
 def test_runtime_directory_preparer_is_executable():
     script = Path("scripts/prepare-runtime-directories.sh")
 
@@ -356,8 +393,9 @@ def test_runtime_directory_preparer_preserves_host_read_audit_access():
     )
 
     assert "NANOBOT_RUNTIME_HOST_READ_GID" in script
+    assert "NANOBOT_PRODUCTION_ROOT" in script
     assert 'install -d -m 2750 -o "${runtime_uid}"' in script
-    assert "chmod -R g+rX-w,o-rwx data models sentinel" in script
+    assert 'chmod -R g+rX-w,o-rwx "${runtime_paths[@]}"' in script
     assert "-type d -exec chmod g+s" in script
 
 
@@ -388,11 +426,79 @@ def test_production_deploy_requires_digest_and_never_builds_in_place():
 
     assert "@sha256:" in script
     assert "NANOBOT_RELEASE_MANIFEST" in script
+    assert "NANOBOT_COORDINATED_BACKUP_DIR" in script
+    assert "NANOBOT_PROMPT_AUDIT_RECEIPT" in script
+    assert "NANOBOT_PRODUCTION_ROOT" in script
     assert "scripts/deploy_release.py" in script
     assert "docker-compose.prod.yml" in deployment
     assert "--no-build" in deployment
     assert "docker compose build" not in implementation
     assert "prune" not in implementation
+
+
+def test_runtime_release_workflow_builds_sbom_and_manifest_after_both_gates():
+    workflow = Path(".github/workflows/release-runtime.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_run:" in workflow
+    assert "通用质量门禁" in workflow
+    assert "timing-gate-eval.yml/runs" in workflow
+    assert '.head_sha == $sha' in workflow
+    assert '.conclusion == "success"' in workflow
+    assert "docker buildx build" in workflow
+    assert "--push" in workflow
+    assert "--sbom=true" in workflow
+    assert "anchore/sbom-action@v0" in workflow
+    assert "build_release_manifest.py artifact" in workflow
+    assert "build_release_manifest.py release" in workflow
+    assert "--require-built" in workflow
+    assert 'tar --create --file "${bundle}" "${EVIDENCE_DIR}"' in workflow
+    assert 'sha256sum "${bundle}" >"${bundle}.sha256"' in workflow
+    assert "sandbox-real-docker" not in workflow
+    assert "nanobot-runtime:latest" not in workflow
+
+
+def test_webui_production_dependencies_are_patched_and_router_stays_client_only():
+    lock = json.loads(
+        Path("webui/package-lock.json").read_text(encoding="utf-8")
+    )
+    packages = lock["packages"]
+    assert packages["node_modules/axios"]["version"] == "1.18.1"
+    assert packages["node_modules/form-data"]["version"] == "4.0.6"
+    assert packages["node_modules/react-router"]["version"] == "7.18.1"
+    assert packages["node_modules/react-router-dom"]["version"] == "7.18.1"
+
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(Path("webui/src").rglob("*"))
+        if path.suffix in {".js", ".jsx", ".ts", ".tsx"}
+    )
+    # GHSA-qwww-vcr4-c8h2 影响 RSC action；当前后台必须保持纯 BrowserRouter SPA。
+    assert "BrowserRouter" in source
+    for server_or_data_router_api in (
+        "createBrowserRouter",
+        "RouterProvider",
+        "RSCHydratedRouter",
+        "RSCStaticRouter",
+        "createCallServer",
+    ):
+        assert server_or_data_router_api not in source
+
+
+def test_production_prompt_manager_uses_target_digest_and_restricted_container():
+    path = Path("scripts/manage-prompt-runtime-production.sh")
+    script = path.read_text(encoding="utf-8")
+
+    assert os.access(path, os.X_OK)
+    assert "@sha256:" in script
+    assert "--network none" in script
+    assert "--read-only" in script
+    assert "--cap-drop ALL" in script
+    assert "no-new-privileges:true" in script
+    assert "/var/lib/nanobot/prompt-runtime" in script
+    assert "scripts/verify_prompt_runtime_release.py" in script
+    assert "data/prompts_v2" not in script
 
 
 def test_local_build_rolls_back_when_compose_recreate_fails(tmp_path):
@@ -584,6 +690,7 @@ def test_quality_gate_runs_full_backend_frontend_and_architecture_checks():
     assert "python -m ruff check" in workflow
     assert "npm run lint" in workflow
     assert "npm run build" in workflow
+    assert "npm audit --omit=dev --audit-level=critical" in workflow
     assert "cp .env.example .env" in workflow
     assert "trap 'rm -f .env' EXIT" in workflow
     assert "docker compose -f docker-compose.yml config --quiet" in workflow

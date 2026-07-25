@@ -64,7 +64,30 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--state-dir",
         type=Path,
-        default=Path("data/release-state"),
+        required=True,
+    )
+    parser.add_argument("--production-root", type=Path, required=True)
+    parser.add_argument("--compose-env-file", type=Path, required=True)
+    parser.add_argument("--database", type=Path, required=True)
+    parser.add_argument("--sandbox-data-root", type=Path, required=True)
+    parser.add_argument("--backup-dir", type=Path, required=True)
+    parser.add_argument("--backup-risk-marker", required=True)
+    parser.add_argument("--prompt-host-root", type=Path, required=True)
+    parser.add_argument("--prompt-audit-receipt", type=Path, required=True)
+    parser.add_argument(
+        "--evidence-max-age-seconds",
+        type=int,
+        default=21600,
+    )
+    parser.add_argument(
+        "--system-min-free-bytes",
+        type=int,
+        default=60 * 1024 * 1024 * 1024,
+    )
+    parser.add_argument(
+        "--pull-reserve-bytes",
+        type=int,
+        default=5 * 1024 * 1024 * 1024,
     )
     parser.add_argument(
         "--ready-url",
@@ -99,6 +122,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         DeploymentError,
         ReleaseStateStore,
     )
+    from core.release.production_preflight import (
+        ProductionPreflightError,
+        validate_coordinated_backup,
+        validate_database_feature_kill_switches,
+        validate_production_paths,
+        validate_prompt_audit_receipt,
+        validate_pull_disk_gate,
+        validate_release_artifact_evidence,
+        validate_release_source_identity,
+    )
 
     args = _parser().parse_args(argv)
     runtime_image = os.environ.get(
@@ -127,16 +160,62 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.health_timeout_seconds <= 0
         or args.health_interval_seconds <= 0
         or args.command_timeout_seconds <= 0
+        or args.evidence_max_age_seconds <= 0
+        or args.system_min_free_bytes <= 0
+        or args.pull_reserve_bytes <= 0
     ):
-        print("部署超时参数必须大于 0", file=sys.stderr)
+        print("部署超时、证据有效期与磁盘预算参数必须大于 0", file=sys.stderr)
         return 2
 
-    state_dir = (
-        args.state_dir
-        if args.state_dir.is_absolute()
-        else ROOT / args.state_dir
-    )
-    state_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = args.state_dir
+    try:
+        paths = validate_production_paths(
+            source_root=ROOT,
+            production_root=args.production_root,
+            environment_file=args.compose_env_file,
+            data_dir=args.production_root / "data",
+            models_dir=args.production_root / "models",
+            sentinel_dir=args.production_root / "sentinel",
+            prompt_host_root=args.prompt_host_root,
+            release_state_dir=state_dir,
+        )
+        if args.database.resolve() != (
+            paths["data_dir"] / "nanobot.db"
+        ).resolve():
+            raise ProductionPreflightError(
+                "生产 SQLite 必须是 NANOBOT_PRODUCTION_ROOT/data/nanobot.db"
+            )
+        validate_release_source_identity(ROOT, runtime)
+        validate_release_artifact_evidence(ROOT, runtime)
+        validate_pull_disk_gate(
+            system_min_free_bytes=args.system_min_free_bytes,
+            pull_reserve_bytes=args.pull_reserve_bytes,
+        )
+        validate_coordinated_backup(
+            backup_dir=args.backup_dir,
+            database_path=args.database,
+            data_root=args.sandbox_data_root,
+            expected_risk_marker=args.backup_risk_marker,
+            max_age_seconds=args.evidence_max_age_seconds,
+        )
+        validate_prompt_audit_receipt(
+            receipt_path=args.prompt_audit_receipt,
+            prompt_host_root=paths["prompt_host_root"],
+            artifact=runtime,
+            max_age_seconds=args.evidence_max_age_seconds,
+        )
+        validate_database_feature_kill_switches(args.database)
+    except ProductionPreflightError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    os.environ.update({
+        "NANOBOT_PRODUCTION_ENV_FILE": str(paths["environment_file"]),
+        "NANOBOT_PRODUCTION_DATA_DIR": str(paths["data_dir"]),
+        "NANOBOT_PRODUCTION_MODELS_DIR": str(paths["models_dir"]),
+        "NANOBOT_PRODUCTION_SENTINEL_DIR": str(paths["sentinel_dir"]),
+        "NANOBOT_PROMPT_HOST_ROOT": str(paths["prompt_host_root"]),
+    })
     lock_path = state_dir / "deploy.lock"
     with lock_path.open("a+", encoding="utf-8") as lock:
         try:
@@ -151,7 +230,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 timeout_seconds=args.command_timeout_seconds,
             ),
             state_store=ReleaseStateStore(state_dir),
+            compose_env_file=paths["environment_file"],
             ready_url=args.ready_url,
+            system_min_free_bytes=args.system_min_free_bytes,
+            pull_reserve_bytes=args.pull_reserve_bytes,
             health_attempts=max(
                 1,
                 math.ceil(
