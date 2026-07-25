@@ -579,7 +579,7 @@ def test_quality_gate_runs_full_backend_frontend_and_architecture_checks():
     behavior_step = workflow.split(
         "- name: 检查架构行为 Golden 漂移", maxsplit=1
     )[1].split("- name:", maxsplit=1)[0]
-    assert "continue-on-error: true" in inventory_step
+    assert "continue-on-error: true" not in inventory_step
     assert "continue-on-error: true" not in behavior_step
     assert "python -m ruff check" in workflow
     assert "npm run lint" in workflow

@@ -525,6 +525,57 @@ def test_cli_writes_checks_and_reports_inventory_drift(tmp_path, capsys):
     assert "已漂移" in capsys.readouterr().err
 
 
+def test_cli_check_reuses_stored_revision_instead_of_current_head(
+    tmp_path,
+    monkeypatch,
+):
+    import scripts.audit_decision_rules as audit_module
+
+    _write(
+        tmp_path,
+        "core/sample.py",
+        'def accepts(value):\n    return value == "v1"\n',
+    )
+    common_arguments = [
+        "--root",
+        str(tmp_path),
+        "--scan-root",
+        "core",
+    ]
+    monkeypatch.setattr(
+        audit_module,
+        "_source_revision",
+        lambda _root: "revision-before-commit",
+    )
+    assert audit_module.main([*common_arguments, "--write"]) == 0
+
+    monkeypatch.setattr(
+        audit_module,
+        "_source_revision",
+        lambda _root: "revision-after-commit",
+    )
+    assert audit_module.main([*common_arguments, "--check"]) == 0
+    payload = json.loads(
+        (
+            tmp_path
+            / "docs/architecture/decision-rule-inventory.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert payload["source_revision"] == "revision-before-commit"
+
+    assert (
+        audit_module.main(
+            [
+                *common_arguments,
+                "--source-revision",
+                "revision-after-commit",
+                "--check",
+            ]
+        )
+        == 1
+    )
+
+
 def test_cli_accepts_enveloped_overrides_and_prints_markdown(tmp_path, capsys):
     from scripts.audit_decision_rules import audit_repository, main
 

@@ -3190,6 +3190,9 @@ skipped 单测冒充为通过；环境不满足时只能标记 `BLOCKED`，不�
   Artifact Profile、strict、Golden 写入和漂移检查。
 - Runtime Module Diagnostics 只读返回 Verification Registry 和 suite
   元数据；Web Runtime Diagnostics 不维护第二份 suite 枚举。
+- 决策规则清单稳定后，CI 已移除 `continue-on-error`。`--check` 复用已生成
+  清单记录的基线提交，只比较当前扫描结果，避免“提交清单后 HEAD 改变”形成
+  不可解的提交 SHA 自引用；显式 `--source-revision` 仍保持严格覆盖语义。
 
 #### 本地验证结果
 

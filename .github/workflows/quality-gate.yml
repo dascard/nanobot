@@ -60,7 +60,6 @@ jobs:
         run: python scripts/build_verification_plan.py --check-golden
 
       - name: 检查决策规则清单漂移
-        continue-on-error: true
         run: python scripts/audit_decision_rules.py --check
 
       - name: 检查语义 Task SLO Manifest 漂移

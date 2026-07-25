@@ -1574,6 +1574,19 @@ def _source_revision(root: Path) -> str:
     return completed.stdout.strip()
 
 
+def _stored_source_revision(path: Path) -> str:
+    """读取已生成清单的基线提交，避免提交 SHA 自引用导致永久漂移。"""
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    source_revision = payload.get("source_revision")
+    return source_revision.strip() if isinstance(source_revision, str) else ""
+
+
 def _write_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
@@ -1608,7 +1621,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--source-revision",
         default=None,
-        help="写入报告的源提交，默认读取当前 Git HEAD",
+        help=(
+            "写入报告的源提交；生成时默认读取当前 Git HEAD，"
+            "检查时默认复用清单中的基线提交"
+        ),
     )
     override_mode = parser.add_mutually_exclusive_group()
     override_mode.add_argument(
@@ -1678,6 +1694,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif not override_path.is_absolute():
         override_path = root / override_path
+    source_revision = arguments.source_revision
+    if source_revision is None and arguments.check:
+        source_revision = _stored_source_revision(json_output)
+    if source_revision is None or not source_revision:
+        source_revision = _source_revision(root)
     try:
         overrides, group_overrides = _load_override_configuration(
             override_path
@@ -1689,11 +1710,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if arguments.scan_roots
                 else None
             ),
-            source_revision=(
-                arguments.source_revision
-                if arguments.source_revision is not None
-                else _source_revision(root)
-            ),
+            source_revision=source_revision,
             overrides=overrides,
             group_overrides=group_overrides,
         )
