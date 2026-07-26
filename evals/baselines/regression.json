@@ -1,0 +1,8 @@
+{
+  "suite": "regression",
+  "total": 11,
+  "passed": 11,
+  "failed": 0,
+  "pass_rate": 1.0,
+  "failed_cases": []
+}

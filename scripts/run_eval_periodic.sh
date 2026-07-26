@@ -91,6 +91,15 @@ run_step "timing gate" "eval_suite" "timing_gate" \
   "evals/reports/${PERIODIC_REPORT_DATE}-timing_gate.json" \
   bash scripts/run_timing_gate_gate.sh
 
+run_step "regression" "eval_suite" "regression" \
+  "evals/baselines/regression.json" \
+  "evals/reports/${PERIODIC_REPORT_DATE}-regression.json" \
+  python -B -m evals.run \
+    --suite regression \
+    --baseline evals/baselines/regression.json \
+    --min-pass-rate 1.0 \
+    --max-new-failures 0
+
 run_step "capability model routing" "eval_suite" "capability_model_routing" \
   "evals/baselines/capability_model_routing.json" \
   "evals/reports/${PERIODIC_REPORT_DATE}-capability_model_routing.json" \

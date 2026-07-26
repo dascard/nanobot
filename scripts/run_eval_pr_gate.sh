@@ -18,6 +18,12 @@ python -B -m pytest \
 bash scripts/run_timing_gate_gate.sh
 
 python -B -m evals.run \
+  --suite regression \
+  --baseline evals/baselines/regression.json \
+  --min-pass-rate 1.0 \
+  --max-new-failures 0
+
+python -B -m evals.run \
   --suite capability_model_routing \
   --baseline evals/baselines/capability_model_routing.json \
   --min-pass-rate 1.0 \

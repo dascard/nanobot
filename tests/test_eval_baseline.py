@@ -361,6 +361,8 @@ def test_eval_pr_gate_script_runs_stable_suites():
     assert script.exists()
     text = script.read_text(encoding="utf-8")
     assert "scripts/run_timing_gate_gate.sh" in text
+    assert "--suite regression" in text
+    assert "evals/baselines/regression.json" in text
     assert "--suite capability_model_routing" in text
     assert "evals/baselines/capability_model_routing.json" in text
     assert "--suite capability_reply_contract" in text
@@ -385,6 +387,8 @@ def test_eval_periodic_script_runs_stable_suites():
     text = script.read_text(encoding="utf-8")
     assert "run_step" in text
     assert "scripts/run_timing_gate_gate.sh" in text
+    assert "--suite regression" in text
+    assert "evals/baselines/regression.json" in text
     assert "--suite capability_model_routing" in text
     assert "evals/baselines/capability_model_routing.json" in text
     assert "--suite capability_reply_contract" in text
