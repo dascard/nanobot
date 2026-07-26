@@ -64,6 +64,28 @@ def test_eligible_excludes_internal_and_no_context_turns(db_session):
     assert skipped[moderated.id] == "moderation_no_context"
 
 
+def test_normalize_turn_summarizes_long_user_message_from_raw_length(db_session):
+    """长消息判定必须基于原文长度，不能先截断到 max_per_msg 再判。"""
+    from app.session_memory.windowing import normalize_turn_for_prompt
+
+    long_turn = _turn(db_session, content="长" * 2500)
+    assistant_turn = _turn(db_session, role="assistant", content="答" * 2500)
+    db_session.commit()
+
+    normalized = normalize_turn_for_prompt(long_turn, max_per_msg=300)
+    assert normalized is not None
+    assert normalized["content"].startswith("[长消息摘要]")
+    assert "约 2500 字符" in normalized["content"]
+
+    assistant_normalized = normalize_turn_for_prompt(
+        assistant_turn,
+        max_per_msg=300,
+    )
+    assert assistant_normalized is not None
+    assert "[长消息摘要]" not in assistant_normalized["content"]
+    assert "截断" in assistant_normalized["content"]
+
+
 def test_recent_raw_window_selects_latest_by_id_not_created_at(db_session):
     from app.session_memory.windowing import select_latest_raw_window
 

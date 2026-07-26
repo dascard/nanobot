@@ -352,23 +352,20 @@ def build_session_memory(
     prev_dt: datetime | None = None
     for item in recent_window:
         cur_dt = item.get("created_at")
+        # Prompt v2 的 history 契约只接受 user/assistant role，独立 system 行
+        # 会在 normalized_history_messages() 被丢弃；时间间隔提示必须折叠进
+        # 随后一条消息的正文前缀才能真正到达模型。
+        gap_hint = ""
         if prev_dt is not None and cur_dt is not None:
             gap_min = (cur_dt - prev_dt).total_seconds() / 60
             if gap_min > CONTEXT_GAP_HINT_MIN:
-                history_messages.append({
-                    "role": "system",
-                    "content": (
-                        f"[时间间隔提示] 距离上一条消息约{int(gap_min)}分钟；"
-                        "这只是时间信号，是否延续同一话题请结合前后内容判断。"
-                    ),
-                    "meta_json": '{"kind":"context_gap_marker"}',
-                })
+                gap_hint = f"[时间间隔] 距上一条消息约{int(gap_min)}分钟\n"
                 gap_breaks += 1
         time_label = relative_time_label(cur_dt) if cur_dt else ""
         display = f"{time_label} {item['content']}".strip() if time_label else item["content"]
         history_messages.append({
             "role": item["role"],
-            "content": display,
+            "content": f"{gap_hint}{display}",
             "meta_json": item.get("meta_json", "{}"),
             "_created_at": cur_dt,
             "turn_id": item.get("turn_id"),

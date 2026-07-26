@@ -107,6 +107,36 @@ def test_knowledge_query_uses_reranker_before_final_score(db_session):
     assert result["items"][0]["score_breakdown"]["reranker"] == 0.9
 
 
+class FailingRerankerProvider:
+    def rerank(self, query, candidates, *, top_k=None):
+        raise RuntimeError("reranker service down")
+
+
+def test_knowledge_query_degrades_at_runtime_when_reranker_raises(db_session):
+    """reranker 运行中故障应运行时降级，而不是让整个查询失败。"""
+    from core.knowledge_rag import KnowledgeRagService
+
+    doc = _manual_doc(
+        db_session,
+        "degraded-runtime.md",
+        "# 向量数据库\n向量数据库 运行时降级验证 reranker 故障兜底。",
+        title="运行时降级",
+        trust_level="medium",
+        published_at="2026-05-22",
+    )
+    _index_doc(db_session, doc)
+
+    result = KnowledgeRagService(
+        db_session,
+        reranker_provider=FailingRerankerProvider(),
+    ).query("向量数据库 运行时降级", limit=5)
+
+    assert result["degraded"] is True
+    assert result["fallback_reason"] == "reranker_error"
+    assert [item["document_id"] for item in result["items"]] == [doc.id]
+    assert result["items"][0]["score_breakdown"]["reranker"] is None
+
+
 def test_knowledge_query_debug_contract_keys(db_session):
     from core.knowledge_rag import KnowledgeRagService
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +31,8 @@ from core.semantic.retriever import (
 )
 from core.semantic.scoring import passes_relevance_gate, recency_score, weighted_score
 
+
+logger = logging.getLogger("nanobot.knowledge_rag")
 
 TRUST_ORDER = {"low": 1, "medium": 2, "high": 3}
 TRUST_SCORE = {"low": 0.35, "medium": 0.70, "high": 1.0}
@@ -437,6 +440,7 @@ class KnowledgeRagService:
         skipped: dict[str, int],
         limit: int,
         degraded: bool,
+        fallback_reason: str = "",
         debug_trace: dict[str, Any] | None,
     ) -> dict[str, Any]:
         capped_limit = max(1, int(limit))
@@ -454,7 +458,9 @@ class KnowledgeRagService:
             "query": query,
             "source": "knowledge",
             "degraded": degraded,
-            "fallback_reason": "reranker_unavailable" if degraded else "",
+            "fallback_reason": (
+                (fallback_reason or "reranker_unavailable") if degraded else ""
+            ),
             "stats": {
                 "fts_candidates": len(recall.fts_hits),
                 "vector_candidates": len(recall.vector_hits),
@@ -786,17 +792,31 @@ class _KnowledgeReranker:
         candidates: RetrievalCandidates[_KnowledgeCandidate],
     ) -> RerankOutcome[_KnowledgeCandidate]:
         all_candidates = list(candidates.items)
-        debug_inputs = self.service._rerank(request.query, all_candidates)
-        reranker_items = (
-            tuple(all_candidates)
-            if self.service.reranker_provider is not None
-            else ()
-        )
+        degraded = self.service.reranker_provider is None
+        fallback_reason = "reranker_unavailable" if degraded else ""
+        debug_inputs: list[dict[str, Any]] = []
+        reranker_items: tuple[_KnowledgeCandidate, ...] = ()
+        if not degraded:
+            # reranker 服务运行中不可用时按运行时降级处理，relevance gate
+            # 退回 semantic/lexical 阈值；是否允许降级由工具层决定。
+            try:
+                debug_inputs = self.service._rerank(request.query, all_candidates)
+                reranker_items = tuple(all_candidates)
+            except Exception:
+                logger.warning(
+                    "[KnowledgeRag] reranker 调用失败，按运行时降级继续",
+                    exc_info=True,
+                )
+                degraded = True
+                fallback_reason = "reranker_error"
+                debug_inputs = []
+                reranker_items = ()
         return RerankOutcome(
             items=tuple(all_candidates),
             reranker_items=reranker_items,
             metadata={
-                "degraded": self.service.reranker_provider is None,
+                "degraded": degraded,
+                "fallback_reason": fallback_reason,
                 "reranker_input_pairs": debug_inputs,
             },
         )
@@ -906,5 +926,8 @@ class _KnowledgeResultBuilder:
             skipped=dict(state.candidates.metadata),
             limit=state.request.limit,
             degraded=bool(state.rerank_outcome.metadata["degraded"]),
+            fallback_reason=str(
+                state.rerank_outcome.metadata.get("fallback_reason") or ""
+            ),
             debug_trace=debug_trace,
         )

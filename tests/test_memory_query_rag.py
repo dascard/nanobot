@@ -257,6 +257,34 @@ def test_archived_session_summary_delete_job_removes_fts_and_recall(db_session):
     assert after["items"] == []
 
 
+class FailingRerankerProvider:
+    def rerank(self, query, candidates, *, top_k=None):
+        raise RuntimeError("reranker service down")
+
+
+def test_memory_rag_degrades_at_runtime_when_reranker_raises(db_session):
+    """reranker 运行中故障应运行时降级，而不是让整个查询失败。"""
+    from core.memory_rag import MemoryRagService
+
+    digest = _digest_row(131, cards=[
+        {"title": "端口", "text": "uvicorn 8000 端口冲突。", "keywords": ["端口"]},
+    ])
+    chunks = chunks_from_memory_digest(digest)
+    _index_chunks(db_session, chunks)
+
+    service = MemoryRagService(
+        db_session,
+        embedding_provider=KeywordEmbeddingProvider(),
+        reranker_provider=FailingRerankerProvider(),
+    )
+    result = service.query("端口", source="digest", limit=5)
+
+    assert result["degraded"] is True
+    assert result["fallback_reason"] == "reranker_error"
+    assert result["items"]
+    assert result["items"][0]["matched_cards"][0]["reranker"] is None
+
+
 def test_memory_query_uses_reranker_after_recall(db_session):
     from core.memory_rag import MemoryRagService
 

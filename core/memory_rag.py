@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -33,6 +34,8 @@ from core.semantic.retriever import (
 )
 from core.semantic.scoring import passes_relevance_gate, recency_score, weighted_score
 
+
+logger = logging.getLogger("nanobot.memory_rag")
 
 RELEVANCE_WEIGHTS = {"reranker": 0.70, "semantic": 0.20, "lexical": 0.10}
 MIN_FALLBACK_RERANK_LEXICAL = 0.50
@@ -459,6 +462,7 @@ class MemoryRagService:
         reranker_latency_ms: int,
         counters: dict[str, int],
         degraded: bool,
+        fallback_reason: str = "",
         debug_trace: dict[str, Any] | None,
     ) -> dict[str, Any]:
         if debug_trace is not None:
@@ -480,7 +484,9 @@ class MemoryRagService:
             "query": query,
             "source": source,
             "degraded": degraded,
-            "fallback_reason": "reranker_unavailable" if degraded else "",
+            "fallback_reason": (
+                (fallback_reason or "reranker_unavailable") if degraded else ""
+            ),
             "stats": {
                 "fts_candidates": len(recall.fts_hits),
                 "vector_candidates": len(recall.vector_hits),
@@ -704,20 +710,41 @@ class _MemoryReranker:
     ) -> RerankOutcome[_Candidate]:
         all_candidates = list(candidates.items)
         bm25_by_id = dict(candidates.metadata["bm25_by_id"])
-        reranker_candidates = self.service._prepare_rerank_candidates(
-            all_candidates,
-            bm25_by_id=bm25_by_id,
-        )
-        reranker_latency_ms, debug_inputs = self.service._rerank(
-            request.query,
-            candidates=all_candidates,
-            rerank_candidates=reranker_candidates,
-        )
+        degraded = self.service.reranker_provider is None
+        fallback_reason = "reranker_unavailable" if degraded else ""
+        reranker_candidates: list[_Candidate] = []
+        reranker_latency_ms = 0
+        debug_inputs: list[dict[str, Any]] = []
+        if not degraded:
+            reranker_candidates = self.service._prepare_rerank_candidates(
+                all_candidates,
+                bm25_by_id=bm25_by_id,
+            )
+            # reranker 服务运行中不可用（HTTP 超时/宕机、本地模型加载失败）
+            # 时按运行时降级处理，交由 relevance gate 的 degraded 分支继续
+            # 排序；是否允许降级由工具层按 allow_degraded 决定。
+            try:
+                reranker_latency_ms, debug_inputs = self.service._rerank(
+                    request.query,
+                    candidates=all_candidates,
+                    rerank_candidates=reranker_candidates,
+                )
+            except Exception:
+                logger.warning(
+                    "[MemoryRag] reranker 调用失败，按运行时降级继续",
+                    exc_info=True,
+                )
+                degraded = True
+                fallback_reason = "reranker_error"
+                reranker_candidates = []
+                reranker_latency_ms = 0
+                debug_inputs = []
         return RerankOutcome(
             items=tuple(all_candidates),
             reranker_items=tuple(reranker_candidates),
             metadata={
-                "degraded": self.service.reranker_provider is None,
+                "degraded": degraded,
+                "fallback_reason": fallback_reason,
                 "reranker_latency_ms": reranker_latency_ms,
                 "reranker_input_pairs": debug_inputs,
                 "reranker_executed": bool(debug_inputs),
@@ -838,5 +865,8 @@ class _MemoryResultBuilder:
             ),
             counters=dict(state.candidates.metadata),
             degraded=bool(state.rerank_outcome.metadata["degraded"]),
+            fallback_reason=str(
+                state.rerank_outcome.metadata.get("fallback_reason") or ""
+            ),
             debug_trace=debug_trace,
         )

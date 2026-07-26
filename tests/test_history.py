@@ -198,14 +198,18 @@ def test_build_memory_uses_neutral_gap_hint_instead_of_topic_break(db_session):
         user_id="gap-user",
     )
 
+    # Prompt v2 history 契约只接受 user/assistant；gap 提示必须折叠为
+    # 随后消息的正文前缀，独立 system 行会在编译时被静默丢弃。
+    assert all(message["role"] in {"user", "assistant"} for message in messages)
     hints = [
         message["content"]
         for message in messages
-        if '"kind":"context_gap_marker"' in message.get("meta_json", "")
+        if "[时间间隔]" in message["content"]
     ]
     assert len(hints) == 1
-    assert "时间间隔" in hints[0]
-    assert "结合前后内容判断" in hints[0]
+    assert "距上一条消息约" in hints[0]
+    assert hints[0].startswith("[时间间隔]")
+    assert "继续处理这个问题" in hints[0]
     assert "话题断裂" not in hints[0]
     assert "不应视为同一话题" not in hints[0]
     assert debug["gap_breaks"] == 1

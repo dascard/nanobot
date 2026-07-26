@@ -782,6 +782,9 @@ async def execute_memory_query(
                 if source == "all":
                     return ToolResult(error="source=all requires MEMORY_RAG_ENABLED=1")
             if source == "session_summary":
+                # session summary 没有独立的 include_archived 参数；沿用
+                # include_legacy 表达「包含已归档摘要」，此处显式命名以免
+                # 位置参数错位被误读为其他语义。
                 service = SessionSummaryRetrievalService(uow.db)
                 if mode == "search":
                     return tool._session_search(
@@ -789,7 +792,7 @@ async def execute_memory_query(
                         args,
                         limit,
                         include_detail,
-                        include_legacy,
+                        include_archived=include_legacy,
                     )
                 if mode == "time":
                     return tool._session_time(
@@ -797,16 +800,20 @@ async def execute_memory_query(
                         args,
                         limit,
                         include_detail,
-                        include_legacy,
+                        include_archived=include_legacy,
                     )
                 if mode == "expand":
-                    return tool._session_expand(service, args, include_legacy)
+                    return tool._session_expand(
+                        service,
+                        args,
+                        include_archived=include_legacy,
+                    )
                 if mode == "aggregate":
                     return tool._session_aggregate(
                         service,
                         args,
                         limit,
-                        include_legacy,
+                        include_archived=include_legacy,
                     )
                 return ToolResult(error=f"Unsupported mode: {mode}")
             if source == "all":

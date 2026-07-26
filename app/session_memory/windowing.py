@@ -254,15 +254,19 @@ def normalize_turn_for_prompt(
 ) -> dict[str, Any] | None:
     from core.context_builder import LONG_USER_MESSAGE_CHARS, sanitize_prompt_text
 
-    content = sanitize_prompt_text(getattr(turn, "content", "") or "", max_per_msg)
-    if not content.strip():
-        return None
-    if turn.role == "user" and len(content) > LONG_USER_MESSAGE_CHARS:
-        preview = content[:200].rstrip()
+    raw_content = str(getattr(turn, "content", "") or "")
+    # 长消息判定必须基于原文长度：先按 max_per_msg 截断再判会让该分支
+    # 永远不可达（真实链路 max_per_msg=300 < 2000）。
+    if turn.role == "user" and len(raw_content) > LONG_USER_MESSAGE_CHARS:
+        preview = sanitize_prompt_text(raw_content[:200]).rstrip()
         content = (
-            f"[长消息摘要] 用户发送了约 {len(content)} 字符的长消息，"
+            f"[长消息摘要] 用户发送了约 {len(raw_content)} 字符的长消息，"
             f"开头为: {preview}...[截断]"
         )
+    else:
+        content = sanitize_prompt_text(raw_content, max_per_msg)
+    if not content.strip():
+        return None
 
     token_cost = max(len(content), estimate_tokens(content))
     return {
