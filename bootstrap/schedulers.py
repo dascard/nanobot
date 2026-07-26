@@ -27,6 +27,7 @@ class SchedulerHandles:
     scheduled_tasks: ThreadHandle | None = None
     session_summary: ThreadHandle | None = None
     eval_sampling: ThreadHandle | None = None
+    reply_eval: ThreadHandle | None = None
     proactive_outreach: ThreadHandle | None = None
     chat_delivery: ThreadHandle | None = None
     group_learning: ThreadHandle | None = None
@@ -37,12 +38,60 @@ class SchedulerHandles:
             self.scheduled_tasks,
             self.session_summary,
             self.eval_sampling,
+            self.reply_eval,
             self.proactive_outreach,
             self.chat_delivery,
             self.group_learning,
         ):
             if handle is not None:
                 handle.stop()
+
+
+def run_reply_eval_tick() -> dict | None:
+    """单次 reply_eval 调度检查——未启用返回 None,否则运行套件并返回概要。"""
+    from core.settings_service import settings
+
+    if not settings.get_bool("eval.reply_eval_schedule_enabled", False):
+        return None
+
+    from api.admin.reply_routes import run_reply_eval_suite
+    from core.async_bridge import run_awaitable_sync
+    from core.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        variant = settings.get_str("eval.reply_eval_variant", "v2_code_retry")
+        return run_awaitable_sync(
+            run_reply_eval_suite(db, variant=variant, name=f"scheduled {variant}")
+        )
+    finally:
+        db.close()
+
+
+def reply_eval_scheduler(stop_event: threading.Event) -> None:
+    """reply_eval 周期调度线程——默认关闭,由 eval.reply_eval_schedule_enabled 控制。"""
+    from core.settings_service import settings
+
+    worker_logger = logging.getLogger("nanobot.reply_eval.scheduler")
+    worker_logger.info("Reply eval scheduler started.")
+    while True:
+        interval_hours = max(
+            1, settings.get_int("eval.reply_eval_interval_hours", 24)
+        )
+        if stop_event.wait(timeout=interval_hours * 3600):
+            break
+        try:
+            result = run_reply_eval_tick()
+            if result is not None:
+                worker_logger.info(
+                    "Reply eval scheduled run finished: total=%s passed=%s failed=%s",
+                    result.get("total"),
+                    result.get("passed"),
+                    result.get("failed"),
+                )
+        except Exception as exc:
+            worker_logger.exception("Reply eval scheduler error: %s", exc)
+    worker_logger.info("Reply eval scheduler stopped.")
 
 
 def _start_thread(
@@ -167,6 +216,12 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
         target=eval_sampling_scheduler,
     )
     logger.info("Eval sampling scheduler initialized.")
+
+    handles.reply_eval = _start_thread(
+        name="reply-eval-scheduler",
+        target=reply_eval_scheduler,
+    )
+    logger.info("Reply eval scheduler initialized (disabled by default).")
 
     handles.proactive_outreach = _start_thread(
         name="proactive-outreach-scheduler",

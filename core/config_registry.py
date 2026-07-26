@@ -1164,10 +1164,34 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=100, value_type="int", category="eval",
         description="每轮采样上限", min_value=10, max_value=500,
     ),
+    "eval.sample_max_pending_per_suite": SettingDef(
+        key="eval.sample_max_pending_per_suite",
+        env_name="EVAL_SAMPLE_MAX_PENDING_PER_SUITE",
+        default=200, value_type="int", category="eval",
+        description="每 suite 待标注候选上限(0=不限)", min_value=0, max_value=10000,
+    ),
     "eval.log_path": SettingDef(
         key="eval.log_path", env_name="EVAL_LOG_PATH",
         default="data/nanobot.log", value_type="str", category="eval",
         description="采样日志路径",
+    ),
+    "eval.reply_eval_schedule_enabled": SettingDef(
+        key="eval.reply_eval_schedule_enabled",
+        env_name="EVAL_REPLY_EVAL_SCHEDULE_ENABLED",
+        default=False, value_type="bool", category="eval",
+        description="启用 reply_eval 周期调度(调用真实模型,默认关闭)",
+    ),
+    "eval.reply_eval_interval_hours": SettingDef(
+        key="eval.reply_eval_interval_hours",
+        env_name="EVAL_REPLY_EVAL_INTERVAL_HOURS",
+        default=24, value_type="int", category="eval",
+        description="reply_eval 调度间隔(小时)", min_value=1, max_value=168,
+    ),
+    "eval.reply_eval_variant": SettingDef(
+        key="eval.reply_eval_variant",
+        env_name="EVAL_REPLY_EVAL_VARIANT",
+        default="v2_code_retry", value_type="str", category="eval",
+        description="reply_eval 调度使用的 variant",
     ),
     "memory_digest.scheduler_enabled": SettingDef(
         key="memory_digest.scheduler_enabled",

@@ -1734,6 +1734,60 @@
     {
       "category": "eval",
       "dangerous": false,
+      "default": 24,
+      "env_name": "EVAL_REPLY_EVAL_INTERVAL_HOURS",
+      "key": "eval.reply_eval_interval_hours",
+      "owner_module": "core.eval",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "eval",
+      "dangerous": false,
+      "default": false,
+      "env_name": "EVAL_REPLY_EVAL_SCHEDULE_ENABLED",
+      "key": "eval.reply_eval_schedule_enabled",
+      "owner_module": "core.eval",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "bool"
+    },
+    {
+      "category": "eval",
+      "dangerous": false,
+      "default": "v2_code_retry",
+      "env_name": "EVAL_REPLY_EVAL_VARIANT",
+      "key": "eval.reply_eval_variant",
+      "owner_module": "core.eval",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
+      "category": "eval",
+      "dangerous": false,
       "default": true,
       "env_name": "EVAL_SAMPLE_DB_ENABLED",
       "key": "eval.sample_db_enabled",
@@ -1802,6 +1856,24 @@
         "default"
       ],
       "value_type": "bool"
+    },
+    {
+      "category": "eval",
+      "dangerous": false,
+      "default": 200,
+      "env_name": "EVAL_SAMPLE_MAX_PENDING_PER_SUITE",
+      "key": "eval.sample_max_pending_per_suite",
+      "owner_module": "core.eval",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
     },
     {
       "category": "memory",

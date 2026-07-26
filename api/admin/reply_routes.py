@@ -454,19 +454,22 @@ def reply_eval_save_generated(
     return {"ok": True, "saved": saved}
 
 
-@router.post("/reply-eval/run")
-async def reply_eval_run(
-    body: ReplyEvalRunIn,
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
-):
+async def run_reply_eval_suite(
+    db: Session,
+    *,
+    variant: str,
+    name: str = "",
+    case_ids: list[str] | None = None,
+    limit: int = 50,
+) -> dict:
+    """运行 reply_eval 套件并落库——路由与调度器共用的内核。"""
     from core.database import ReplyEvalCase, ReplyEvalResult, ReplyEvalRun
 
     q = db.query(ReplyEvalCase).filter(ReplyEvalCase.enabled == 1)
-    if body.case_ids:
-        q = q.filter(ReplyEvalCase.case_id.in_(body.case_ids))
-    cases = q.order_by(ReplyEvalCase.created_at.asc()).limit(max(1, min(body.limit or 50, 200))).all()
-    run = ReplyEvalRun(name=body.name or f"{body.variant} {time.strftime('%m-%d %H:%M')}", variant=body.variant)
+    if case_ids:
+        q = q.filter(ReplyEvalCase.case_id.in_(case_ids))
+    cases = q.order_by(ReplyEvalCase.created_at.asc()).limit(max(1, min(limit or 50, 200))).all()
+    run = ReplyEvalRun(name=name or f"{variant} {time.strftime('%m-%d %H:%M')}", variant=variant)
     db.add(run)
     db.commit()
     db.refresh(run)
@@ -491,8 +494,8 @@ async def reply_eval_run(
             message=case.input_text,
             recent_context=str(context.get("recent_context") or ""),
             persona_text=str(context.get("persona_text") or ""),
-            variant=body.variant,
-            enable_reply_contract_retry=body.variant in {"code_retry", "v2_code_retry"},
+            variant=variant,
+            enable_reply_contract_retry=variant in {"code_retry", "v2_code_retry"},
             dry_run=True,
         )
         try:
@@ -523,7 +526,7 @@ async def reply_eval_run(
                 trace_id=str(outcome.get("trace_id") or ""),
                 prompt_sha256=str(outcome.get("prompt_sha256") or ""),
                 case_id=case.case_id,
-                variant=body.variant,
+                variant=variant,
                 expected_action=expected_action,
                 actual_action=actual_action,
                 called_reply_or_no_reply=1 if called else 0,
@@ -541,7 +544,7 @@ async def reply_eval_run(
                 trace_id="",
                 prompt_sha256="",
                 case_id=case.case_id,
-                variant=body.variant,
+                variant=variant,
                 expected_action=case.expected_action or "any",
                 actual_action="error",
                 passed=0,
@@ -571,6 +574,21 @@ async def reply_eval_run(
     db.commit()
     db.refresh(run)
     return {**_reply_eval_run_to_dict(run), "results": [row_to_dict(row) for row in results]}
+
+
+@router.post("/reply-eval/run")
+async def reply_eval_run(
+    body: ReplyEvalRunIn,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    return await run_reply_eval_suite(
+        db,
+        variant=body.variant,
+        name=body.name,
+        case_ids=body.case_ids,
+        limit=body.limit,
+    )
 
 
 @router.get("/reply-eval/traffic")
