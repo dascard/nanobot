@@ -6,8 +6,8 @@
       "match": {
         "category": "natural_language_semantic"
       },
-      "expected_count": 79,
-      "expected_rule_ids_sha256": "a284cbf6761887959d706c006067af4693303016b77e0abe8eab6ae8f8567dac",
+      "expected_count": 82,
+      "expected_rule_ids_sha256": "d2c731a2f3b3f03d6b51ff934d1fe8d387e81f46a0c1d9c6be89a47ede9bfc00",
       "override": {
         "category": "natural_language_semantic",
         "disposition": "model_signal_only",
@@ -20,8 +20,8 @@
       "match": {
         "category": "compatibility"
       },
-      "expected_count": 136,
-      "expected_rule_ids_sha256": "04f362900f3f8550380306f2bb6f01f153abab2a978757263bd2e7abbccb038a",
+      "expected_count": 137,
+      "expected_rule_ids_sha256": "20ff3a565be456ed2cbe34e1cd087ed65a8da52748e000a70d9ed63b4c4a1e49",
       "override": {
         "category": "compatibility",
         "disposition": "compatibility_migration",

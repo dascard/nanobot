@@ -86,7 +86,6 @@ sudo scripts/manage-sandbox-production.sh prepare-host --initialize-storage
 sudo scripts/manage-sandbox-production.sh build-image
 sudo scripts/manage-sandbox-production.sh smoke
 sudo scripts/manage-sandbox-production.sh install-control-plane
-sudo scripts/manage-sandbox-production.sh deploy
 ~~~
 
 `build-image` 构建并固定以下发布单元：
@@ -98,7 +97,11 @@ sudo scripts/manage-sandbox-production.sh deploy
 
 `image-built` 阶段凭据同时绑定三个镜像引用、三个 IMAGE ID 和部署 manifest SHA256。`--reuse-built-image` 只有在 Restricted、Developer、代理的全部构建输入、canonical manifest 和 manifest 渲染器均未漂移时才允许复用。
 
-`deploy` 完成后所有 Sandbox 开关、session 执行硬开关和 Developer 网络硬开关仍应关闭。`provision-owner`、`enable-workspace`、`enable-assets`、`enable-exec` 和 `disable-owner` 是兼容拒绝入口，不会执行旧 ToolOverride 或 TSV 操作。
+`deploy` 与 `deploy-runtime` 已停用。Runtime 只能从独立发布树通过完整 OCI digest、
+SBOM、验证结果和 ReleaseManifest 交给 `scripts/deploy-production.sh`；Sandbox 管理脚本
+不会再调用 `docker-build.sh` 或切换 `nanobot-runtime:latest`。正式部署前后所有 Sandbox
+开关仍应关闭。provision-owner、enable-workspace、enable-assets、enable-exec 和
+disable-owner 是兼容拒绝入口，不会执行旧 ToolOverride 或 TSV 操作。
 
 接受单盘故障风险时，配置必须显式写出同盘模式和风险确认；不能通过省略参数或调用普通 Compose 绕过：
 
@@ -116,7 +119,8 @@ sudo scripts/manage-sandbox-production.sh configure \
 
 loopback 镜像必须同时满足逻辑大小和实际分配空间均为 16 GiB。脚本使用
 `mkfs.xfs -K` 禁止格式化阶段 discard 已预分配的 backing file 块，并在构建、
-Smoke、控制面安装、协调备份和部署前重复执行实际分配门禁。可用下列只读命令
+Smoke、控制面安装和协调备份前重复执行实际分配门禁；正式 Runtime 部署器另行执行
+pull-only 系统水位门禁。可用下列只读命令
 独立核对；返回 0 且 `actual_allocated_bytes` 不小于
 `17179869184` 才算通过：
 
@@ -203,17 +207,18 @@ sudo scripts/manage-sandbox-production.sh update-release \
   --rerun-smoke
 ~~~
 
-同一候选哈希完成 Smoke、控制面、Runtime 部署和部署后验收前，不进入
-`master`。验收通过后必须将该提交原样 fast-forward 到 `master`，不能 squash、
-amend 或重新生成提交；否则提交哈希变化，原阶段证据失效。确认远端
+同一候选哈希完成 Smoke 与控制面验收前，不进入 `master`。验收通过后必须将该提交
+原样 fast-forward 到 `master`，不能 squash、amend 或重新生成提交；否则提交哈希
+变化，原阶段证据失效。确认远端
 `origin/master` 已包含完全相同的 RELEASE 后，执行：
 
 ~~~bash
 sudo scripts/manage-sandbox-production.sh promote-release
 ~~~
 
-该命令要求 `runtime-deployed` 已完成，只更新配置中的发布来源，不修改 RELEASE、
-VERSION、镜像或任何阶段凭据。`origin/master` 或候选引用后续前进时，脚本只验证
+该命令要求 `smoke-passed` 与 `control-plane-ready` 已完成，只更新 Sandbox 控制面
+配置中的发布来源，不修改 RELEASE、VERSION、镜像或阶段凭据。Runtime 的
+current/pending/rollback 由 ReleaseManifest 部署器独立管理。`origin/master` 或候选引用后续前进时，脚本只验证
 固定 RELEASE 仍属于对应引用历史，不要求 RELEASE 等于远端最新 tip，也不会静默
 替换提交。每个生产阶段都会重新验证发布来源，`status` 会显示当前来源。
 

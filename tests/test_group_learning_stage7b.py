@@ -336,6 +336,48 @@ def test_file_sqlite_concurrent_replay_writes_one_candidate_and_evidence(
         engine.dispose()
 
 
+def test_run_id_collision_replays_when_initial_idempotency_read_is_stale(
+    db_session,
+):
+    from core.db.group_learning_command_adapter import (
+        SqlAlchemyGroupLearningCommandRepository,
+    )
+    from core.db.models import GroupLearningRun
+
+    repository = SqlAlchemyGroupLearningCommandRepository(db_session)
+    repository.persist_candidate_batch(_batch_write())
+    repository.commit()
+
+    class _StaleQuery:
+        def filter(self, *_criteria):
+            return self
+
+        def first(self):
+            return None
+
+    class _StaleIdempotencySession:
+        def __init__(self, delegate):
+            self._delegate = delegate
+            self._missed = False
+
+        def query(self, *entities):
+            if entities == (GroupLearningRun,) and not self._missed:
+                self._missed = True
+                return _StaleQuery()
+            return self._delegate.query(*entities)
+
+        def __getattr__(self, name):
+            return getattr(self._delegate, name)
+
+    stale_repository = SqlAlchemyGroupLearningCommandRepository(
+        _StaleIdempotencySession(db_session)
+    )
+    result = stale_repository.persist_candidate_batch(_batch_write())
+
+    assert result.replayed is True
+    assert result.run_id == "glr_test_1"
+
+
 def test_model_observation_records_only_proposal_and_never_group_memory(
     db_session,
 ):

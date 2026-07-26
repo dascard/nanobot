@@ -36,6 +36,7 @@ readonly LOOPBACK_IMAGE="${LOOPBACK_STORAGE_DIR}/data.xfs"
 readonly XFS_LABEL="nanobot-sbx"
 readonly LOCAL_SAME_DISK_RISK_MARKER="single_disk_logical_rollback_only"
 readonly BACKUP_MAX_BYTES_FIXED="17179869184"
+readonly BUILD_RESERVE_BYTES="21474836480"
 readonly RUNTIME_UID="10001"
 readonly RUNTIME_GID="10001"
 # 旧 /etc/nanobot/sandbox-projects.tsv 仅可由显式迁移工具读取；本脚本不再写入。
@@ -107,7 +108,7 @@ Nanobot Sandbox 生产管理脚本
   3. build-image
   4. smoke
   5. install-control-plane
-  6. deploy
+  6. 使用 scripts/deploy-production.sh 和完整 ReleaseManifest 部署 Runtime
   7. 在 Web「Sandbox 管理」页按 canonical session 配置授权与配额
 
 子命令：
@@ -119,8 +120,8 @@ Nanobot Sandbox 生产管理脚本
   build-image           构建固定版本 Sandbox 镜像
   smoke                 运行不得跳过的真实 Docker 安全矩阵
   install-control-plane 安装 Python 3.11、sandboxd、Token、UDS 和 systemd 单元
-  deploy                协调备份并部署新版 Nanobot Runtime，开关保持关闭
-  deploy-runtime        仅升级四个 Runtime 服务，复用已验收的 Sandbox 基础设施
+  deploy                已停用；正式 Runtime 只能由 ReleaseManifest 部署器发布
+  deploy-runtime        已停用；正式 Runtime 只能由 ReleaseManifest 部署器发布
   provision-owner       已停用；请使用 Web「Sandbox 管理」页
   enable-workspace      已停用；请使用 Web「Sandbox 管理」页
   enable-assets         已停用；请使用 Web「Sandbox 管理」页
@@ -163,15 +164,13 @@ update-release 参数：
                             必须同时使用 --reuse-built-image --rerun-smoke
 
 promote-release 参数：
-  不接受参数。仅在 runtime-deployed 完成且相同提交已进入 origin/master 后，
-  将发布来源从候选引用更新为 origin/master，不改变 RELEASE 或阶段凭据。
+  不接受参数。仅在 Smoke 与 control-plane-ready 完成且相同提交已进入
+  origin/master 后，将 Sandbox 控制面来源提升为 origin/master；Runtime
+  ReleaseManifest 状态由正式部署器独立管理。
 
-deploy-runtime 参数：
-  --release <40 位提交>      必须等于干净 checkout，并且是当前 Runtime 的快进后代
-  [--release-ref <远端引用>] origin/master，或显式候选引用
-                             origin/release-candidates/<名称>
-  该命令不会重建 Sandbox 镜像、重跑 Smoke 或重新安装 sandboxd；若提交修改
-  Sandbox 控制面、镜像、AppArmor、systemd 或配额 helper，将拒绝执行。
+Runtime 部署：
+  本脚本不再构建或切换 nanobot-runtime:latest。取得完整 OCI digest、SBOM、
+  验证结果与 ReleaseManifest 后，只能使用 scripts/deploy-production.sh。
 
 smoke 参数：
   --retry                    删除并重建本脚本固定命名的失败 Smoke worktree
@@ -835,9 +834,11 @@ promote_release_command() {
   require_no_extra_args "$@"
   require_root
   load_config
-  require_stage runtime-deployed
+  require_stage smoke-passed
+  require_stage control-plane-ready
   assert_release_checkout_current
-  assert_runtime_current
+  assert_smoke_current
+  assert_control_plane_current
 
   if [[ "${RELEASE_REF}" == "origin/master" ]]; then
     log "RELEASE 已由 origin/master 固定，无需重复提升"
@@ -1201,7 +1202,7 @@ create_loopback_image() (
 
   # 预分配后仍保留 60 GiB 系统空间和 20 GiB Docker 构建余量。
   root_free="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
-  required_free=$((DATA_IMAGE_SIZE_BYTES + SYSTEM_MIN_FREE_BYTES + 20 * 1024 * 1024 * 1024))
+  required_free=$((DATA_IMAGE_SIZE_BYTES + SYSTEM_MIN_FREE_BYTES + BUILD_RESERVE_BYTES))
   (( root_free >= required_free )) \
     || die "根分区空间不足：预分配后无法同时保留 60 GiB 系统空间和 20 GiB 构建余量"
 
@@ -1356,7 +1357,7 @@ repair_loopback_allocation() (
 
   missing_bytes=$((DATA_IMAGE_SIZE_BYTES - actual_allocated_bytes))
   root_free="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
-  required_free=$((missing_bytes + SYSTEM_MIN_FREE_BYTES + 20 * 1024 * 1024 * 1024))
+  required_free=$((missing_bytes + SYSTEM_MIN_FREE_BYTES + BUILD_RESERVE_BYTES))
   (( root_free >= required_free )) \
     || die "根分区空间不足：补充分配后无法同时保留 60 GiB 系统空间和 20 GiB 构建余量"
 
@@ -1612,8 +1613,8 @@ check_build_disk_gate() {
   local used_percent
   free_bytes="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
   used_percent="$(df --output=pcent / | tail -n 1 | tr -dc '0-9')"
-  (( free_bytes >= SYSTEM_MIN_FREE_BYTES )) \
-    || die "根分区可用空间低于 60 GiB，停止镜像构建"
+  (( free_bytes >= SYSTEM_MIN_FREE_BYTES + BUILD_RESERVE_BYTES )) \
+    || die "根分区不足以同时保留 60 GiB 系统水位和 20 GiB 本地构建余量"
   (( used_percent < 80 )) \
     || die "根分区使用率达到 80%，停止镜像构建"
 }
@@ -1980,7 +1981,7 @@ assert_runtime_current() {
   local runtime_release
   local running_release
   runtime_release="$(runtime_release_from_stage)"
-  running_release="$(docker image inspect nanobot-runtime:latest \
+  running_release="$(docker inspect nanobot-server \
     --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
     2>/dev/null || true)"
   [[ "${running_release}" == "${runtime_release}" ]] \
@@ -2498,7 +2499,7 @@ install_control_plane_command() {
   mark_stage control-plane-ready \
     "release=${RELEASE}|manifest=$(profile_manifest_sha256_from_stage)"
   log "sandboxd healthz/readyz 均通过"
-  printf '下一步：sudo %s deploy\n' "$0"
+  printf '下一步：准备 OCI digest、SBOM、验证结果与 ReleaseManifest，再使用 scripts/deploy-production.sh。\n'
 }
 
 upsert_env_value() {
@@ -2701,369 +2702,12 @@ print(json.dumps(result, ensure_ascii=False))
 PY
 }
 
-set_setting() {
-  local key="$1"
-  local json_value="$2"
-  local body
-  body="$(jq -nc --argjson value "${json_value}" '{value: $value}')"
-  admin_api PUT "/settings/${key}" "${body}" >/dev/null
-}
-
-validate_runtime_mount_boundaries() {
-  local container
-  local mounts
-  for container in "${FIXED_CONTAINERS[@]}"; do
-    mounts="$(docker inspect "${container}" \
-      --format '{{range .Mounts}}{{println .Destination}}{{end}}')"
-    if grep -Fxq /var/run/docker.sock <<<"${mounts}"; then
-      die "${container} 错误挂载了 Docker Socket"
-    fi
-  done
-
-  mounts="$(docker inspect nanobot-server \
-    --format '{{range .Mounts}}{{println .Destination}}{{end}}')"
-  grep -Fxq /run/nanobot-sandboxd <<<"${mounts}" \
-    || die "nanobot-server 未挂载 sandboxd UDS 目录"
-  if grep -Fxq "${DATA_ROOT}" <<<"${mounts}"; then
-    die "nanobot-server 不得挂载 ${DATA_ROOT}"
-  fi
-
-  for container in \
-    nanobot-session-summary-worker \
-    nanobot-outbound-delivery-worker \
-    nanobot-semantic-index-worker; do
-    mounts="$(docker inspect "${container}" \
-      --format '{{range .Mounts}}{{println .Destination}}{{end}}')"
-    if grep -Fxq /run/nanobot-sandboxd <<<"${mounts}"; then
-      die "${container} 不得访问 sandboxd UDS"
-    fi
-  done
-}
-
-force_feature_flags_off() {
-  admin_api POST /settings/sandbox.sandboxd_socket/reset >/dev/null
-  admin_api POST /settings/sandbox.sandboxd_token_file/reset >/dev/null
-  admin_api POST /settings/sandbox.asset_token_secret/reset >/dev/null
-  local feature_body
-  feature_body='{"enabled":false,"exec_enabled":false,"reason":"生产部署保持关闭"}'
-  admin_api PUT /sandbox/features "${feature_body}" >/dev/null
-  set_setting sandbox.workspace_quota_bytes "${WORKSPACE_QUOTA_BYTES}"
-  set_setting sandbox.asset_max_bytes "${ASSET_MAX_BYTES}"
-  set_setting sandbox.total_quota_bytes "${TOTAL_QUOTA_BYTES}"
-  set_setting sandbox.disk_max_percent "${DISK_MAX_PERCENT}"
-  set_setting sandbox.disk_min_free_bytes "${DISK_MIN_FREE_BYTES}"
-
-  local status
-  status="$(admin_api GET /sandbox/status)"
-  jq -e '
-    .feature.enabled == false and
-    .feature.exec_enabled == false and
-    .feature.group_enabled == false and
-    .controller.health.ok == true and
-    .controller.ready.ok == true
-  ' <<<"${status}" >/dev/null \
-    || die "Sandbox 开关关闭或 sandboxd ready 状态不符合预期"
-}
-
-sandbox_feature_snapshot() {
-  local status
-  status="$(admin_api GET /sandbox/status)"
-  jq -cS '{
-    infrastructure_enable_allowed: .feature.infrastructure_enable_allowed,
-    enabled: .feature.enabled,
-    exec_enabled: .feature.exec_enabled,
-    group_enabled: .feature.group_enabled
-  }' <<<"${status}"
-}
-
-assert_sandbox_feature_snapshot() {
-  local expected="$1"
-  local status
-  local actual
-  status="$(admin_api GET /sandbox/status)"
-  jq -e '
-    .controller.health.ok == true and
-    .controller.ready.ok == true
-  ' <<<"${status}" >/dev/null \
-    || die "Runtime 更新后 sandboxd health/ready 不符合预期"
-  actual="$(jq -cS '{
-    infrastructure_enable_allowed: .feature.infrastructure_enable_allowed,
-    enabled: .feature.enabled,
-    exec_enabled: .feature.exec_enabled,
-    group_enabled: .feature.group_enabled
-  }' <<<"${status}")"
-  [[ "${actual}" == "${expected}" ]] \
-    || die "Runtime 更新改变了 Sandbox Feature 状态"
-}
-
-validate_runtime_bind_mounts_current() {
-  local runtime_host_read_gid
-  local directory
-  local metadata
-  runtime_host_read_gid="$(id -g "$(deploy_user)")"
-  for directory in data models sentinel; do
-    [[ -d "${REPO_ROOT}/${directory}" \
-        && ! -L "${REPO_ROOT}/${directory}" ]] \
-      || die "Runtime bind mount 目录无效：${directory}"
-    metadata="$(stat -c '%u:%g:%a' "${REPO_ROOT}/${directory}")"
-    [[ "${metadata}" == \
-        "${RUNTIME_UID}:${runtime_host_read_gid}:2750" ]] \
-      || die "Runtime bind mount 权限不符合既有生产契约：${directory}"
-  done
-}
-
-rollback_runtime_after_deploy_failure() {
-  local rollback_id
-  local current_id
-  rollback_id="$(docker image inspect nanobot-runtime:rollback \
-    --format '{{.Id}}' 2>/dev/null || true)"
-  [[ -n "${rollback_id}" ]] || {
-    warn "不存在 nanobot-runtime:rollback，无法自动恢复前一 Runtime"
-    return 1
-  }
-  current_id="$(docker image inspect nanobot-runtime:latest \
-    --format '{{.Id}}' 2>/dev/null || true)"
-  if [[ "${current_id}" == "${rollback_id}" ]] && wait_server_health; then
-    log "前一 Runtime 已由构建脚本恢复：${rollback_id}"
-    return 0
-  fi
-
-  log "恢复前一 Runtime 镜像与 4 个固定服务"
-  run_as_deploy docker image tag nanobot-runtime:rollback nanobot-runtime:latest
-  (cd "${REPO_ROOT}" \
-    && run_as_deploy docker compose up -d --force-recreate "${FIXED_SERVICES[@]}")
-  wait_server_health || {
-    warn "前一 Runtime 容器已恢复，但健康检查未通过"
-    return 1
-  }
-  log "前一 Runtime 恢复完成：${rollback_id}"
-}
-
-rollback_control_plane_after_deploy_failure() {
-  stage_exists control-plane-rollback || {
-    warn "不存在控制面回滚凭据，保留当前健康的 sandboxd"
-    return 1
-  }
-  local marker
-  local previous_release
-  local previous_dir
-  local link_parent
-  local temporary_dir
-  local archived_stage
-  marker="$(read_stage control-plane-rollback)"
-  previous_release="${marker#release=}"
-  [[ "${marker}" == "release=${previous_release}" \
-      && "${previous_release}" =~ ^[0-9a-f]{40}$ ]] || {
-    warn "控制面回滚凭据格式无效"
-    return 1
-  }
-  previous_dir="$(dirname "${RELEASE_DIR}")/${previous_release}"
-  [[ -d "${previous_dir}" && ! -L "${previous_dir}" \
-      && -f "${previous_dir}/.nanobot-release" \
-      && ! -L "${previous_dir}/.nanobot-release" \
-      && "$(cat "${previous_dir}/.nanobot-release")" == "${previous_release}" ]] \
-    || {
-      warn "控制面回滚发布树无效：${previous_dir}"
-      return 1
-    }
-  if docker ps \
-    --filter 'label=com.nanobot.sandbox=true' \
-    --filter 'label=com.nanobot.managed-by=sandboxd' \
-    --format '{{.Names}}' | grep -q .; then
-    warn "仍有活动 Sandbox 容器，拒绝回滚 sandboxd"
-    return 1
-  fi
-
-  log "回滚 sandboxd 只读发布树：${previous_release}"
-  link_parent="$(dirname "${SERVER_RELEASE_LINK}")"
-  temporary_dir="$(mktemp -d "${link_parent}/.nanobot-server-rollback.XXXXXX")"
-  ln -s -- "${previous_dir}" "${temporary_dir}/nanobot-server"
-  mv -Tf -- "${temporary_dir}/nanobot-server" "${SERVER_RELEASE_LINK}"
-  rmdir -- "${temporary_dir}"
-  systemctl restart nanobot-sandboxd.service
-  systemctl is-active --quiet nanobot-sandboxd.service || {
-    warn "sandboxd 回滚后未运行"
-    return 1
-  }
-  probe_sandboxd || {
-    warn "sandboxd 回滚后 health/ready 未通过"
-    return 1
-  }
-  if stage_exists control-plane-ready; then
-    archived_stage="${STATE_DIR}/control-plane-ready.failed-$(date -u +%Y%m%dT%H%M%SZ)"
-    mv -- "${STATE_DIR}/control-plane-ready" "${archived_stage}"
-  fi
-  log "sandboxd 已回滚：${previous_release}"
-}
-
-rollback_failed_deploy() {
-  (force_feature_flags_off) >/dev/null 2>&1 \
-    || warn "无法通过管理 API 二次确认 Sandbox 开关；.env 硬配置仍为 false"
-  rollback_runtime_after_deploy_failure \
-    || warn "Runtime 自动回滚未完成，需按回滚手册人工处置"
-  rollback_control_plane_after_deploy_failure \
-    || warn "sandboxd 自动回滚未执行或未完成"
-}
-
-rollback_runtime_only_deploy() {
-  rollback_runtime_after_deploy_failure \
-    || warn "Runtime 自动回滚未完成，需按回滚手册人工处置"
-}
-
-deploy_runtime_release() {
-  local target_release="$1"
-  local feature_policy="$2"
-  local feature_snapshot_before=""
-  ensure_state_dir
-  local pre_file="${STATE_DIR}/nonfixed.pre"
-  local post_file="${STATE_DIR}/nonfixed.post"
-
-  case "${feature_policy}" in
-    off)
-      log "写入 feature-off 配置与 Asset Token Secret"
-      configure_application_env_off
-      ;;
-    preserved)
-      log "记录 Runtime 更新前的 Sandbox Feature 状态"
-      feature_snapshot_before="$(sandbox_feature_snapshot)"
-      validate_runtime_bind_mounts_current
-      ;;
-    *)
-      die "未知 Runtime Feature 策略：${feature_policy}"
-      ;;
-  esac
-
-  capture_nonfixed_containers "${pre_file}"
-
-  log "执行协调备份"
-  coordinated_backup
-
-  if [[ "${feature_policy}" == "off" ]]; then
-    prepare_runtime_bind_mounts
-  fi
-
-  log "构建并重建 4 个 Nanobot 服务"
-  if ! run_as_deploy env \
-      -u http_proxy -u https_proxy \
-      -u HTTP_PROXY -u HTTPS_PROXY \
-      -u all_proxy -u ALL_PROXY \
-      "${REPO_ROOT}/scripts/docker-build.sh" \
-      --build-arg "NANOBOT_UID=${RUNTIME_UID}" \
-      --build-arg "NANOBOT_GID=${RUNTIME_GID}" \
-      "${FIXED_SERVICES[@]}"; then
-    if [[ "${feature_policy}" == "off" ]]; then
-      rollback_failed_deploy
-    else
-      rollback_runtime_only_deploy
-    fi
-    die "新版 Nanobot Runtime 构建或启动失败，已执行受控回滚"
-  fi
-
-  if ! (
-    wait_server_health || die "新版 Nanobot Runtime 健康检查失败"
-    [[ "$(docker image inspect nanobot-runtime:latest \
-        --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
-        == "${target_release}" ]] \
-      || die "运行镜像提交哈希不正确"
-    docker exec nanobot-server python -c \
-      'import core.sandbox, sandboxd; print("SANDBOX_CODE=OK")'
-
-    validate_runtime_mount_boundaries
-    if [[ "${feature_policy}" == "off" ]]; then
-      force_feature_flags_off
-    else
-      assert_sandbox_feature_snapshot "${feature_snapshot_before}"
-    fi
-    capture_nonfixed_containers "${post_file}"
-    diff -u "${pre_file}" "${post_file}" \
-      || die "非 Nanobot 固定容器清单发生变化"
-  ); then
-    if [[ "${feature_policy}" == "off" ]]; then
-      rollback_failed_deploy
-    else
-      rollback_runtime_only_deploy
-    fi
-    die "新版 Nanobot Runtime 部署后门禁失败，已执行受控回滚"
-  fi
-
-  mark_stage runtime-deployed \
-    "release=${target_release}|flags=${feature_policy}"
-}
-
 deploy_command() {
-  require_no_extra_args "$@"
-  require_root
-  load_config
-  require_stage image-built
-  require_stage smoke-passed
-  require_stage control-plane-ready
-  assert_release_checkout_current
-  assert_prepared_storage_current
-  assert_host_prepared_current
-  assert_smoke_current
-  assert_control_plane_current
-  probe_sandboxd
-  check_build_disk_gate
-
-  deploy_runtime_release "${RELEASE}" off
-  log "Runtime 部署完成；三个 Sandbox 开关仍为关闭"
-  printf '下一步：保持宿主硬上限关闭；完成验收后从 Web「Sandbox 管理」页授权。\n'
+  die "deploy 已停用；Sandbox 管理脚本不再构建或切换 nanobot-runtime:latest，请使用 scripts/deploy-production.sh"
 }
 
 deploy_runtime_command() {
-  require_root
-  load_config
-
-  local target_release=""
-  local target_release_ref="${RELEASE_REF}"
-  local current_runtime_release
-  shift
-  while (( $# )); do
-    case "$1" in
-      --release)
-        [[ $# -ge 2 ]] || die "--release 缺少参数"
-        target_release="$2"
-        shift 2
-        ;;
-      --release-ref)
-        [[ $# -ge 2 ]] || die "--release-ref 缺少参数"
-        target_release_ref="$2"
-        shift 2
-        ;;
-      -h|--help)
-        usage
-        return 0
-        ;;
-      *)
-        die "deploy-runtime 未知参数：$1"
-        ;;
-    esac
-  done
-
-  require_stage image-built
-  require_stage smoke-passed
-  require_stage control-plane-ready
-  require_stage runtime-deployed
-  assert_prepared_storage_current
-  assert_host_prepared_current
-  assert_smoke_current
-  assert_control_plane_current
-  assert_runtime_current
-  validate_runtime_release_target \
-    "${target_release}" "${target_release_ref}"
-  probe_sandboxd
-  check_build_disk_gate
-
-  current_runtime_release="$(runtime_release_from_stage)"
-  if [[ "${current_runtime_release}" == "${target_release}" ]]; then
-    log "Runtime 已部署目标 RELEASE，无需重复重建"
-    return 0
-  fi
-
-  deploy_runtime_release "${target_release}" preserved
-  log "Runtime 独立更新完成；Sandbox 镜像、Smoke、sandboxd 与 Feature 状态均保持不变"
-  printf 'Sandbox 控制面 RELEASE=%s；Runtime RELEASE=%s\n' \
-    "${RELEASE}" "${target_release}"
+  die "deploy-runtime 已停用；正式 Runtime 只能使用 scripts/deploy-production.sh 和完整 ReleaseManifest"
 }
 
 terminate_leases_command() {
@@ -3198,6 +2842,8 @@ status_command() {
       "$((BACKUP_MAX_BYTES / 1024 / 1024 / 1024))"
     printf '根分区最低保留：%s GiB\n' \
       "$((SYSTEM_MIN_FREE_BYTES / 1024 / 1024 / 1024))"
+    printf '本地镜像构建余量：%s GiB\n' \
+      "$((BUILD_RESERVE_BYTES / 1024 / 1024 / 1024))"
     printf '备份风险标记：%s\n' "${BACKUP_RISK_MARKER}"
   else
     printf '安装配置：未配置\n'
@@ -3238,7 +2884,9 @@ status_command() {
     docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' \
       | grep -E '^nanobot-sandbox-(python|developer):' || true
     if docker inspect nanobot-server >/dev/null 2>&1; then
-      printf '运行 Runtime 提交：%s\n' "$(docker image inspect nanobot-runtime:latest \
+      printf '运行 Runtime 镜像：%s\n' "$(docker inspect nanobot-server \
+        --format '{{.Config.Image}}' 2>/dev/null || true)"
+      printf '运行 Runtime 提交：%s\n' "$(docker inspect nanobot-server \
         --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
       if stage_exists runtime-deployed; then
         printf 'Runtime 部署凭据：%s\n' "$(runtime_release_from_stage)"

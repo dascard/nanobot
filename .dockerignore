@@ -31,7 +31,9 @@ vendor/KohakuTerrarium/build/
 docs/
 design-system/
 cc2codex/
-patches/
+patches/**
+!patches/kohakuterrarium/
+!patches/kohakuterrarium/stream-message-flag.patch
 test_*.py
 goal.md
 prompt-v2-*-snapshot.md

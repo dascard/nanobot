@@ -322,6 +322,11 @@ class SqlAlchemyGroupLearningCommandRepository:
             run_write.run_id,
         )
         if run_id_collision is not None:
+            if (
+                run_id_collision.idempotency_key
+                == run_write.idempotency_key
+            ):
+                return self._replay_result(run_id_collision, write)
             raise ValueError("run_id 已绑定其他幂等批次")
 
         now = db_now_naive()

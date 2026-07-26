@@ -2,7 +2,16 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${repo_root}"
+runtime_root="${NANOBOT_PRODUCTION_ROOT:-${repo_root}}"
+if [[ "${runtime_root}" != /* || ! -d "${runtime_root}" || -L "${runtime_root}" ]]; then
+  echo "NANOBOT_PRODUCTION_ROOT 必须是现有普通目录的绝对路径。" >&2
+  exit 2
+fi
+runtime_paths=(
+  "${runtime_root}/data"
+  "${runtime_root}/models"
+  "${runtime_root}/sentinel"
+)
 
 runtime_uid="${NANOBOT_RUNTIME_UID:-10001}"
 runtime_gid="${NANOBOT_RUNTIME_GID:-10001}"
@@ -29,10 +38,10 @@ if [[ ! "${runtime_uid}" =~ ^[0-9]+$ \
 fi
 
 install -d -m 2750 -o "${runtime_uid}" -g "${runtime_host_read_gid}" \
-  data models sentinel
+  "${runtime_paths[@]}"
 
 ownership_mismatch="$(
-  find data models sentinel -xdev \
+  find "${runtime_paths[@]}" -xdev \
     \( ! -uid "${runtime_uid}" -o ! -gid "${runtime_host_read_gid}" \) \
     -print -quit
 )"
@@ -42,10 +51,10 @@ if [[ -n "${ownership_mismatch}" ]]; then
     echo "确认停服并备份后，可用 --fix-existing 显式迁移所有权。" >&2
     exit 1
   fi
-  chown -R "${runtime_uid}:${runtime_host_read_gid}" data models sentinel
+  chown -R "${runtime_uid}:${runtime_host_read_gid}" "${runtime_paths[@]}"
 fi
 
-chmod -R g+rX-w,o-rwx data models sentinel
-find data models sentinel -xdev -type d -exec chmod g+s {} +
+chmod -R g+rX-w,o-rwx "${runtime_paths[@]}"
+find "${runtime_paths[@]}" -xdev -type d -exec chmod g+s {} +
 
-echo "运行目录 owner UID=${runtime_uid}、Runtime GID=${runtime_gid}、宿主只读 GID=${runtime_host_read_gid} 已验证。"
+echo "生产运行目录 owner UID=${runtime_uid}、Runtime GID=${runtime_gid}、宿主只读 GID=${runtime_host_read_gid} 已验证。"

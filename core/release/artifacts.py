@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 from types import MappingProxyType
 from typing import Literal
@@ -177,6 +177,20 @@ def _validate_nonempty(value: str, *, field_name: str) -> str:
     return value
 
 
+def _validate_evidence_path(value: str, *, field_name: str) -> str:
+    normalized = _validate_nonempty(value, field_name=field_name)
+    path = PurePosixPath(normalized)
+    if (
+        path.is_absolute()
+        or "\\" in normalized
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ArtifactManifestError(
+            f"{field_name} 必须是仓库内安全相对路径"
+        )
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactSource:
     """Artifact 的源码身份；不记录源码正文或凭据。"""
@@ -227,8 +241,11 @@ class ArtifactManifest:
     oci_image_digest: str
     oci_image_id: str
     sbom_path: str
+    sbom_sha256: str
     dependency_manifest_path: str
+    dependency_manifest_sha256: str
     verification_suites: tuple[str, ...]
+    verification_results_path: str
     verification_results_sha256: str
     built_at: str
     builder_version: str
@@ -237,7 +254,7 @@ class ArtifactManifest:
 
     def _content_dict(self) -> dict[str, object]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "profile_id": self.profile_id,
             "artifact_id": self.artifact_id,
             "artifact_kind": self.artifact_kind,
@@ -249,8 +266,11 @@ class ArtifactManifest:
             "oci_image_digest": self.oci_image_digest,
             "oci_image_id": self.oci_image_id,
             "sbom_path": self.sbom_path,
+            "sbom_sha256": self.sbom_sha256,
             "dependency_manifest_path": self.dependency_manifest_path,
+            "dependency_manifest_sha256": self.dependency_manifest_sha256,
             "verification_suites": list(self.verification_suites),
+            "verification_results_path": self.verification_results_path,
             "verification_results_sha256": (
                 self.verification_results_sha256
             ),
@@ -272,8 +292,11 @@ def build_artifact_manifest(
     oci_image_reference: str,
     oci_image_id: str,
     sbom_path: str,
+    sbom_sha256: str,
     dependency_manifest_path: str,
+    dependency_manifest_sha256: str,
     verification_suites: Iterable[str],
+    verification_results_path: str,
     verification_results_sha256: str,
     built_at: str,
     builder_version: str,
@@ -353,10 +376,19 @@ def build_artifact_manifest(
             raise ArtifactManifestError(
                 "正式 Artifact 必须记录已执行验证 suite"
             )
-        _validate_nonempty(sbom_path, field_name="sbom_path")
-        _validate_nonempty(
+        _validate_evidence_path(sbom_path, field_name="sbom_path")
+        _validate_sha256(sbom_sha256, field_name="sbom_sha256")
+        _validate_evidence_path(
             dependency_manifest_path,
             field_name="dependency_manifest_path",
+        )
+        _validate_sha256(
+            dependency_manifest_sha256,
+            field_name="dependency_manifest_sha256",
+        )
+        _validate_evidence_path(
+            verification_results_path,
+            field_name="verification_results_path",
         )
         _validate_sha256(
             verification_results_sha256,
@@ -372,8 +404,11 @@ def build_artifact_manifest(
             normalized_hashes,
             schema_migration_head,
             sbom_path,
+            sbom_sha256,
             dependency_manifest_path,
+            dependency_manifest_sha256,
             suites,
+            verification_results_path,
             verification_results_sha256,
         )):
             raise ArtifactManifestError(
@@ -381,7 +416,7 @@ def build_artifact_manifest(
             )
 
     content = {
-        "schema_version": 1,
+        "schema_version": 2,
         "profile_id": profile_id,
         "artifact_id": profile_id,
         "artifact_kind": profile.artifact_kind,
@@ -393,8 +428,11 @@ def build_artifact_manifest(
         "oci_image_digest": image_digest,
         "oci_image_id": image_id,
         "sbom_path": sbom_path,
+        "sbom_sha256": sbom_sha256,
         "dependency_manifest_path": dependency_manifest_path,
+        "dependency_manifest_sha256": dependency_manifest_sha256,
         "verification_suites": list(suites),
+        "verification_results_path": verification_results_path,
         "verification_results_sha256": verification_results_sha256,
         "built_at": built_at,
         "builder_version": builder_version,
@@ -412,8 +450,11 @@ def build_artifact_manifest(
         oci_image_digest=image_digest,
         oci_image_id=image_id,
         sbom_path=sbom_path,
+        sbom_sha256=sbom_sha256,
         dependency_manifest_path=dependency_manifest_path,
+        dependency_manifest_sha256=dependency_manifest_sha256,
         verification_suites=suites,
+        verification_results_path=verification_results_path,
         verification_results_sha256=verification_results_sha256,
         built_at=built_at,
         builder_version=builder_version,
@@ -450,8 +491,11 @@ def build_observed_runtime_artifact(
         oci_image_reference=immutable_reference,
         oci_image_id=image_id,
         sbom_path="",
+        sbom_sha256="",
         dependency_manifest_path="",
+        dependency_manifest_sha256="",
         verification_suites=(),
+        verification_results_path="",
         verification_results_sha256="",
         built_at=observed_at,
         builder_version="observed-runtime-v1",
@@ -602,8 +646,11 @@ _ARTIFACT_FIELDS = frozenset({
     "oci_image_digest",
     "oci_image_id",
     "sbom_path",
+    "sbom_sha256",
     "dependency_manifest_path",
+    "dependency_manifest_sha256",
     "verification_suites",
+    "verification_results_path",
     "verification_results_sha256",
     "built_at",
     "builder_version",
@@ -632,7 +679,7 @@ def _artifact_from_dict(value: object) -> ArtifactManifest:
         field_name="ArtifactManifest",
     )
     try:
-        if payload["schema_version"] != 1:
+        if payload["schema_version"] != 2:
             raise ReleaseManifestError(
                 "ArtifactManifest schema_version 无效"
             )
@@ -666,11 +713,18 @@ def _artifact_from_dict(value: object) -> ArtifactManifest:
             ),
             oci_image_id=str(payload["oci_image_id"]),
             sbom_path=str(payload["sbom_path"]),
+            sbom_sha256=str(payload["sbom_sha256"]),
             dependency_manifest_path=str(
                 payload["dependency_manifest_path"]
             ),
+            dependency_manifest_sha256=str(
+                payload["dependency_manifest_sha256"]
+            ),
             verification_suites=tuple(
                 payload["verification_suites"]
+            ),
+            verification_results_path=str(
+                payload["verification_results_path"]
             ),
             verification_results_sha256=str(
                 payload["verification_results_sha256"]

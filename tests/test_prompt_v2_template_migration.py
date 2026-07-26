@@ -1090,6 +1090,24 @@ def test_template_apply_holds_global_write_lock_across_all_files(tmp_path):
     ]
 
 
+def test_template_governance_read_lock_works_on_read_only_runtime_mount(tmp_path):
+    from core.prompt_v2.flow_storage import template_governance_read_lock
+
+    live_root = tmp_path / "live"
+    runtime_dir = live_root / "runtime"
+    runtime_dir.mkdir(parents=True)
+    lock_path = live_root / ".prompt-template-governance.lock"
+    lock_path.write_bytes(b"")
+    lock_path.chmod(0o400)
+    live_root.chmod(0o500)
+    try:
+        with template_governance_read_lock(runtime_dir):
+            assert lock_path.is_file()
+    finally:
+        live_root.chmod(0o700)
+        lock_path.chmod(0o600)
+
+
 def test_template_provision_recovers_without_auto_adopting_legacy_file(tmp_path):
     from core.prompt_v2.template_migration import TemplateMigrationService
 

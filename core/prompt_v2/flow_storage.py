@@ -141,13 +141,38 @@ def _template_governance_lock(
     thread_lock = _thread_lock_for(lock_path)
     with thread_lock:
         assert_no_symlink_components(lock_path)
-        flags = (
-            os.O_RDWR
-            | os.O_CREAT
-            | getattr(os, "O_CLOEXEC", 0)
+        common_flags = (
+            getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0)
         )
-        descriptor = os.open(lock_path, flags, 0o600)
+        if exclusive:
+            descriptor = os.open(
+                lock_path,
+                os.O_RDWR | os.O_CREAT | common_flags,
+                0o600,
+            )
+        else:
+            try:
+                descriptor = os.open(
+                    lock_path,
+                    os.O_RDONLY | common_flags,
+                )
+            except FileNotFoundError:
+                try:
+                    initializer = os.open(
+                        lock_path,
+                        os.O_RDWR | os.O_CREAT | common_flags,
+                        0o600,
+                    )
+                except OSError as exc:
+                    raise FlowStorageError(
+                        "共享读取前必须由可写 Runtime 身份初始化模板治理锁"
+                    ) from exc
+                os.close(initializer)
+                descriptor = os.open(
+                    lock_path,
+                    os.O_RDONLY | common_flags,
+                )
         try:
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
                 raise FlowStorageError(f"模板治理锁文件不是普通文件: {lock_path}")

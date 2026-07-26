@@ -74,6 +74,11 @@ jobs:
           trap 'rm -f .env' EXIT
           docker compose -f docker-compose.yml config --quiet
           NANOBOT_RUNTIME_IMAGE="example.invalid/nanobot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+          NANOBOT_PRODUCTION_ENV_FILE="$PWD/.env.example" \
+          NANOBOT_PRODUCTION_DATA_DIR="$PWD/data" \
+          NANOBOT_PRODUCTION_MODELS_DIR="$PWD/models" \
+          NANOBOT_PRODUCTION_SENTINEL_DIR="$PWD/sentinel" \
+          NANOBOT_PROMPT_HOST_ROOT="/var/lib/nanobot/prompt-runtime" \
             docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
 
       - name: 初始化 Prompt Runtime 验收副本
@@ -111,3 +116,7 @@ jobs:
       - name: 前端构建
         working-directory: webui
         run: npm run build
+
+      - name: 记录生产依赖审计并阻断 Critical
+        working-directory: webui
+        run: npm audit --omit=dev --audit-level=critical

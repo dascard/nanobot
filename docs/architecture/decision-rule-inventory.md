@@ -1,40 +1,40 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`708fa3fb90b4b072b359da4c2a74dabcafc41272`
-- 规则总数：6418
+- 源提交：`496819a3208a64c6803ab4b27a89915c8898dfe9`
+- 规则总数：6535
 - 扫描错误：0
-- 人工复核队列：687
+- 人工复核队列：691
 - 完整逐项记录：`decision-rule-inventory.json`
 
 ## 分类汇总
 
 | 分类 | 数量 |
 |---|---:|
-| `compatibility` | 131 |
-| `configurable_policy` | 1113 |
-| `data_consistency` | 427 |
-| `natural_language_semantic` | 29 |
+| `compatibility` | 132 |
+| `configurable_policy` | 1147 |
+| `data_consistency` | 429 |
+| `natural_language_semantic` | 32 |
 | `presentation` | 5 |
-| `protocol_syntax` | 3391 |
-| `security_invariant` | 1322 |
+| `protocol_syntax` | 3450 |
+| `security_invariant` | 1340 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `scripts/manage-sandbox-production.sh` | 201 |
 | `core/schema_migrations.py` | 195 |
+| `scripts/manage-sandbox-production.sh` | 185 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
 | `core/proactive_research.py` | 82 |
 | `core/llm_request_linter.py` | 75 |
 | `core/semantic/backfill.py` | 68 |
-| `sandboxd/app.py` | 67 |
+| `sandboxd/app.py` | 68 |
+| `api/admin/sandbox_routes.py` | 65 |
 | `core/outbound/delivery_claims.py` | 65 |
-| `api/admin/sandbox_routes.py` | 64 |
 | `core/outbound_delivery_schema.py` | 64 |
-| `core/sandbox/lease_reconciler.py` | 61 |
+| `core/sandbox/lease_reconciler.py` | 63 |
 | `core/outbound/settlement.py` | 59 |
 | `core/prompt_v2/audit.py` | 59 |
 | `clients/new_api_client.py` | 55 |
@@ -44,8 +44,8 @@
 | `app/memory_digest/llm_builder.py` | 51 |
 | `core/proactive_outreach_schema.py` | 51 |
 | `api/admin/reply_routes.py` | 48 |
-| `core/sandbox/process_service.py` | 48 |
 | `clients/classifier_client.py` | 47 |
+| `core/sandbox/process_service.py` | 47 |
 | `scripts/sandbox-coordinated-backup.sh` | 46 |
 | `api/admin/sticker_routes.py` | 45 |
 | `core/prompt_v2/flow_migrations.py` | 45 |
@@ -53,30 +53,32 @@
 | `core/daily_digest.py` | 43 |
 | `nanobot_kt/bridge.py` | 43 |
 | `app/memory_digest/builder.py` | 42 |
+| `core/persona_preprocess.py` | 41 |
+| `core/scheduled_task_outbound.py` | 41 |
 | `clients/model_registry.py` | 40 |
 | `api/admin/chat_config_routes.py` | 39 |
 | `core/memory_cleanup.py` | 39 |
-| `core/persona_preprocess.py` | 39 |
-| `core/scheduled_task_outbound.py` | 39 |
 | `core/tracing.py` | 39 |
 | `sandboxd/network_policy.py` | 39 |
 | `creatures/nanobot/prompts/skills/news_search/evidence.py` | 38 |
 | `scripts/assign-sandbox-project-quota.sh` | 38 |
 | `app/session_memory/admin_browser.py` | 37 |
+| `core/release/production_preflight.py` | 37 |
 | `app/group_analysis/preprocess.py` | 36 |
+| `core/release/deployment.py` | 36 |
 | `core/sticker_preview.py` | 36 |
 | `core/db/group_learning_governance_adapter.py` | 35 |
 | `sandboxd/unified_patch.py` | 35 |
+| `core/group_runtime/runtime.py` | 34 |
+| `core/group_runtime/scoring.py` | 34 |
 | `core/sandbox/admin_operations.py` | 34 |
-| `core/group_runtime/runtime.py` | 33 |
 | `app/session_memory/llm_contract.py` | 32 |
-| `core/group_runtime/scoring.py` | 32 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/adapters.py` | 32 |
 | `core/outbound/generation.py` | 31 |
 | `api/admin/group_learning_routes.py` | 30 |
+| `app/session_memory/llm_summarizer.py` | 30 |
 | `core/legacy_adapter.py` | 30 |
-| `app/session_memory/llm_summarizer.py` | 29 |
-| `sandboxd/docker_backend.py` | 29 |
+| `sandboxd/docker_backend.py` | 30 |
 | `scripts/check_architecture.py` | 29 |
 | `api/admin/rag_benchmark_routes.py` | 28 |
 | `app/memory_digest/jobs.py` | 28 |
@@ -90,6 +92,7 @@
 | `api/admin/rag_routes.py` | 26 |
 | `app/group_ingress/helpers.py` | 26 |
 | `core/prompt_v2/template_registry.py` | 26 |
+| `core/sandbox/admin_service.py` | 26 |
 | `sandboxd/environment_manager.py` | 26 |
 | `webui/src/api/generated/adminClient.ts` | 26 |
 | `api/admin/runtime_routes.py` | 25 |
@@ -100,9 +103,9 @@
 | `api/admin/eval_routes.py` | 24 |
 | `app/session_memory/jobs.py` | 24 |
 | `core/outbound_transport.py` | 24 |
+| `core/release/artifacts.py` | 24 |
 | `core/outbound_delivery_service.py` | 23 |
 | `sandboxd/lease_store.py` | 23 |
-| `core/release/artifacts.py` | 22 |
 | `core/sandbox/access_policy.py` | 22 |
 | `api/admin/proactive_outreach_routes.py` | 21 |
 | `app/session_memory/rolling_summary.py` | 21 |
@@ -120,6 +123,7 @@
 | `webui/src/features/prompt/PromptPages.jsx` | 19 |
 | `api/admin/prompt_v2_routes.py` | 18 |
 | `app/persona/retrieval_service.py` | 18 |
+| `core/context_builder.py` | 18 |
 | `core/outbound/control_transitions.py` | 18 |
 | `core/proactive/orchestrator.py` | 18 |
 | `core/prompt_v2/compiler.py` | 18 |
@@ -134,7 +138,7 @@
 | `api/history_log_routes.py` | 17 |
 | `app/group_analysis/analyzer.py` | 17 |
 | `app/session_memory/windowing.py` | 17 |
-| `core/context_builder.py` | 17 |
+| `core/sandbox/tool_service.py` | 17 |
 | `core/semantic/adapters.py` | 17 |
 | `core/settings_specs.py` | 17 |
 | `creatures/nanobot/prompts/skills/image_generation/tool.py` | 17 |
@@ -153,7 +157,6 @@
 | `core/db/group_learning_legacy_adapter.py` | 15 |
 | `core/memory_rag.py` | 15 |
 | `core/outbound/policy.py` | 15 |
-| `core/sandbox/tool_service.py` | 15 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/tool.py` | 15 |
 | `foundation/llm/request_sanitizer.py` | 15 |
 | `foundation/llm/safe_diagnostics.py` | 15 |
@@ -190,7 +193,6 @@
 | `core/group_learning/prompt_injection.py` | 12 |
 | `core/news/source_registry.py` | 12 |
 | `core/prompt_v2/flow.py` | 12 |
-| `core/sandbox/admin_service.py` | 12 |
 | `core/semantic/scoring.py` | 12 |
 | `core/sticker_rag.py` | 12 |
 | `core/task_runtime/resilience.py` | 12 |
@@ -219,7 +221,7 @@
 | `core/eval_sampling/timing_signal_audit.py` | 10 |
 | `core/model_provider/route_registry.py` | 10 |
 | `core/outbound/projection.py` | 10 |
-| `core/release/deployment.py` | 10 |
+| `core/prompt_v2/template_resolution.py` | 10 |
 | `core/runtime/events.py` | 10 |
 | `scripts/build_semantic_task_baseline.py` | 10 |
 | `scripts/sandbox-smoke-summary.py` | 10 |
@@ -233,13 +235,13 @@
 | `core/jobs/contracts.py` | 9 |
 | `core/outbound/replay.py` | 9 |
 | `core/prompt_v2/contribution_registry.py` | 9 |
-| `core/prompt_v2/template_resolution.py` | 9 |
 | `core/sandbox/client.py` | 9 |
 | `core/semantic/reranker.py` | 9 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/normalize_v2.py` | 9 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/official.py` | 9 |
 | `foundation/identity/normalization.py` | 9 |
 | `scripts/build-sandbox-image.sh` | 9 |
+| `scripts/deploy_release.py` | 9 |
 | `api/admin/group_memory_routes.py` | 8 |
 | `api/admin/trace_routes.py` | 8 |
 | `api/routes.py` | 8 |
@@ -256,6 +258,7 @@
 | `sandboxd/lease_reconciler.py` | 8 |
 | `scripts/build_task_slo_manifest.py` | 8 |
 | `scripts/check-sandbox-data-disk.sh` | 8 |
+| `scripts/manage-prompt-runtime-production.sh` | 8 |
 | `scripts/render-sandbox-profile-manifest.py` | 8 |
 | `api/admin/web_search_routes.py` | 7 |
 | `api/memory_routes.py` | 7 |
@@ -281,12 +284,14 @@
 | `creatures/nanobot/prompts/skills/news_search/search_backend.py` | 7 |
 | `sandboxd/process_output.py` | 7 |
 | `scripts/manage_prompt_templates.py` | 7 |
+| `scripts/verify_prompt_runtime_release.py` | 7 |
 | `webui/src/features/manifest.jsx` | 7 |
 | `workers/session_summary_worker.py` | 7 |
 | `api/chat_request_contract.py` | 6 |
 | `api/sticker_media_routes.py` | 6 |
 | `api/telemetry_middleware.py` | 6 |
 | `app/group_analysis/local_rag.py` | 6 |
+| `app/session_memory/blocks.py` | 6 |
 | `core/admin/idempotency.py` | 6 |
 | `core/agent_runtime/contracts.py` | 6 |
 | `core/asset_transport.py` | 6 |
@@ -311,6 +316,7 @@
 | `api/group_utility_routes.py` | 5 |
 | `app/group_ingress/message_adapter.py` | 5 |
 | `app/group_memory/injection_service.py` | 5 |
+| `app/session_memory/block_episodes.py` | 5 |
 | `clients/provider_adapter.py` | 5 |
 | `clients/task_runtime_adapter.py` | 5 |
 | `core/compaction.py` | 5 |
@@ -324,7 +330,7 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/diversify.py` | 5 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/validate.py` | 5 |
 | `nanobot_kt/prompt_runtime.py` | 5 |
-| `scripts/deploy_release.py` | 5 |
+| `scripts/backfill_session_blocks.py` | 5 |
 | `scripts/manage_prompt_flow.py` | 5 |
 | `webui/src/features/generated-images/GeneratedImagesPage.jsx` | 5 |
 | `workers/chat_delivery_worker.py` | 5 |
@@ -381,6 +387,7 @@
 | `core/proactive/delivery_runtime.py` | 3 |
 | `core/proactive/lease.py` | 3 |
 | `core/proactive/runtime_support.py` | 3 |
+| `core/proactive/scheduler.py` | 3 |
 | `core/prompt_v2/context_adapters.py` | 3 |
 | `core/prompt_v2/section_descriptors.py` | 3 |
 | `core/runtime/extensions.py` | 3 |
@@ -397,6 +404,7 @@
 | `nanobot_kt/tools/knowledge_query.py` | 3 |
 | `scripts/manage_memory_cleanup.py` | 3 |
 | `scripts/migrate_group_learning_legacy.py` | 3 |
+| `webui/src/features/agent-runs/AgentRunDetailPage.jsx` | 3 |
 | `webui/src/features/agent-runs/AgentRunsPage.jsx` | 3 |
 | `webui/src/features/agent-runs/LLMApiLogsPage.jsx` | 3 |
 | `api/admin/db_browser_routes.py` | 2 |
@@ -416,7 +424,6 @@
 | `core/message_transport_adapters.py` | 2 |
 | `core/moderation.py` | 2 |
 | `core/private_timing_contracts.py` | 2 |
-| `core/proactive/scheduler.py` | 2 |
 | `core/registry/validation.py` | 2 |
 | `core/sandbox/execution_profiles.py` | 2 |
 | `core/sandbox/quota_service.py` | 2 |
@@ -437,9 +444,9 @@
 | `nanobot_kt/tool_registration_adapter.py` | 2 |
 | `nanobot_kt/tool_runtime.py` | 2 |
 | `scripts/build_release_impact.py` | 2 |
+| `scripts/deploy-production.sh` | 2 |
 | `scripts/rag_write_test_report.py` | 2 |
 | `server.py` | 2 |
-| `webui/src/features/agent-runs/AgentRunDetailPage.jsx` | 2 |
 | `webui/src/features/manifestValidation.js` | 2 |
 | `webui/src/features/tools/ToolsPage.jsx` | 2 |
 | `api/admin/runtime_module_routes.py` | 1 |
@@ -487,7 +494,6 @@
 | `creatures/nanobot/prompts/skills/web_search/tool.py` | 1 |
 | `foundation/llm/tool_policy.py` | 1 |
 | `nanobot_kt/model_attempts.py` | 1 |
-| `scripts/deploy-production.sh` | 1 |
 | `scripts/run_proactive_outreach_simulation.py` | 1 |
 | `webui/src/api/client.js` | 1 |
 | `webui/src/components/TraceView.jsx` | 1 |
@@ -673,43 +679,43 @@
 | `decision.6d2eb9c5e1ce5f3e6dfb` | `api/admin/tool_routes.py:401` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：router.get("/effective") |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.694b4e4e4d82131328d9` | `api/admin/tool_routes.py:433` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.694b4e4e4d82131328d9` | `api/admin/tool_routes.py:442` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：router.get("/decisions") |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.98862f0a2bdbb05822bd` | `api/admin/tool_routes.py:461` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.98862f0a2bdbb05822bd` | `api/admin/tool_routes.py:470` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：router.get("/{tool_name}/schema") |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.f7ce045ba9a791695bbf` | `api/admin/tool_routes.py:472` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.f7ce045ba9a791695bbf` | `api/admin/tool_routes.py:481` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：router.put("/{tool_name}/schema") |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.1a68a71b796dac686790` | `api/admin/tool_routes.py:489` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.1a68a71b796dac686790` | `api/admin/tool_routes.py:503` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：router.delete("/{tool_name}/schema") |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.164763293e4ddf056737` | `api/admin/tool_routes.py:506` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.164763293e4ddf056737` | `api/admin/tool_routes.py:523` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：router.put( "/{tool_name}", operation_id="adminToolDefaultsUpdate", response_model=ToolMutationResponse, responses=standard_error_responses( 400, 401, 404, 409, 422, ), ) |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.36216c05a3bc39efe818` | `api/admin/tool_routes.py:590` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.36216c05a3bc39efe818` | `api/admin/tool_routes.py:607` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：router.put( "/{tool_name}/override", operation_id="adminToolOverrideSet", response_model=ToolMutationResponse, responses=standard_error_responses( 400, 401, 404, 409, 422, ), ) |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.1e4ad6ef00c4b86c5220` | `api/admin/tool_routes.py:614` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.1e4ad6ef00c4b86c5220` | `api/admin/tool_routes.py:631` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：scope_type not in {"group", "user", "chat_type", "platform"} |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.13b0b38c67e5f8137d49` | `api/admin/tool_routes.py:616` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.13b0b38c67e5f8137d49` | `api/admin/tool_routes.py:633` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：scope_type == "chat_type" |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.6574f85856d5392d4735` | `api/admin/tool_routes.py:616` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.6574f85856d5392d4735` | `api/admin/tool_routes.py:633` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：scope_id not in {"private", "private_superuser", "group"} |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.a92a5008f3cc28d2a21a` | `api/admin/tool_routes.py:618` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.a92a5008f3cc28d2a21a` | `api/admin/tool_routes.py:635` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：scope_type == "platform" |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.e93219c7be359eea07bf` | `api/admin/tool_routes.py:622` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.e93219c7be359eea07bf` | `api/admin/tool_routes.py:639` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：scope_type in {"group", "user"} |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.5375116032a0e688d760` | `api/admin/tool_routes.py:652` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.5375116032a0e688d760` | `api/admin/tool_routes.py:669` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：router.delete( "/{tool_name}/override", operation_id="adminToolOverrideDelete", response_model=ToolMutationResponse, responses=standard_error_responses( 401, 404, 409, 422, ), ) |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
-| `decision.66028dadc80edb0eda09` | `api/admin/tool_routes.py:674` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
+| `decision.66028dadc80edb0eda09` | `api/admin/tool_routes.py:691` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：scope_type == "platform" |  |  |  |  |  |
 |  | 原因：人工复核：工具管理路由、作用域枚举和兼容身份语法属于 Endpoint Registry 管理的公开协议资源 |  |  |  |  |  |
 | `decision.eef589ef7fb11488e810` | `api/endpoint_contracts.py:16` | `python.regex_call` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
@@ -982,10 +988,10 @@
 | `decision.32d9b0f806a347d6cf94` | `app/session_memory/llm_summarizer.py:544` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：str(item).lower().startswith(("warning", "warn:", "警告")) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.3b51f163bd542c06679e` | `app/session_memory/rolling_summary.py:265` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.3b51f163bd542c06679e` | `app/session_memory/rolling_summary.py:267` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要："必须调用" in text |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.85d8f1c1d4e8c535af13` | `app/session_memory/rolling_summary.py:265` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.85d8f1c1d4e8c535af13` | `app/session_memory/rolling_summary.py:267` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要："工具" in text |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.fde322c8cfe7bd7fdd50` | `app/session_memory/summarizer.py:58` | `python.regex_call` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
@@ -1018,13 +1024,13 @@
 | `decision.215f3c0d2b679b98779a` | `clients/classifier_client.py:948` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
 |  | 摘要：type_str == "否" |  |  |  |  |  |
 |  | 原因：人工复核：自由文本类型标签属于待迁移的旧模型输出格式 |  |  |  |  |  |
-| `decision.2910f749265a970c43e7` | `clients/new_api_client.py:810` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.2910f749265a970c43e7` | `clients/new_api_client.py:817` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：hard_markers = ["设计", "证明", "推导", "架构", "审计", "优化", "debug", "reason", "analyze", "复杂", "proof"] |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.189018f10cc2f9c290bd` | `clients/new_api_client.py:815` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.189018f10cc2f9c290bd` | `clients/new_api_client.py:822` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：coding_markers = ["代码", "code", "python", "sql", "bug", "javascript", "typescript", "前端", "后端"] |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.11bc8ea3473806ae0a9d` | `clients/new_api_client.py:820` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.11bc8ea3473806ae0a9d` | `clients/new_api_client.py:827` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：easy_markers = ["翻译", "润色", "摘要", "改写", "hello", "hi", "你好", "解释一下"] |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.90a867d5c507b97f5f32` | `clients/task_runtime_adapter.py:84` | `python.numeric_control_flow` | `protocol_syntax` | `preserve` | 阶段 3／4 | `reviewed` |
@@ -1039,28 +1045,28 @@
 | `decision.90c31aab6e0a1df0ea28` | `core/config_registry.py:100` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：mode not in {"disabled", "observation", "active"} |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b285bea2e346029ab3bb` | `core/config_registry.py:1188` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b285bea2e346029ab3bb` | `core/config_registry.py:1204` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_route_descriptor.inherits_from != "reply" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b311d9dcf2b5deda403e` | `core/config_registry.py:1242` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b311d9dcf2b5deda403e` | `core/config_registry.py:1258` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.2bb496715819bdcd3bc9` | `core/config_registry.py:1252` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.2bb496715819bdcd3bc9` | `core/config_registry.py:1268` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.dae06bbee217953780ff` | `core/config_registry.py:1252` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.dae06bbee217953780ff` | `core/config_registry.py:1268` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "timeout" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.671ba1803851f9f59377` | `core/config_registry.py:1253` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.671ba1803851f9f59377` | `core/config_registry.py:1269` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b80da902b1dcbf99117e` | `core/config_registry.py:1253` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b80da902b1dcbf99117e` | `core/config_registry.py:1269` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "timeout" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.5f13cbd491b0243fead7` | `core/config_registry.py:1269` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.5f13cbd491b0243fead7` | `core/config_registry.py:1285` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_route_descriptor.inherits_from == "reply" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b79aa7ab1e709629e053` | `core/config_registry.py:1301` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b79aa7ab1e709629e053` | `core/config_registry.py:1317` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：descriptor.route_type != "controller" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
 | `decision.98636769c55b8c6ac665` | `core/content_rules/adapters.py:23` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
@@ -1138,109 +1144,109 @@
 | `decision.7d708d093b6a49ff4774` | `core/db/group_learning_adapter.py:560` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：GroupMemory.source != "legacy_group_learning_migration" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.cfff8078f42c594b1fb2` | `core/db/group_learning_governance_adapter.py:98` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.cfff8078f42c594b1fb2` | `core/db/group_learning_governance_adapter.py:105` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：GroupLearningCandidate.candidate_id == str(candidate_id or "").strip() |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.e2e3d8919d9f55306497` | `core/db/group_learning_governance_adapter.py:170` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.e2e3d8919d9f55306497` | `core/db/group_learning_governance_adapter.py:184` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：GroupMemory.status == "active" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.ed825b91d39d63374e0b` | `core/db/group_learning_governance_adapter.py:184` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.ed825b91d39d63374e0b` | `core/db/group_learning_governance_adapter.py:198` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：str(row.approved_content_hash or "") != approved_content_hash |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.9ea3a01b59adb5753d67` | `core/db/group_learning_governance_adapter.py:202` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.9ea3a01b59adb5753d67` | `core/db/group_learning_governance_adapter.py:216` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：str(row.chat_stream_id or "") != chat_stream_id |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.ac9425cd3c198c49e548` | `core/db/group_learning_governance_adapter.py:203` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.ac9425cd3c198c49e548` | `core/db/group_learning_governance_adapter.py:217` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：str(row.memory_type or "") != memory_type |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.be75ee9c412ff651980d` | `core/db/group_learning_governance_adapter.py:204` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.be75ee9c412ff651980d` | `core/db/group_learning_governance_adapter.py:218` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：str(row.status or "") != "active" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.9af1e177b08876670f14` | `core/db/group_learning_governance_adapter.py:245` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.9af1e177b08876670f14` | `core/db/group_learning_governance_adapter.py:259` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：identity.chat_type != "group" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.34315223e6a3038cc2e1` | `core/db/group_learning_governance_adapter.py:261` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.34315223e6a3038cc2e1` | `core/db/group_learning_governance_adapter.py:276` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：int(row.chat_log_id or 0) > 0 |  |  |  |  |  |
 |  | 原因：人工复核：只有正整数 ChatLog ID 才能进入正式记忆 evidence 列表，属于持久化数据合同 |  |  |  |  |  |
-| `decision.d895f15da119257c6e7d` | `core/db/group_learning_governance_adapter.py:275` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.d895f15da119257c6e7d` | `core/db/group_learning_governance_adapter.py:290` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：approval_source == "human" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.7b64a562487e3f7ebf82` | `core/db/group_learning_governance_adapter.py:303` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.7b64a562487e3f7ebf82` | `core/db/group_learning_governance_adapter.py:318` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：approval_source == "model" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.df2b24d8970e54db9350` | `core/db/group_learning_governance_adapter.py:308` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.df2b24d8970e54db9350` | `core/db/group_learning_governance_adapter.py:323` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：approval_source == "model" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.f075c420ac136ab26e3e` | `core/db/group_learning_governance_adapter.py:313` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.f075c420ac136ab26e3e` | `core/db/group_learning_governance_adapter.py:328` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：approval_source == "human" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.b9170375378b12290242` | `core/db/group_learning_governance_adapter.py:387` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b9170375378b12290242` | `core/db/group_learning_governance_adapter.py:402` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：action in {"merge_into", "add_alias"} |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.58061832a85c03bf6db0` | `core/db/group_learning_governance_adapter.py:390` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.58061832a85c03bf6db0` | `core/db/group_learning_governance_adapter.py:405` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：action == "merge_into" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.970201bf81c4226c0053` | `core/db/group_learning_governance_adapter.py:398` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.970201bf81c4226c0053` | `core/db/group_learning_governance_adapter.py:413` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：action == "merge_into" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.cf08254525f0fe844ada` | `core/db/group_learning_governance_adapter.py:475` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.cf08254525f0fe844ada` | `core/db/group_learning_governance_adapter.py:491` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：row.status == "accepted" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.203486c501fa97b8aa40` | `core/db/group_learning_governance_adapter.py:480` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.203486c501fa97b8aa40` | `core/db/group_learning_governance_adapter.py:496` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：row.status == "merged" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.886b0825987f03835725` | `core/db/group_learning_governance_adapter.py:482` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.886b0825987f03835725` | `core/db/group_learning_governance_adapter.py:498` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：row.status == "alias" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.7ba5bf97ebbbac5ce480` | `core/db/group_learning_governance_adapter.py:484` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.7ba5bf97ebbbac5ce480` | `core/db/group_learning_governance_adapter.py:500` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：row.status == "rejected" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.c440237cd80af6a08687` | `core/db/group_learning_governance_adapter.py:487` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.c440237cd80af6a08687` | `core/db/group_learning_governance_adapter.py:503` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：row.status == "conflict" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.20743655cbd139dc2c9e` | `core/db/group_learning_governance_adapter.py:490` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.20743655cbd139dc2c9e` | `core/db/group_learning_governance_adapter.py:506` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：row.status == "waiting_for_evidence" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.6b62542808815f4e5325` | `core/db/group_learning_governance_adapter.py:504` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.6b62542808815f4e5325` | `core/db/group_learning_governance_adapter.py:520` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：identity.chat_type != "group" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.c574dacaf28c0ab3a8e5` | `core/db/group_learning_governance_adapter.py:520` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.c574dacaf28c0ab3a8e5` | `core/db/group_learning_governance_adapter.py:536` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：run.status == "succeeded" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.fd5f7823762286a34d55` | `core/db/group_learning_governance_adapter.py:520` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.fd5f7823762286a34d55` | `core/db/group_learning_governance_adapter.py:536` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：run.mode == "active" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.72bfa47f41f6f4fa670e` | `core/db/group_learning_governance_adapter.py:526` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.72bfa47f41f6f4fa670e` | `core/db/group_learning_governance_adapter.py:542` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：run.status != "succeeded" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.736807a96baa515a4e59` | `core/db/group_learning_governance_adapter.py:526` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.736807a96baa515a4e59` | `core/db/group_learning_governance_adapter.py:542` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：run.mode != "candidate_only" |  |  |  |  |  |
 |  | 原因：人工复核：候选、目标、正式记忆、运行和游标必须满足同会话同类型及合法状态的一致性约束 |  |  |  |  |  |
-| `decision.b74ec832ee3476539829` | `core/db/group_learning_governance_adapter.py:530` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b74ec832ee3476539829` | `core/db/group_learning_governance_adapter.py:546` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：candidate.approval_source == "human" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.734b0be6279ece24e0c2` | `core/db/group_learning_governance_adapter.py:539` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.734b0be6279ece24e0c2` | `core/db/group_learning_governance_adapter.py:555` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：action == "reject" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.60e9cd236d56e37dff9d` | `core/db/group_learning_governance_adapter.py:550` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.60e9cd236d56e37dff9d` | `core/db/group_learning_governance_adapter.py:566` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：action == "conflict_with" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.9661594be851c01a7e3d` | `core/db/group_learning_governance_adapter.py:603` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.9661594be851c01a7e3d` | `core/db/group_learning_governance_adapter.py:619` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：str(run.trigger or "") == "schedule" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.263e6e1a774914ffa68d` | `core/db/group_learning_governance_adapter.py:646` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.263e6e1a774914ffa68d` | `core/db/group_learning_governance_adapter.py:662` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：action == "reject" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.7f03d5c17068200c67e0` | `core/db/group_learning_governance_adapter.py:657` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.7f03d5c17068200c67e0` | `core/db/group_learning_governance_adapter.py:673` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：action in {"merge", "resolve_conflict"} |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.bc0e62128880f27d2dc4` | `core/db/group_learning_governance_adapter.py:664` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.bc0e62128880f27d2dc4` | `core/db/group_learning_governance_adapter.py:680` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：action == "merge" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.c87f48b24e7f079fc47f` | `core/db/group_learning_governance_adapter.py:679` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.c87f48b24e7f079fc47f` | `core/db/group_learning_governance_adapter.py:695` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：resolution == "keep_target" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
-| `decision.0eef3c4ab8516ed9821f` | `core/db/group_learning_governance_adapter.py:765` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.0eef3c4ab8516ed9821f` | `core/db/group_learning_governance_adapter.py:782` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：str(memory.governance_mode or "") != "human_managed" |  |  |  |  |  |
 |  | 原因：人工复核：候选动作、状态、来源、会话类型和治理模式分支属于冻结的群学习协议合同 |  |  |  |  |  |
 | `decision.97cdb1848f1f539fccfe` | `core/db/group_learning_legacy_adapter.py:78` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
@@ -1684,21 +1690,27 @@
 | `decision.16bb7e064bf18cbfd0b5` | `core/persona_preprocess.py:281` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：legacy_type == "trait" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.9098360a8ece82182a47` | `core/persona_preprocess.py:377` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.6361fa3c335324cf3796` | `core/persona_preprocess.py:371` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+|  | 摘要：PersonaFact.confidence != "归档" |  |  |  |  |  |
+|  | 原因：人工复核：归档过滤属于画像事实状态机 |  |  |  |  |  |
+| `decision.9098360a8ece82182a47` | `core/persona_preprocess.py:381` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：row.confidence == "归档" |  |  |  |  |  |
 |  | 原因：人工复核：归档是画像事实状态 |  |  |  |  |  |
-| `decision.bb4cf418e64eca54e487` | `core/persona_preprocess.py:380` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.bb4cf418e64eca54e487` | `core/persona_preprocess.py:384` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：row.confidence == "确认" |  |  |  |  |  |
 |  | 原因：人工复核：确认是画像事实置信状态 |  |  |  |  |  |
-| `decision.2c03a5274e6680b15679` | `core/persona_preprocess.py:381` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.2c03a5274e6680b15679` | `core/persona_preprocess.py:385` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：row.confidence == "可能" |  |  |  |  |  |
 |  | 原因：人工复核：可能是画像事实置信状态 |  |  |  |  |  |
-| `decision.6361fa3c335324cf3796` | `core/persona_preprocess.py:657` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.f2794cd3228202c78c1b` | `core/persona_preprocess.py:664` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：PersonaFact.confidence != "归档" |  |  |  |  |  |
 |  | 原因：人工复核：归档过滤属于画像事实状态机 |  |  |  |  |  |
-| `decision.f2794cd3228202c78c1b` | `core/persona_preprocess.py:688` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.ae6258e4d3ca1d52d8d0` | `core/persona_preprocess.py:676` | `python.string_control_flow` | `natural_language_semantic` | `model_signal_only` | 阶段 3／4 | `reviewed` |
+|  | 摘要：str(f.confidence or "") == "待确认" |  |  |  |  |  |
+|  | 原因：人工复核：自然语言字面量只能作为候选信号，最终语义必须由结构化模型任务或人工结论产生 |  |  |  |  |  |
+| `decision.969c9bd9a13edfe63ab8` | `core/persona_preprocess.py:700` | `python.string_control_flow` | `natural_language_semantic` | `model_signal_only` | 阶段 3／4 | `reviewed` |
 |  | 摘要：PersonaFact.confidence != "归档" |  |  |  |  |  |
-|  | 原因：人工复核：归档过滤属于画像事实状态机 |  |  |  |  |  |
+|  | 原因：人工复核：自然语言字面量只能作为候选信号，最终语义必须由结构化模型任务或人工结论产生 |  |  |  |  |  |
 | `decision.e248c9b51f4e762a77de` | `core/proactive/delivery.py:160` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：existing.status in { "sending", "queued", "delivering", "retry_wait", "sent", "sent_after_ambiguous_replay", "failed", "blocked", "ambiguous", "legacy_ambiguous_hold", } |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
@@ -1720,6 +1732,9 @@
 | `decision.87cc29573490f0f1a615` | `core/proactive/schedule_repository.py:176` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：status in { "sending", "queued", "delivering", "retry_wait", "sent", "sent_after_ambiguous_replay", "failed", "blocked", "ambiguous", "legacy_ambiguous_hold", } |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
+| `decision.436021170e2b7d8fbc18` | `core/proactive/scheduler.py:72` | `python.literal_collection` | `natural_language_semantic` | `model_signal_only` | 阶段 3／4 | `reviewed` |
+|  | 摘要：_CHECK_THRESHOLD_KEYS = ( "min_interval_min", "max_check_interval_min", "max_silence_min", "ambiguous_hold_min", "repeat_topic_cooldown_min", ) |  |  |  |  |  |
+|  | 原因：人工复核：自然语言字面量只能作为候选信号，最终语义必须由结构化模型任务或人工结论产生 |  |  |  |  |  |
 | `decision.29a02e1fca6eb9c1d30f` | `core/proactive_diagnostics.py:9` | `python.literal_mapping` | `presentation` | `resource` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_GENERATION_ERROR_SUMMARIES = { "model_truncated": "主动外呼正文生成被截断", "model_finish_error": "主动外呼正文生成未正常结束", "empty_response": "主动外呼正文生成返回空正文", "contract_error": "主动外呼正文不符合生成契约", "generation_timeout": "主动外呼正文生成超时", "generation_error": "主动外呼正文生… |  |  |  |  |  |
 |  | 原因：人工复核：错误摘要是面向运维的稳定展示资源 |  |  |  |  |  |
@@ -1740,6 +1755,9 @@
 |  | 原因：人工复核：结果标记只能出现一次是输出合同约束 |  |  |  |  |  |
 | `decision.dd20ab38c2a99f9af21e` | `core/prompt_v2/template_migration.py:389` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 8 | `reviewed` |
 |  | 摘要：report.drift_status != "untracked_legacy" |  |  |  |  |  |
+|  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
+| `decision.a877f363d9b2b80010e8` | `core/prompt_v2/template_resolution.py:130` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 8 | `reviewed` |
+|  | 摘要：baseline_report.drift_status != "untracked_legacy" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.bcb652b23577a49941f8` | `core/prompt_v2/variables.py:89` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 6 | `reviewed` |
 |  | 摘要：normalized in { "tasks/classifier_legacy", "tasks/private_decision", "tasks/news_daily_quality", "tasks/news_relevance_review", "tasks/group_analysis_topics", "tasks/group_analysis_titles", "tasks/group_analysis_quotes", "tasks/group_analy… |  |  |  |  |  |
@@ -1768,22 +1786,22 @@
 | `decision.fca1c28f8a344d215324` | `core/sandbox/admin_operations.py:73` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：len(normalized_worker) > 128 |  |  |  |  |  |
 |  | 原因：人工复核：Sandbox Admin worker 标识长度是租约身份边界 |  |  |  |  |  |
-| `decision.9eca082101b144c19f32` | `core/sandbox/admin_operations.py:668` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.9eca082101b144c19f32` | `core/sandbox/admin_operations.py:701` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：int(data.get("generation") or 0) != generation |  |  |  |  |  |
 |  | 原因：人工复核：Sandbox Admin 操作结果必须匹配活动租约 generation |  |  |  |  |  |
-| `decision.039e7fdb58b87b8a5019` | `core/scheduled_task_outbound.py:549` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.039e7fdb58b87b8a5019` | `core/scheduled_task_outbound.py:568` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：result.delivery_mode != "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:680` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:699` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:668` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:669` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:668` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:669` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:1966` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2057` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
@@ -2320,10 +2338,10 @@
 | `decision.78f31fa69b408682a975` | `nanobot_kt/bridge.py:95` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：direct_markers = ( "群聊总结", "群总结", "群日报", "分析群", "总结群", "分析这个群", "总结这个群", ) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.280f1c6b1ad6514eccc2` | `nanobot_kt/bridge.py:1273` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.280f1c6b1ad6514eccc2` | `nanobot_kt/bridge.py:1260` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：'[系统内部错误]' in response |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.beeb1c3552646a5db389` | `nanobot_kt/bridge.py:1274` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.beeb1c3552646a5db389` | `nanobot_kt/bridge.py:1261` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：'[工具错误]' in response |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.4eada97c303f015a80d7` | `nanobot_kt/image_pipeline.py:124` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |

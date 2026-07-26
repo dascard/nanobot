@@ -197,11 +197,17 @@ def _artifact_command(args: argparse.Namespace) -> int:
         oci_image_reference=args.image_reference or "",
         oci_image_id=args.image_id or "",
         sbom_path=_logical_reference(root, sbom),
+        sbom_sha256=_sha256_file(sbom),
         dependency_manifest_path=_logical_reference(
             root,
             dependency,
         ),
+        dependency_manifest_sha256=_sha256_file(dependency),
         verification_suites=tuple(args.verification_suite),
+        verification_results_path=_logical_reference(
+            root,
+            verification,
+        ),
         verification_results_sha256=_sha256_file(verification),
         built_at=(
             args.built_at
@@ -241,6 +247,10 @@ def _release_command(args: argparse.Namespace) -> int:
 
 def _validate_command(args: argparse.Namespace) -> int:
     from core.release.artifacts import load_release_manifest
+    from core.release.production_preflight import (
+        ProductionPreflightError,
+        validate_release_artifact_evidence,
+    )
 
     release = load_release_manifest(args.manifest)
     runtime = release.runtime_artifact
@@ -255,6 +265,11 @@ def _validate_command(args: argparse.Namespace) -> int:
         raise ManifestBuildError(
             "目标 Runtime Artifact 必须是 provenance=built"
         )
+    if args.require_built:
+        try:
+            validate_release_artifact_evidence(args.root.resolve(), runtime)
+        except ProductionPreflightError as exc:
+            raise ManifestBuildError(str(exc)) from exc
     print(
         f"ReleaseManifest 验证通过：{release.release_id} "
         f"{runtime.oci_image_reference}"
@@ -324,6 +339,7 @@ def _parser() -> argparse.ArgumentParser:
         "validate",
         help="校验 ReleaseManifest 和目标镜像",
     )
+    validate.add_argument("--root", type=Path, default=ROOT)
     validate.add_argument("--manifest", type=Path, required=True)
     validate.add_argument("--runtime-image")
     validate.add_argument("--require-built", action="store_true")

@@ -22,7 +22,14 @@ def _write_evidence(root: Path) -> dict[str, Path]:
     )
     paths["sbom"].parent.mkdir()
     paths["sbom"].write_text('{"spdxVersion":"SPDX-2.3"}\n')
-    paths["verification"].write_text('{"passed":true}\n')
+    paths["verification"].write_text(
+        '{"schema_version":1,"source_sha":"'
+        + "a" * 40
+        + '","kt_sha":"'
+        + "b" * 40
+        + '","suites":{"backend-full":{"run_id":"1",'
+        '"job":"backend","conclusion":"success"}}}\n'
+    )
     return paths
 
 
@@ -86,9 +93,16 @@ def test_manifest_cli_builds_artifact_release_and_validates_target(
         evidence["python_lock"].read_bytes()
     ).hexdigest()
     assert artifact.sbom_path == "artifacts/runtime.spdx.json"
+    assert artifact.sbom_sha256 == hashlib.sha256(
+        evidence["sbom"].read_bytes()
+    ).hexdigest()
     assert artifact.dependency_manifest_path == (
         "requirements-prod.lock"
     )
+    assert artifact.dependency_manifest_sha256 == hashlib.sha256(
+        evidence["python_lock"].read_bytes()
+    ).hexdigest()
+    assert artifact.verification_results_path == "artifacts/verification.json"
 
     assert main([
         "release",
@@ -104,6 +118,8 @@ def test_manifest_cli_builds_artifact_release_and_validates_target(
 
     assert main([
         "validate",
+        "--root",
+        str(tmp_path),
         "--manifest",
         str(release_path),
         "--runtime-image",
@@ -112,6 +128,8 @@ def test_manifest_cli_builds_artifact_release_and_validates_target(
     ]) == 0
     assert main([
         "validate",
+        "--root",
+        str(tmp_path),
         "--manifest",
         str(release_path),
         "--runtime-image",
