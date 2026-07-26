@@ -671,7 +671,7 @@ def test_scheduled_task_runner_does_not_require_asyncio_runner(monkeypatch):
     stop_event = threading.Event()
     calls = {"run": 0}
 
-    async def fake_run_scheduled_tasks():
+    async def fake_run_scheduled_tasks(at=None):
         calls["run"] += 1
         stop_event.set()
         return 0
@@ -690,7 +690,7 @@ def test_scheduled_task_runner_runs_async_loop_without_sync_bridge(monkeypatch):
     stop_event = threading.Event()
     calls = {"run": 0}
 
-    async def fake_run_scheduled_tasks():
+    async def fake_run_scheduled_tasks(at=None):
         calls["run"] += 1
         stop_event.set()
         return 0

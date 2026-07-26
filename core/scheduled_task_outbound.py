@@ -281,21 +281,38 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _cron_field_matches(value: int, expression: str) -> bool:
+def _cron_field_matches(
+    value: int,
+    expression: str,
+    *,
+    field_min: int = 0,
+    is_weekday: bool = False,
+) -> bool:
     if expression == "*":
         return True
+
+    def _dow(n: int) -> int:
+        # 标准 cron 周字段 0/7 都表示周日;归一到 0..6。
+        return 0 if int(n) == 7 else int(n)
+
+    target = _dow(value) if is_weekday else value
     for part in expression.split(","):
         normalized = part.strip()
         if "-" in normalized:
             lower, upper = normalized.split("-", 1)
-            if int(lower) <= value <= int(upper):
+            lo, hi = int(lower), int(upper)
+            if is_weekday:
+                lo, hi = _dow(lo), _dow(hi)
+            if lo <= target <= hi:
                 return True
         elif normalized.startswith("*/"):
             step = int(normalized[2:])
-            if value % step == 0:
+            if step > 0 and (value - field_min) % step == 0:
                 return True
-        elif normalized.isdigit() and int(normalized) == value:
-            return True
+        elif normalized.isdigit():
+            literal = _dow(int(normalized)) if is_weekday else int(normalized)
+            if literal == target:
+                return True
     return False
 
 
@@ -313,11 +330,13 @@ def scheduled_cron_matches(cron_expr: str, local_time: datetime) -> bool:
             return False
         minute, hour, day, month, day_of_week = parts
         return all((
-            _cron_field_matches(localized.minute, minute),
-            _cron_field_matches(localized.hour, hour),
-            _cron_field_matches(localized.day, day),
-            _cron_field_matches(localized.month, month),
-            _cron_field_matches(localized.isoweekday(), day_of_week),
+            _cron_field_matches(localized.minute, minute, field_min=0),
+            _cron_field_matches(localized.hour, hour, field_min=0),
+            _cron_field_matches(localized.day, day, field_min=1),
+            _cron_field_matches(localized.month, month, field_min=1),
+            _cron_field_matches(
+                localized.isoweekday(), day_of_week, is_weekday=True,
+            ),
         ))
     except (TypeError, ValueError, ZeroDivisionError):
         return False

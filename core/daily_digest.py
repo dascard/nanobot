@@ -1432,8 +1432,12 @@ async def _generate_task_message(task: ScheduledTask) -> str | None:
             )
 
 
-async def run_scheduled_tasks() -> int:
-    """检查到期任务并交给持久化出站 producer。"""
+async def run_scheduled_tasks(at: datetime | None = None) -> int:
+    """检查到期任务并交给持久化出站 producer。
+
+    ``at`` 允许调度循环对错过的分钟槽逐一补扫;省略时使用当前时间。
+    每分钟槽的 occurrence_key 保证补扫与实时 tick 之间幂等去重。
+    """
     executed = 0
     try:
         recovered = await recover_expired_scheduled_task_occurrences(
@@ -1452,7 +1456,7 @@ async def run_scheduled_tasks() -> int:
             type(exc).__name__,
         )
 
-    local_now = db_now_naive()
+    local_now = at or db_now_naive()
     discovery_db = SessionLocal()
     try:
         task_ids = [
@@ -1520,16 +1524,46 @@ def _should_run(task: ScheduledTask, now: datetime) -> bool:
     return scheduled_cron_matches(task.cron_expr or "", now)
 
 
+_SCHEDULED_CATCHUP_MAX_SLOTS = 10
+
+
 async def scheduled_task_loop(stop_event: threading.Event, *, poll_interval_seconds: float = 60.0) -> None:
-    """异步主循环：每分钟检查一次定时任务。"""
+    """异步主循环：逐分钟槽检查定时任务，tick 超时也补扫错过的槽。"""
     logger.info("Scheduled task runner started")
+    last_slot: datetime | None = None
     while not stop_event.is_set():
         try:
-            await run_scheduled_tasks()
+            now_slot = db_now_naive().replace(second=0, microsecond=0)
+            # 枚举 (last_slot, now_slot] 之间的每个分钟槽逐一匹配:上一次
+            # tick 若超过 60s,中间的分钟槽不会被静默跳过。
+            slots: list[datetime] = []
+            if last_slot is None or now_slot <= last_slot:
+                slots = [now_slot]
+            else:
+                cursor = last_slot + timedelta(minutes=1)
+                while cursor <= now_slot:
+                    slots.append(cursor)
+                    cursor += timedelta(minutes=1)
+                if len(slots) > _SCHEDULED_CATCHUP_MAX_SLOTS:
+                    dropped = len(slots) - _SCHEDULED_CATCHUP_MAX_SLOTS
+                    logger.warning(
+                        "Scheduled task catch-up 超出窗口,放弃最早 %d 个分钟槽",
+                        dropped,
+                    )
+                    slots = slots[-_SCHEDULED_CATCHUP_MAX_SLOTS:]
+            for slot in slots:
+                await run_scheduled_tasks(at=slot)
+            last_slot = now_slot
         except Exception as e:
             logger.error(f"Scheduled task tick failed: {e}")
 
-        remaining = float(poll_interval_seconds)
+        # 对齐下一分钟墙钟边界,避免固定 60s 睡眠随处理耗时漂移。
+        now = db_now_naive()
+        next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+        remaining = max(1.0, min(
+            float(poll_interval_seconds),
+            (next_minute - now).total_seconds(),
+        ))
         while remaining > 0 and not stop_event.is_set():
             step = min(1.0, remaining)
             await asyncio.sleep(step)
