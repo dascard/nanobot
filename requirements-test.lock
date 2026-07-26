@@ -102,6 +102,9 @@ docstring-parser==0.18.0
 duckduckgo-search==8.1.1
     # via -r requirements.txt
     # from https://pypi.org/simple
+execnet==2.1.2
+    # via pytest-xdist
+    # from https://pypi.org/simple
 fake-useragent==2.2.0
     # via ddgs
     # from https://pypi.org/simple
@@ -374,11 +377,19 @@ pytest==9.1.1
     #   -r requirements-test.txt
     #   pytest-asyncio
     #   pytest-mock
+    #   pytest-timeout
+    #   pytest-xdist
     # from https://pypi.org/simple
 pytest-asyncio==1.4.0
     # via -r requirements-test.txt
     # from https://pypi.org/simple
 pytest-mock==3.15.1
+    # via -r requirements-test.txt
+    # from https://pypi.org/simple
+pytest-timeout==2.4.0
+    # via -r requirements-test.txt
+    # from https://pypi.org/simple
+pytest-xdist==3.8.0
     # via -r requirements-test.txt
     # from https://pypi.org/simple
 python-dateutil==2.9.0.post0
@@ -522,7 +533,7 @@ tokenizers==0.22.2
     #   model2vec
     #   transformers
     # from https://pypi.org/simple
-torch==2.13.0
+torch==2.13.0+cpu
     # via
     #   -r requirements.txt
     #   sentence-transformers
