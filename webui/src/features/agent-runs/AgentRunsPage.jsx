@@ -14,15 +14,23 @@ export function AgentRunsPage() {
   const [toolDetail, setToolDetail] = useState(null)
   const [status, setStatus] = useState('')
   const [sessionFilter, setSessionFilter] = useState('')
+  const [loadError, setLoadError] = useState('')
   const limit = 30
 
   const loadRuns = useCallback(() => {
     api.get('/agent-runs', { params: { page, limit, status, session_id: sessionFilter } }).then(r => {
       setRuns(r.data.items || [])
       setTotal(r.data.total || 0)
-      if (!selected && r.data.items?.length) setSelected(r.data.items[0].run_id)
-    }).catch(() => setRuns([]))
-  }, [page, status, sessionFilter, selected])
+      setLoadError('')
+      // functional update 消除对 selected 的依赖,否则每次点击列表行都会
+      // 因 loadRuns 身份变化触发整页列表重拉。
+      const firstRunId = r.data.items?.[0]?.run_id || ''
+      if (firstRunId) setSelected(prev => prev || firstRunId)
+    }).catch(e => {
+      setRuns([])
+      setLoadError(e?.response?.data?.detail || e?.message || '加载运行列表失败')
+    })
+  }, [page, status, sessionFilter])
   useEffect(() => { loadRuns() }, [loadRuns])
   useEffect(() => {
     if (!selected) return
@@ -72,7 +80,11 @@ export function AgentRunsPage() {
               ))}
             </tbody>
           </table>
-          {!runs.length && <div className="py-16 text-center text-sm text-slate-600">暂无运行记录</div>}
+          {!runs.length && (
+            loadError
+              ? <div className="py-16 text-center text-sm text-red-400">{loadError}</div>
+              : <div className="py-16 text-center text-sm text-slate-600">暂无运行记录</div>
+          )}
           <div className="p-3"><Pagination page={page} total={total} limit={limit} onChange={setPage} /></div>
         </Card>
         <div className="xl:col-span-7 space-y-4 min-w-0">

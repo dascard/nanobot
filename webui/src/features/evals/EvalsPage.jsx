@@ -210,11 +210,7 @@ export function EvalsPage() {
     return value
   }
 
-  const buildExpectedFromLabelForm = () => {
-    if (!expectedContract) throw new Error('期望字段契约尚未加载')
-    if (labelShowJson && labelFields._rawJson) {
-      try { return JSON.parse(labelFields._rawJson) } catch { throw new Error('JSON 格式错误') }
-    }
+  const buildFormExpected = () => {
     const expectedJson = {}
     for (const key of fieldsForSuite(labelSuite)) {
       const parsed = parseFieldValue(key, labelFields[key])
@@ -223,6 +219,20 @@ export function EvalsPage() {
       }
     }
     return expectedJson
+  }
+
+  const formExpectedPreview = () => {
+    // JSON 模式预填必须是类型转换后的 expected(boolean/string_list 等),
+    // 直接 stringify 原始表单字符串会诱导用户提交错误类型被后端 400。
+    try { return JSON.stringify(buildFormExpected(), null, 2) } catch { return '{}' }
+  }
+
+  const buildExpectedFromLabelForm = () => {
+    if (!expectedContract) throw new Error('期望字段契约尚未加载')
+    if (labelShowJson && labelFields._rawJson) {
+      try { return JSON.parse(labelFields._rawJson) } catch { throw new Error('JSON 格式错误') }
+    }
+    return buildFormExpected()
   }
 
   const validateExpectedJson = (expectedJson) => {
@@ -744,11 +754,22 @@ export function EvalsPage() {
 
                 {/* 高级 JSON 模式（所有 suite 都有） */}
                 <div className="mt-4">
-                  <button onClick={() => setLabelShowJson(!labelShowJson)} className="text-xs text-slate-500 hover:text-slate-300">
-                    {labelShowJson ? '收起' : '▶'} 高级 JSON 模式
+                  <button onClick={() => {
+                    if (labelShowJson) {
+                      // 收起 = 放弃 JSON 覆盖,回到以表单为准;否则残留的
+                      // _rawJson 会静默覆盖之后的表单修改。
+                      const next = { ...labelFields }
+                      delete next._rawJson
+                      setLabelFields(next)
+                      setLabelShowJson(false)
+                    } else {
+                      setLabelShowJson(true)
+                    }
+                  }} className="text-xs text-slate-500 hover:text-slate-300">
+                    {labelShowJson ? '收起(以表单为准)' : '▶'} 高级 JSON 模式
                   </button>
                   {labelShowJson && (
-                    <textarea value={labelFields._rawJson || JSON.stringify(labelFields, null, 2)} onChange={e => setLabelFields({...labelFields, _rawJson: e.target.value})}
+                    <textarea value={labelFields._rawJson ?? formExpectedPreview()} onChange={e => setLabelFields({...labelFields, _rawJson: e.target.value})}
                       rows={8} className="w-full p-3 mt-2 rounded-xl bg-slate-900 border border-slate-700 font-mono text-xs" />
                   )}
                 </div>

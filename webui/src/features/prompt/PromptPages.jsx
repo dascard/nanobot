@@ -715,13 +715,19 @@ export function PromptV2TemplatesPage() {
     loadToolSchemaConfig(schemaToolName)
   }, [templateWorkspace, schemaToolName, loadToolSchemaConfig])
 
-  useEffect(() => {
-    if (!activeTemplateKey) return
-    api.get(`/prompt/templates/${promptV2Path(activeTemplateKey)}`).then(r => {
+  const loadTemplateDetail = useCallback((templateKey) => {
+    const key = templateKey || activeTemplateKey
+    if (!key) return
+    api.get(`/prompt/templates/${promptV2Path(key)}`).then(r => {
       setDetail(r.data)
       setContent(r.data.content || '')
     }).catch(e => alert(e.response?.data?.detail || '加载模板失败'))
   }, [activeTemplateKey])
+
+  useEffect(() => {
+    if (!activeTemplateKey) return
+    loadTemplateDetail(activeTemplateKey)
+  }, [activeTemplateKey, loadTemplateDetail])
 
   useEffect(() => {
     if (!toast) return
@@ -764,6 +770,9 @@ export function PromptV2TemplatesPage() {
     api.delete(`/prompt/templates/${promptV2Path(activeTemplateKey)}`).then(() => {
       setToast(`已删除运行时覆盖 ${activeTemplateKey}`)
       loadTemplates()
+      // 编辑器必须同步回源模板内容,否则残留的旧覆盖正文一经保存会
+      // 静默重建刚删除的覆盖。
+      loadTemplateDetail(activeTemplateKey)
     }).catch(e => alert(e.response?.data?.detail || '删除运行时覆盖失败'))
   }
 
@@ -772,6 +781,7 @@ export function PromptV2TemplatesPage() {
     api.post(`/prompt/templates/${promptV2Path(activeTemplateKey)}/reset`).then(() => {
       setToast(`已重置覆盖 ${activeTemplateKey}`)
       loadTemplates()
+      loadTemplateDetail(activeTemplateKey)
     }).catch(e => alert(e.response?.data?.detail || '重置覆盖失败'))
   }
 

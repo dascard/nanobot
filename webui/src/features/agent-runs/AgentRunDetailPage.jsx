@@ -1,18 +1,49 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { NavLink, useParams } from 'react-router-dom'
 
 import { api } from '../../api'
 import { Card, JsonBlock, MiniStat, Spinner } from '../../components/ui'
 import { LLMApiRequestLogsBlock } from '../../components/TraceView'
 
+function formatApiError(e, fallback = '请求失败') {
+  return e?.response?.data?.detail || e?.message || fallback
+}
+
 // ── Agent Run 详情（深链 /agent-runs/:runId） ──
 export function AgentRunDetailPage() {
   const { runId } = useParams()
   const [detail, setDetail] = useState(null)
   const [toolDetail, setToolDetail] = useState(null)
-  useEffect(() => {
-    api.get(`/agent-runs/${encodeURIComponent(runId)}`).then(r => setDetail(r.data)).catch(() => setDetail(null))
+  const [loadError, setLoadError] = useState('')
+  const loadDetail = useCallback(() => {
+    api.get(`/agent-runs/${encodeURIComponent(runId)}`)
+      .then(r => {
+        setDetail(r.data)
+        setLoadError('')
+      })
+      .catch(e => {
+        setDetail(null)
+        setLoadError(formatApiError(e, '加载运行详情失败'))
+      })
   }, [runId])
+  useEffect(() => {
+    loadDetail()
+  }, [loadDetail])
+  if (loadError) {
+    return (
+      <Card className="p-12 text-center">
+        <p className="text-sm text-red-400 mb-4">{loadError}</p>
+        <div className="flex items-center justify-center gap-4 text-sm">
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700"
+            onClick={loadDetail}
+          >重试</button>
+          <NavLink to="/agent-runs" className="text-slate-400 hover:text-slate-200">← 返回运行追踪</NavLink>
+        </div>
+      </Card>
+    )
+  }
   if (!detail || !detail.run) return <Card className="p-12 text-center text-slate-500"><Spinner /></Card>
   const r = detail.run
   const replyLogs = detail.reply_contract_check_logs || []
