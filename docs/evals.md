@@ -32,11 +32,15 @@ bash scripts/run_eval_pr_gate.sh
 
 当前覆盖：
 
+- `regression`(11 个历史 bug 固化用例,baseline `evals/baselines/regression.json`)
 - `timing_gate`
 - `capability_model_routing`
 - `capability_reply_contract`
 - `capability_rendering_contract`
 - RAG benchmark manual+fixture deterministic gate
+
+`regression` baseline 的更新遵循下方「Baseline 更新规则」同一口径(人工审查 +
+`failed=0` + 数字与当前输出一致),不允许只刷新 baseline 掩盖回归。
 
 `.github/workflows/timing-gate-eval.yml` 在 PR 和主分支 push 上调用同一个脚本。Workflow 显式设置 `NANOBOT_TESTING`、`DATABASE_URL`、`NEW_API_KEY` 和 `NANOBOT_ADMIN_TOKEN`，避免测试导入配置时写入 `.env`。
 
@@ -239,6 +243,20 @@ CI 或本地缺少真实 DB 时，三类路径都会写出同一份 `source.mode
 
 排查失败时，先看 workflow 失败步骤，再下载 artifact。通用 suite 优先看 `evals/reports/YYYY-MM-DD-<suite>.json`，不要只看 `latest.json`；TimingSignal audit 优先看 `evals/reports/runs/<run_id>/timing_signal_audit.json`；RAG benchmark 优先看 `tmp/rag_benchmark/reports/latest.md` 和对应 run-id JSON。
 
+## reply_eval 周期调度
+
+`reply_eval`(`reply_eval_cases` / `reply_eval_runs`)调用真实模型评测回复行为,
+原本只能在 Admin WebUI 或 `/reply-eval/run` 手动触发。现已支持调度化(默认关闭):
+
+- `eval.reply_eval_schedule_enabled`(bool,默认 false):开启后由
+  `reply-eval-scheduler` 线程按周期执行。
+- `eval.reply_eval_interval_hours`(默认 24,范围 1–168)。
+- `eval.reply_eval_variant`(默认 `v2_code_retry`,与 `/reply-eval/run` 的默认一致)。
+
+调度与路由共用 `api/admin/reply_routes.py::run_reply_eval_suite` 内核,结果与手动
+运行一样写入 `reply_eval_runs`,可在 WebUI ReplyEval 页对比历史 run。该套件消耗
+真实模型调用,只应在具备模型网关的环境开启。
+
 ## Baseline 更新规则
 
 TimingGate proposal review 不触发 baseline 更新；baseline 更新仍只适用于人工确认后的正式 case 行为变化。
@@ -288,6 +306,45 @@ python -m evals.candidates promote --suite timing_gate --target-dataset timing_g
 - 不能包含 scorer 不会读取的字段。
 
 Admin 接口兼容旧字段 `expected_json`，但新调用应统一发送 `expected`。WebUI 标注入口按 `{ expected: expectedJson, note }` 提交，避免把人工说明混入 `expected`。
+
+### 生产 → 仓库晋升回路
+
+采样与标注发生在生产环境,而 PR Gate 只读仓库 `evals/cases/`。`promote` 默认把 case
+写到运行数据根(`RUNTIME_PATHS.data_dir/evals/cases/`),该目录没有任何评测入口消费,
+必须用 `--cases-root` 把标注成果带回仓库:
+
+1. 把生产 DB 快照同步到开发机(现行手动做法)。
+2. 开发侧对快照库晋升,直接落仓库目录:
+
+   ```bash
+   python -m evals.candidates promote --suite timing_gate --target-dataset timing_gate \
+     --apply --cases-root evals/cases
+   ```
+
+3. 生产上已 `promoted`、文件滞留在生产 data_dir 的存量,用 `export-cases` 从 DB 重建
+   (幂等,目标文件已存在则跳过,expected 不合法记 invalid 并以退出码 1 提示):
+
+   ```bash
+   python -m evals.candidates export-cases --cases-root evals/cases
+   ```
+
+4. `git add` 新 case 文件并提交,进入 PR Gate。
+
+### 积压清理与采样限流
+
+- 批量拒绝积压候选(先 `--dry-run` 看命中数,`--apply` 写状态并记 `AdminAuditLog`,
+  action=`bulk_reject_eval_candidates`):
+
+  ```bash
+  python -m evals.candidates batch-reject --suite memory_learning \
+    --created-before 2026-07-01 --reason-code low_value --dry-run
+  python -m evals.candidates batch-reject --suite memory_learning \
+    --created-before 2026-07-01 --reason-code low_value --apply
+  ```
+
+- 采样端上限:`eval.sample_max_pending_per_suite`(默认 200,0=不限)。某 suite 的待标注
+  候选(status=candidate)达到上限后,该 suite 本轮采样跳过插入并输出 skipped 日志,
+  防止 memory_learning 式无限积压。
 
 ### 候选 readiness 与批量预检
 
