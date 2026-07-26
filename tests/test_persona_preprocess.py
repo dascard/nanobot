@@ -189,6 +189,115 @@ class TestContradictionDetection:
         assert facts[1].status == "review"
         assert facts[1].inject_policy == "manual_only"
 
+    def test_contradiction_pending_confidence_survives_same_round_decay(
+        self, state_machine, db_session, monkeypatch
+    ):
+        """NLI 矛盾标记的'待确认'不得被同轮 _apply_decay 覆写回计算值。"""
+        vector = np.pad(np.array([1.0], dtype=np.float32), (0, 767))
+        monkeypatch.setattr("core.persona_preprocess.embed_text", lambda _text: vector)
+        monkeypatch.setattr(
+            "core.persona_preprocess._get_nli",
+            lambda: lambda _text: [{"label": "CONTRADICTION", "score": 0.95}],
+        )
+
+        state_machine.process_candidates([
+            {
+                "text": "用户长期偏好 Python",
+                "memory_type": "stable_preference",
+            },
+        ])
+        old_fact = db_session.query(PersonaFact).one()
+        # 模拟历史高证据画像:evidence=3 时 compute_confidence(3,0)≈0.79>0.75
+        old_fact.evidence_count = 3
+        db_session.commit()
+
+        state_machine.process_candidates([
+            {"text": "用户长期不使用 Python", "memory_type": "stable_preference"},
+        ])
+
+        facts = db_session.query(PersonaFact).order_by(PersonaFact.id.asc()).all()
+        assert facts[0].confidence == "待确认"
+        assert facts[1].confidence == "待确认"
+
+    def test_merge_does_not_downgrade_legacy_evidence_count(
+        self, state_machine, db_session, monkeypatch
+    ):
+        """迁移回填的历史行(证据列表空但计数高)同文合并不得被降级。"""
+        vector = np.pad(np.array([1.0], dtype=np.float32), (0, 767))
+        monkeypatch.setattr("core.persona_preprocess.embed_text", lambda _text: vector)
+
+        state_machine.process_candidates([
+            {"text": "用户长期偏好 Python", "memory_type": "stable_preference"},
+        ])
+        legacy = db_session.query(PersonaFact).one()
+        legacy.evidence_count = 5
+        legacy.evidence_log_ids_json = "[]"
+        legacy.status = "active"
+        legacy.inject_policy = "auto"
+        db_session.commit()
+
+        db_session.add(ChatLog(
+            user_id="test_user_01",
+            session_id="s1",
+            role="user",
+            content="我平时都用 Python",
+        ))
+        db_session.commit()
+        log_id = db_session.query(ChatLog).one().id
+
+        state_machine.process_candidates([
+            {
+                "text": "用户长期偏好 Python",
+                "memory_type": "stable_preference",
+                "evidence_log_ids": [log_id],
+            },
+        ])
+
+        merged = db_session.query(PersonaFact).one()
+        assert merged.evidence_count == 5
+        assert json.loads(merged.evidence_log_ids_json) == [log_id]
+
+    def test_build_summary_window_not_crowded_by_archived_rows(
+        self, state_machine, db_session
+    ):
+        """归档行不得挤占 build_summary 的 limit 窗口。"""
+        from core.persona_preprocess import MAX_FACTS_PER_USER
+
+        now = _local_now()
+        for i in range(MAX_FACTS_PER_USER):
+            db_session.add(PersonaFact(
+                user_id="test_user_01",
+                domain_primary="general",
+                content=f"归档事实 {i}",
+                evidence_count=100 + i,
+                first_seen=now,
+                last_seen=now,
+                confidence="归档",
+                fact_type="preference",
+                memory_type="stable_preference",
+                status="active",
+                inject_policy="auto",
+            ))
+        db_session.add(PersonaFact(
+            user_id="test_user_01",
+            domain_primary="general",
+            content="活跃画像:用户偏好 Python",
+            evidence_count=3,
+            first_seen=now,
+            last_seen=now,
+            confidence="确认",
+            fact_type="preference",
+            memory_type="stable_preference",
+            status="active",
+            inject_policy="auto",
+        ))
+        db_session.commit()
+
+        summary = state_machine.build_summary()
+
+        assert "活跃画像:用户偏好 Python" in summary
+        assert "归档事实" not in summary
+
     def test_single_similar_candidate_is_not_linked_when_nli_is_neutral(
         self, state_machine, db_session, monkeypatch
     ):

@@ -361,10 +361,14 @@ class PersonaStateMachine:
 
     def build_summary(self) -> str:
         """将当前已确认的画像压缩为注入用 JSON 字符串。"""
+        # 归档/禁用过滤必须下推到 SQL:limit 窗口若被高证据数的归档行
+        # 挤占,活跃画像会被静默排除。
         rows = (
             self.db.query(PersonaFact)
             .filter(
                 PersonaFact.user_id == self.user_id,
+                PersonaFact.status.notin_(("disabled", "rejected", "archived")),
+                PersonaFact.confidence != "归档",
             )
             .order_by(PersonaFact.evidence_count.desc())
             .limit(MAX_FACTS_PER_USER)
@@ -522,7 +526,10 @@ class PersonaStateMachine:
         existing_ids = _safe_json_list(getattr(fact, "evidence_log_ids_json", "[]"))
         merged_ids = list(dict.fromkeys([*existing_ids, *evidence_ids]))[-50:]
         fact.evidence_log_ids_json = json.dumps(merged_ids, ensure_ascii=False)
-        fact.evidence_count = len(merged_ids)
+        # 治理列迁移前的历史行 evidence_log_ids_json 为空但保留累计
+        # evidence_count(并据此授予 active/auto);同文合并不得用证据 ID
+        # 数把历史累计值降级,否则老画像会因 low_evidence 静默消失。
+        fact.evidence_count = max(int(fact.evidence_count or 0), len(merged_ids))
 
         fact.embedding = _to_blob(vec)
         score = compute_confidence(fact.evidence_count, 0)
@@ -662,6 +669,11 @@ class PersonaStateMachine:
 
         for f in facts:
             if f.last_seen is None:
+                continue
+            # 矛盾标记"待确认"由 NLI 判定写入,等待人工/后续证据裁决;
+            # 时间衰减不得在同一轮或后续轮把它覆写回计算值,否则检索侧
+            # 的矛盾惩罚永不生效。
+            if str(f.confidence or "") == "待确认":
                 continue
             days = (now - f.last_seen).days
             score = compute_confidence(f.evidence_count, days)

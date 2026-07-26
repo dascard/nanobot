@@ -1031,6 +1031,43 @@ class TestObservabilityAPI:
 
 
 class TestPersonaAdmin:
+    def test_persona_extract_rejects_invalid_candidates_structure(
+        self, client, auth_header, monkeypatch,
+    ):
+        """LLM 返回的 candidates 非 dict 列表时必须 502,不得 500。"""
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(User(id="u-extract", name="提取用户"))
+            db.add(ChatLog(
+                user_id="u-extract",
+                session_id="private_u-extract",
+                role="user",
+                content="我平时都用 Python 写脚本",
+            ))
+            db.commit()
+
+        async def fake_chat_completion(self, **_kwargs):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": '{"candidates": ["不是字典的候选"]}',
+                    },
+                }],
+            }
+
+        monkeypatch.setattr(
+            "clients.new_api_client.NewAPIClient.chat_completion",
+            fake_chat_completion,
+        )
+
+        r = client.post(
+            "/api/v1/admin/persona/users/u-extract/extract",
+            json={"window_hours": 0, "limit": 10},
+            headers=auth_header,
+        )
+
+        assert r.status_code == 502
+        assert "candidates 结构无效" in r.text
+
     def test_persona_users_facts_and_injection_preview(self, client, auth_header):
         now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:

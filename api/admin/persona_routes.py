@@ -328,18 +328,41 @@ async def persona_extract_user(
     parsed = EvolutionUtils.json_repair(raw)
     if not isinstance(parsed, dict) or parsed.get("parse_error"):
         raise HTTPException(status_code=502, detail="画像提取 LLM 返回空内容或非 JSON")
-    candidates = parsed.get("candidates", []) if isinstance(parsed, dict) else []
-    stats = sm.process_candidates(candidates)
-    persona_summary = sm.build_summary()
-    persona = db.query(Persona).filter(Persona.user_id == user_id).first()
-    if persona:
-        persona.persona_json = persona_summary
-        if str(persona.status or "") == "archived":
-            persona.status = "review"
-        persona.updated_at = db_now_naive()
-    else:
-        db.add(Persona(user_id=user_id, persona_json=persona_summary))
-    db.commit()
+    candidates = parsed.get("candidates", [])
+    # LLM 输出是外部数据:candidates 非列表或元素非 dict 时直接进
+    # process_candidates 会以 AttributeError 500,必须先校验并按 502 上抛。
+    if not isinstance(candidates, list) or any(
+        not isinstance(item, dict) for item in candidates
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail="画像提取 LLM 返回的 candidates 结构无效",
+        )
+
+    from core.evolution import _get_lock as _persona_user_lock
+
+    # 与后台进化任务共用按用户锁,避免并发写同一用户画像;拿不到锁说明
+    # 进化正在运行,提示管理员稍后重试而不是交错写。
+    lock = _persona_user_lock(user_id)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="该用户画像进化正在运行,请稍后重试",
+        )
+    try:
+        stats = sm.process_candidates(candidates)
+        persona_summary = sm.build_summary()
+        persona = db.query(Persona).filter(Persona.user_id == user_id).first()
+        if persona:
+            persona.persona_json = persona_summary
+            if str(persona.status or "") == "archived":
+                persona.status = "review"
+            persona.updated_at = db_now_naive()
+        else:
+            db.add(Persona(user_id=user_id, persona_json=persona_summary))
+        db.commit()
+    finally:
+        lock.release()
     audit_request(db, request, "extract_persona", "persona", user_id, {"stats": stats, "raw_count": len(log_dicts)})
     return {
         "user_id": user_id,
