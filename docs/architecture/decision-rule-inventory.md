@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`35b8904eef449e8fd7beb7831685abf033249aa6`
-- 规则总数：5801
+- 源提交：`708fa3fb90b4b072b359da4c2a74dabcafc41272`
+- 规则总数：6418
 - 扫描错误：0
 - 人工复核队列：687
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,26 +12,29 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 131 |
-| `configurable_policy` | 1112 |
+| `configurable_policy` | 1113 |
 | `data_consistency` | 427 |
 | `natural_language_semantic` | 29 |
 | `presentation` | 5 |
-| `protocol_syntax` | 3339 |
-| `security_invariant` | 758 |
+| `protocol_syntax` | 3391 |
+| `security_invariant` | 1322 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `scripts/manage-sandbox-production.sh` | 193 |
-| `core/schema_migrations.py` | 188 |
+| `scripts/manage-sandbox-production.sh` | 201 |
+| `core/schema_migrations.py` | 195 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
 | `core/proactive_research.py` | 82 |
 | `core/llm_request_linter.py` | 75 |
 | `core/semantic/backfill.py` | 68 |
+| `sandboxd/app.py` | 67 |
 | `core/outbound/delivery_claims.py` | 65 |
+| `api/admin/sandbox_routes.py` | 64 |
 | `core/outbound_delivery_schema.py` | 64 |
+| `core/sandbox/lease_reconciler.py` | 61 |
 | `core/outbound/settlement.py` | 59 |
 | `core/prompt_v2/audit.py` | 59 |
 | `clients/new_api_client.py` | 55 |
@@ -41,6 +44,7 @@
 | `app/memory_digest/llm_builder.py` | 51 |
 | `core/proactive_outreach_schema.py` | 51 |
 | `api/admin/reply_routes.py` | 48 |
+| `core/sandbox/process_service.py` | 48 |
 | `clients/classifier_client.py` | 47 |
 | `scripts/sandbox-coordinated-backup.sh` | 46 |
 | `api/admin/sticker_routes.py` | 45 |
@@ -54,58 +58,65 @@
 | `core/memory_cleanup.py` | 39 |
 | `core/persona_preprocess.py` | 39 |
 | `core/scheduled_task_outbound.py` | 39 |
+| `core/tracing.py` | 39 |
+| `sandboxd/network_policy.py` | 39 |
 | `creatures/nanobot/prompts/skills/news_search/evidence.py` | 38 |
+| `scripts/assign-sandbox-project-quota.sh` | 38 |
 | `app/session_memory/admin_browser.py` | 37 |
 | `app/group_analysis/preprocess.py` | 36 |
 | `core/sticker_preview.py` | 36 |
 | `core/db/group_learning_governance_adapter.py` | 35 |
+| `sandboxd/unified_patch.py` | 35 |
+| `core/sandbox/admin_operations.py` | 34 |
 | `core/group_runtime/runtime.py` | 33 |
-| `core/tracing.py` | 33 |
 | `app/session_memory/llm_contract.py` | 32 |
 | `core/group_runtime/scoring.py` | 32 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/adapters.py` | 32 |
 | `core/outbound/generation.py` | 31 |
-| `sandboxd/app.py` | 31 |
 | `api/admin/group_learning_routes.py` | 30 |
 | `core/legacy_adapter.py` | 30 |
 | `app/session_memory/llm_summarizer.py` | 29 |
+| `sandboxd/docker_backend.py` | 29 |
 | `scripts/check_architecture.py` | 29 |
 | `api/admin/rag_benchmark_routes.py` | 28 |
 | `app/memory_digest/jobs.py` | 28 |
 | `core/group_memory.py` | 28 |
+| `core/runtime_tool_service.py` | 28 |
+| `sandboxd/filesystem.py` | 28 |
 | `core/proactive/generation.py` | 27 |
 | `core/sticker_memory.py` | 27 |
 | `nanobot_kt/image_pipeline.py` | 27 |
+| `webui/src/features/sandbox/SandboxPage.test.jsx` | 27 |
 | `api/admin/rag_routes.py` | 26 |
 | `app/group_ingress/helpers.py` | 26 |
 | `core/prompt_v2/template_registry.py` | 26 |
+| `sandboxd/environment_manager.py` | 26 |
 | `webui/src/api/generated/adminClient.ts` | 26 |
 | `api/admin/runtime_routes.py` | 25 |
 | `core/prompts/manager.py` | 25 |
+| `core/sandbox/profile_catalog.py` | 25 |
 | `core/timing_score.py` | 25 |
+| `sandboxd/process_manager.py` | 25 |
 | `api/admin/eval_routes.py` | 24 |
 | `app/session_memory/jobs.py` | 24 |
 | `core/outbound_transport.py` | 24 |
-| `core/runtime_tool_service.py` | 24 |
 | `core/outbound_delivery_service.py` | 23 |
-| `api/admin/sandbox_routes.py` | 22 |
+| `sandboxd/lease_store.py` | 23 |
 | `core/release/artifacts.py` | 22 |
+| `core/sandbox/access_policy.py` | 22 |
 | `api/admin/proactive_outreach_routes.py` | 21 |
 | `app/session_memory/rolling_summary.py` | 21 |
 | `core/db/group_learning_command_adapter.py` | 21 |
 | `core/outbound/run_claims.py` | 21 |
 | `core/semantic/indexer.py` | 21 |
 | `nanobot_kt/reply_contract.py` | 21 |
-| `scripts/assign-sandbox-project-quota.sh` | 21 |
 | `api/endpoint_contracts.py` | 20 |
 | `core/admin/table_views.py` | 20 |
-| `core/sandbox/admin_operations.py` | 20 |
 | `core/semantic/jobs.py` | 20 |
 | `core/web_search/relevance.py` | 20 |
 | `nanobot_kt/tools/memory_query.py` | 20 |
 | `webui/src/features/evals/EvalsPage.jsx` | 20 |
 | `core/inbound_idempotency.py` | 19 |
-| `sandboxd/filesystem.py` | 19 |
 | `webui/src/features/prompt/PromptPages.jsx` | 19 |
 | `api/admin/prompt_v2_routes.py` | 18 |
 | `app/persona/retrieval_service.py` | 18 |
@@ -113,6 +124,7 @@
 | `core/proactive/orchestrator.py` | 18 |
 | `core/prompt_v2/compiler.py` | 18 |
 | `core/prompt_v2/task_contracts.py` | 18 |
+| `core/sandbox/lease_service.py` | 18 |
 | `core/sql_readonly.py` | 18 |
 | `core/task_runtime/validators.py` | 18 |
 | `core/tool_contracts/ai_daily.py` | 18 |
@@ -126,20 +138,22 @@
 | `core/semantic/adapters.py` | 17 |
 | `core/settings_specs.py` | 17 |
 | `creatures/nanobot/prompts/skills/image_generation/tool.py` | 17 |
-| `sandboxd/docker_backend.py` | 17 |
 | `scripts/migrate-sandbox-project-map.py` | 17 |
 | `workers/semantic_index_worker.py` | 17 |
 | `api/chat_recovery.py` | 16 |
 | `app/group_learning/pipeline_service.py` | 16 |
+| `core/sandbox/environment_service.py` | 16 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/evidence_light.py` | 16 |
 | `nanobot_kt/output.py` | 16 |
 | `scripts/generate_openapi_client.py` | 16 |
+| `webui/src/features/sandbox/SandboxPage.jsx` | 16 |
 | `api/admin/outbound_delivery_routes.py` | 15 |
 | `api/admin/session_memory_routes.py` | 15 |
 | `app/group_ingress/recovery.py` | 15 |
 | `core/db/group_learning_legacy_adapter.py` | 15 |
 | `core/memory_rag.py` | 15 |
 | `core/outbound/policy.py` | 15 |
+| `core/sandbox/tool_service.py` | 15 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/tool.py` | 15 |
 | `foundation/llm/request_sanitizer.py` | 15 |
 | `foundation/llm/safe_diagnostics.py` | 15 |
@@ -153,9 +167,10 @@
 | `core/group_learning/rules.py` | 14 |
 | `core/outbound/control.py` | 14 |
 | `core/sandbox/asset_store.py` | 14 |
+| `core/sandbox/run_ledger.py` | 14 |
 | `core/semantic/retriever.py` | 14 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/enrich.py` | 14 |
-| `webui/src/features/sandbox/SandboxPage.jsx` | 14 |
+| `sandboxd/config.py` | 14 |
 | `app/group_learning/migration_audit.py` | 13 |
 | `core/db/group_learning_schedule_adapter.py` | 13 |
 | `core/group_runtime/state.py` | 13 |
@@ -175,11 +190,13 @@
 | `core/group_learning/prompt_injection.py` | 12 |
 | `core/news/source_registry.py` | 12 |
 | `core/prompt_v2/flow.py` | 12 |
+| `core/sandbox/admin_service.py` | 12 |
 | `core/semantic/scoring.py` | 12 |
 | `core/sticker_rag.py` | 12 |
 | `core/task_runtime/resilience.py` | 12 |
 | `creatures/nanobot/prompts/skills/image_summary/tool.py` | 12 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/curated.py` | 12 |
+| `sandboxd/container_security.py` | 12 |
 | `scripts/build_behavior_baseline.py` | 12 |
 | `api/admin/persona_routes.py` | 11 |
 | `core/asset_tokens.py` | 11 |
@@ -188,11 +205,11 @@
 | `core/proactive/serialization.py` | 11 |
 | `core/prompt_v2/task_templates.py` | 11 |
 | `core/reply_postprocess.py` | 11 |
-| `core/sandbox/access_policy.py` | 11 |
 | `core/settings_service.py` | 11 |
 | `core/tool_registration.py` | 11 |
 | `creatures/nanobot/prompts/skills/schedule_task/tool.py` | 11 |
 | `nanobot_kt/tools/sandbox.py` | 11 |
+| `sandboxd/quota.py` | 11 |
 | `webui/src/features/rag/RagBenchmarkPage.jsx` | 11 |
 | `api/chat_persistence.py` | 10 |
 | `app/group_learning/review_service.py` | 10 |
@@ -204,9 +221,9 @@
 | `core/outbound/projection.py` | 10 |
 | `core/release/deployment.py` | 10 |
 | `core/runtime/events.py` | 10 |
-| `core/sandbox/admin_service.py` | 10 |
-| `core/sandbox/tool_service.py` | 10 |
 | `scripts/build_semantic_task_baseline.py` | 10 |
+| `scripts/sandbox-smoke-summary.py` | 10 |
+| `scripts/sandbox-smoke-test.sh` | 10 |
 | `webui/src/features/models/ModelsPage.jsx` | 10 |
 | `app/group_learning/candidate_service.py` | 9 |
 | `app/group_memory/retrieval_service.py` | 9 |
@@ -222,6 +239,7 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/normalize_v2.py` | 9 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/official.py` | 9 |
 | `foundation/identity/normalization.py` | 9 |
+| `scripts/build-sandbox-image.sh` | 9 |
 | `api/admin/group_memory_routes.py` | 8 |
 | `api/admin/trace_routes.py` | 8 |
 | `api/routes.py` | 8 |
@@ -234,8 +252,11 @@
 | `core/session_guidance.py` | 8 |
 | `core/task_runtime/slo.py` | 8 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/freshness.py` | 8 |
+| `sandboxd/lease_backend.py` | 8 |
+| `sandboxd/lease_reconciler.py` | 8 |
 | `scripts/build_task_slo_manifest.py` | 8 |
 | `scripts/check-sandbox-data-disk.sh` | 8 |
+| `scripts/render-sandbox-profile-manifest.py` | 8 |
 | `api/admin/web_search_routes.py` | 7 |
 | `api/memory_routes.py` | 7 |
 | `core/client_meta.py` | 7 |
@@ -258,7 +279,7 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/htmllist.py` | 7 |
 | `creatures/nanobot/prompts/skills/news_search/runtime_cache.py` | 7 |
 | `creatures/nanobot/prompts/skills/news_search/search_backend.py` | 7 |
-| `sandboxd/config.py` | 7 |
+| `sandboxd/process_output.py` | 7 |
 | `scripts/manage_prompt_templates.py` | 7 |
 | `webui/src/features/manifest.jsx` | 7 |
 | `workers/session_summary_worker.py` | 7 |
@@ -281,11 +302,9 @@
 | `core/proactive_candidate.py` | 6 |
 | `core/proactive_diagnostics.py` | 6 |
 | `core/qq_outbound_renderer.py` | 6 |
-| `core/sandbox/run_ledger.py` | 6 |
 | `core/web_search/search_runtime.py` | 6 |
 | `foundation/message_contract/contracts.py` | 6 |
 | `foundation/message_contract/parsing.py` | 6 |
-| `sandboxd/quota.py` | 6 |
 | `webui/src/features/proactive-outreach/ProactiveOutreachPage.jsx` | 6 |
 | `webui/src/features/session-config/SessionConfigsPage.jsx` | 6 |
 | `api/asset_routes.py` | 5 |
@@ -298,6 +317,7 @@
 | `core/expression_memory.py` | 5 |
 | `core/group_learning/aspects.py` | 5 |
 | `core/model_provider/contracts.py` | 5 |
+| `core/sandbox/repositories.py` | 5 |
 | `core/task_runtime/contracts.py` | 5 |
 | `core/telemetry/job_observer.py` | 5 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/digest.py` | 5 |
@@ -335,7 +355,7 @@
 | `foundation/identity/contracts.py` | 4 |
 | `nanobot_kt/kt_adapter.py` | 4 |
 | `sandboxd/auth.py` | 4 |
-| `scripts/build-sandbox-image.sh` | 4 |
+| `sandboxd/concurrency.py` | 4 |
 | `scripts/build_release_manifest.py` | 4 |
 | `scripts/build_verification_plan.py` | 4 |
 | `scripts/check-loopback-image-allocation.sh` | 4 |
@@ -398,6 +418,8 @@
 | `core/private_timing_contracts.py` | 2 |
 | `core/proactive/scheduler.py` | 2 |
 | `core/registry/validation.py` | 2 |
+| `core/sandbox/execution_profiles.py` | 2 |
+| `core/sandbox/quota_service.py` | 2 |
 | `core/sqlite_maintenance.py` | 2 |
 | `core/state_manager.py` | 2 |
 | `core/telemetry/__init__.py` | 2 |
@@ -455,7 +477,6 @@
 | `core/repositories/chat_logs.py` | 1 |
 | `core/retrieval/contracts.py` | 1 |
 | `core/runtime_paths.py` | 1 |
-| `core/sandbox/repositories.py` | 1 |
 | `core/settings_admin_service.py` | 1 |
 | `core/sqlite_retry.py` | 1 |
 | `core/sticker_preview_jobs.py` | 1 |
@@ -468,7 +489,6 @@
 | `nanobot_kt/model_attempts.py` | 1 |
 | `scripts/deploy-production.sh` | 1 |
 | `scripts/run_proactive_outreach_simulation.py` | 1 |
-| `scripts/sandbox-smoke-test.sh` | 1 |
 | `webui/src/api/client.js` | 1 |
 | `webui/src/components/TraceView.jsx` | 1 |
 | `webui/src/components/ui.jsx` | 1 |
@@ -1019,28 +1039,28 @@
 | `decision.90c31aab6e0a1df0ea28` | `core/config_registry.py:100` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：mode not in {"disabled", "observation", "active"} |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b285bea2e346029ab3bb` | `core/config_registry.py:1153` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b285bea2e346029ab3bb` | `core/config_registry.py:1188` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_route_descriptor.inherits_from != "reply" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b311d9dcf2b5deda403e` | `core/config_registry.py:1207` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b311d9dcf2b5deda403e` | `core/config_registry.py:1242` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.2bb496715819bdcd3bc9` | `core/config_registry.py:1217` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.2bb496715819bdcd3bc9` | `core/config_registry.py:1252` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.dae06bbee217953780ff` | `core/config_registry.py:1217` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.dae06bbee217953780ff` | `core/config_registry.py:1252` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "timeout" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.671ba1803851f9f59377` | `core/config_registry.py:1218` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.671ba1803851f9f59377` | `core/config_registry.py:1253` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b80da902b1dcbf99117e` | `core/config_registry.py:1218` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b80da902b1dcbf99117e` | `core/config_registry.py:1253` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "timeout" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.5f13cbd491b0243fead7` | `core/config_registry.py:1234` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.5f13cbd491b0243fead7` | `core/config_registry.py:1269` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_route_descriptor.inherits_from == "reply" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b79aa7ab1e709629e053` | `core/config_registry.py:1266` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b79aa7ab1e709629e053` | `core/config_registry.py:1301` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：descriptor.route_type != "controller" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
 | `decision.98636769c55b8c6ac665` | `core/content_rules/adapters.py:23` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
@@ -1745,10 +1765,10 @@
 | `decision.3b68c7f2229895f995a3` | `core/runtime/extensions.py:551` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：len(contracts) > 1 |  |  |  |  |  |
 |  | 原因：人工复核：同一 Transform Pipeline 的输入输出合同必须唯一 |  |  |  |  |  |
-| `decision.fca1c28f8a344d215324` | `core/sandbox/admin_operations.py:65` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.fca1c28f8a344d215324` | `core/sandbox/admin_operations.py:73` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：len(normalized_worker) > 128 |  |  |  |  |  |
 |  | 原因：人工复核：Sandbox Admin worker 标识长度是租约身份边界 |  |  |  |  |  |
-| `decision.9eca082101b144c19f32` | `core/sandbox/admin_operations.py:474` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.9eca082101b144c19f32` | `core/sandbox/admin_operations.py:668` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：int(data.get("generation") or 0) != generation |  |  |  |  |  |
 |  | 原因：人工复核：Sandbox Admin 操作结果必须匹配活动租约 generation |  |  |  |  |  |
 | `decision.039e7fdb58b87b8a5019` | `core/scheduled_task_outbound.py:549` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
@@ -1757,13 +1777,13 @@
 | `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:680` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:656` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:668` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:656` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:668` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:1954` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:1966` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |

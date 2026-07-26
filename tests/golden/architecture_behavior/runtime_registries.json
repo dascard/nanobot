@@ -5921,6 +5921,21 @@
     },
     {
       "category": "sandbox",
+      "dangerous": true,
+      "default": false,
+      "env_name": "NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED",
+      "key": "sandbox.developer_network_allowed",
+      "owner_module": "core.sandbox",
+      "restart_required": true,
+      "safety_class": "invariant",
+      "source_precedence": [
+        "environment",
+        "default"
+      ],
+      "value_type": "bool"
+    },
+    {
+      "category": "sandbox",
       "dangerous": false,
       "default": 80,
       "env_name": "NANOBOT_SANDBOX_DISK_MAX_PERCENT",
@@ -6027,6 +6042,24 @@
     {
       "category": "sandbox",
       "dangerous": false,
+      "default": 15,
+      "env_name": "NANOBOT_SANDBOX_LEASE_RECONCILE_INTERVAL_SECONDS",
+      "key": "sandbox.lease_reconcile_interval_seconds",
+      "owner_module": "core.sandbox",
+      "restart_required": true,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "sandbox",
+      "dangerous": false,
       "default": 165,
       "env_name": "NANOBOT_SANDBOX_RUN_TIMEOUT",
       "key": "sandbox.run_timeout_seconds",
@@ -6092,6 +6125,21 @@
         "default"
       ],
       "value_type": "str"
+    },
+    {
+      "category": "sandbox",
+      "dangerous": true,
+      "default": false,
+      "env_name": "NANOBOT_SANDBOX_SESSION_EXECUTION_ALLOWED",
+      "key": "sandbox.session_execution_allowed",
+      "owner_module": "core.sandbox",
+      "restart_required": true,
+      "safety_class": "invariant",
+      "source_precedence": [
+        "environment",
+        "default"
+      ],
+      "value_type": "bool"
     },
     {
       "category": "sandbox",
@@ -9296,6 +9344,54 @@
     },
     {
       "availability_policy": "configurable",
+      "category": "file",
+      "domain": "tool.file",
+      "execution_policy": "foreground_only",
+      "framework_owned": false,
+      "group_default": false,
+      "name": "sandbox_poll",
+      "owner_module": "core.sandbox",
+      "private_default": false,
+      "prompt_template_keys": [
+        "tools/sandbox_poll/usage"
+      ],
+      "risk_level": "high",
+      "trace_policy": "metadata_only"
+    },
+    {
+      "availability_policy": "configurable",
+      "category": "file",
+      "domain": "tool.file",
+      "execution_policy": "foreground_only",
+      "framework_owned": false,
+      "group_default": false,
+      "name": "sandbox_terminate",
+      "owner_module": "core.sandbox",
+      "private_default": false,
+      "prompt_template_keys": [
+        "tools/sandbox_terminate/usage"
+      ],
+      "risk_level": "high",
+      "trace_policy": "metadata_only"
+    },
+    {
+      "availability_policy": "configurable",
+      "category": "file",
+      "domain": "tool.file",
+      "execution_policy": "foreground_only",
+      "framework_owned": false,
+      "group_default": false,
+      "name": "sandbox_write_stdin",
+      "owner_module": "core.sandbox",
+      "private_default": false,
+      "prompt_template_keys": [
+        "tools/sandbox_write_stdin/usage"
+      ],
+      "risk_level": "high",
+      "trace_policy": "metadata_only"
+    },
+    {
+      "availability_policy": "configurable",
       "category": "system",
       "domain": "tool.system",
       "execution_policy": "foreground_or_background",
@@ -9371,6 +9467,22 @@
       ],
       "risk_level": "low",
       "trace_policy": "standard"
+    },
+    {
+      "availability_policy": "configurable",
+      "category": "file",
+      "domain": "tool.file",
+      "execution_policy": "foreground_only",
+      "framework_owned": false,
+      "group_default": false,
+      "name": "workspace_apply_patch",
+      "owner_module": "core.sandbox",
+      "private_default": false,
+      "prompt_template_keys": [
+        "tools/workspace_apply_patch/usage"
+      ],
+      "risk_level": "medium",
+      "trace_policy": "metadata_only"
     },
     {
       "availability_policy": "configurable",

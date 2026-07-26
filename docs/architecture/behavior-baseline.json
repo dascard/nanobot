@@ -73,7 +73,7 @@
       "stage": "阶段 7B"
     },
     {
-      "after_sha256": "a38635a895c5442dd3a1a853f614fa2d8e89b9fc8dac68e844ba6ded6534c2c9",
+      "after_sha256": "01a8c51398dda2319ce9ef4ea983aae673a614b1af45deb0114d4e4e53dc8b16",
       "before_sha256": "d6127b3f19ff082bdbb3163a384f394ca5b748fa524ecab0b176aa26e8fb54d5",
       "id": "stage7c_group_analysis_prompt",
       "reason": "为 group_analysis 增加 Registry 驱动的可选 aspects，同步显式工具兼容默认和定时学习默认；同时把经来源审核且无冲突的正式群体记忆作为不可信背景接入 canonical Prompt Contribution，未选择方面不创建模型分支或报告区块。",
@@ -105,7 +105,7 @@
       "stage": "阶段 7B"
     },
     {
-      "after_sha256": "e071a5c594294bf97b280fce1342dcb1131b86ac17a550841e1fc51cd66a762a",
+      "after_sha256": "d0a74e533efb5e76f72bcba99529477e12ecfe7452000c67aa8bd7b4b8a2af39",
       "before_sha256": "a2e5de1a65d2804950629d03cec6062ccf3594f53a5ed152c0a886e0f8e77c68",
       "id": "stage8_group_learning_rule_controls",
       "reason": "登记 Web 群学习工作台使用的受管规则启停配置；默认值为空且标记为危险设置，不创建白名单、不启用学习或 Prompt 注入。",
@@ -113,7 +113,7 @@
       "stage": "阶段 8"
     }
   ],
-  "baseline_git_commit": "35b8904eef449e8fd7beb7831685abf033249aa6",
+  "baseline_git_commit": "708fa3fb90b4b072b359da4c2a74dabcafc41272",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -156,14 +156,14 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "a38635a895c5442dd3a1a853f614fa2d8e89b9fc8dac68e844ba6ded6534c2c9"
+      "sha256": "01a8c51398dda2319ce9ef4ea983aae673a614b1af45deb0114d4e4e53dc8b16"
     },
     {
       "classification": "preserve",
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "e071a5c594294bf97b280fce1342dcb1131b86ac17a550841e1fc51cd66a762a"
+      "sha256": "d0a74e533efb5e76f72bcba99529477e12ecfe7452000c67aa8bd7b4b8a2af39"
     },
     {
       "classification": "security_invariant",

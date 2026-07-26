@@ -6627,6 +6627,15 @@
             "title": "Chat Type",
             "type": "string"
           },
+          "execution_profile": {
+            "default": "restricted",
+            "enum": [
+              "restricted",
+              "developer"
+            ],
+            "title": "Execution Profile",
+            "type": "string"
+          },
           "expected_version": {
             "anyOf": [
               {
@@ -6720,9 +6729,42 @@
             "maxLength": 255,
             "title": "Reason",
             "type": "string"
+          },
+          "request_id": {
+            "maxLength": 64,
+            "minLength": 8,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Request Id",
+            "type": "string"
           }
         },
+        "required": [
+          "request_id"
+        ],
         "title": "SandboxKillSwitchRequest",
+        "type": "object"
+      },
+      "SandboxLeaseActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "default": "",
+            "maxLength": 255,
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 64,
+            "minLength": 8,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "SandboxLeaseActionRequest",
         "type": "object"
       },
       "SandboxQuotaRequest": {
@@ -20679,6 +20721,280 @@
         "x-nanobot-pagination": "none"
       }
     },
+    "/api/v1/admin/sandbox/leases": {
+      "get": {
+        "operationId": "get_api_v1_admin_sandbox_leases",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Sandbox Leases",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/sandbox/leases/{lease_id}/destroy": {
+      "post": {
+        "operationId": "post_api_v1_admin_sandbox_leases_lease_id_destroy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lease_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 10,
+              "pattern": "^sbxlease_[A-Za-z0-9_-]+$",
+              "title": "Lease Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxLeaseActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Destroy Sandbox Lease",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/sandbox/leases/{lease_id}/recreate": {
+      "post": {
+        "operationId": "post_api_v1_admin_sandbox_leases_lease_id_recreate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lease_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 10,
+              "pattern": "^sbxlease_[A-Za-z0-9_-]+$",
+              "title": "Lease Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxLeaseActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Recreate Sandbox Lease",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/sandbox/leases/{lease_id}/stop": {
+      "post": {
+        "operationId": "post_api_v1_admin_sandbox_leases_lease_id_stop",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lease_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 10,
+              "pattern": "^sbxlease_[A-Za-z0-9_-]+$",
+              "title": "Lease Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxLeaseActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Stop Sandbox Lease",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
     "/api/v1/admin/sandbox/operations": {
       "get": {
         "operationId": "get_api_v1_admin_sandbox_operations",
@@ -24135,6 +24451,16 @@
             "schema": {
               "default": "qq",
               "title": "Platform",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Session Id",
               "type": "string"
             }
           },

@@ -307,8 +307,23 @@
     },
     {
       "path": "prompts.v2.default/tools/sandbox_exec/usage.md",
-      "sha256": "2f54b35532b64ff709ed4b15fba12b525d087fd7f14e1172678788c74b9edf91",
-      "size_bytes": 1057
+      "sha256": "3b02603438f5357bdf6e22352e3ab4cee11a57bddcd0aadf4e4431b192653891",
+      "size_bytes": 1410
+    },
+    {
+      "path": "prompts.v2.default/tools/sandbox_poll/usage.md",
+      "sha256": "62d4a13d7284b3731edfaef50569044a9a06f646da2cdf933cb4882c7c2f5847",
+      "size_bytes": 706
+    },
+    {
+      "path": "prompts.v2.default/tools/sandbox_terminate/usage.md",
+      "sha256": "f4b456e37f63b2037157d1c568e0e776127d2c47596f4489dfd88009a4b915dc",
+      "size_bytes": 686
+    },
+    {
+      "path": "prompts.v2.default/tools/sandbox_write_stdin/usage.md",
+      "sha256": "d44bf1b3001ccb5cd20f98ed465a547eeb16fb2db527ac3c4b6b125dc03ae93a",
+      "size_bytes": 597
     },
     {
       "path": "prompts.v2.default/tools/schedule_task/usage.md",
@@ -329,6 +344,11 @@
       "path": "prompts.v2.default/tools/web_search/usage.md",
       "sha256": "5caed07ebb2d939320fda80398499d911bb5680c9e7c37f7a81c9701caef9c8c",
       "size_bytes": 1400
+    },
+    {
+      "path": "prompts.v2.default/tools/workspace_apply_patch/usage.md",
+      "sha256": "da6af5fa98bde87a75e489569fb368aca125efbfcefab0025ade5ff10a922e37",
+      "size_bytes": 776
     },
     {
       "path": "prompts.v2.default/tools/workspace_list/usage.md",
