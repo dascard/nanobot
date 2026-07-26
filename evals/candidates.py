@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from core.eval_sampling.store import (
+    bulk_reject_candidates,
     candidate_trend_report,
+    export_promoted_cases,
     label_candidate,
     list_candidates,
     plan_candidate_batch_audit,
@@ -63,6 +65,7 @@ def promote_labeled(
     suite: str = "",
     target_dataset: str = "regression",
     apply: bool = False,
+    cases_root: str | Path | None = None,
 ) -> dict[str, Any]:
     preflight = preflight_candidate_promotions(
         db,
@@ -70,6 +73,7 @@ def promote_labeled(
         status="labeled",
         target_dataset=target_dataset,
         limit=10000,
+        cases_root=cases_root,
     )
     items = []
     for item in preflight["items"]:
@@ -105,7 +109,9 @@ def promote_labeled(
     for item in preflight["items"]:
         if not item["readiness"]["ready"]:
             continue
-        path = promote_candidate(db, item["case_id"], target_dataset=target_dataset)
+        path = promote_candidate(
+            db, item["case_id"], target_dataset=target_dataset, cases_root=cases_root
+        )
         applied_items.append({"case_id": item["case_id"], "path": path})
     result["ok"] = True
     result["applied"] = len(applied_items)
@@ -174,6 +180,26 @@ def main(argv: list[str] | None = None) -> int:
     promote_p.add_argument("--target-dataset", default="regression")
     promote_p.add_argument("--apply", action="store_true")
     promote_p.add_argument("--dry-run", action="store_true")
+    promote_p.add_argument("--cases-root", default="",
+                           help="case 落盘目录(如仓库 evals/cases);默认运行数据根")
+
+    export_cases_p = sub.add_parser("export-cases")
+    export_cases_p.add_argument("--suite", default="")
+    export_cases_p.add_argument("--target-dataset", default="")
+    export_cases_p.add_argument("--cases-root", required=True,
+                                help="case 落盘目录(如仓库 evals/cases)")
+
+    batch_reject_p = sub.add_parser("batch-reject")
+    batch_reject_p.add_argument("--suite", default="")
+    batch_reject_p.add_argument("--status", default="candidate")
+    batch_reject_p.add_argument("--source", default="")
+    batch_reject_p.add_argument("--created-before", default="",
+                                help="仅拒绝早于该时间的候选(ISO 格式,如 2026-07-01)")
+    batch_reject_p.add_argument("--reason-code", default="low_value")
+    batch_reject_p.add_argument("--note", default="")
+    batch_reject_p.add_argument("--limit", type=int, default=1000)
+    batch_reject_p.add_argument("--apply", action="store_true")
+    batch_reject_p.add_argument("--dry-run", action="store_true")
 
     audit_p = sub.add_parser("audit")
     audit_p.add_argument("--suite", default="")
@@ -208,8 +234,40 @@ def main(argv: list[str] | None = None) -> int:
                 suite=args.suite,
                 target_dataset=args.target_dataset,
                 apply=bool(args.apply and not args.dry_run),
+                cases_root=args.cases_root or None,
             )
             print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "export-cases":
+            result = export_promoted_cases(
+                db,
+                suite=args.suite,
+                target_dataset=args.target_dataset,
+                cases_root=args.cases_root,
+            )
+            print(
+                f"total={result['total']} written={len(result['written'])} "
+                f"skipped={len(result['skipped'])} invalid={len(result['invalid'])}"
+            )
+            for item in result["invalid"]:
+                print(f"invalid: {item['case_id']}: {item['error']}")
+            return 0 if not result["invalid"] else 1
+        if args.command == "batch-reject":
+            result = bulk_reject_candidates(
+                db,
+                suite=args.suite,
+                status=args.status,
+                source=args.source,
+                created_before=args.created_before,
+                reason_code=args.reason_code,
+                note=args.note,
+                limit=args.limit,
+                apply=bool(args.apply and not args.dry_run),
+            )
+            print(
+                f"matched={result['matched']} rejected={result['rejected']} "
+                f"audit_log_id={result['audit_log_id']}"
+            )
             return 0
         if args.command == "audit":
             result = audit_candidates(

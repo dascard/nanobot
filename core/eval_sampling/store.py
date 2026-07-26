@@ -119,6 +119,13 @@ def _db_now_naive() -> datetime:
     return datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
 
 
+def _cases_dir(cases_root: str | Path | None = None) -> Path:
+    """晋升/导出的 case 目录——默认运行数据根,可显式指向仓库 evals/cases。"""
+    if cases_root:
+        return Path(cases_root)
+    return REPO_ROOT / "evals" / "cases"
+
+
 def _readiness_reason(code: str, message: str, **extra: Any) -> dict[str, Any]:
     reason: dict[str, Any] = {"code": code, "message": message}
     reason.update(extra)
@@ -529,6 +536,7 @@ def preflight_candidate_promotions(
     source: str = "",
     target_dataset: str = "",
     limit: int = 200,
+    cases_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """批量预检候选晋升，不写文件、不改 DB。"""
     capped_limit = max(1, min(int(limit or 200), 500))
@@ -561,6 +569,7 @@ def preflight_candidate_promotions(
         readiness = candidate_readiness(
             row,
             target_dataset=target_dataset or (row.suite if row else "regression"),
+            cases_root=cases_root,
         )
         if readiness["ready"]:
             ready_count += 1
@@ -795,6 +804,100 @@ def get_candidate(db, case_id: str) -> EvalCandidate | None:
     return db.query(EvalCandidate).filter(EvalCandidate.case_id == case_id).first()
 
 
+def count_pending_by_suite(db) -> dict[str, int]:
+    """统计各 suite 处于 candidate 状态(待标注)的数量。"""
+    from sqlalchemy import func
+
+    rows = (
+        db.query(EvalCandidate.suite, func.count(EvalCandidate.id))
+        .filter(EvalCandidate.status == CANDIDATE_STATUS_CANDIDATE)
+        .group_by(EvalCandidate.suite)
+        .all()
+    )
+    return {suite: count for suite, count in rows}
+
+
+def bulk_reject_candidates(
+    db,
+    *,
+    suite: str = "",
+    status: str = "candidate",
+    source: str = "",
+    created_before: str = "",
+    reason_code: str | None = None,
+    note: str | None = None,
+    limit: int = 1000,
+    apply: bool = False,
+    ip_address: str = "",
+) -> dict[str, Any]:
+    """按过滤条件批量拒绝候选——apply=False 只统计;apply=True 改状态并写审计。"""
+    if not status:
+        raise ValueError("status is required for bulk reject")
+    if status not in REJECTABLE_CANDIDATE_STATUSES:
+        raise ValueError(f"status not rejectable: {status}")
+    reason = _normalize_reason_code(reason_code, REJECT_REASON_CODES)
+    normalized_note = _normalize_note(note)
+    capped_limit = max(1, min(int(limit or 1000), 10000))
+
+    q = _candidate_query(db, suite=suite, status=status, source=source)
+    if created_before:
+        try:
+            cutoff = datetime.fromisoformat(created_before)
+        except ValueError as exc:
+            raise ValueError(f"invalid created_before: {created_before}") from exc
+        q = q.filter(EvalCandidate.created_at < cutoff)
+    rows = q.order_by(EvalCandidate.id.asc()).limit(capped_limit).all()
+
+    if not apply:
+        return {
+            "matched": len(rows),
+            "rejected": 0,
+            "reason_code": reason,
+            "audit_log_id": None,
+        }
+
+    now = _db_now_naive()
+    case_ids: list[str] = []
+    for row in rows:
+        row.status = CANDIDATE_STATUS_REJECTED
+        if normalized_note:
+            row.note = normalized_note
+        row.updated_at = now
+        case_ids.append(row.case_id)
+
+    audit = AdminAuditLog(
+        action="bulk_reject_eval_candidates",
+        target_type="eval_candidate_batch",
+        target_id=f"bulk_reject_{now:%Y%m%d_%H%M%S}",
+        detail_json=json.dumps(
+            {
+                "filters": {
+                    "suite": suite,
+                    "status": status,
+                    "source": source,
+                    "created_before": created_before,
+                    "limit": capped_limit,
+                },
+                "reason_code": reason,
+                "note": normalized_note,
+                "rejected": len(case_ids),
+                "case_ids": case_ids[:500],
+            },
+            ensure_ascii=False,
+        ),
+        ip_address=(ip_address or "")[:45],
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(audit)
+    return {
+        "matched": len(rows),
+        "rejected": len(case_ids),
+        "reason_code": reason,
+        "audit_log_id": audit.id,
+    }
+
+
 def update_candidate(db, case_id: str, **fields):
     """更新候选字段。"""
     row = get_candidate(db, case_id)
@@ -964,6 +1067,7 @@ def candidate_readiness(
     row: EvalCandidate | None,
     *,
     target_dataset: str | None = None,
+    cases_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """返回候选当前是否可晋升，以及阻断原因。"""
     dataset, dataset_reason = _validate_dataset_name(
@@ -990,7 +1094,7 @@ def candidate_readiness(
     if dataset_reason:
         blocking_reasons.append(dataset_reason)
     else:
-        target_path = str(REPO_ROOT / "evals" / "cases" / dataset / f"{row.case_id}.json")
+        target_path = str(_cases_dir(cases_root) / dataset / f"{row.case_id}.json")
 
     if row.status != "labeled":
         blocking_reasons.append(_readiness_reason(
@@ -1037,32 +1141,20 @@ def candidate_readiness(
     }
 
 
-def plan_candidate_promotion(db, case_id: str, *, target_dataset: str = "regression") -> dict:
-    """构建候选晋升计划，不写文件、不改 DB。"""
-    row = get_candidate(db, case_id)
-    if not row:
-        raise ValueError("candidate not found")
-    readiness = candidate_readiness(row, target_dataset=target_dataset)
-    if not readiness["ready"]:
-        reason = readiness["blocking_reasons"][0]
-        raise ValueError(f"{reason['code']}: {reason['message']}")
-    expected = _safe_json(row.expected_json, {})
-
-    dataset = readiness["target_dataset"]
-    out_path = Path(readiness["target_path"])
-
+def _build_case_payload(row: EvalCandidate) -> dict[str, Any]:
+    """把候选行构建为 case 文件内容(晋升与导出共用)。"""
     tags = _safe_json(row.tags_json, [])
     if not isinstance(tags, list):
         tags = []
     if "promoted" not in tags:
         tags = [*tags, "promoted"]
 
-    case_data = {
-        "id": case_id,
+    return {
+        "id": row.case_id,
         "suite": row.suite,
         "description": row.description,
         "input": _safe_json(row.input_json, {}),
-        "expected": expected,
+        "expected": _safe_json(row.expected_json, {}),
         "tags": tags,
         "meta": {
             "origin": "eval_candidate",
@@ -1071,19 +1163,90 @@ def plan_candidate_promotion(db, case_id: str, *, target_dataset: str = "regress
             "fingerprint": row.fingerprint or "",
         },
     }
+
+
+def plan_candidate_promotion(
+    db,
+    case_id: str,
+    *,
+    target_dataset: str = "regression",
+    cases_root: str | Path | None = None,
+) -> dict:
+    """构建候选晋升计划，不写文件、不改 DB。"""
+    row = get_candidate(db, case_id)
+    if not row:
+        raise ValueError("candidate not found")
+    readiness = candidate_readiness(row, target_dataset=target_dataset, cases_root=cases_root)
+    if not readiness["ready"]:
+        reason = readiness["blocking_reasons"][0]
+        raise ValueError(f"{reason['code']}: {reason['message']}")
+
     return {
         "case_id": case_id,
         "suite": row.suite,
-        "target_dataset": dataset,
-        "path": str(out_path),
-        "case": case_data,
+        "target_dataset": readiness["target_dataset"],
+        "path": readiness["target_path"],
+        "case": _build_case_payload(row),
     }
 
 
-def promote_candidate(db, case_id: str, *, target_dataset: str = "regression") -> str | None:
+def export_promoted_cases(
+    db,
+    *,
+    suite: str = "",
+    target_dataset: str = "",
+    cases_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """把 status=promoted 的候选重建为 case 文件——已存在跳过,expected 不合法记 invalid。"""
+    rows = (
+        _candidate_query(db, suite=suite, status=CANDIDATE_STATUS_PROMOTED)
+        .order_by(EvalCandidate.id.asc())
+        .all()
+    )
+    written: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    invalid: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            dataset = _safe_dataset_name(target_dataset or row.suite)
+            validate_expected_contract(row.suite, _safe_json(row.expected_json, {}))
+        except ValueError as exc:
+            invalid.append({"case_id": row.case_id, "error": str(exc)})
+            continue
+        out_path = _cases_dir(cases_root) / dataset / f"{row.case_id}.json"
+        if out_path.exists():
+            skipped.append({
+                "case_id": row.case_id,
+                "path": str(out_path),
+                "reason": "target_exists",
+            })
+            continue
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(_build_case_payload(row), indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        written.append({"case_id": row.case_id, "path": str(out_path)})
+    return {
+        "total": len(rows),
+        "written": written,
+        "skipped": skipped,
+        "invalid": invalid,
+    }
+
+
+def promote_candidate(
+    db,
+    case_id: str,
+    *,
+    target_dataset: str = "regression",
+    cases_root: str | Path | None = None,
+) -> str | None:
     """提升候选到指定 eval dataset。必须已标注。"""
     try:
-        plan = plan_candidate_promotion(db, case_id, target_dataset=target_dataset)
+        plan = plan_candidate_promotion(
+            db, case_id, target_dataset=target_dataset, cases_root=cases_root
+        )
     except ValueError as e:
         if str(e) == "candidate not found":
             return None
