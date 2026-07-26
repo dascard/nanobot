@@ -57,8 +57,13 @@
 | `users` | 用户 ID + `history_clear_at` 清除标记 | `proxy_chat`、`mark-clear` |
 | `chat_logs` | **原始消息存档**——进化/画像分析素材，含 tool、ambient | `_persist_chat_turn`、`log_ambient` |
 | `conversation_turns` | **精简对话上下文**——仅 user/assistant，专用于历史注入 | `_persist_chat_turn` |
-| `personas` | 用户画像 JSON | `evolution_task` |
+| `personas` / `persona_facts` | 用户画像 JSON / 治理化画像事实（证据、置信度、矛盾） | `evolution_task`、`PersonaStateMachine` |
+| `rolling_session_summaries` | 短期窗口外的滚动会话摘要 | `app/session_memory` |
+| `group_memories` | 群体记忆（含人工/模型治理来源与审批哈希） | `app/group_memory`、群学习治理 |
+| `semantic_index_items` / `_fts` | 统一语义索引（memory/session_summary/knowledge/sticker 召回） | `semantic-index-worker` |
 | `scheduled_tasks` | 定时推送任务 | `/chat/tasks` |
+| `proactive_outreach_log` | 主动外呼评估与投递账本 | `core/proactive` |
+| `sandbox_access_grants` / `sandbox_leases` / `sandbox_runs` | Sandbox 授权 / 租约 / 运行账本 | `core/sandbox`（reconciler + 管理操作） |
 
 **分离原则**：`ChatLog` 是档案馆（保留全部，永不删除），`ConversationTurn` 是工作内存（可清理，时间窗口查询）。
 
@@ -69,6 +74,9 @@
 - **模型路由**：`get_ordered_candidates()` 按 priority score 排序，向下遍历（便宜优先）
 - **熔断器**：`ModelFailureTracker` 连续 3 次失败后自动禁用 5min
 - **Sandbox 边界**：Nanobot Server 不挂 Docker Socket、不知道宿主 Workspace 路径，只经 sandboxd UDS 操作；Profile 只能由 `SandboxAccessGrant` 决定，模型不能在参数中选择；Server 是 `SandboxLease`/`SandboxRun` 业务账本唯一写入方（周期 reconciler 主动拉取 sandboxd 事实）
+- **RAG 降级**：reranker 未配置或运行时失败时按 `allow_degraded` 决定——允许则退回 semantic/lexical 门控并在结果标注 `degraded`/`fallback_reason`，不允许则 fail-closed；不得把 reranker 异常当空分数导致候选整批静默丢弃
+- **主动外呼**：默认关闭（`proactive_outreach.enabled`），目标用户仅来自 `NANOBOT_SUPER_USER_IDS`；调度阈值与管理端 run-once 必须共用同一托管配置
+- **测试超时兜底**：`pytest.ini` 设 120s 单测超时（`pytest-timeout`），任何卡死用例会被打断报失败而非无限挂起
 - **Token 估算**：CJK 字符按 1.0，ASCII 按 0.35（不求精确，量级判断）
 - **中文优先**：bot 使用者是中文用户，所有 prompt 和回复用中文
 - **提示词同步**：修改 `enriched_query` 组装逻辑、历史注入方式、conversation 结构、工具输出契约或 prompt runtime 输入时，**必须检查 canonical Prompt Runtime 模板是否仍然准确**，重点包括 `prompts.v2.default/chat/*`、`prompts.v2.default/tasks/*`、`prompts.v2.default/tools/*/usage.md`、`core/prompt_v2/variables.py` 和 `core/prompt_v2/template_registry.py`。如果模板引用的变量、标记或行为描述已过时，必须在同一 PR 中更新默认模板与必要的 `data/prompts_v2/` 运行时模板。
@@ -79,7 +87,13 @@
 - ✗ 没测 Qwen 连通性就说端口改了 OK
 - ✗ 没测 news_search 就说"网络问题非代码"
 - ✗ 没跑 benchmark 就说 prompt 优化好了
+- ✗ 测试还在跑（甚至卡死挂起）就基于"上一次 exit 0"或未完成的运行声称通过
 - ✓ **任何修改后，必须实际运行验证命令并确认输出**
+- ✓ **声称测试通过前，必须确认本次全量运行真正结束且 0 failures，不复用旧结果**
+
+### 1b. 改内部调用签名不查全替身
+- ✗ 给 `run_scheduled_tasks` 加 `at` 参数，却没同步测试里的 `fake_run_scheduled_tasks` 替身，导致循环内异常被吞、测试无限挂起
+- ✓ **改动函数签名/契约时，grep 全仓所有调用方与 mock/替身点一并更新**
 
 ### 2. 急于提交
 - ✗ 多次在测试没跑完、用户没确认时就要 commit

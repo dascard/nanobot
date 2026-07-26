@@ -1,6 +1,6 @@
 # Nanobot Server
 
-Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配器 / Web 客户端消息，运行 KohakuTerrarium Agent，维护聊天记忆、群聊运行状态、TimingGate 判定、RAG 语义索引、表情包数据、Prompt Runtime 模板和管理后台调试面板。
+Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配器 / Web 客户端消息，运行 KohakuTerrarium Agent，维护聊天记忆、群聊运行状态、TimingGate 判定、RAG 语义索引、表情包数据、用户画像、主动外呼、代码执行沙箱、Prompt Runtime 模板和管理后台调试面板。
 
 ## 主要能力
 
@@ -10,6 +10,9 @@ Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配�
 - 群聊上下文：保留消息、引用、@、指向性、冷却和 generation 信息，减少 bot 打断用户之间定向对话。
 - 表情包系统：自动入库、缓存预览、视觉打标、搜索、禁用、去重和使用统计。
 - 记忆系统：保存 `ChatLog`、`ConversationTurn`、Persona、Digest、滚动摘要、群记忆和近期上下文。
+- 用户画像：从 ChatLog 提取候选，按证据数 / 时间衰减维护置信度，NLI 检测矛盾，注入前按治理策略过滤。
+- 主动外呼：按静默时长、话题冷却和概率对超级用户发起主动消息，带租约、幂等投递和 ambiguous 冷静期；默认关闭。
+- 代码执行沙箱：`restricted`（一次性容器）与 `developer`（会话型 Lease）两类 Profile，由独立 `sandboxd` 控制面运行容器，模型经 `sandbox_exec` / `poll` / `write_stdin` / `terminate` 与 workspace 文件工具操作；Profile 只能由服务端 `SandboxAccessGrant` 决定，全部硬开关默认关闭且 fail-closed。
 - RAG 与语义索引：统一维护 `memory`、`sticker`、`knowledge` 和 `group_memory` 的召回链路；`memory` / `sticker` / `knowledge` 使用 BM25、已存向量和近期上下文混合召回后交给 reranker，`group_memory` 使用 SQL gate 和 reranker。
 - RAG Debug / Benchmark：WebUI 支持单次 RAG trace、只读 benchmark、manual / generated case 管理、候选展示和报告查看。
 - 只读数据库浏览：Admin DB Browser 以白名单表、列级脱敏、BLOB 安全序列化和 SQL 安全边界展示运行数据。
@@ -48,13 +51,16 @@ graph TD
 | `server.py` | FastAPI 应用入口、日志、启动检查和后台任务 |
 | `api/routes.py` | 普通 API、群聊入口、TimingGate timer、私聊、任务和记忆端点 |
 | `api/admin_routes.py` | WebUI 管理 API |
-| `api/admin/` | RAG Debug、RAG Benchmark 等管理子路由 |
-| `core/` | 数据库、群运行态、TimingGate、表情包、记忆、RAG 和配置 |
+| `api/admin/` | RAG Debug、RAG Benchmark、模型、工具、画像、群记忆、Sandbox 等管理子路由 |
+| `app/` | 领域服务模块（session_memory、group_memory、persona、memory_digest、group_learning、group_ingress、prompt_runtime 等） |
+| `core/` | 数据库、群运行态、TimingGate、表情包、记忆、RAG、主动外呼、Prompt v2 和配置 |
+| `core/sandbox/` | Sandbox Server 侧（授权、Lease/Run 账本、管理操作，不接触 Docker） |
+| `sandboxd/` | Sandbox 独立控制面（唯一接触 Docker Socket 与 `/srv/nanobot`，经 UDS 提供服务） |
 | `evals/rag_benchmark/` | RAG benchmark case、adapter、runner、scoring 和报告生成 |
 | `nanobot_kt/` | KT Bridge、输出适配和工具实现 |
 | `creatures/nanobot/` | KT creature 配置、工具说明和运行记忆 |
 | `workers/` | Session summary 与语义索引异步 worker |
-| `webui/` | Admin WebUI 前端 |
+| `webui/` | Admin WebUI 前端（React + Vite） |
 | `vendor/KohakuTerrarium/` | KT 框架子模块 |
 | `tests/` | pytest 测试 |
 
@@ -277,6 +283,26 @@ tmp/rag_benchmark/reports/
 
 `tmp/rag_benchmark/` 里的 generated case、报告、备份和运行锁都是本地运行产物，不应提交。
 
+## 代码执行沙箱
+
+Sandbox 让模型在隔离容器里执行代码与操作 Workspace 文件，分两层：
+
+- **Server 侧（`core/sandbox/`）**：只经 sandboxd UDS 操作，不挂 Docker Socket、不知道宿主 Workspace 路径；维护 `SandboxAccessGrant` 授权、`SandboxLease` / `SandboxRun` 账本与管理操作，并作为账本唯一写入方由周期 reconciler 主动拉取 sandboxd 事实收敛。
+- **控制面（`sandboxd/`）**：唯一接触 Docker Socket 与 `/srv/nanobot` 的组件，负责容器生命周期、出口网络策略、Workspace/Runtime 配额与用量对账。
+
+要点：
+
+- 两类 Profile：`restricted`（一次性断网容器、Python 数据工具）与 `developer`（会话型 Lease、GitHub/PyPI/npm allowlist、完整开发工具链）；`trusted_developer` 为恒 `not_ready` 占位。
+- 可用 Profile 只能由 `SandboxAccessGrant` 决定，模型不能在参数中选择镜像、网络或任何 Docker 参数。
+- 永久红线：禁 Docker Socket、privileged、host network/PID、宿主根目录、任意 bind mount、跨 Workspace 与长期写凭据。
+- 所有新开关默认关闭且 fail-closed：`NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED`（env）与 `sandbox.enabled` / `sandbox.exec_enabled` / `sandbox.session_execution_allowed` / `sandbox.developer_network_allowed`（DB SystemSetting）。
+
+部署、灰度、回滚、备份与安全 / 威胁模型见 `docs/sandbox-operations.md`、`docs/sandbox-rollout-rollback.md`、`docs/sandbox-security-model.md`。真实隔离矩阵（AppArmor、宿主 project quota、六组特权 Docker 验收）需在部署宿主完成，未验收前生产保持 `BLOCKED`。
+
+## 主动外呼
+
+主动外呼（`core/proactive/`）由后台调度器按静默时长、最大检查间隔、话题冷却和概率对超级用户发起主动消息，经 Judge 评估、grounding 校验后走幂等出站投递，带租约与 ambiguous 冷静期。能力默认关闭（`proactive_outreach.enabled`），目标用户仅来自 `NANOBOT_SUPER_USER_IDS`；管理端可 `run-once`（check / due）演练，阈值与后台调度器共用同一托管配置。
+
 ## 数据库与并发
 
 默认 SQLite 连接会设置：
@@ -322,6 +348,11 @@ Admin DB Browser 只面向管理员调试使用：
 | `GET /api/v1/admin/rag/benchmark/reports/latest` | 查看最近一次 benchmark 报告 |
 | `GET /api/v1/admin/prompt` | Prompt Runtime 预览 / 模板管理相关数据 |
 | `GET /api/v1/admin/models/status` | 模型状态 |
+| `GET /api/v1/admin/persona/users` | 用户画像列表与注入预览 |
+| `GET /api/v1/admin/proactive-outreach/*` | 主动外呼配置、run-once 演练与投递记录 |
+| `GET /api/v1/admin/sandbox/status` | Sandbox readiness、Profile 与开关状态 |
+| `POST /api/v1/admin/sandbox/access-grants` | 授予 / 变更会话 Sandbox 能力与 Profile |
+| `GET /api/v1/admin/sandbox/leases` | Sandbox Lease 列表与安全投影 |
 | `GET /api/v1/admin/db/tables` | 只读数据库表清单 |
 | `GET /api/v1/admin/db/tables/{table_name}` | 只读分页查看白名单表 |
 | `POST /api/v1/admin/db/query` | 受限只读 SQL 查询 |
@@ -351,18 +382,29 @@ python -B -m pytest tests/test_prompt_v2.py tests/test_prompt_manifest.py -q -p 
 
 ## 测试
 
+全量测试使用 pytest-xdist 并行，并由 pytest-timeout 兜底防止卡死用例无限挂起（配置见 `pytest.ini`）：
+
 ```bash
-python -m pytest tests/ -v
+python -m pytest tests/ -n auto --dist loadfile -v
+```
+
+20 核并行约 2 分钟。调试单文件 / 单测直接运行，不加 `-n`（避免 worker 启动开销）：
+
+```bash
+python -m pytest tests/test_<module>.py -v
 ```
 
 常用局部测试：
 
 ```bash
 python -m pytest tests/test_kt_framework.py tests/test_bridge_integration.py tests/test_sticker_tool.py -q
-python -m pytest tests/test_timing_runtime.py tests/test_timing_gate.py -q
+python -m pytest tests/test_timing_runtime.py -q
 python -m pytest tests/test_admin_api.py -q
 python -m pytest tests/test_admin_db_browser.py tests/test_rag_debug.py -q
-python -m pytest tests/test_rag_benchmark.py tests/test_rag_benchmark_admin.py tests/test_rag_benchmark_webui.py -q
+python -m pytest tests/test_rag_benchmark.py tests/test_rag_benchmark_admin.py -q
+python -m pytest tests/test_persona_preprocess.py tests/test_group_memory_rag.py -q
+python -m pytest tests/test_proactive_outreach.py tests/test_admin_proactive_outreach.py -q
+python -m pytest "tests/test_sandbox_*.py" "tests/test_sandboxd_*.py" -q
 python -m pytest tests/test_tracing_sqlite_retry.py tests/test_database.py -q
 ```
 
