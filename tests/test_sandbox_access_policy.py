@@ -7,6 +7,7 @@ from core.database import (
     SystemSetting,
     Workspace,
     WorkspaceQuotaBinding,
+    WorkspaceRuntimeQuotaBinding,
 )
 from core.sandbox.access_contracts import SandboxCapability
 from core.sandbox.access_policy import SandboxAccessPolicy
@@ -65,6 +66,14 @@ def _grant_session(
                 desired_quota if applied_quota is None else applied_quota
             ),
             status=quota_status,
+            generation=1,
+        ),
+        WorkspaceRuntimeQuotaBinding(
+            workspace_id=workspace_id,
+            project_id=10001,
+            desired_quota_bytes=512 * MIB,
+            applied_quota_bytes=512 * MIB,
+            status="applied",
             generation=1,
         ),
         SandboxAccessGrant(

@@ -366,6 +366,23 @@ def test_production_script_requires_explicit_local_same_disk_risk_marker():
     assert "根文件系统最低保留空间不得低于 60 GiB" in source
 
 
+def test_production_script_exposes_authenticated_lease_termination_entry():
+    source = SCRIPT.read_text(encoding="utf-8")
+    help_result = subprocess.run(
+        [str(SCRIPT), "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert help_result.returncode == 0, help_result.stderr
+    assert "terminate-leases" in help_result.stdout
+    assert "/v1/admin/leases/terminate-all" in source
+    assert "/etc/nanobot/sandboxd-admin.token" in source
+    assert "sandboxd_admin_terminate_all" in source
+
+
 def test_production_script_guards_real_loopback_preallocation():
     source = SCRIPT.read_text(encoding="utf-8")
 
@@ -870,3 +887,134 @@ def test_control_plane_probe_has_bounded_uds_startup_retry():
     assert "socket.timeout" in probe_body
     assert "b\" 503 \"" in probe_body
     assert "time.sleep(0.1)" in probe_body
+
+
+def test_production_image_stage_binds_two_profiles_proxy_and_manifest():
+    source = SCRIPT.read_text(encoding="utf-8")
+    build_body = source.split("build_image_command() {", 1)[1].split(
+        "\nimage_bundle_from_stage() {",
+        1,
+    )[0]
+    verify_body = source.split("image_bundle_from_stage() {", 1)[1].split(
+        "\nassert_smoke_current() {",
+        1,
+    )[0]
+
+    assert 'RESTRICTED_IMAGE="nanobot-sandbox-python:${VERSION}"' in source
+    assert 'DEVELOPER_IMAGE="nanobot-sandbox-developer:${VERSION}"' in source
+    assert (
+        'CANONICAL_PROXY_IMAGE="nanobot-sandbox-egress-proxy:2026.07.25"'
+        in source
+    )
+    assert '"${VERSION}" --profile developer' in build_body
+    assert "render-sandbox-profile-manifest.py" in build_body
+    assert "expected_proxy_id" in build_body
+    assert '[[ "${proxy_id}" == "${expected_proxy_id}" ]]' in build_body
+    assert "restricted=${RESTRICTED_IMAGE}@" in build_body
+    assert "developer=${DEVELOPER_IMAGE}@" in build_body
+    assert "proxy=${PROXY_IMAGE}@" in build_body
+    assert "manifest=${manifest_sha256}" in build_body
+    assert 'docker image inspect "${RESTRICTED_IMAGE}"' in verify_body
+    assert 'docker image inspect "${DEVELOPER_IMAGE}"' in verify_body
+    assert 'docker image inspect "${PROXY_IMAGE}"' in verify_body
+    assert "load_profile_catalog" in verify_body
+
+
+def test_reused_image_gate_covers_all_profile_inputs():
+    source = SCRIPT.read_text(encoding="utf-8")
+    update_body = source.split("update_release_command() {", 1)[1].split(
+        "\nassert_data_device_not_root_chain() {",
+        1,
+    )[0]
+
+    for required_path in (
+        "scripts/build-sandbox-image.sh",
+        "scripts/render-sandbox-profile-manifest.py",
+        "config/sandbox-execution-profiles.v1.json",
+        "docker/sandbox/python",
+        "docker/sandbox/developer",
+        "docker/sandbox/egress-proxy",
+    ):
+        assert required_path in update_body
+
+
+def test_control_plane_shares_one_runtime_manifest_and_defaults_hard_limits_off():
+    source = SCRIPT.read_text(encoding="utf-8")
+    unit = (
+        REPO_ROOT / "deploy" / "systemd" / "nanobot-sandboxd.service"
+    ).read_text(encoding="utf-8")
+    env_body = source.split(
+        "install_sandboxd_credentials_and_env() {",
+        1,
+    )[1].split("\nprobe_sandboxd() {", 1)[0]
+    application_body = source.split(
+        "configure_application_env_off() {",
+        1,
+    )[1].split("\nwait_server_health() {", 1)[0]
+
+    runtime_manifest = "/run/nanobot-sandboxd/profile-manifest.json"
+    installed_manifest = (
+        "/etc/nanobot/sandbox-execution-profiles.v1.json"
+    )
+    assert "NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE=${RUNTIME_PROFILE_MANIFEST}" in (
+        env_body
+    )
+    assert "NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED=false" in env_body
+    assert installed_manifest in unit
+    assert runtime_manifest in unit
+    assert "ExecStartPre=/usr/bin/install -m 0640" in unit
+    assert "RuntimeDirectoryPreserve=restart" in unit
+    assert (
+        "NANOBOT_SANDBOX_SESSION_EXECUTION_ALLOWED false"
+        in application_body
+    )
+    assert (
+        "NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED false"
+        in application_body
+    )
+    assert "NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE" in application_body
+
+
+def test_kill_switch_generates_required_idempotency_key():
+    source = SCRIPT.read_text(encoding="utf-8")
+    body = source.split("kill_switch_command() {", 1)[1].split(
+        "\nruntime_cleanup_command() {",
+        1,
+    )[0]
+
+    assert 'request_id="sbxkill_$(openssl rand -hex 16)"' in body
+    assert "'{request_id:$request_id,reason:$reason}'" in body
+
+
+def test_production_smoke_stage_requires_complete_structured_matrix():
+    source = SCRIPT.read_text(encoding="utf-8")
+    validation_body = source.split("validate_smoke_evidence() {", 1)[1].split(
+        "\nassert_smoke_current() {",
+        1,
+    )[0]
+    smoke_body = source.split("smoke_command() {", 1)[1].split(
+        "\ninstall_release_tree() {",
+        1,
+    )[0]
+
+    for group_id in (
+        "basic-security",
+        "lease",
+        "process",
+        "developer-toolchain",
+        "network",
+        "data-continuity",
+    ):
+        assert group_id in validation_body
+    assert 'value.get("result") != "passed"' in validation_body
+    assert 'item.get("skipped") != 0' in validation_body
+    assert 'item.get("tests", 0) <= 0' in validation_body
+    assert validation_body.index("artifact_candidate.is_symlink()") < (
+        validation_body.index("artifact_candidate.resolve(strict=True)")
+    )
+    assert "--manifest" in smoke_body
+    assert "--data-root" in smoke_body
+    assert "--evidence-root" in smoke_body
+    assert "summary.json" in source
+    assert "grep -Eq '1 passed'" not in source
+    assert "manifest=$(profile_manifest_sha256_from_stage)" in smoke_body

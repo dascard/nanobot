@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from core.sandbox.backend import FakeSandboxBackend
+from core.sandbox.access_contracts import LEASE_PROCESS_TOOL_NAMES
 from core.sandbox.paths import SandboxStorageLayout
 from core.sandbox.tool_service import SandboxToolService
 from core.tool_registry import SANDBOX_TOOL_NAMES
@@ -51,6 +52,7 @@ def _enable_sandbox(db, *, exec_enabled: bool = False) -> None:
         SandboxAccessGrant,
         Workspace,
         WorkspaceQuotaBinding,
+        WorkspaceRuntimeQuotaBinding,
     )
 
     _set_setting(db, "sandbox.enabled", True)
@@ -76,6 +78,14 @@ def _enable_sandbox(db, *, exec_enabled: bool = False) -> None:
             project_id=10000,
             desired_quota_bytes=quota_bytes,
             applied_quota_bytes=quota_bytes,
+            status="applied",
+            generation=1,
+        ),
+        WorkspaceRuntimeQuotaBinding(
+            workspace_id=workspace_id,
+            project_id=10001,
+            desired_quota_bytes=512 * 1024 * 1024,
+            applied_quota_bytes=512 * 1024 * 1024,
             status="applied",
             generation=1,
         ),
@@ -142,8 +152,9 @@ def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
         runtime_preset="full",
         db=db_session,
     )
-    assert SANDBOX_TOOL_NAMES - {"sandbox_exec"} <= workspace_only.sent_tool_names
-    assert "sandbox_exec" not in workspace_only.sent_tool_names
+    exec_tools = {"sandbox_exec", *LEASE_PROCESS_TOOL_NAMES}
+    assert SANDBOX_TOOL_NAMES - exec_tools <= workspace_only.sent_tool_names
+    assert not exec_tools & workspace_only.sent_tool_names
 
     exec_row = db_session.query(SystemSetting).filter_by(
         key="sandbox.exec_enabled",
@@ -158,7 +169,11 @@ def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
         runtime_preset="full",
         db=db_session,
     )
-    assert SANDBOX_TOOL_NAMES <= all_enabled.sent_tool_names
+    assert (
+        SANDBOX_TOOL_NAMES - LEASE_PROCESS_TOOL_NAMES
+        <= all_enabled.sent_tool_names
+    )
+    assert not LEASE_PROCESS_TOOL_NAMES & all_enabled.sent_tool_names
 
     ordinary = build_tool_plan(
         chat_type="private",
@@ -392,6 +407,51 @@ def test_sandbox_exec_records_nonzero_exit_as_failed(db_session):
     row = db_session.query(SandboxRun).one()
     assert row.status == "failed"
     assert row.termination_reason == "nonzero_exit"
+
+
+def test_sandbox_exec_uses_manifest_profile_image_when_legacy_absent(db_session):
+    from core.database import SandboxRun
+    from creatures.nanobot.prompts.skills.sandbox.tool import SandboxExecTool
+
+    _enable_sandbox(db_session, exec_enabled=True)
+    backend = FakeSandboxBackend()
+    backend.set_response("ready", {
+        "status": "success",
+        "summary": "sandboxd 已就绪",
+        "next_actions": [],
+        "artifacts": [],
+        "data": {
+            "image_id": "",
+            "profiles": {
+                "restricted": {"ready": True, "image_id": IMAGE_ID},
+            },
+        },
+    })
+    backend.set_response("run", {
+        "status": "success",
+        "summary": "Sandbox 执行完成",
+        "next_actions": [],
+        "artifacts": [],
+        "data": {
+            "exit_code": 0,
+            "termination_reason": "completed",
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "workspace_used_bytes": 0,
+            "workspace_usage_delta_bytes": 0,
+        },
+    })
+
+    result = run_async(_tool_factory(SandboxExecTool, backend).execute(
+        {"command": "true"},
+        context=_context(),
+    ))
+
+    assert json.loads(result.output)["status"] == "success"
+    db_session.expire_all()
+    row = db_session.query(SandboxRun).one()
+    assert row.image_digest == IMAGE_ID
+    assert row.status == "completed"
 
 
 def test_sandbox_exec_failure_terminal_survives_outer_uow_rollback(db_session):

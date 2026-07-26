@@ -127,6 +127,34 @@ def test_kt_adapter_covers_every_active_execution_port():
     assert result.orphan_port_ids == ()
 
 
+def test_new_sandbox_tools_have_schema_execution_and_prompt_bindings():
+    from core.tool_registration import get_tool_registration
+    from nanobot_kt.tool_registration_adapter import build_kt_tool_configs
+
+    configs = {
+        item.name: item
+        for item in build_kt_tool_configs()
+    }
+    for name in {
+        "sandbox_poll",
+        "sandbox_write_stdin",
+        "sandbox_terminate",
+        "workspace_apply_patch",
+    }:
+        registration = get_tool_registration(name)
+        assert registration is not None
+        assert registration.lifecycle == "active"
+        assert registration.schema_provider_id == "canonical"
+        assert registration.execution_binding is not None
+        assert registration.execution_binding.port_id == (
+            f"tool.{name}.execute"
+        )
+        assert registration.prompt_template_keys == (
+            f"tools/{name}/usage",
+        )
+        assert configs[name].module == "nanobot_kt.tools.sandbox"
+
+
 def test_loaded_tool_drift_fails_closed_but_allows_framework_tools():
     from nanobot_kt.tool_registration_adapter import (
         ToolRegistrationDriftError,

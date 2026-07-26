@@ -42,7 +42,7 @@ class _FakeBackend:
             data={
                 "docker": True,
                 "image_id": IMAGE_ID,
-                "apparmor_profile": "nanobot-sandbox",
+                "apparmor_profile": "nanobot-sandbox-restricted",
                 "disk_used_percent": 21.5,
                 "disk_free_bytes": 500 * 1024 * 1024 * 1024,
                 "host_path": "/srv/nanobot/不得返回",
@@ -59,6 +59,27 @@ class _FakeBackend:
                 "status": "cancelling",
                 "stdout": "不得返回的输出正文",
                 "host_path": "/srv/nanobot/不得返回",
+            },
+        )
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeAdminBackend:
+    def __init__(self):
+        self.closed = False
+        self.terminate_calls = []
+
+    def terminate_all_leases(self, *, request_id, reason):
+        self.terminate_calls.append((request_id, reason))
+        return success_result(
+            "全量终止完成",
+            data={
+                "controller_epoch": "sbxctl_" + "1" * 32,
+                "terminated_lease_ids": [],
+                "affected_process_ids": [],
+                "failed_lease_ids": [],
             },
         )
 
@@ -166,6 +187,8 @@ def test_admin_sandbox_status_reports_safe_health_usage_and_runs(
     payload = response.json()
     assert payload["feature"] == {
         "infrastructure_enable_allowed": False,
+        "session_execution_allowed": False,
+        "developer_network_allowed": False,
         "enabled": True,
         "exec_enabled": True,
         "group_enabled": False,
@@ -236,33 +259,68 @@ def test_admin_sandbox_run_list_and_cancel_are_sanitized_and_audited(
     assert audit.target_id == "sbxrun_running"
 
 
-def test_admin_sandbox_kill_switch_only_disables_features_and_preserves_data(
+def test_admin_sandbox_kill_switch_terminates_runs_and_preserves_data(
     db_session,
     monkeypatch,
 ):
     _settings(db_session)
     _business_rows(db_session)
     backends = []
+    admin_backends = []
     client = _client(db_session, monkeypatch, backends)
+
+    def admin_factory(_db):
+        backend = _FakeAdminBackend()
+        admin_backends.append(backend)
+        return backend
+
+    monkeypatch.setattr(
+        sandbox_routes,
+        "_sandbox_admin_backend",
+        admin_factory,
+    )
 
     response = client.post(
         "/api/v1/admin/sandbox/kill-switch",
-        json={"reason": "灰度回滚演练"},
+        json={
+            "request_id": "legacy-kill-switch-request-1",
+            "reason": "灰度回滚演练",
+        },
     )
 
     assert response.status_code == 200
     assert response.json() == {
         "ok": True,
+        "replayed": False,
         "feature": {"enabled": False, "exec_enabled": False},
-        "active_run_count": 1,
+        "terminated_count": 1,
+        "failed_count": 0,
+        "terminated_lease_count": 0,
+        "terminated_run_count": 1,
+        "failed_lease_count": 0,
+        "failed_run_count": 0,
         "data_preserved": True,
     }
-    assert db_session.get(SystemSetting, "sandbox.enabled").value == "0"
-    assert db_session.get(SystemSetting, "sandbox.exec_enabled").value == "0"
+    assert db_session.get(SystemSetting, "sandbox.enabled").value == "false"
+    assert db_session.get(SystemSetting, "sandbox.exec_enabled").value == "false"
     assert db_session.query(Workspace).count() == 1
     assert db_session.query(Asset).count() == 1
     assert db_session.query(WorkspaceAsset).count() == 1
     assert db_session.query(SandboxRun).count() == 2
+    assert db_session.get(SandboxRun, "sbxrun_running").status == "cancelled"
+    assert (
+        db_session.get(SandboxRun, "sbxrun_running").termination_reason
+        == "kill_switch"
+    )
+    assert admin_backends[0].terminate_calls == [(
+        "legacy-kill-switch-request-1",
+        "kill_switch",
+    )]
+    assert admin_backends[0].closed is True
+    assert len(backends[-1].cancelled) == 1
+    assert backends[-1].cancelled[0][0] == "sbxrun_running"
+    assert backends[-1].cancelled[0][1].startswith("kill_")
+    assert backends[-1].closed is True
     audit = db_session.query(AdminAuditLog).filter_by(
         action="sandbox_kill_switch"
     ).one()
@@ -329,6 +387,8 @@ def test_admin_sandbox_feature_enable_respects_host_hard_ceiling(
     assert accepted.status_code == 200
     assert accepted.json()["feature"] == {
         "infrastructure_enable_allowed": True,
+        "session_execution_allowed": False,
+        "developer_network_allowed": False,
         "enabled": True,
         "exec_enabled": False,
         "group_enabled": False,
@@ -409,6 +469,30 @@ def test_admin_sandbox_lists_only_real_private_sessions_and_enqueues_one_request
     assert operation.status_code == 200
     assert operation.json()["operation"]["status"] == "pending"
     assert operation.json()["operation"]["expected_quota_generation"] == 1
+
+
+def test_admin_sandbox_rejects_trusted_profile_selection(
+    db_session,
+    monkeypatch,
+):
+    _settings(db_session)
+    db_session.commit()
+    client = _client(db_session, monkeypatch, [])
+
+    response = client.post(
+        "/api/v1/admin/sandbox/access-grants",
+        json={
+            "request_id": "trusted-profile-request-1",
+            "session_id": "private_trusted-profile",
+            "capability": "exec",
+            "quota_bytes": 64 * 1024 * 1024,
+            "execution_profile": "trusted_developer",
+        },
+    )
+
+    assert response.status_code == 422
+    assert db_session.query(SandboxAccessGrant).count() == 0
+    assert db_session.query(SandboxAdminOperation).count() == 0
 
 
 def test_admin_sandbox_quota_change_is_async_and_audited(

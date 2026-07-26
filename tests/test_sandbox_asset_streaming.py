@@ -26,6 +26,7 @@ class _EmptyContainers:
 class _FakeDockerBackend:
     class _Client:
         containers = _EmptyContainers()
+        networks = _EmptyContainers()
 
     client = _Client()
 
@@ -33,7 +34,7 @@ class _FakeDockerBackend:
         return {
             "docker": True,
             "image_id": IMAGE_ID,
-            "apparmor_profile": "nanobot-sandbox",
+            "apparmor_profile": "nanobot-sandbox-restricted",
             "disk_used_percent": 1.0,
             "disk_free_bytes": 10**12,
         }

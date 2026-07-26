@@ -36,8 +36,10 @@ def test_sandbox_build_script_has_security_smoke_and_no_global_cleanup():
     assert "--read-only" in script
     assert "--cap-drop ALL" in script
     assert "--security-opt no-new-privileges" in script
-    assert "--pids-limit 128" in script
-    assert "--memory 512m" in script
+    assert "pids_limit=128" in script
+    assert "memory_limit=512m" in script
+    assert '--pids-limit "${pids_limit}"' in script
+    assert '--memory "${memory_limit}"' in script
     assert "docker system prune" not in script
     assert "docker image prune" not in script
     assert "docker volume prune" not in script

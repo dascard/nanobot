@@ -147,6 +147,236 @@ def test_admin_quota_request_uses_long_running_timeout_budget(tmp_path):
     assert captured["timeout"]["read"] == 165
 
 
+def test_admin_lease_methods_use_admin_paths_token_and_fixed_payloads(
+    tmp_path,
+):
+    admin_token = "a" * 64
+    token_file = tmp_path / "admin-client.token"
+    token_file.write_text(admin_token, encoding="ascii")
+    token_file.chmod(0o600)
+    captured = []
+
+    def handler(request):
+        captured.append({
+            "method": request.method,
+            "path": request.url.path,
+            "authorization": request.headers["authorization"],
+            "request_id": request.headers["x-nanobot-request-id"],
+            "body": (
+                json.loads(request.content)
+                if request.content
+                else None
+            ),
+            "timeout": request.extensions.get("timeout", {}),
+        })
+        return httpx.Response(200, json={
+            "status": "success",
+            "summary": "ok",
+            "next_actions": [],
+            "artifacts": [],
+            "data": {},
+        })
+
+    backend = HttpSandboxdAdminBackend(
+        socket_path="/run/nanobot-sandboxd/sandboxd.sock",
+        token_file=str(token_file),
+        timeout_seconds=15,
+        run_timeout_seconds=165,
+        client=httpx.Client(
+            transport=httpx.MockTransport(handler),
+            base_url="http://sandboxd",
+        ),
+    )
+    lease_id = "sbxlease_admin_client"
+
+    backend.list_leases()
+    backend.stop_lease(
+        lease_id,
+        request_id="admin_lease_stop_request",
+    )
+    backend.destroy_lease(
+        lease_id,
+        request_id="admin_lease_destroy_request",
+    )
+    backend.recreate_lease(
+        lease_id,
+        request_id="admin_lease_recreate_request",
+    )
+    backend.terminate_all_leases(
+        request_id="admin_terminate_all_request",
+        reason="kill_switch",
+    )
+
+    assert [
+        (item["method"], item["path"], item["body"])
+        for item in captured
+    ] == [
+        ("GET", "/v1/admin/leases", None),
+        (
+            "POST",
+            f"/v1/admin/leases/{lease_id}/stop",
+            {"request_id": "admin_lease_stop_request"},
+        ),
+        (
+            "DELETE",
+            f"/v1/admin/leases/{lease_id}",
+            {"request_id": "admin_lease_destroy_request"},
+        ),
+        (
+            "POST",
+            f"/v1/admin/leases/{lease_id}/recreate",
+            {"request_id": "admin_lease_recreate_request"},
+        ),
+        (
+            "POST",
+            "/v1/admin/leases/terminate-all",
+            {
+                "request_id": "admin_terminate_all_request",
+                "reason": "kill_switch",
+            },
+        ),
+    ]
+    assert all(
+        item["authorization"] == f"Bearer {admin_token}"
+        for item in captured
+    )
+    assert captured[3]["timeout"]["read"] == 165
+
+
+def test_process_http_methods_use_fixed_paths_headers_and_payloads(tmp_path):
+    normal_token = "n" * 64
+    admin_token = "a" * 64
+    normal_token_file = tmp_path / "client.token"
+    admin_token_file = tmp_path / "admin-client.token"
+    normal_token_file.write_text(normal_token, encoding="ascii")
+    admin_token_file.write_text(admin_token, encoding="ascii")
+    normal_token_file.chmod(0o600)
+    admin_token_file.chmod(0o600)
+    captured = []
+
+    def handler(request):
+        captured.append({
+            "method": request.method,
+            "url": str(request.url),
+            "authorization": request.headers["authorization"],
+            "request_id": request.headers["x-nanobot-request-id"],
+            "body": (
+                json.loads(request.content)
+                if request.content
+                else None
+            ),
+            "timeout": request.extensions.get("timeout", {}),
+        })
+        return httpx.Response(200, json={
+            "status": "success",
+            "summary": "ok",
+            "next_actions": [],
+            "artifacts": [],
+            "data": {},
+        })
+
+    transport = httpx.MockTransport(handler)
+    normal = HttpSandboxdBackend(
+        socket_path="/run/nanobot-sandboxd/sandboxd.sock",
+        token_file=str(normal_token_file),
+        timeout_seconds=15,
+        run_timeout_seconds=165,
+        client=httpx.Client(
+            transport=transport,
+            base_url="http://sandboxd",
+        ),
+    )
+    admin = HttpSandboxdAdminBackend(
+        socket_path="/run/nanobot-sandboxd/sandboxd.sock",
+        token_file=str(admin_token_file),
+        client=httpx.Client(
+            transport=transport,
+            base_url="http://sandboxd",
+        ),
+    )
+    process_id = "sbxrun_http_client_process"
+    start_payload = {
+        "request_id": process_id,
+        "command": "python -m pytest tests/ -v",
+        "cwd": "repos/project",
+        "yield_time_ms": 10_000,
+        "timeout_seconds": 300,
+    }
+    stdin_payload = {
+        "request_id": "sbxstdin_http_client_process",
+        "chars": "q\n",
+    }
+
+    normal.start_process("sbxlease_http_client", start_payload)
+    normal.get_process(process_id, cursor="v1:12:3")
+    normal.write_process_stdin(process_id, stdin_payload)
+    normal.terminate_process(
+        process_id,
+        request_id="sbxterm_http_client_process",
+    )
+    admin.list_processes()
+
+    assert [
+        {
+            "method": item["method"],
+            "url": item["url"],
+            "authorization": item["authorization"],
+            "body": item["body"],
+        }
+        for item in captured
+    ] == [
+        {
+            "method": "POST",
+            "url": (
+                "http://sandboxd/v1/leases/"
+                "sbxlease_http_client/processes"
+            ),
+            "authorization": f"Bearer {normal_token}",
+            "body": start_payload,
+        },
+        {
+            "method": "GET",
+            "url": (
+                "http://sandboxd/v1/processes/"
+                f"{process_id}?cursor=v1%3A12%3A3"
+            ),
+            "authorization": f"Bearer {normal_token}",
+            "body": None,
+        },
+        {
+            "method": "POST",
+            "url": f"http://sandboxd/v1/processes/{process_id}/stdin",
+            "authorization": f"Bearer {normal_token}",
+            "body": stdin_payload,
+        },
+        {
+            "method": "POST",
+            "url": (
+                f"http://sandboxd/v1/processes/{process_id}/terminate"
+            ),
+            "authorization": f"Bearer {normal_token}",
+            "body": {
+                "request_id": "sbxterm_http_client_process",
+            },
+        },
+        {
+            "method": "GET",
+            "url": "http://sandboxd/v1/admin/processes",
+            "authorization": f"Bearer {admin_token}",
+            "body": None,
+        },
+    ]
+    assert captured[0]["request_id"] == process_id
+    assert captured[0]["timeout"]["read"] == 165
+    assert captured[1]["request_id"]
+    assert captured[2]["request_id"] == stdin_payload["request_id"]
+    assert (
+        captured[3]["request_id"]
+        == "sbxterm_http_client_process"
+    )
+    assert captured[4]["request_id"]
+
+
 def test_http_backend_maps_stable_error_without_exposing_transport(tmp_path):
     token_file = tmp_path / "client.token"
     token_file.write_text("t" * 64)

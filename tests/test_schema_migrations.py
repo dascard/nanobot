@@ -124,10 +124,13 @@ def test_schema_migrations_records_applied_versions():
         "assets",
         "workspace_assets",
         "sandbox_runs",
+        "sandbox_leases",
         "sandbox_access_grants",
         "workspace_quota_bindings",
         "sandbox_admin_operations",
         "sandbox_project_sequences",
+        "workspace_runtime_quota_bindings",
+        "workspace_maintenance_states",
         "admin_idempotency_records",
     } <= set(inspector.get_table_names())
     rss_columns = [col["name"] for col in inspector.get_columns("rolling_session_summaries")]
@@ -155,6 +158,11 @@ def test_schema_migrations_records_applied_versions():
         "agent_run_id",
         "tool_call_id",
         "image_digest",
+        "lease_id",
+        "profile_id",
+        "execution_mode",
+        "process_state",
+        "last_seen_at",
         "termination_reason",
         "peak_memory_bytes",
         "stdout_bytes",
@@ -171,9 +179,35 @@ def test_schema_migrations_records_applied_versions():
         "external_session_id",
         "workspace_id",
         "capability_level",
+        "execution_profile",
         "status",
         "version",
     } <= grant_columns
+    lease_columns = {
+        column["name"]
+        for column in inspector.get_columns("sandbox_leases")
+    }
+    assert {
+        "lease_id",
+        "lease_key",
+        "grant_id",
+        "chat_stream_id",
+        "workspace_id",
+        "profile_id",
+        "catalog_generation",
+        "policy_sha256",
+        "status",
+        "image_digest",
+        "controller_epoch",
+        "created_at",
+        "last_active_at",
+        "idle_expires_at",
+        "max_expires_at",
+        "stopped_at",
+        "reconciled_at",
+        "last_error_code",
+        "last_error_summary",
+    } == lease_columns
     quota_columns = {
         column["name"]
         for column in inspector.get_columns("workspace_quota_bindings")
@@ -187,6 +221,37 @@ def test_schema_migrations_records_applied_versions():
         "generation",
         "last_error_code",
     } <= quota_columns
+    runtime_quota_columns = {
+        column["name"]
+        for column in inspector.get_columns(
+            "workspace_runtime_quota_bindings"
+        )
+    }
+    assert {
+        "workspace_id",
+        "project_id",
+        "desired_quota_bytes",
+        "applied_quota_bytes",
+        "status",
+        "generation",
+        "last_error_code",
+    } <= runtime_quota_columns
+    maintenance_columns = {
+        column["name"]
+        for column in inspector.get_columns(
+            "workspace_maintenance_states"
+        )
+    }
+    assert {
+        "workspace_id",
+        "status",
+        "generation",
+        "applied_quota_generation",
+        "locked_by",
+        "fencing_token",
+        "lease_expires_at",
+        "last_error_code",
+    } <= maintenance_columns
     operation_columns = {
         column["name"]
         for column in inspector.get_columns("sandbox_admin_operations")
@@ -1372,3 +1437,418 @@ def test_group_memory_canonical_identity_migration_rejects_existing_projection_c
         "web:other-room:group",
         "group_sensitive-room",
     )
+
+
+def _legacy_sandbox_profile_engine(database_url: str = "sqlite:///:memory:"):
+    from core.schema_migrations import (
+        MIGRATIONS,
+        _SANDBOX_EXECUTION_PROFILES_AND_LEASES_VERSION,
+        _SANDBOX_RUNTIME_PROJECT_QUOTAS_VERSION,
+        _SANDBOX_WORKSPACE_QUOTA_MAINTENANCE_VERSION,
+    )
+
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations ("
+            "version TEXT PRIMARY KEY, "
+            "name TEXT NOT NULL, "
+            "applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(
+            text(
+                "INSERT INTO schema_migrations(version, name) "
+                "VALUES (:version, :name)"
+            ),
+            [
+                {"version": version, "name": name}
+                for version, name, _migration in MIGRATIONS
+                if version not in {
+                    _SANDBOX_EXECUTION_PROFILES_AND_LEASES_VERSION,
+                    _SANDBOX_RUNTIME_PROJECT_QUOTAS_VERSION,
+                    _SANDBOX_WORKSPACE_QUOTA_MAINTENANCE_VERSION,
+                }
+            ],
+        )
+        conn.execute(text(
+            "CREATE TABLE workspaces ("
+            "id VARCHAR(36) PRIMARY KEY, "
+            "quota_bytes INTEGER NOT NULL DEFAULT 1, "
+            "used_bytes INTEGER NOT NULL DEFAULT 0)"
+        ))
+        conn.execute(text(
+            "INSERT INTO workspaces(id) VALUES ('workspace-legacy')"
+        ))
+        conn.execute(text(
+            "CREATE TABLE workspace_quota_bindings ("
+            "workspace_id VARCHAR(36) PRIMARY KEY, "
+            "project_id INTEGER NOT NULL UNIQUE, "
+            "desired_quota_bytes BIGINT NOT NULL, "
+            "applied_quota_bytes BIGINT NOT NULL DEFAULT 0, "
+            "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
+            "generation INTEGER NOT NULL DEFAULT 1, "
+            "last_error_code VARCHAR(64) NOT NULL DEFAULT '', "
+            "last_error_summary VARCHAR(255) NOT NULL DEFAULT '', "
+            "last_applied_at DATETIME, "
+            "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        ))
+        conn.execute(text(
+            "INSERT INTO workspace_quota_bindings("
+            "workspace_id, project_id, desired_quota_bytes, "
+            "applied_quota_bytes, status, generation"
+            ") VALUES ('workspace-legacy', 10000, 4294967296, "
+            "4294967296, 'applied', 7)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE sandbox_project_sequences ("
+            "name VARCHAR(32) PRIMARY KEY, "
+            "next_value INTEGER NOT NULL, "
+            "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        ))
+        conn.execute(text(
+            "INSERT INTO sandbox_project_sequences(name, next_value) "
+            "VALUES ('workspace', 10001)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE sandbox_access_grants ("
+            "id VARCHAR(36) PRIMARY KEY, "
+            "chat_stream_id VARCHAR(512) NOT NULL UNIQUE, "
+            "platform VARCHAR(32) NOT NULL, "
+            "chat_type VARCHAR(16) NOT NULL, "
+            "external_session_id VARCHAR(255) NOT NULL, "
+            "workspace_id VARCHAR(36), "
+            "capability_level VARCHAR(16) NOT NULL DEFAULT 'off', "
+            "status VARCHAR(16) NOT NULL DEFAULT 'disabled', "
+            "version INTEGER NOT NULL DEFAULT 1, "
+            "reason TEXT NOT NULL DEFAULT '', "
+            "created_by VARCHAR(128) NOT NULL DEFAULT '', "
+            "updated_by VARCHAR(128) NOT NULL DEFAULT '', "
+            "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "FOREIGN KEY (workspace_id) REFERENCES workspaces(id)"
+            ")"
+        ))
+        conn.execute(text(
+            "INSERT INTO sandbox_access_grants("
+            "id, chat_stream_id, platform, chat_type, external_session_id, "
+            "workspace_id, capability_level, status"
+            ") VALUES ("
+            "'grant-legacy', 'qq:legacy:private', 'qq', 'private', 'legacy', "
+            "'workspace-legacy', 'exec', 'active'"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE TABLE sandbox_runs ("
+            "run_id VARCHAR(64) PRIMARY KEY, "
+            "request_id VARCHAR(64) NOT NULL UNIQUE, "
+            "workspace_id VARCHAR(36) NOT NULL, "
+            "trace_id VARCHAR(64) NOT NULL DEFAULT '', "
+            "agent_run_id VARCHAR(64) NOT NULL DEFAULT '', "
+            "tool_call_id VARCHAR(64) NOT NULL DEFAULT '', "
+            "image_digest VARCHAR(255) NOT NULL, "
+            "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
+            "exit_code INTEGER, "
+            "termination_reason VARCHAR(64) NOT NULL DEFAULT '', "
+            "cpu_time_ms INTEGER NOT NULL DEFAULT 0, "
+            "peak_memory_bytes INTEGER NOT NULL DEFAULT 0, "
+            "stdout_bytes INTEGER NOT NULL DEFAULT 0, "
+            "stderr_bytes INTEGER NOT NULL DEFAULT 0, "
+            "stdout_truncated BOOLEAN NOT NULL DEFAULT 0, "
+            "stderr_truncated BOOLEAN NOT NULL DEFAULT 0, "
+            "started_at DATETIME, "
+            "finished_at DATETIME, "
+            "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "FOREIGN KEY (workspace_id) REFERENCES workspaces(id)"
+            ")"
+        ))
+        conn.execute(text(
+            "INSERT INTO sandbox_runs("
+            "run_id, request_id, workspace_id, image_digest, status"
+            ") VALUES ("
+            "'run-legacy', 'request-legacy', 'workspace-legacy', "
+            "'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+            "'completed'"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE TABLE sandbox_admin_operations ("
+            "operation_id VARCHAR(64) PRIMARY KEY, "
+            "request_id VARCHAR(64) NOT NULL UNIQUE, "
+            "operation_type VARCHAR(32) NOT NULL, "
+            "chat_stream_id VARCHAR(512) NOT NULL DEFAULT '', "
+            "workspace_id VARCHAR(36), "
+            "desired_capability VARCHAR(16) NOT NULL DEFAULT '', "
+            "previous_capability VARCHAR(16) NOT NULL DEFAULT '', "
+            "desired_quota_bytes INTEGER NOT NULL DEFAULT 0, "
+            "expected_grant_version INTEGER, "
+            "expected_quota_generation INTEGER, "
+            "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
+            "step VARCHAR(64) NOT NULL DEFAULT 'queued', "
+            "attempt_count INTEGER NOT NULL DEFAULT 0, "
+            "max_attempts INTEGER NOT NULL DEFAULT 5, "
+            "locked_by VARCHAR(128) NOT NULL DEFAULT '', "
+            "lease_token VARCHAR(64) NOT NULL DEFAULT '', "
+            "lease_expires_at DATETIME, "
+            "next_attempt_at DATETIME, "
+            "error_code VARCHAR(64) NOT NULL DEFAULT '', "
+            "error_summary VARCHAR(255) NOT NULL DEFAULT '', "
+            "reason VARCHAR(255) NOT NULL DEFAULT '', "
+            "created_by VARCHAR(128) NOT NULL DEFAULT '', "
+            "started_at DATETIME, "
+            "finished_at DATETIME, "
+            "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "FOREIGN KEY (workspace_id) REFERENCES workspaces(id), "
+            "CONSTRAINT ck_sandbox_admin_operation_type "
+            "CHECK (operation_type IN "
+            "('set_access', 'set_quota', 'bind_workspace', 'import_quota')), "
+            "CONSTRAINT ck_sandbox_admin_operation_status "
+            "CHECK (status IN "
+            "('pending', 'running', 'succeeded', 'failed', 'cancelled')), "
+            "CONSTRAINT ck_sandbox_admin_desired_capability "
+            "CHECK (desired_capability IN "
+            "('', 'off', 'workspace', 'assets', 'exec')), "
+            "CONSTRAINT ck_sandbox_admin_previous_capability "
+            "CHECK (previous_capability IN "
+            "('', 'off', 'workspace', 'assets', 'exec')), "
+            "CONSTRAINT ck_sandbox_admin_desired_quota "
+            "CHECK (desired_quota_bytes >= 0), "
+            "CONSTRAINT ck_sandbox_admin_attempt_count "
+            "CHECK (attempt_count >= 0), "
+            "CONSTRAINT ck_sandbox_admin_max_attempts CHECK (max_attempts >= 1)"
+            ")"
+        ))
+        conn.execute(text(
+            "INSERT INTO sandbox_admin_operations("
+            "operation_id, request_id, operation_type, chat_stream_id, "
+            "workspace_id, desired_quota_bytes, expected_quota_generation, "
+            "status, step, reason, created_by, created_at, updated_at"
+            ") VALUES ("
+            "'operation-legacy', 'request-operation-legacy', 'set_quota', "
+            "'qq:legacy:private', 'workspace-legacy', 4294967296, 7, "
+            "'pending', 'queued', '保留旧行', 'tester', "
+            "'2026-07-25 10:00:00', '2026-07-25 10:00:01'"
+            ")"
+        ))
+    return engine
+
+
+def test_sandbox_profile_and_lease_migration_upgrades_current_master_schema():
+    from core.schema_migrations import (
+        _SANDBOX_EXECUTION_PROFILES_AND_LEASES_VERSION,
+        _SANDBOX_RUNTIME_PROJECT_QUOTAS_VERSION,
+        run_schema_migrations,
+    )
+
+    engine = _legacy_sandbox_profile_engine()
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    assert "sandbox_leases" in inspector.get_table_names()
+    assert "execution_profile" in {
+        column["name"]
+        for column in inspector.get_columns("sandbox_access_grants")
+    }
+    assert {
+        "lease_id",
+        "profile_id",
+        "execution_mode",
+        "process_state",
+        "last_seen_at",
+    } <= {
+        column["name"]
+        for column in inspector.get_columns("sandbox_runs")
+    }
+    with engine.begin() as conn:
+        assert conn.execute(text(
+            "SELECT execution_profile FROM sandbox_access_grants "
+            "WHERE id = 'grant-legacy'"
+        )).scalar_one() == "restricted"
+        assert conn.execute(text(
+            "SELECT profile_id, execution_mode, process_state "
+            "FROM sandbox_runs WHERE run_id = 'run-legacy'"
+        )).one() == ("restricted", "oneshot", "not_applicable")
+        assert conn.execute(text(
+            "SELECT project_id, desired_quota_bytes, applied_quota_bytes, "
+            "status, generation "
+            "FROM workspace_runtime_quota_bindings "
+            "WHERE workspace_id = 'workspace-legacy'"
+        )).one() == (
+            10001,
+            512 * 1024 * 1024,
+            0,
+            "pending",
+            7,
+        )
+        assert conn.execute(text(
+            "SELECT next_value FROM sandbox_project_sequences "
+            "WHERE name = 'workspace'"
+        )).scalar_one() == 10002
+        assert conn.execute(text(
+            "SELECT status, generation, applied_quota_generation, "
+            "last_error_code "
+            "FROM workspace_maintenance_states "
+            "WHERE workspace_id = 'workspace-legacy'"
+        )).one() == ("ready", 7, 7, "")
+        assert conn.execute(text(
+            "SELECT operation_type, desired_quota_bytes, "
+            "expected_quota_generation, reason, created_by "
+            "FROM sandbox_admin_operations "
+            "WHERE operation_id = 'operation-legacy'"
+        )).one() == (
+            "set_quota",
+            4294967296,
+            7,
+            "保留旧行",
+            "tester",
+        )
+        conn.execute(text(
+            "INSERT INTO sandbox_admin_operations("
+            "operation_id, request_id, operation_type"
+            ") VALUES "
+            "('operation-stop', 'request-operation-stop', 'lease_stop'), "
+            "('operation-kill', 'request-operation-kill', 'kill_switch')"
+        ))
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = :version"
+        ), {
+            "version": _SANDBOX_EXECUTION_PROFILES_AND_LEASES_VERSION,
+        }).scalar_one() == 1
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = :version"
+        ), {
+            "version": _SANDBOX_RUNTIME_PROJECT_QUOTAS_VERSION,
+        }).scalar_one() == 1
+
+
+def test_quota_maintenance_backfill_marks_inconsistent_binding_error():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = _legacy_sandbox_profile_engine()
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO workspaces(id) VALUES ('workspace-drift')"
+        ))
+        conn.execute(text(
+            "INSERT INTO workspace_quota_bindings("
+            "workspace_id, project_id, desired_quota_bytes, "
+            "applied_quota_bytes, status, generation"
+            ") VALUES ('workspace-drift', 10005, 4294967296, 1024, "
+            "'applied', 3)"
+        ))
+
+    run_schema_migrations(engine)
+
+    with engine.connect() as conn:
+        assert conn.execute(text(
+            "SELECT status, generation, applied_quota_generation, "
+            "last_error_code "
+            "FROM workspace_maintenance_states "
+            "WHERE workspace_id = 'workspace-legacy'"
+        )).one() == ("ready", 7, 7, "")
+        assert conn.execute(text(
+            "SELECT status, applied_quota_generation, last_error_code "
+            "FROM workspace_maintenance_states "
+            "WHERE workspace_id = 'workspace-drift'"
+        )).one() == ("error", 0, "quota_maintenance_required")
+
+
+def test_upgraded_lease_partial_unique_index_preserves_terminal_history():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = _legacy_sandbox_profile_engine()
+    run_schema_migrations(engine)
+    lease_values = {
+        "grant_id": "grant-legacy",
+        "chat_stream_id": "qq:legacy:private",
+        "workspace_id": "workspace-legacy",
+        "profile_id": "developer",
+        "catalog_generation": "20260725.1",
+        "policy_sha256": "a" * 64,
+    }
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO sandbox_leases("
+            "lease_id, lease_key, grant_id, chat_stream_id, workspace_id, "
+            "profile_id, catalog_generation, policy_sha256, status"
+            ") VALUES ("
+            "'lease-current-a', 'same-key', :grant_id, :chat_stream_id, "
+            ":workspace_id, :profile_id, :catalog_generation, "
+            ":policy_sha256, 'active'"
+            ")"
+        ), lease_values)
+    with pytest.raises(IntegrityError):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO sandbox_leases("
+                "lease_id, lease_key, grant_id, chat_stream_id, workspace_id, "
+                "profile_id, catalog_generation, policy_sha256, status"
+                ") VALUES ("
+                "'lease-current-b', 'same-key', :grant_id, :chat_stream_id, "
+                ":workspace_id, :profile_id, :catalog_generation, "
+                ":policy_sha256, 'idle'"
+                ")"
+            ), lease_values)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE sandbox_leases SET status = 'stopped' "
+            "WHERE lease_id = 'lease-current-a'"
+        ))
+        conn.execute(text(
+            "INSERT INTO sandbox_leases("
+            "lease_id, lease_key, grant_id, chat_stream_id, workspace_id, "
+            "profile_id, catalog_generation, policy_sha256, status"
+            ") VALUES ("
+            "'lease-current-b', 'same-key', :grant_id, :chat_stream_id, "
+            ":workspace_id, :profile_id, :catalog_generation, "
+            ":policy_sha256, 'active'"
+            ")"
+        ), lease_values)
+        conn.execute(text(
+            "INSERT INTO sandbox_leases("
+            "lease_id, lease_key, grant_id, chat_stream_id, workspace_id, "
+            "profile_id, catalog_generation, policy_sha256, status"
+            ") VALUES ("
+            "'lease-history', 'same-key', :grant_id, :chat_stream_id, "
+            ":workspace_id, :profile_id, :catalog_generation, "
+            ":policy_sha256, 'failed'"
+            ")"
+        ), lease_values)
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM sandbox_leases WHERE lease_key = 'same-key'"
+        )).scalar_one() == 3
+
+
+def test_file_sqlite_sandbox_admin_rebuild_creates_pre_migration_backup(
+    tmp_path,
+):
+    from core.schema_migrations import run_schema_migrations
+
+    db_path = tmp_path / "legacy-sandbox.db"
+    engine = _legacy_sandbox_profile_engine(f"sqlite:///{db_path}")
+    engine.dispose()
+    engine = create_engine(f"sqlite:///{db_path}")
+
+    run_schema_migrations(engine, db_path=str(db_path))
+
+    backups = sorted(tmp_path.glob("legacy-sandbox.db.bak.*"))
+    assert len(backups) == 1
+    backup_engine = create_engine(f"sqlite:///{backups[0]}")
+    try:
+        assert "execution_profile" not in {
+            column["name"]
+            for column in inspect(backup_engine).get_columns(
+                "sandbox_access_grants"
+            )
+        }
+        with backup_engine.connect() as conn:
+            assert conn.execute(text(
+                "SELECT operation_type FROM sandbox_admin_operations "
+                "WHERE operation_id = 'operation-legacy'"
+            )).scalar_one() == "set_quota"
+    finally:
+        backup_engine.dispose()

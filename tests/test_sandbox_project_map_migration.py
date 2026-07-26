@@ -36,7 +36,8 @@ def _database(path: Path) -> None:
             );
             INSERT INTO schema_migrations(version, name) VALUES
                 ('20260722_sandbox_control_plane_tables', 'control'),
-                ('20260722_sandbox_project_sequence_seed', 'seed');
+                ('20260722_sandbox_project_sequence_seed', 'seed'),
+                ('20260725_sandbox_runtime_project_quotas', 'runtime quota');
             CREATE TABLE workspaces (
                 id TEXT PRIMARY KEY,
                 quota_bytes INTEGER NOT NULL,
@@ -44,6 +45,20 @@ def _database(path: Path) -> None:
                 status TEXT NOT NULL
             );
             CREATE TABLE workspace_quota_bindings (
+                workspace_id TEXT PRIMARY KEY,
+                project_id INTEGER NOT NULL UNIQUE,
+                desired_quota_bytes INTEGER NOT NULL,
+                applied_quota_bytes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                generation INTEGER NOT NULL DEFAULT 1,
+                last_error_code TEXT NOT NULL DEFAULT '',
+                last_error_summary TEXT NOT NULL DEFAULT '',
+                last_applied_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
+            );
+            CREATE TABLE workspace_runtime_quota_bindings (
                 workspace_id TEXT PRIMARY KEY,
                 project_id INTEGER NOT NULL UNIQUE,
                 desired_quota_bytes INTEGER NOT NULL,
@@ -147,6 +162,28 @@ def test_project_map_conflict_rolls_back_the_entire_batch(tmp_path):
             "SELECT workspace_id, project_id FROM workspace_quota_bindings"
         ).fetchall()
     assert rows == [(WORKSPACE_B, 10001)]
+
+
+def test_project_map_rejects_project_id_already_bound_to_runtime(tmp_path):
+    database = tmp_path / "nanobot.db"
+    _database(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO workspace_runtime_quota_bindings("
+            "workspace_id, project_id, desired_quota_bytes"
+            ") VALUES (?, 10000, ?)",
+            (WORKSPACE_B, 32 * MIB),
+        )
+        connection.commit()
+
+    with pytest.raises(MIGRATION.MigrationError, match="Runtime"):
+        MIGRATION.migrate_database(
+            database,
+            _bindings(
+                f"legacy-a\t{WORKSPACE_A}\t10000\t{64 * MIB}\n"
+            ),
+            apply=True,
+        )
 
 
 def test_project_map_rejects_duplicate_project_and_noncanonical_workspace():

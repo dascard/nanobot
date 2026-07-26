@@ -115,6 +115,65 @@ def test_workspace_trace_sanitizers_omit_write_read_and_search_text():
     assert payload["search_result"]["data"]["matches"][0]["text_omitted"] is True
 
 
+def test_process_and_patch_trace_sanitizers_keep_only_audit_metadata():
+    from core.tracing import sanitize_tool_trace_args, sanitize_tool_trace_result
+
+    stdin_secret = "STDIN_SECRET_MUST_NOT_PERSIST"
+    patch_secret = "PATCH_SECRET_MUST_NOT_PERSIST"
+    output_secret = "PROCESS_OUTPUT_MUST_NOT_PERSIST"
+    payload = {
+        "stdin_args": sanitize_tool_trace_args(
+            "sandbox_write_stdin",
+            {
+                "process_id": "sbxrun_trace",
+                "chars": stdin_secret,
+            },
+        ),
+        "patch_args": sanitize_tool_trace_args(
+            "workspace_apply_patch",
+            {
+                "path": "src/example.py",
+                "patch": f"@@ -1 +1 @@\n-old\n+{patch_secret}\n",
+            },
+        ),
+        "poll_result": sanitize_tool_trace_result(
+            "sandbox_poll",
+            {
+                "status": "success",
+                "summary": "轮询完成",
+                "artifacts": [],
+                "data": {
+                    "process_id": "sbxrun_trace",
+                    "execution_status": "running",
+                    "process_state": "running",
+                    "next_cursor": "v1:10:0",
+                    "stdout_delta": output_secret,
+                    "stderr_delta": "",
+                    "active_processes": [{
+                        "process_id": "sbxrun_trace",
+                        "state": "running",
+                        "command": "SECRET_COMMAND",
+                    }],
+                },
+            },
+        ),
+    }
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert stdin_secret not in serialized
+    assert patch_secret not in serialized
+    assert output_secret not in serialized
+    assert "SECRET_COMMAND" not in serialized
+    assert payload["stdin_args"]["chars_omitted"] is True
+    assert len(payload["stdin_args"]["chars_sha256"]) == 64
+    assert payload["patch_args"]["patch_omitted"] is True
+    assert len(payload["patch_args"]["patch_sha256"]) == 64
+    assert payload["poll_result"]["data"]["stdout_delta_omitted"] is True
+    assert len(
+        payload["poll_result"]["data"]["stdout_delta_sha256"]
+    ) == 64
+
+
 def test_asset_publish_trace_omits_short_lived_transport_token():
     from core.tracing import sanitize_tool_trace_result
 

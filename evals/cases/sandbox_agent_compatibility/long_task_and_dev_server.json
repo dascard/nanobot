@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "case_id": "long_task_and_dev_server",
+  "title": "长任务增量恢复与本地开发服务",
+  "task": "启动超过单次 yield 的测试任务，通过 sandbox_poll 获取增量输出；再启动 dev server，用第二条 sandbox_exec 经 127.0.0.1 访问，最后通过 sandbox_terminate 回收整个 Lease。",
+  "required_checkpoints": [
+    "long_task_started",
+    "incremental_output_observed",
+    "long_task_completed",
+    "dev_server_started",
+    "loopback_request_succeeded",
+    "lease_terminated"
+  ],
+  "thresholds": {
+    "max_invalid_tool_calls": 0,
+    "max_environment_misunderstanding_retries": 1,
+    "max_calls_to_first_effective_test": 10,
+    "require_long_task_recovery": true,
+    "require_post_rebuild_continuation": false,
+    "max_security_policy_violation_attempts": 0
+  }
+}

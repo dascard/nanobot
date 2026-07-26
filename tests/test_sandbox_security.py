@@ -109,10 +109,10 @@ def _assert_host_prerequisites(client, image_reference: str) -> tuple[str, int, 
     except OSError as exc:
         pytest.fail(f"无法读取 AppArmor profiles：{type(exc).__name__}")
     if not any(
-        line.startswith("nanobot-sandbox ")
+        line.startswith("nanobot-sandbox-restricted ")
         for line in profiles.splitlines()
     ):
-        pytest.fail("nanobot-sandbox AppArmor profile 尚未加载")
+        pytest.fail("nanobot-sandbox-restricted AppArmor profile 尚未加载")
     if os.geteuid() != 0:
         pytest.fail("真实 Sandbox 测试必须以 root 运行，以便安全设置 Workspace UID/GID")
 
@@ -165,8 +165,8 @@ def _assert_inspect_security(snapshot: dict) -> None:
     assert host.get("MemorySwap") == 512 * 1024 * 1024
     assert host.get("NanoCpus") == 1_000_000_000
     assert "no-new-privileges" in security_opt
-    assert "apparmor=nanobot-sandbox" in security_opt
-    assert snapshot.get("AppArmorProfile") == "nanobot-sandbox"
+    assert "apparmor=nanobot-sandbox-restricted" in security_opt
+    assert snapshot.get("AppArmorProfile") == "nanobot-sandbox-restricted"
     assert destinations == {"/workspace", "/inputs", "/runtime"}
     assert set(tmpfs) == {"/tmp"}
     assert all(item.get("Destination") != "/var/run/docker.sock" for item in mounts)
@@ -209,7 +209,7 @@ def test_real_docker_security_matrix(tmp_path):
         client_token_path=tmp_path / "client.token",
         image_reference=image_reference,
         image_allowlist=(image_id,),
-        apparmor_profile="nanobot-sandbox",
+        apparmor_profile="nanobot-sandbox-restricted",
         workspace_uid=uid,
         workspace_gid=gid,
         disk_min_free_bytes=0,
@@ -228,7 +228,7 @@ def test_real_docker_security_matrix(tmp_path):
     try:
         ready = backend.ready()
         assert ready["image_id"] == image_id
-        assert ready["apparmor_profile"] == "nanobot-sandbox"
+        assert ready["apparmor_profile"] == "nanobot-sandbox-restricted"
 
         baseline = _run(
             backend,

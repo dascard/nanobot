@@ -32,6 +32,8 @@ class _QuotaManager:
             "used_bytes": 0,
             "observed_project_id": payload["project_id"],
             "project_id_matches": True,
+            "quota_bytes_matches": True,
+            "verified": True,
         }
 
 
@@ -58,6 +60,8 @@ def test_quota_api_requires_independent_admin_token_and_matching_request_id(tmp_
         "workspace_id": WORKSPACE_ID,
         "project_id": 10000,
         "quota_bytes": 64 * MIB,
+        "runtime_project_id": 10001,
+        "runtime_quota_bytes": 32 * MIB,
         "generation": 1,
     }
 
@@ -103,12 +107,38 @@ def test_quota_api_requires_independent_admin_token_and_matching_request_id(tmp_
     assert mismatched.status_code == 403
     assert accepted.status_code == 200
     assert accepted.json()["data"]["applied"] is True
-    assert runtime.quota_manager.apply_calls == [{
-        "workspace_id": WORKSPACE_ID,
-        "project_id": 10000,
-        "quota_bytes": 64 * MIB,
-        "generation": 1,
-    }]
+    assert runtime.quota_manager.apply_calls == [
+        {
+            "workspace_id": WORKSPACE_ID,
+            "project_id": 10000,
+            "quota_bytes": 64 * MIB,
+            "generation": 1,
+            "scope": "workspace",
+        },
+        {
+            "workspace_id": WORKSPACE_ID,
+            "project_id": 10001,
+            "quota_bytes": 32 * MIB,
+            "generation": 1,
+            "scope": "runtime",
+        },
+    ]
+    assert runtime.quota_manager.inspect_calls == [
+        {
+            "workspace_id": WORKSPACE_ID,
+            "project_id": 10000,
+            "quota_bytes": 64 * MIB,
+            "generation": 1,
+            "scope": "workspace",
+        },
+        {
+            "workspace_id": WORKSPACE_ID,
+            "project_id": 10001,
+            "quota_bytes": 32 * MIB,
+            "generation": 1,
+            "scope": "runtime",
+        },
+    ]
 
 
 def test_sandboxd_startup_rejects_equal_normal_and_admin_token(tmp_path):
@@ -140,6 +170,8 @@ def test_quota_api_rejects_host_paths_and_unknown_fields_without_echo(tmp_path):
                 "workspace_id": WORKSPACE_ID,
                 "project_id": 10000,
                 "quota_bytes": 64 * MIB,
+                "runtime_project_id": 10001,
+                "runtime_quota_bytes": 32 * MIB,
                 "generation": 1,
                 "host_path": forbidden_path,
             },
@@ -160,7 +192,17 @@ def test_project_quota_manager_uses_fixed_argv_and_returns_bounded_metadata(tmp_
 
     def command(argv, *, timeout):
         calls.append((tuple(argv), timeout))
-        return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=(
+                "project_quota_verified=true\n"
+                "scope=workspace\n"
+                "project_id=10000\n"
+                f"quota_bytes={64 * MIB}\n"
+            ),
+            stderr="",
+        )
 
     manager = ProjectQuotaManager(
         data_root=data_root,
@@ -181,6 +223,7 @@ def test_project_quota_manager_uses_fixed_argv_and_returns_bounded_metadata(tmp_
 
     assert result == {
         "workspace_id": WORKSPACE_ID,
+        "scope": "workspace",
         "project_id": 10000,
         "quota_bytes": 64 * MIB,
         "generation": 3,
@@ -192,6 +235,8 @@ def test_project_quota_manager_uses_fixed_argv_and_returns_bounded_metadata(tmp_
         os.fspath(helper_path),
         "--workspace-id",
         WORKSPACE_ID,
+        "--scope",
+        "workspace",
         "--project-id",
         "10000",
         "--quota-bytes",

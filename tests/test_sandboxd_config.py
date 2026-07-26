@@ -50,6 +50,17 @@ def test_systemd_unit_limits_surface_and_does_not_start_tcp_listener():
     assert "PrivateNetwork=true" in unit
     assert "ProtectSystem=strict" in unit
     assert "ReadWritePaths=/srv/nanobot /run/nanobot-sandboxd" in unit
+    assert (
+        "ConditionPathExists="
+        "/etc/nanobot/sandbox-execution-profiles.v1.json"
+    ) in unit
+    assert (
+        "ExecStartPre=/usr/bin/install -m 0640 -o root "
+        "-g nanobot-sandboxd "
+        "/etc/nanobot/sandbox-execution-profiles.v1.json "
+        "/run/nanobot-sandboxd/profile-manifest.json"
+    ) in unit
+    assert "RuntimeDirectoryPreserve=restart" in unit
     assert "--host" not in unit
     assert "--port" not in unit
 
@@ -64,9 +75,22 @@ def test_compose_only_mounts_sandboxd_socket_into_server():
     assert "/run/nanobot-sandboxd" not in workers
 
 
-def test_sandbox_apparmor_allows_pinned_python_runtime_and_denies_network():
-    profile = Path("deploy/apparmor/nanobot-sandbox").read_text()
+def test_sandbox_apparmor_profiles_separate_restricted_and_loopback_network():
+    restricted = Path(
+        "deploy/apparmor/nanobot-sandbox-restricted"
+    ).read_text()
+    developer = Path(
+        "deploy/apparmor/nanobot-sandbox-developer"
+    ).read_text()
 
-    assert "/usr/local/lib/libpython3.11.so.1.0 mr," in profile
-    assert "/usr/local/lib/python3.11/ r," in profile
-    assert "deny network," in profile
+    assert "profile nanobot-sandbox-restricted" in restricted
+    assert "/usr/local/lib/libpython3.11.so.1.0 mr," in restricted
+    assert "/usr/local/lib/python3.11/ r," in restricted
+    assert "deny network," in restricted
+    assert "network inet stream," not in restricted
+
+    assert "profile nanobot-sandbox-developer" in developer
+    assert "network inet stream," in developer
+    assert "network inet6 stream," in developer
+    assert "deny network," not in developer
+    assert "deny /var/run/docker.sock rw," in developer

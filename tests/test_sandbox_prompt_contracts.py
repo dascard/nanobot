@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+from uuid import uuid4
+
+import pytest
+
+from core.database import (
+    SandboxAccessGrant,
+    SystemSetting,
+    Workspace,
+    WorkspaceQuotaBinding,
+    WorkspaceRuntimeQuotaBinding,
+)
+from core.settings_service import settings
+
+
+MIB = 1024 * 1024
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_infrastructure_ceiling(monkeypatch):
+    monkeypatch.setenv(
+        "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "NANOBOT_SANDBOX_SESSION_EXECUTION_ALLOWED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED",
+        "true",
+    )
+    settings.invalidate()
+    try:
+        yield
+    finally:
+        settings.invalidate()
+
+
+def _grant(db, *, suffix: str, profile_id: str) -> str:
+    workspace_id = str(uuid4())
+    session_id = f"prompt-{suffix}"
+    runtime_quota = (
+        10 * 1024 * MIB
+        if profile_id == "developer"
+        else 512 * MIB
+    )
+    db.add(Workspace(
+        id=workspace_id,
+        platform="qq",
+        owner_type="user",
+        owner_id=session_id,
+        name="default",
+        status="active",
+        quota_bytes=32 * MIB,
+        used_bytes=0,
+    ))
+    db.flush()
+    db.add_all([
+        WorkspaceQuotaBinding(
+            workspace_id=workspace_id,
+            project_id=10000,
+            desired_quota_bytes=32 * MIB,
+            applied_quota_bytes=32 * MIB,
+            status="applied",
+            generation=1,
+        ),
+        WorkspaceRuntimeQuotaBinding(
+            workspace_id=workspace_id,
+            project_id=10001,
+            desired_quota_bytes=runtime_quota,
+            applied_quota_bytes=runtime_quota,
+            status="applied",
+            generation=1,
+        ),
+        SandboxAccessGrant(
+            id=str(uuid4()),
+            chat_stream_id=f"qq:{session_id}:private",
+            platform="qq",
+            chat_type="private",
+            external_session_id=session_id,
+            workspace_id=workspace_id,
+            capability_level="exec",
+            execution_profile=profile_id,
+            status="active",
+            version=1,
+        ),
+        SystemSetting(key="sandbox.enabled", value="true"),
+        SystemSetting(key="sandbox.exec_enabled", value="true"),
+    ])
+    db.commit()
+    return session_id
+
+
+def _plan(db, *, suffix: str, profile_id: str):
+    from core.tool_plan import build_tool_plan
+
+    session_id = _grant(db, suffix=suffix, profile_id=profile_id)
+    return build_tool_plan(
+        chat_type="private",
+        platform="qq",
+        session_id=f"private_{session_id}",
+        runtime_preset="full",
+        db=db,
+    )
+
+
+def test_restricted_prompt_uses_actual_oneshot_profile_capabilities(
+    db_session,
+):
+    plan = _plan(
+        db_session,
+        suffix="restricted",
+        profile_id="restricted",
+    )
+    prompt = plan.runtime_tool_prompt
+
+    assert "当前 Profile：restricted" in prompt
+    assert "单条命令最大时长：120 秒" in prompt
+    assert "无网络（network=none）" in prompt
+    assert "公网可用" not in prompt
+    assert "命令与文件写并发时不保证一致快照" in prompt
+    assert "一次性执行 Profile" in prompt
+    assert "不支持长进程、detached、stdin" in prompt
+    assert "sandbox_poll" not in plan.sent_tool_names
+    assert "sandbox_write_stdin" not in plan.sent_tool_names
+    assert "sandbox_terminate" not in plan.sent_tool_names
+    assert "workspace_apply_patch" in plan.sent_tool_names
+
+
+def test_developer_prompt_explains_lease_shell_storage_and_termination(
+    db_session,
+):
+    plan = _plan(
+        db_session,
+        suffix="developer",
+        profile_id="developer",
+    )
+    prompt = plan.runtime_tool_prompt
+
+    assert "当前 Profile：developer" in prompt
+    assert "单条命令最大时长：1800 秒" in prompt
+    assert "只能经受控代理访问以下域名" in prompt
+    assert "github.com" in prompt
+    assert "codeload.github.com" in prompt
+    assert "registry.npmjs.org" in prompt
+    assert "IP 直连、私网、宿主和其他容器均不可达" in prompt
+    assert "HTTP_PROXY/HTTPS_PROXY 只负责应用选路，不是安全边界" in prompt
+    assert "公网可用" not in prompt
+    assert "git" in prompt
+    assert "rg" in prompt
+    assert "pytest" in prompt
+    assert "Docker 不可用" in prompt
+    assert "root 或 sudo" in prompt
+    assert "支持；detached 后台进程：不支持；stdin：支持" in prompt
+    assert "命令与文件写并发时不保证一致快照" in prompt
+    assert "前台命令" in prompt
+    assert "yield_time_ms" in prompt
+    assert "不要使用 `cmd &`" in prompt
+    assert "当前 Lease" in prompt
+    assert "全部活动进程" in prompt
+    assert "/workspace 与 /runtime 保留" in prompt
+    assert "/tmp 和全部旧 process_id 失效" in prompt
+    assert "新的 `/bin/bash -lc`" in prompt
+    assert "`cd`、`export`、`alias`、`source activate` 不跨命令保留" in prompt
+    assert "cwd" in prompt
+    assert "`FOO=bar cmd`" in prompt
+    assert "`.venv/bin/python`" in prompt
+    assert "HOME=/runtime/home" in prompt
+    assert "`~/.profile`" in prompt
+    assert "/tmp 只在同一 Lease 内持久" in prompt
+    assert {
+        "sandbox_exec",
+        "sandbox_poll",
+        "sandbox_write_stdin",
+        "sandbox_terminate",
+        "workspace_apply_patch",
+    } <= plan.sent_tool_names

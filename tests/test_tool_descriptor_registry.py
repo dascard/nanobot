@@ -28,6 +28,15 @@ def test_tool_descriptor_registry_derives_runtime_and_prompt_contracts():
     assert descriptors["sandbox_exec"].prompt_editable is True
     assert descriptors["python_sandbox"].prompt_editable is False
     assert descriptors["sandbox_exec"].owner_module == "core.sandbox"
+    for name in {
+        "sandbox_poll",
+        "sandbox_write_stdin",
+        "sandbox_terminate",
+        "workspace_apply_patch",
+    }:
+        assert descriptors[name].execution_policy == "foreground_only"
+        assert descriptors[name].trace_policy == "metadata_only"
+        assert descriptors[name].owner_module == "core.sandbox"
     assert descriptors["group_analysis"].prompt_template_keys == (
         "tools/group_analysis/usage",
         "tools/group_analysis/system",

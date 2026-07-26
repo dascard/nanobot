@@ -9,7 +9,9 @@ from core.database import (
     SandboxAccessGrant,
     SandboxAdminOperation,
     Workspace,
+    WorkspaceMaintenanceState,
     WorkspaceQuotaBinding,
+    WorkspaceRuntimeQuotaBinding,
 )
 from core.sandbox.admin_operations import (
     SandboxAdminOperationRunner,
@@ -38,7 +40,15 @@ class _QuotaBackend:
         self.failure = failure
         self.ensure_calls: list[tuple[str, str]] = []
         self.apply_calls: list[dict] = []
+        self.stop_lease_calls: list[tuple[str, str]] = []
         self.closed = False
+
+    def stop_lease(self, lease_id: str, *, request_id: str):
+        self.stop_lease_calls.append((lease_id, request_id))
+        return success_result(
+            "已停止",
+            data={"lease_id": lease_id, "lease_recycled": True},
+        )
 
     def ensure_workspace(self, workspace_id: str, *, request_id: str):
         self.ensure_calls.append((workspace_id, request_id))
@@ -54,8 +64,17 @@ class _QuotaBackend:
                 "workspace_id": payload["workspace_id"],
                 "project_id": payload["project_id"],
                 "quota_bytes": payload["quota_bytes"],
+                "runtime_project_id": payload["runtime_project_id"],
+                "runtime_quota_bytes": payload["runtime_quota_bytes"],
                 "generation": payload["generation"],
                 "used_bytes": 0,
+                "terminated_lease_ids": [],
+                "failed_lease_ids": [],
+                "workspace_project_id_matches": True,
+                "workspace_quota_bytes_matches": True,
+                "runtime_project_id_matches": True,
+                "runtime_quota_bytes_matches": True,
+                "quota_verified": True,
                 "applied": True,
             },
         )
@@ -78,6 +97,7 @@ def _enqueue_access(
     request_id: str,
     session_id: str,
     capability: str = "workspace",
+    execution_profile: str = "restricted",
     quota_bytes: int = 64 * MIB,
     expected_version: int | None = None,
 ):
@@ -87,11 +107,192 @@ def _enqueue_access(
         chat_type="private",
         session_id=session_id,
         capability=capability,
+        execution_profile=execution_profile,
         quota_bytes=None if capability == "off" else quota_bytes,
         expected_version=expected_version,
         reason="测试授权",
         actor="admin-test",
     )
+
+
+def test_profile_selection_is_validated_and_part_of_idempotency(
+    db_session,
+):
+    first = _enqueue_access(
+        db_session,
+        request_id="developer-profile-request-1",
+        session_id="private_developer-profile",
+        capability="exec",
+        execution_profile="developer",
+    )
+    db_session.commit()
+
+    grant = db_session.query(SandboxAccessGrant).one()
+    runtime_binding = db_session.query(
+        WorkspaceRuntimeQuotaBinding
+    ).one()
+    assert grant.execution_profile == "developer"
+    assert runtime_binding.desired_quota_bytes == 10 * 1024 * MIB
+
+    repeated = _enqueue_access(
+        db_session,
+        request_id="developer-profile-request-1",
+        session_id="private_developer-profile",
+        capability="exec",
+        execution_profile="developer",
+    )
+    assert repeated.created is False
+    assert repeated.operation.operation_id == first.operation.operation_id
+
+    with pytest.raises(SandboxAdminRequestError) as conflict:
+        _enqueue_access(
+            db_session,
+            request_id="developer-profile-request-1",
+            session_id="private_developer-profile",
+            capability="exec",
+            execution_profile="restricted",
+        )
+    assert conflict.value.code == "idempotency_conflict"
+
+    with pytest.raises(SandboxAdminRequestError) as rejected:
+        _enqueue_access(
+            db_session,
+            request_id="trusted-profile-request-1",
+            session_id="private_trusted-profile",
+            capability="exec",
+            execution_profile="trusted_developer",
+        )
+    assert rejected.value.code == "invalid_execution_profile"
+
+
+def test_identical_access_resave_is_noop_and_does_not_requiesce(db_session):
+    """原样保存已应用的授权不得再次 quiesce Workspace/推进版本。"""
+    _enqueue_access(
+        db_session,
+        request_id="noop-access-request-1",
+        session_id="private_noop-session",
+        capability="assets",
+        quota_bytes=64 * MIB,
+    )
+    db_session.commit()
+    runner = SandboxAdminOperationRunner(
+        _factory(db_session),
+        backend_factory=lambda: _QuotaBackend(),
+        worker_id="runner-noop",
+    )
+    assert runner.run_once() is True
+    db_session.expire_all()
+    grant = db_session.query(SandboxAccessGrant).one()
+    version_before = int(grant.version)
+    binding = db_session.query(WorkspaceQuotaBinding).one()
+    generation_before = int(binding.generation)
+    maintenance = db_session.get(
+        WorkspaceMaintenanceState,
+        str(grant.workspace_id),
+    )
+    assert maintenance is not None and maintenance.status == "ready"
+
+    resave = _enqueue_access(
+        db_session,
+        request_id="noop-access-request-2",
+        session_id="private_noop-session",
+        capability="assets",
+        quota_bytes=64 * MIB,
+    )
+    db_session.commit()
+
+    assert resave.created is False
+    assert resave.operation.status == "succeeded"
+    assert resave.operation.step == "noop_no_change"
+    db_session.expire_all()
+    grant = db_session.query(SandboxAccessGrant).one()
+    binding = db_session.query(WorkspaceQuotaBinding).one()
+    maintenance = db_session.get(
+        WorkspaceMaintenanceState,
+        str(grant.workspace_id),
+    )
+    assert int(grant.version) == version_before
+    assert grant.status == "active"
+    assert int(binding.generation) == generation_before
+    assert binding.status == "applied"
+    assert maintenance.status == "ready"
+
+
+def test_quota_change_replay_wins_over_stale_usage_precheck(db_session):
+    """已入队请求的重放不得被后续用量变化的预检误判为 409。"""
+    _enqueue_access(
+        db_session,
+        request_id="quota-replay-access",
+        session_id="private_quota-replay",
+        capability="assets",
+        quota_bytes=64 * MIB,
+    )
+    db_session.commit()
+    grant = db_session.query(SandboxAccessGrant).one()
+    workspace_id = str(grant.workspace_id)
+
+    first = SandboxAdminService(db_session).enqueue_quota_change(
+        request_id="quota-replay-request-1",
+        workspace_id=workspace_id,
+        quota_bytes=96 * MIB,
+        reason="扩容",
+        actor="admin-test",
+    )
+    db_session.commit()
+    assert first.created is True
+
+    workspace = db_session.get(Workspace, workspace_id)
+    workspace.used_bytes = 128 * MIB  # 用量随后超过目标配额
+    db_session.commit()
+
+    replayed = SandboxAdminService(db_session).enqueue_quota_change(
+        request_id="quota-replay-request-1",
+        workspace_id=workspace_id,
+        quota_bytes=96 * MIB,
+        reason="扩容",
+        actor="admin-test",
+    )
+
+    assert replayed.created is False
+    assert replayed.operation.operation_id == first.operation.operation_id
+
+
+def test_async_runner_never_claims_synchronous_lease_operation(db_session):
+    now = db_now_naive()
+    synchronous = SandboxAdminOperation(
+        operation_id="sbxop_sync_lease_stop",
+        request_id="sync-lease-stop-request",
+        operation_type="lease_stop",
+        status="pending",
+        step="queued",
+        created_at=now,
+        updated_at=now,
+    )
+    asynchronous = SandboxAdminOperation(
+        operation_id="sbxop_async_set_quota",
+        request_id="async-set-quota-request",
+        operation_type="set_quota",
+        status="pending",
+        step="queued",
+        created_at=now + timedelta(seconds=1),
+        updated_at=now + timedelta(seconds=1),
+    )
+    db_session.add_all([synchronous, asynchronous])
+    db_session.commit()
+
+    claim = _claim_operation(
+        db_session,
+        worker_id="runner-filter-test",
+        lease_seconds=180,
+    )
+
+    assert claim is not None
+    assert claim.operation_id == asynchronous.operation_id
+    db_session.expire_all()
+    assert db_session.get(
+        SandboxAdminOperation,
+        synchronous.operation_id,
+    ).status == "pending"
 
 
 def test_access_upgrade_is_not_active_until_quota_runner_confirms(db_session):
@@ -106,12 +307,15 @@ def test_access_upgrade_is_not_active_until_quota_runner_confirms(db_session):
 
     grant = db_session.query(SandboxAccessGrant).one()
     binding = db_session.query(WorkspaceQuotaBinding).one()
+    runtime_binding = db_session.query(WorkspaceRuntimeQuotaBinding).one()
     operation = result.operation
     assert result.created is True
     assert grant.capability_level == "off"
     assert grant.status == "provisioning"
     assert binding.status == "pending"
     assert binding.applied_quota_bytes == 0
+    assert runtime_binding.status == "pending"
+    assert runtime_binding.applied_quota_bytes == 0
     assert operation.status == "pending"
 
     backend = _QuotaBackend()
@@ -125,6 +329,7 @@ def test_access_upgrade_is_not_active_until_quota_runner_confirms(db_session):
     db_session.expire_all()
     grant = db_session.query(SandboxAccessGrant).one()
     binding = db_session.query(WorkspaceQuotaBinding).one()
+    runtime_binding = db_session.query(WorkspaceRuntimeQuotaBinding).one()
     operation = db_session.get(SandboxAdminOperation, operation.operation_id)
     workspace = db_session.get(Workspace, grant.workspace_id)
     assert operation.status == "succeeded"
@@ -133,6 +338,8 @@ def test_access_upgrade_is_not_active_until_quota_runner_confirms(db_session):
     assert grant.status == "active"
     assert binding.status == "applied"
     assert binding.applied_quota_bytes == 64 * MIB
+    assert runtime_binding.status == "applied"
+    assert runtime_binding.applied_quota_bytes == 512 * MIB
     assert workspace.quota_bytes == 64 * MIB
     assert backend.closed is True
 
@@ -289,13 +496,21 @@ def test_project_ids_are_database_allocated_and_unique(db_session):
     )
     db_session.commit()
 
-    project_ids = [
+    workspace_project_ids = [
         row.project_id
         for row in db_session.query(WorkspaceQuotaBinding)
         .order_by(WorkspaceQuotaBinding.project_id)
         .all()
     ]
-    assert project_ids == [10000, 10001]
+    runtime_project_ids = [
+        row.project_id
+        for row in db_session.query(WorkspaceRuntimeQuotaBinding)
+        .order_by(WorkspaceRuntimeQuotaBinding.project_id)
+        .all()
+    ]
+    assert workspace_project_ids == [10000, 10002]
+    assert runtime_project_ids == [10001, 10003]
+    assert not set(workspace_project_ids) & set(runtime_project_ids)
 
 
 def test_quota_cannot_shrink_below_current_workspace_usage(db_session):
@@ -537,6 +752,85 @@ def test_failed_upgrade_never_enables_requested_capability(db_session):
     assert operation.status == "failed"
     assert grant.capability_level == "off"
     assert grant.status == "error"
+
+
+def test_capability_off_recycles_active_leases(db_session):
+    """关闭授权必须回收该 Workspace 的活动 Lease,不得留容器跑到 TTL。"""
+    from core.database import SandboxLease, SandboxRun
+
+    _enqueue_access(
+        db_session,
+        request_id="off-recycle-grant",
+        session_id="private_off-recycle",
+        capability="exec",
+        execution_profile="developer",
+    )
+    db_session.commit()
+    runner = SandboxAdminOperationRunner(
+        _factory(db_session),
+        backend_factory=lambda: _QuotaBackend(),
+        worker_id="runner-off-setup",
+    )
+    assert runner.run_once() is True
+    db_session.expire_all()
+    grant = db_session.query(SandboxAccessGrant).one()
+    lease = SandboxLease(
+        lease_id="sbxlease_off_recycle",
+        lease_key="e" * 64,
+        grant_id=str(grant.id),
+        chat_stream_id=str(grant.chat_stream_id),
+        workspace_id=str(grant.workspace_id),
+        profile_id="developer",
+        catalog_generation="20260725.1",
+        policy_sha256="b" * 64,
+        status="active",
+        image_digest="sha256:" + "a" * 64,
+        controller_epoch="sbxctl_" + "5" * 32,
+    )
+    run = SandboxRun(
+        run_id="sbxrun_off_recycle",
+        request_id="sbxreq_off_recycle",
+        workspace_id=str(grant.workspace_id),
+        lease_id=lease.lease_id,
+        profile_id="developer",
+        execution_mode="lease",
+        process_state="running",
+        image_digest="sha256:" + "a" * 64,
+        status="running",
+    )
+    db_session.add_all([lease, run])
+    db_session.commit()
+
+    _enqueue_access(
+        db_session,
+        request_id="off-recycle-request",
+        session_id="private_off-recycle",
+        capability="off",
+        execution_profile="developer",
+    )
+    db_session.commit()
+    off_backend = _QuotaBackend()
+    off_runner = SandboxAdminOperationRunner(
+        _factory(db_session),
+        backend_factory=lambda: off_backend,
+        worker_id="runner-off",
+    )
+    assert off_runner.run_once() is True
+
+    assert [call[0] for call in off_backend.stop_lease_calls] == [
+        "sbxlease_off_recycle",
+    ]
+    db_session.expire_all()
+    settled_lease = db_session.get(SandboxLease, "sbxlease_off_recycle")
+    settled_run = db_session.get(SandboxRun, "sbxrun_off_recycle")
+    assert settled_lease.status == "stopped"
+    assert settled_lease.last_error_code == "access_revoked"
+    assert settled_run.status == "failed"
+    assert settled_run.termination_reason == "access_revoked"
+    operation = db_session.query(SandboxAdminOperation).filter_by(
+        request_id="off-recycle-request",
+    ).one()
+    assert operation.status == "succeeded"
 
 
 def test_lost_lease_cannot_commit_terminal_state(db_session):

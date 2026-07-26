@@ -172,7 +172,9 @@ def test_production_smoke_uses_only_hashed_minimal_dependencies():
     smoke_runner = (
         REPO_ROOT / "scripts" / "sandbox-smoke-test.sh"
     ).read_text(encoding="utf-8")
-    assert "python -m pytest --noconftest -c /dev/null" in smoke_runner
+    assert "python -m pytest \\" in smoke_runner
+    assert "--noconftest \\" in smoke_runner
+    assert "-c /dev/null \\" in smoke_runner
 
 
 def test_runtime_cleanup_service_requires_one_time_maintenance_approval():
@@ -248,6 +250,36 @@ def test_backup_and_rollback_docs_preserve_persistent_data():
     assert "明确不备份" in backup
     assert "删除 `/srv/nanobot`" in rollback
     assert "全局 Docker prune" in rollback
+
+
+def test_p16_docs_define_profile_lifecycle_and_fail_closed_boundaries():
+    operations = (REPO_ROOT / "docs/sandbox-operations.md").read_text(
+        encoding="utf-8",
+    )
+    rollback = (REPO_ROOT / "docs/sandbox-rollout-rollback.md").read_text(
+        encoding="utf-8",
+    )
+    backup = (REPO_ROOT / "docs/sandbox-backup-restore.md").read_text(
+        encoding="utf-8",
+    )
+    security = (REPO_ROOT / "docs/sandbox-security-model.md").read_text(
+        encoding="utf-8",
+    )
+
+    for content in (operations, rollback, security):
+        assert "restricted" in content
+        assert "developer" in content
+        assert "trusted_developer" in content
+        assert "controller_restarted" in content
+        assert "policy_sha256" in content
+    assert "六组" in operations
+    assert "summary.json" in operations
+    assert "新 Server 与旧 manifest" in rollback
+    assert "`/srv/nanobot/runtime/`" in backup
+    assert "明确不备份" in backup
+    assert "不是安全边界" in security
+    assert "process_id" in security
+    assert "生产宿主真实隔离验收为 `BLOCKED`" in security
 
 
 def test_local_same_disk_backup_rejects_missing_risk_marker(tmp_path):

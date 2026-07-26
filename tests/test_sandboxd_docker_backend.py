@@ -71,8 +71,14 @@ def test_docker_backend_builds_only_fixed_security_parameters(tmp_path):
     backend = LocalDockerBackend(config, docker_client=_DockerClient())
     backend.workspace_files.layout.ensure_workspace(WORKSPACE_ID)
     runtime = backend.workspace_files.layout.ensure_runtime(WORKSPACE_ID)
-    inputs = tmp_path / "inputs"
-    inputs.mkdir()
+    inputs = (
+        config.data_root
+        / "runtime"
+        / ".inputs"
+        / WORKSPACE_ID
+        / "sbxrun_test1"
+    )
+    inputs.mkdir(parents=True)
 
     kwargs = backend._container_kwargs(
         image=_Image(),
@@ -90,7 +96,10 @@ def test_docker_backend_builds_only_fixed_security_parameters(tmp_path):
     assert kwargs["network_mode"] == "none"
     assert kwargs["read_only"] is True
     assert kwargs["cap_drop"] == ["ALL"]
-    assert kwargs["security_opt"] == ["no-new-privileges", "apparmor=nanobot-sandbox"]
+    assert kwargs["security_opt"] == [
+        "no-new-privileges",
+        "apparmor=nanobot-sandbox-restricted",
+    ]
     assert kwargs["privileged"] is False
     assert kwargs["init"] is True
     assert kwargs["pids_limit"] == 128
@@ -141,11 +150,12 @@ def test_ready_requires_exact_loaded_apparmor_profile(tmp_path, monkeypatch):
     assert "profile 未加载" in missing.value.summary
 
     profiles.write_text(
-        "docker-default (enforce)\nnanobot-sandbox (enforce)\n",
+        "docker-default (enforce)\n"
+        "nanobot-sandbox-restricted (enforce)\n",
         encoding="utf-8",
     )
     ready = backend.ready()
-    assert ready["apparmor_profile"] == "nanobot-sandbox"
+    assert ready["apparmor_profile"] == "nanobot-sandbox-restricted"
 
 
 class _Container:
@@ -251,9 +261,15 @@ def test_execute_attaches_output_before_start_for_fast_container(
             super().__init__(containers=FastContainers())
 
     class EmptyAssetFiles:
-        def __init__(self):
-            self.root = tmp_path / "inputs"
-            self.root.mkdir()
+        def __init__(self, data_root):
+            self.root = (
+                data_root
+                / "runtime"
+                / ".inputs"
+                / WORKSPACE_ID
+                / "sbxrun_fast_output"
+            )
+            self.root.mkdir(parents=True)
 
         def stage_path(self, _workspace_id, _run_id):
             return self.root
@@ -273,7 +289,7 @@ def test_execute_attaches_output_before_start_for_fast_container(
         config,
         docker_client=FastDockerClient(),
         workspace_files=workspace_files,
-        asset_files=EmptyAssetFiles(),
+        asset_files=EmptyAssetFiles(config.data_root),
     )
 
     result = backend.execute(
