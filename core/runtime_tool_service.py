@@ -3,6 +3,8 @@
 import json
 import logging
 from datetime import timedelta
+from functools import lru_cache
+from pathlib import Path
 
 from core.time_utils import db_now_naive
 from core.tool_registration import (
@@ -24,6 +26,7 @@ logger = logging.getLogger("nanobot.runtime_tools")
 # 兼容旧调用方；真实默认值由 ToolProfileDescriptor Registry 持有。
 _DEFAULT_LIGHTWEIGHT_SET = set(get_default_lightweight_tool_names())
 RESEARCH_TOOL_NAMES = _REGISTRY_RESEARCH_TOOL_NAMES
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def list_user_tool_descriptors():
@@ -333,10 +336,175 @@ def resolve_effective_tools(
     return enabled, disabled
 
 
+@lru_cache(maxsize=8)
+def _profile_toolchain(profile_id: str) -> tuple[str, ...]:
+    """从实际镜像构建契约提取模型可见工具链。"""
+
+    if profile_id == "developer":
+        manifest = (
+            _REPO_ROOT
+            / "docker"
+            / "sandbox"
+            / "developer"
+            / "toolchain-manifest.json"
+        )
+        try:
+            parsed = json.loads(manifest.read_text(encoding="utf-8"))
+            commands = parsed.get("required_commands")
+            if isinstance(commands, list):
+                normalized = tuple(
+                    str(item).strip()
+                    for item in commands
+                    if str(item).strip()
+                )
+                if normalized:
+                    return normalized
+        except (OSError, TypeError, ValueError):
+            logger.warning(
+                "Failed to read developer Sandbox toolchain manifest",
+                exc_info=True,
+            )
+    if profile_id == "restricted":
+        requirements = (
+            _REPO_ROOT
+            / "docker"
+            / "sandbox"
+            / "python"
+            / "requirements.in"
+        )
+        packages: list[str] = []
+        try:
+            for line in requirements.read_text(encoding="utf-8").splitlines():
+                value = line.split("#", 1)[0].strip()
+                if value:
+                    packages.append(value.split("==", 1)[0])
+        except OSError:
+            logger.warning(
+                "Failed to read restricted Sandbox requirements",
+                exc_info=True,
+            )
+        return tuple(dict.fromkeys(("sh", "python", *packages)))
+    return ()
+
+
+def build_sandbox_profile_guidance(
+    profile_id: str,
+    *,
+    enabled_tool_names: set[str] | frozenset[str] = frozenset(),
+) -> str:
+    """按 canonical Profile 生成模型可见环境说明。"""
+
+    from core.sandbox.execution_profiles import (
+        load_execution_profile_registry,
+    )
+
+    descriptor = load_execution_profile_registry().descriptor(profile_id)
+    tools = sorted(set(enabled_tool_names) & set(SANDBOX_TOOL_NAMES))
+    toolchain = _profile_toolchain(descriptor.profile_id)
+    lines = [f"Sandbox 环境（当前 Profile：{descriptor.profile_id}）："]
+    if descriptor.network_policy_id == "none":
+        lines.append(
+            "- 网络：无网络（network=none）；公网、内网和宿主服务均不可达。"
+        )
+    else:
+        lines.append(
+            "- 网络：只能经受控代理访问以下域名："
+            + "、".join(descriptor.network_allowlist)
+            + "；其他公网域名、IP 直连、私网、宿主和其他容器均不可达。"
+        )
+        lines.append(
+            "- HTTP_PROXY/HTTPS_PROXY 只负责应用选路，不是安全边界；"
+            "清空或篡改代理变量不会获得三层直连路径。"
+        )
+    if tools:
+        lines.append("- 当前模型工具：" + "、".join(tools) + "。")
+    if toolchain:
+        lines.append("- 镜像工具链：" + "、".join(toolchain) + "。")
+    lines.extend([
+        f"- 单条命令最大时长：{int(descriptor.max_timeout_seconds)} 秒；"
+        "静态 wire schema 的 3600 秒只是协议绝对上限。",
+        "- 权限：容器内 Docker 不可用，没有 root 或 sudo；"
+        "不能选择镜像、网络、挂载、设备或 capability。",
+        "- 并发：命令之间可并发；workspace_write 与 "
+        "workspace_apply_patch 互斥。命令与文件写并发时不保证一致快照。",
+    ])
+
+    if descriptor.execution_mode == "lease":
+        lines.extend([
+            "- 长进程："
+            + ("支持" if descriptor.allow_long_running_processes else "不支持")
+            + "；detached 后台进程："
+            + ("支持" if descriptor.allow_detached_processes else "不支持")
+            + "；stdin："
+            + ("支持" if descriptor.allow_stdin else "不支持")
+            + "。",
+            "- dev server 必须以前台命令启动，并用 yield_time_ms 快速返回后"
+            "通过 sandbox_poll 轮询；不要使用 `cmd &`。",
+            "- terminate、命令硬超时、输出硬上限或 controller 重启都会回收"
+            "当前 Lease，并终止其中全部活动进程。/workspace 与 /runtime 保留；"
+            "/tmp 和全部旧 process_id 失效；下一次已授权执行会透明创建新 Lease。",
+            f"- 每条命令都是新的 `{descriptor.shell_path} -lc`。"
+            "`cd`、`export`、`alias`、`source activate` 不跨命令保留；"
+            "使用 cwd、内联 `FOO=bar cmd` 或直接调用 `.venv/bin/python`。",
+            "- HOME=/runtime/home 持久，登录 shell 会读取 `~/.profile`；"
+            "/workspace 与 /runtime 跨命令及 Lease 重建持久，"
+            "/tmp 只在同一 Lease 内持久。",
+        ])
+    else:
+        lines.extend([
+            "- 当前是一次性执行 Profile：不支持长进程、detached、stdin、"
+            "sandbox_poll 或 sandbox_terminate；yield_time_ms 不会把命令转成"
+            "可续接进程。",
+            f"- 每条命令都是新的 `{descriptor.shell_path} -lc`。"
+            "`cd`、`export`、`alias` 和环境激活不跨命令保留；"
+            "使用 cwd、内联环境变量或直接调用虚拟环境解释器。",
+            "- /workspace 与 /runtime 跨命令和容器重建持久；"
+            "/tmp 随每次一次性容器删除。",
+        ])
+    return "\n".join(lines)
+
+
+def _sandbox_prompt_profile(
+    enabled: dict[str, bool],
+    *,
+    chat_type: str,
+    platform: str,
+    session_id: str,
+    db,
+) -> str:
+    if db is None or not session_id:
+        return ""
+    from core.sandbox.access_policy import SandboxAccessPolicy
+
+    policy = SandboxAccessPolicy(db)
+    preferred = (
+        "sandbox_exec",
+        "workspace_apply_patch",
+        "workspace_read",
+        "workspace_list",
+    )
+    for tool_name in preferred:
+        if not enabled.get(tool_name):
+            continue
+        decision = policy.evaluate(
+            tool_name,
+            platform=platform,
+            chat_type=chat_type,
+            session_id=session_id,
+        )
+        if decision.allowed:
+            return decision.execution_profile
+    return ""
+
+
 def build_runtime_tool_prompt(
     enabled: dict[str, bool],
     disabled: dict[str, str],
     chat_type: str = "group",
+    *,
+    platform: str = "",
+    session_id: str = "",
+    db=None,
 ) -> str:
     """生成动态 [RuntimeTool] 系统消息。"""
     inactive = [n for n, v in enabled.items() if not v]
@@ -357,6 +525,21 @@ def build_runtime_tool_prompt(
             "sql_analysis；memory_query 只查询已生成的结构化摘要，不用于检索未摘要的 "
             "chat_logs/conversation_turns。"
         )
+
+    profile_id = _sandbox_prompt_profile(
+        enabled,
+        chat_type=chat_type,
+        platform=platform,
+        session_id=session_id,
+        db=db,
+    )
+    if profile_id:
+        lines.append(build_sandbox_profile_guidance(
+            profile_id,
+            enabled_tool_names=frozenset(
+                name for name, allowed in enabled.items() if allowed
+            ),
+        ))
 
     lines.append("规则：不要声称调用未出现在 tools schema 中的工具，也不要声称调用已禁用工具。")
     return "\n".join(lines)

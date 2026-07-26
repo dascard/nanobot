@@ -161,6 +161,18 @@ def test_generic_tool_routes_cannot_mutate_sandbox_authorization(client, monkeyp
         params={"scope_type": "user", "scope_id": "10001"},
     )
 
+    schema_update = client.put(
+        "/api/v1/admin/tools/sandbox_exec/schema",
+        headers=headers,
+        json={"tool_schema": {"type": "object", "properties": {}}},
+    )
+    schema_delete = client.delete(
+        "/api/v1/admin/tools/sandbox_exec/schema",
+        headers=headers,
+    )
+
     assert default_update.status_code == 409
     assert override_update.status_code == 409
     assert override_delete.status_code == 409
+    assert schema_update.status_code == 409
+    assert schema_delete.status_code == 409

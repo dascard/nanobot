@@ -354,6 +354,20 @@ def reconcile_semantic_source(
                 str(getattr(latest_business_job, "job_type", "") or ""),
             )
             superseded = latest_identity != observed_identity
+            # 身份相等还不够:业务任务可能在孤儿扫描之后才 finish,重建了
+            # 索引(upsert 会按 sub_id+index_version 复用被软删行的物理 id)。
+            # 此时孤儿删除的 item_id 快照已过时,会误删刚重建的新鲜行。
+            if not superseded and latest_business_job is not None:
+                business_finished = getattr(
+                    latest_business_job, "finished_at", None,
+                )
+                orphan_created = getattr(job, "created_at", None)
+                if (
+                    business_finished is not None
+                    and orphan_created is not None
+                    and business_finished > orphan_created
+                ):
+                    superseded = True
         else:
             # 部署前遗留 backfill job 没有扫描时 business head，只能保守拦截。
             superseded = bool(

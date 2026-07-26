@@ -401,6 +401,7 @@ def list_tool_targets(scope_type: str = "group", search: str = "", limit: int = 
 @router.get("/effective")
 def get_effective_tools(chat_type: str = "group", group_id: str = "", user_id: str = "",
                         platform: str = "qq",
+                        session_id: str = "",
                         runtime_preset: str = "full",
                         db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """查看给定上下文的实际生效工具列表。"""
@@ -413,15 +414,23 @@ def get_effective_tools(chat_type: str = "group", group_id: str = "", user_id: s
     from core.tool_schema_preview import build_effective_tool_schemas
     runtime_preset = normalize_runtime_preset(runtime_preset)
     platform = normalize_tool_platform(platform) or "qq"
+    # session_id 必须透传:Sandbox 授权按 canonical session 评估,漏传会
+    # 恒 fail-closed;prompt 也必须带 platform/session_id/db,与
+    # ToolPlan.from_effective_tools 的真实运行时组装一致。
     enabled, disabled = resolve_effective_tools(
         chat_type=chat_type, group_id=group_id, user_id=user_id,
-        platform=platform, runtime_preset=runtime_preset, db=db,
+        platform=platform, session_id=session_id,
+        runtime_preset=runtime_preset, db=db,
     )
-    prompt = build_runtime_tool_prompt(enabled, disabled, chat_type)
+    prompt = build_runtime_tool_prompt(
+        enabled, disabled, chat_type,
+        platform=platform, session_id=session_id, db=db,
+    )
     tool_schemas = build_effective_tool_schemas(enabled, db=db)
     return {
         "chat_type": chat_type, "group_id": group_id, "user_id": user_id,
         "platform": platform,
+        "session_id": session_id,
         "runtime_preset": runtime_preset,
         "enabled": {k: v for k, v in enabled.items() if v},
         "disabled": {k: v for k, v in disabled.items()},
@@ -473,8 +482,13 @@ def get_tool_schema_override(tool_name: str, db: Session = Depends(get_db),
 def save_tool_schema_override_api(tool_name: str, body: ToolSchemaOverrideBody,
                                   request: Request, db: Session = Depends(get_db),
                                   _auth=Depends(verify_admin)):
+    from core.tool_registry import SANDBOX_TOOL_NAMES
     from core.tool_schema_preview import build_tool_schema_config, save_tool_schema_override
 
+    # Sandbox 工具的 wire schema 是静态契约(执行端按 STATIC_TOOL_SCHEMAS
+    # 严格校验),override 只会造成模型可见 schema 与执行校验漂移。
+    if tool_name in SANDBOX_TOOL_NAMES:
+        raise HTTPException(409, "Sandbox 工具不接受 schema override")
     try:
         save_tool_schema_override(db, tool_name, body.tool_schema)
     except ValueError as e:
@@ -490,8 +504,11 @@ def save_tool_schema_override_api(tool_name: str, body: ToolSchemaOverrideBody,
 def delete_tool_schema_override_api(tool_name: str, request: Request,
                                     db: Session = Depends(get_db),
                                     _auth=Depends(verify_admin)):
+    from core.tool_registry import SANDBOX_TOOL_NAMES
     from core.tool_schema_preview import build_tool_schema_config, delete_tool_schema_override
 
+    if tool_name in SANDBOX_TOOL_NAMES:
+        raise HTTPException(409, "Sandbox 工具不接受 schema override")
     try:
         deleted = delete_tool_schema_override(db, tool_name)
     except ValueError as e:

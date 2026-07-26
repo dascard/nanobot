@@ -124,7 +124,10 @@ def resolve_template_files(
             baseline_report.invalid_reason
             or f"模板 {template_key} 的基线状态 invalid"
         )
-    if (
+    # 并发变化守卫比对的是 baseline 追踪的 canonical 路径哈希。legacy 别名
+    # 布局(untracked_legacy)读取的是别名文件,其字节本就与 baseline 记录
+    # 不同,不能据此误报"并发变化"——该分支按别名内容回退。
+    if baseline_report.drift_status != "untracked_legacy" and (
         baseline_report.runtime_sha256
         != (_sha256_bytes(runtime_bytes) if runtime_bytes is not None else None)
         or baseline_report.default_sha256

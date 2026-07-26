@@ -172,6 +172,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         group_id=group_id,
         user_id=user_id,
         platform=platform,
+        session_id=session_id,
         runtime_preset=runtime_preset,
         db=db,
     )
