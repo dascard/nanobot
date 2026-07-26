@@ -457,7 +457,7 @@ _COMPATIBILITY_DESCRIPTORS = (
         "tool.edit",
         CompatibilityKind.TOOL,
         "edit",
-        "workspace_write",
+        "workspace_apply_patch",
         owner_module="tool.runtime",
         test_ids=("tests/test_tool_registration.py",),
         tombstone_behavior=CompatibilityTombstoneBehavior.REJECT,

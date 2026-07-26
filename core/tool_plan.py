@@ -133,6 +133,8 @@ class ToolPlan:
         disabled: dict[str, str] | None = None,
         chat_type: str = "group",
         tool_schemas: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+        platform: str = "",
+        session_id: str = "",
         db: Any = None,
     ) -> "ToolPlan":
         enabled_map = {str(k): bool(v) for k, v in (enabled or {}).items()}
@@ -152,7 +154,14 @@ class ToolPlan:
             if _tool_name(tool) in sent_names
         )
         executable_names = frozenset(sent_names)
-        runtime_prompt = build_runtime_tool_prompt(enabled_map, disabled_map, chat_type)
+        runtime_prompt = build_runtime_tool_prompt(
+            enabled_map,
+            disabled_map,
+            chat_type,
+            platform=platform,
+            session_id=session_id,
+            db=db,
+        )
         registration_snapshot = (
             TOOL_REGISTRATION_REGISTRY.registry_snapshot
         )
@@ -202,6 +211,8 @@ def build_tool_plan(
         enabled=enabled,
         disabled=disabled,
         chat_type=chat_type,
+        platform=platform,
+        session_id=session_id,
         db=db,
     )
 

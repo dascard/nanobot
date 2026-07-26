@@ -222,10 +222,14 @@ class ToolDescriptorRegistry:
 
 SANDBOX_TOOL_NAMES = frozenset({
     "sandbox_exec",
+    "sandbox_poll",
+    "sandbox_write_stdin",
+    "sandbox_terminate",
     "workspace_list",
     "workspace_read",
     "workspace_search",
     "workspace_write",
+    "workspace_apply_patch",
     "asset_import",
     "asset_publish",
 })
@@ -373,11 +377,29 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         prompt_template_keys=(),
     ),
 
-    # ── 持久 Workspace 与一次性 Sandbox ──
+    # ── 持久 Workspace 与受控 Sandbox ──
     "sandbox_exec": ToolDef(
         name="sandbox_exec", label="Sandbox 执行", category="file", risk_level="high",
         private_default=False, group_default=False,
-        description="在固定镜像的一次性断网容器中执行命令，只能访问当前 Workspace 和已授权输入资产。",
+        description="在当前授权 Profile 的固定镜像中执行命令，只能访问当前 Workspace 和已授权输入资产。",
+        supports_background=False,
+    ),
+    "sandbox_poll": ToolDef(
+        name="sandbox_poll", label="Sandbox 进程轮询", category="file", risk_level="high",
+        private_default=False, group_default=False,
+        description="读取当前会话已授权 Lease 进程的增量输出和状态。",
+        supports_background=False,
+    ),
+    "sandbox_write_stdin": ToolDef(
+        name="sandbox_write_stdin", label="Sandbox stdin", category="file", risk_level="high",
+        private_default=False, group_default=False,
+        description="向当前会话已授权且仍在运行的 Lease 进程写入标准输入。",
+        supports_background=False,
+    ),
+    "sandbox_terminate": ToolDef(
+        name="sandbox_terminate", label="Sandbox 终止", category="file", risk_level="high",
+        private_default=False, group_default=False,
+        description="按进程句柄回收其所属 Lease，并终止该 Lease 内全部活动进程。",
         supports_background=False,
     ),
     "workspace_list": ToolDef(
@@ -402,6 +424,12 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         name="workspace_write", label="工作区写入", category="file", risk_level="medium",
         private_default=False, group_default=False,
         description="向当前持久 Workspace 原子写入小文本文件。",
+        supports_background=False,
+    ),
+    "workspace_apply_patch": ToolDef(
+        name="workspace_apply_patch", label="工作区补丁", category="file", risk_level="medium",
+        private_default=False, group_default=False,
+        description="对当前持久 Workspace 中的单个 UTF-8 文本文件原子应用统一 diff。",
         supports_background=False,
     ),
     "asset_import": ToolDef(

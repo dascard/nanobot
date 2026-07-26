@@ -360,7 +360,7 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         },
     },
     "sandbox_exec": {
-        "description": "在固定镜像的一次性断网容器中执行命令，只能访问当前 Workspace 和已授权输入资产。",
+        "description": "在当前授权 Profile 的固定镜像中执行命令，只能访问当前 Workspace 和已授权输入资产。",
         "parameters": {
             "type": "object",
             "additionalProperties": False,
@@ -369,21 +369,86 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 16384,
-                    "description": "在容器内部通过 /bin/sh -lc 执行的命令。",
+                    "description": "在当前 Profile 固定 shell 中以新登录 shell 执行的命令。",
                 },
                 "cwd": {
                     "type": "string",
                     "maxLength": 4096,
                     "description": "可选的 Workspace 相对工作目录。",
                 },
+                "yield_time_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30000,
+                    "description": "等待进程完成的毫秒数；到期仍运行时返回 process_id 供后续轮询。",
+                },
                 "timeout_seconds": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 120,
-                    "description": "可选超时；只能申请不高于服务端上限的值。",
+                    "maximum": 3600,
+                    "description": "静态协议绝对上限；服务端还会按当前授权 Profile 强制更低上限。",
                 },
             },
             "required": ["command"],
+        },
+    },
+    "sandbox_poll": {
+        "description": "读取当前会话已授权 Lease 进程的增量输出和状态。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "process_id": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 64,
+                    "description": "sandbox_exec 返回的进程句柄。",
+                },
+                "cursor": {
+                    "type": "string",
+                    "maxLength": 96,
+                    "description": "上次响应返回的 next_cursor；首次轮询可省略。",
+                },
+            },
+            "required": ["process_id"],
+        },
+    },
+    "sandbox_write_stdin": {
+        "description": "向当前会话已授权且仍在运行的 Lease 进程写入标准输入。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "process_id": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 64,
+                    "description": "sandbox_exec 返回的进程句柄。",
+                },
+                "chars": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 65536,
+                    "description": "写入标准输入的 UTF-8 字符。",
+                },
+            },
+            "required": ["process_id", "chars"],
+        },
+    },
+    "sandbox_terminate": {
+        "description": "按进程句柄回收其所属 Lease，并终止该 Lease 内全部活动进程。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "process_id": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 64,
+                    "description": "sandbox_exec 返回的进程句柄。",
+                },
+            },
+            "required": ["process_id"],
         },
     },
     "workspace_list": {
@@ -437,6 +502,28 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "overwrite": {"type": "boolean", "default": False, "description": "文件已存在时是否允许原子覆盖。"},
             },
             "required": ["path", "content", "overwrite"],
+        },
+    },
+    "workspace_apply_patch": {
+        "description": "对当前持久 Workspace 中的单个 UTF-8 文本文件原子应用统一 diff。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "description": "Workspace 相对文件路径；禁止绝对路径和 ..。",
+                },
+                "patch": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 262144,
+                    "description": "仅针对该文件的严格统一 diff；上下文不匹配时不写入。",
+                },
+            },
+            "required": ["path", "patch"],
         },
     },
     "asset_import": {

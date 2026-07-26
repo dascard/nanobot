@@ -104,6 +104,18 @@ _KT_EXECUTION_BINDINGS = MappingProxyType({
         "nanobot_kt.tools.sandbox",
         "SandboxExecTool",
     ),
+    "tool.sandbox_poll.execute": KtExecutionBinding(
+        "nanobot_kt.tools.sandbox",
+        "SandboxPollTool",
+    ),
+    "tool.sandbox_write_stdin.execute": KtExecutionBinding(
+        "nanobot_kt.tools.sandbox",
+        "SandboxWriteStdinTool",
+    ),
+    "tool.sandbox_terminate.execute": KtExecutionBinding(
+        "nanobot_kt.tools.sandbox",
+        "SandboxTerminateTool",
+    ),
     "tool.workspace_list.execute": KtExecutionBinding(
         "nanobot_kt.tools.sandbox",
         "WorkspaceListTool",
@@ -119,6 +131,10 @@ _KT_EXECUTION_BINDINGS = MappingProxyType({
     "tool.workspace_write.execute": KtExecutionBinding(
         "nanobot_kt.tools.sandbox",
         "WorkspaceWriteTool",
+    ),
+    "tool.workspace_apply_patch.execute": KtExecutionBinding(
+        "nanobot_kt.tools.sandbox",
+        "WorkspaceApplyPatchTool",
     ),
     "tool.asset_import.execute": KtExecutionBinding(
         "nanobot_kt.tools.sandbox",

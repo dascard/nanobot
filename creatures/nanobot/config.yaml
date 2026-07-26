@@ -78,6 +78,18 @@ tools:
     type: package
     module: nanobot_kt.tools.sandbox
     class: SandboxExecTool
+  - name: sandbox_poll
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: SandboxPollTool
+  - name: sandbox_write_stdin
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: SandboxWriteStdinTool
+  - name: sandbox_terminate
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: SandboxTerminateTool
   - name: workspace_list
     type: package
     module: nanobot_kt.tools.sandbox
@@ -94,6 +106,10 @@ tools:
     type: package
     module: nanobot_kt.tools.sandbox
     class: WorkspaceWriteTool
+  - name: workspace_apply_patch
+    type: package
+    module: nanobot_kt.tools.sandbox
+    class: WorkspaceApplyPatchTool
   - name: asset_import
     type: package
     module: nanobot_kt.tools.sandbox

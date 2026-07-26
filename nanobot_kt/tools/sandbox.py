@@ -1,4 +1,4 @@
-"""七个 Sandbox 模型工具的 KT 适配层。"""
+"""Sandbox 模型工具的 KT 适配层。"""
 
 from __future__ import annotations
 
@@ -177,6 +177,30 @@ class SandboxExecTool(SandboxToolBase):
         return "sandbox_exec"
 
 
+class SandboxPollTool(SandboxToolBase):
+    is_concurrency_safe = True
+
+    @property
+    def tool_name(self) -> str:
+        return "sandbox_poll"
+
+
+class SandboxWriteStdinTool(SandboxToolBase):
+    is_concurrency_safe = False
+
+    @property
+    def tool_name(self) -> str:
+        return "sandbox_write_stdin"
+
+
+class SandboxTerminateTool(SandboxToolBase):
+    is_concurrency_safe = False
+
+    @property
+    def tool_name(self) -> str:
+        return "sandbox_terminate"
+
+
 class WorkspaceListTool(SandboxToolBase):
     @property
     def tool_name(self) -> str:
@@ -203,6 +227,14 @@ class WorkspaceWriteTool(SandboxToolBase):
         return "workspace_write"
 
 
+class WorkspaceApplyPatchTool(SandboxToolBase):
+    is_concurrency_safe = False
+
+    @property
+    def tool_name(self) -> str:
+        return "workspace_apply_patch"
+
+
 class AssetImportTool(SandboxToolBase):
     is_concurrency_safe = False
 
@@ -223,7 +255,11 @@ __all__ = [
     "AssetImportTool",
     "AssetPublishTool",
     "SandboxExecTool",
+    "SandboxPollTool",
+    "SandboxTerminateTool",
     "SandboxToolBase",
+    "SandboxWriteStdinTool",
+    "WorkspaceApplyPatchTool",
     "WorkspaceListTool",
     "WorkspaceReadTool",
     "WorkspaceSearchTool",

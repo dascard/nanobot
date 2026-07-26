@@ -144,7 +144,8 @@ def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
     unknown_count = len(set(str(key) for key in args) - {
         "command", "cwd", "timeout_seconds", "path", "cursor", "limit",
         "offset", "query", "glob", "content", "overwrite", "source_ref",
-        "logical_name", "media_type",
+        "logical_name", "media_type", "yield_time_ms", "process_id", "chars",
+        "patch",
     })
     result: dict[str, Any] = {}
     if unknown_count:
@@ -159,7 +160,25 @@ def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
         })
         if args.get("timeout_seconds") is not None:
             result["timeout_seconds"] = args.get("timeout_seconds")
+        if args.get("yield_time_ms") is not None:
+            result["yield_time_ms"] = args.get("yield_time_ms")
         return result
+    if name in {"sandbox_poll", "sandbox_terminate"}:
+        result["process_id"] = str(args.get("process_id") or "")[:64]
+        if name == "sandbox_poll" and args.get("cursor") is not None:
+            result["cursor"] = str(args.get("cursor") or "")[:96]
+        return result
+    if name == "sandbox_write_stdin":
+        chars = str(args.get("chars") or "")
+        return {
+            **result,
+            "process_id": str(args.get("process_id") or "")[:64],
+            "chars_omitted": True,
+            **{
+                f"chars_{key}": value
+                for key, value in _text_audit(chars).items()
+            },
+        }
     if name == "workspace_write":
         content = str(args.get("content") or "")
         return {
@@ -168,6 +187,18 @@ def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
             "overwrite": bool(args.get("overwrite", False)),
             "content_omitted": True,
             **{f"content_{key}": value for key, value in _text_audit(content).items()},
+        }
+    if name == "workspace_apply_patch":
+        patch = str(args.get("patch") or "")
+        return {
+            **result,
+            "path": _safe_sandbox_path(args.get("path")),
+            "patch_omitted": True,
+            "patch_lines": patch.count("\n") + (1 if patch else 0),
+            **{
+                f"patch_{key}": value
+                for key, value in _text_audit(patch).items()
+            },
         }
     if name == "workspace_search":
         query = str(args.get("query") or "")
@@ -221,18 +252,50 @@ def _sandbox_artifacts(value: Any) -> list[dict[str, Any]]:
 def _sandbox_result_data(tool_name: str, data: Any) -> dict[str, Any]:
     if not isinstance(data, Mapping):
         return {}
-    if tool_name == "sandbox_exec":
+    if tool_name in {
+        "sandbox_exec",
+        "sandbox_poll",
+        "sandbox_write_stdin",
+        "sandbox_terminate",
+    }:
         safe = {
             key: data.get(key)
             for key in (
-                "run_id", "exit_code", "termination_reason", "oom_killed",
+                "run_id", "process_id", "lease_id", "profile_id",
+                "execution_status", "process_state", "exit_code",
+                "termination_reason", "oom_killed",
                 "cpu_time_ms", "peak_memory_bytes", "stdout_bytes",
                 "stderr_bytes", "stdout_truncated", "stderr_truncated",
-                "workspace_used_bytes",
+                "workspace_used_bytes", "next_cursor", "written_bytes",
+                "lease_recycled", "termination_scope",
+                "workspace_preserved", "runtime_preserved",
             )
             if key in data
         }
-        for stream_name in ("stdout", "stderr"):
+        affected = data.get("affected_process_ids")
+        if isinstance(affected, list):
+            safe["affected_process_ids"] = [
+                str(item or "")[:64]
+                for item in affected[:100]
+            ]
+        active = data.get("active_processes")
+        if isinstance(active, list):
+            safe["active_processes"] = [
+                {
+                    "process_id": str(item.get("process_id") or "")[:64],
+                    "state": str(item.get("state") or "")[:32],
+                }
+                for item in active[:100]
+                if isinstance(item, Mapping)
+            ]
+        for stream_name in (
+            "stdout",
+            "stderr",
+            "stdout_delta",
+            "stderr_delta",
+        ):
+            if stream_name not in data:
+                continue
             audit = _text_audit(data.get(stream_name))
             safe[f"{stream_name}_omitted"] = True
             safe[f"{stream_name}_sha256"] = audit["sha256"]
@@ -290,12 +353,20 @@ def _sandbox_result_data(tool_name: str, data: Any) -> dict[str, Any]:
             "next_cursor": data.get("next_cursor"),
             "total_visible": data.get("total_visible"),
         }
-    if tool_name == "workspace_write":
+    if tool_name in {"workspace_write", "workspace_apply_patch"}:
         return {
             "path": _safe_sandbox_path(data.get("path")),
             **{
                 key: data.get(key)
-                for key in ("size_bytes", "previous_size_bytes", "used_bytes")
+                for key in (
+                    "size_bytes",
+                    "previous_size_bytes",
+                    "used_bytes",
+                    "usage_delta_bytes",
+                    "hunks_applied",
+                    "added_lines",
+                    "removed_lines",
+                )
                 if key in data
             },
         }
