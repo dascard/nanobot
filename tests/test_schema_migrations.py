@@ -298,6 +298,75 @@ def test_schema_migrations_records_applied_versions():
     assert project_sequence == 10000
 
 
+def test_block_session_memory_migration_adds_table_and_column():
+    """块式会话记忆迁移:conversation_blocks 表 + rolling_session_summaries.block_id。"""
+
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE chat_logs (id INTEGER PRIMARY KEY)"))
+        conn.execute(text("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY)"))
+        conn.execute(text("CREATE TABLE users (id TEXT PRIMARY KEY)"))
+        conn.execute(text("CREATE TABLE agent_runs (id TEXT PRIMARY KEY)"))
+        conn.execute(text("CREATE TABLE prompt_render_logs (id INTEGER PRIMARY KEY)"))
+        conn.execute(text("CREATE TABLE llm_api_request_logs (id INTEGER PRIMARY KEY)"))
+        conn.execute(text("CREATE TABLE reply_contract_check_logs (id INTEGER PRIMARY KEY)"))
+        conn.execute(text("CREATE TABLE reply_eval_results (id INTEGER PRIMARY KEY)"))
+        conn.execute(text(
+            "CREATE TABLE group_memories ("
+            "id INTEGER PRIMARY KEY, "
+            "group_id TEXT, memory_type TEXT, content TEXT, content_hash TEXT, "
+            "confidence REAL, evidence_count INTEGER, evidence_log_ids_json TEXT, "
+            "decay_score REAL, status TEXT)"
+        ))
+    # rolling_session_summaries 由迁移链的 _rolling_session_summaries 建全表(无
+    # block_id),随后 _block_session_memory_schema 追加 block_id,验证加列路径。
+
+    # 幂等:连续运行两次不应报错。
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    assert "conversation_blocks" in inspector.get_table_names()
+
+    block_columns = {col["name"] for col in inspector.get_columns("conversation_blocks")}
+    for expected in {
+        "session_id", "user_id", "chat_type", "block_seq", "status", "open_key",
+        "first_turn_id", "last_turn_id", "last_turn_at", "closed_at",
+        "turn_count", "token_estimate", "closed_reason",
+        "rolling_summary_id", "episode_id",
+    }:
+        assert expected in block_columns, expected
+
+    rss_columns = {col["name"] for col in inspector.get_columns("rolling_session_summaries")}
+    assert "block_id" in rss_columns
+
+    index_names = {idx["name"] for idx in inspector.get_indexes("conversation_blocks")}
+    assert "uq_conversation_block_open_key" in index_names
+
+    # 唯一 open 块:同一 session 只允许一个非 NULL open_key,多个 NULL 互异。
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO conversation_blocks(session_id, open_key, status) "
+            "VALUES ('s1', 's1', 'open')"
+        ))
+        conn.execute(text(
+            "INSERT INTO conversation_blocks(session_id, open_key, status) "
+            "VALUES ('s1', NULL, 'closed')"
+        ))
+        conn.execute(text(
+            "INSERT INTO conversation_blocks(session_id, open_key, status) "
+            "VALUES ('s1', NULL, 'closed')"
+        ))
+    with pytest.raises(IntegrityError):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO conversation_blocks(session_id, open_key, status) "
+                "VALUES ('s1', 's1', 'open')"
+            ))
+
+
 def test_summary_model_safe_defaults_migration_is_exact_and_one_time():
     from core.schema_migrations import run_schema_migrations
 

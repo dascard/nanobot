@@ -975,15 +975,25 @@ def save_llm_session_summary(
         raise ValueError("source_turns is required")
     fallback = db.get(RollingSessionSummary, int(job.fallback_summary_id or 0)) if job.fallback_summary_id else None
     previous = db.get(RollingSessionSummary, int(job.previous_summary_id or 0)) if job.previous_summary_id else None
+    # 块式会话记忆(P2):LLM 升级继承 fallback 的 block_id,确保
+    # get_best_session_summary(block_id=X) 能召回到 LLM 版本;归档/替换同块内进行。
+    block_id = (
+        int(fallback.block_id)
+        if fallback is not None and getattr(fallback, "block_id", None) is not None
+        else None
+    )
+    superseded_query = db.query(RollingSessionSummary.id).filter(
+        RollingSessionSummary.session_id == job.session_id,
+        RollingSessionSummary.status == "active",
+    )
+    if block_id is not None:
+        superseded_query = superseded_query.filter(
+            RollingSessionSummary.block_id == block_id
+        )
     superseded_document_ids = [
-        int(row.id)
-        for row in db.query(RollingSessionSummary.id).filter(
-            RollingSessionSummary.session_id == job.session_id,
-            RollingSessionSummary.status == "active",
-        ).all()
-        if int(row.id or 0) > 0
+        int(row.id) for row in superseded_query.all() if int(row.id or 0) > 0
     ]
-    archive_active_summaries_for_session(db, job.session_id)
+    archive_active_summaries_for_session(db, job.session_id, block_id=block_id)
 
     pending_turn_ids = [int(turn.id) for turn in source_turns]
     previous_turn_ids = _json_list(getattr(previous, "source_turn_ids_json", "[]"))
@@ -1025,6 +1035,7 @@ def save_llm_session_summary(
         llm_status="success",
         llm_model=model or "unknown",
         llm_request_log_id=llm_request_log_id,
+        block_id=block_id,
         supersedes_summary_id=int(fallback.id) if fallback and fallback.id else None,
         stable_hash=_summary_stable_hash(
             session_id=job.session_id,

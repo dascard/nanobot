@@ -512,6 +512,7 @@ def _chat_persistence_input(req: ChatProxyRequest) -> chat_persistence.ChatTurnP
         message_id=req.message_id,
         source_message_ids=req.source_message_ids,
         client_meta=req.client_meta,
+        chat_type=_chat_request_type(req),
     )
 
 

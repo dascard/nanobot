@@ -71,6 +71,7 @@ def get_best_session_summary(
     db: Session,
     session_id: str,
     *,
+    block_id: int | None = None,
     after_clear_at: datetime | None = None,
     mutate_stale: bool = True,
 ) -> RollingSessionSummary | None:
@@ -78,16 +79,17 @@ def get_best_session_summary(
 
     LLM 摘要质量更高，优先级高于 deterministic fallback；fallback 只作为
     LLM 摘要缺失或失败时的同步兜底。
+
+    ``block_id`` 非空时把系统 A 收窄到该块(块式会话记忆 P2);None 为群聊/旧
+    行为(session 级)。
     """
-    rows = (
-        db.query(RollingSessionSummary)
-        .filter(
-            RollingSessionSummary.session_id == session_id,
-            RollingSessionSummary.status == "active",
-        )
-        .order_by(RollingSessionSummary.id.desc())
-        .all()
+    query = db.query(RollingSessionSummary).filter(
+        RollingSessionSummary.session_id == session_id,
+        RollingSessionSummary.status == "active",
     )
+    if block_id is not None:
+        query = query.filter(RollingSessionSummary.block_id == int(block_id))
+    rows = query.order_by(RollingSessionSummary.id.desc()).all()
     if not rows:
         return None
 
@@ -186,17 +188,17 @@ def archive_active_summaries_for_session(
     db: Session,
     session_id: str,
     *,
+    block_id: int | None = None,
     enqueue_semantic_delete: bool = False,
     delete_reason: str = "summary_archived",
 ) -> int:
-    rows = (
-        db.query(RollingSessionSummary)
-        .filter(
-            RollingSessionSummary.session_id == session_id,
-            RollingSessionSummary.status == "active",
-        )
-        .all()
+    query = db.query(RollingSessionSummary).filter(
+        RollingSessionSummary.session_id == session_id,
+        RollingSessionSummary.status == "active",
     )
+    if block_id is not None:
+        query = query.filter(RollingSessionSummary.block_id == int(block_id))
+    rows = query.all()
     archived_at = db_now_naive()
     for row in rows:
         row.status = "archived"
@@ -279,19 +281,22 @@ def save_new_active_summary(
     raw_window_start_turn_id: int,
     model: str,
     prompt_sha256: str,
+    block_id: int | None = None,
 ) -> RollingSessionSummary:
     if not pending_turns:
         raise ValueError("pending_turns is required")
-    superseded_rows = (
-        db.query(RollingSessionSummary)
-        .filter(
-            RollingSessionSummary.session_id == str(session_id or ""),
-            RollingSessionSummary.status == "active",
-        )
-        .order_by(RollingSessionSummary.id.asc())
-        .all()
+    superseded_query = db.query(RollingSessionSummary).filter(
+        RollingSessionSummary.session_id == str(session_id or ""),
+        RollingSessionSummary.status == "active",
     )
-    archive_active_summaries_for_session(db, session_id)
+    if block_id is not None:
+        superseded_query = superseded_query.filter(
+            RollingSessionSummary.block_id == int(block_id)
+        )
+    superseded_rows = superseded_query.order_by(
+        RollingSessionSummary.id.asc()
+    ).all()
+    archive_active_summaries_for_session(db, session_id, block_id=block_id)
 
     summary_text = render_summary_text(summary_json)
     pending_turn_ids = [int(turn.id) for turn in pending_turns]
@@ -347,6 +352,7 @@ def save_new_active_summary(
         issues_json=json.dumps(issues, ensure_ascii=False),
         model=model or "",
         prompt_sha256=prompt_sha256 or "",
+        block_id=int(block_id) if block_id is not None else None,
         stable_hash=stable_hash,
         meta_json=json.dumps({
             "schema_version": 1,
@@ -459,6 +465,7 @@ def maybe_rollup_session_summary(
     raw_window_start_turn_id: int,
     current_user_input: str = "",
     after_clear_at: datetime | None = None,
+    block_id: int | None = None,
     force: bool = False,
     dry_run: bool = False,
 ) -> RollupResult:
@@ -521,6 +528,7 @@ def maybe_rollup_session_summary(
             fresh = get_best_session_summary(
                 db,
                 session_id,
+                block_id=block_id,
                 after_clear_at=after_clear_at,
                 mutate_stale=True,
             )
@@ -545,6 +553,7 @@ def maybe_rollup_session_summary(
                 raw_window_start_turn_id=raw_window_start_turn_id,
                 model="deterministic",
                 prompt_sha256=prompt_sha256,
+                block_id=block_id,
             )
             if config.SESSION_SUMMARY_LLM_ENABLED:
                 from app.session_memory.jobs import enqueue_session_summary_job
@@ -576,6 +585,7 @@ def maybe_rollup_session_summary(
         result.summary = get_best_session_summary(
             db,
             session_id,
+            block_id=block_id,
             after_clear_at=after_clear_at,
             mutate_stale=False,
         )

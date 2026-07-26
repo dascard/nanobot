@@ -28,6 +28,8 @@ class ChatTurnPersistenceInput:
     message_id: str | None = None
     source_message_ids: list[str] | None = None
     client_meta: dict | None = None
+    # 私聊/群聊;块式会话记忆仅对 private 归块,group 完全短路。
+    chat_type: str = "private"
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,45 @@ def _pending_chat_log_count(
     if user_id in _evolution_running:
         return 0
     return repository.count_pending_chat_logs(user_id)
+
+
+def _assign_block_safely(
+    db: Session,
+    *,
+    session_id: str,
+    user_id: str,
+    chat_type: str,
+    turns: list[Any],
+) -> None:
+    """把新增对话 turn 归入块;best-effort,失败降级跳过(不阻塞回复)。
+
+    kill-switch 关闭时零开销直接返回;开启时在 SAVEPOINT 内归块,归块出错只回滚
+    savepoint(已 flush 的 turn 不受影响),外层照常提交。见块式会话记忆 spec §8。
+    """
+
+    from app.session_memory.blocks import (
+        assign_turns_to_block,
+        is_block_memory_enabled,
+    )
+
+    if not is_block_memory_enabled(session_id):
+        return
+
+    try:
+        with db.begin_nested():
+            assign_turns_to_block(
+                db,
+                session_id=session_id,
+                user_id=user_id,
+                chat_type=chat_type,
+                turns=turns,
+            )
+    except Exception:
+        logger.warning(
+            "[block] 归块失败,降级跳过(不阻塞回复) session=%s",
+            session_id,
+            exc_info=True,
+        )
 
 
 def ensure_private_request_journal(
@@ -324,7 +365,7 @@ def persist_claimed_chat_turn(
             message_id=key.message_id,
             meta_json=json.dumps(assistant_chat_meta, ensure_ascii=False),
         )
-        repository.add_conversation_turn(
+        user_turn = repository.add_conversation_turn(
             user_id=req.user_id,
             session_id=key.session_id,
             role="user",
@@ -332,7 +373,7 @@ def persist_claimed_chat_turn(
             source_message_ids_json=prepared.source_ids_json,
             meta_json=json.dumps(prepared.user_meta, ensure_ascii=False),
         )
-        repository.add_conversation_turn(
+        assistant_turn = repository.add_conversation_turn(
             user_id=req.user_id,
             session_id=key.session_id,
             role="assistant",
@@ -340,6 +381,13 @@ def persist_claimed_chat_turn(
             meta_json=json.dumps(prepared.assistant_turn_meta, ensure_ascii=False),
         )
         repository.flush()
+        _assign_block_safely(
+            db,
+            session_id=key.session_id,
+            user_id=req.user_id,
+            chat_type="private",
+            turns=[user_turn, assistant_turn],
+        )
         pending = _pending_chat_log_count(repository, req.user_id)
         final_completion = replace(completion, unprocessed_logs=pending)
         completed_journal_meta = dict(prepared.user_meta)
@@ -514,7 +562,7 @@ def persist_chat_turn(
             processed=prepared.assistant_processed_val,
             meta_json=json.dumps(prepared.assistant_chat_meta, ensure_ascii=False),
         )
-        repository.add_conversation_turn(
+        user_turn = repository.add_conversation_turn(
             user_id=req.user_id,
             session_id=req.session_id,
             role="user",
@@ -522,12 +570,20 @@ def persist_chat_turn(
             source_message_ids_json=prepared.source_ids_json,
             meta_json=json.dumps(prepared.user_meta, ensure_ascii=False),
         )
-        repository.add_conversation_turn(
+        assistant_turn = repository.add_conversation_turn(
             user_id=req.user_id,
             session_id=req.session_id,
             role="assistant",
             content=prepared.turn_answer,
             meta_json=json.dumps(prepared.assistant_turn_meta, ensure_ascii=False),
+        )
+        repository.flush()
+        _assign_block_safely(
+            db,
+            session_id=req.session_id,
+            user_id=req.user_id,
+            chat_type=req.chat_type,
+            turns=[user_turn, assistant_turn],
         )
         repository.commit()
 

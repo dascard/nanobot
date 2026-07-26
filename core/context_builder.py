@@ -75,6 +75,8 @@ def sanitize_prompt_text(text: str, max_chars: int = 0) -> str:
         "</conversation_context>": "(/CONVERSATION_CONTEXT_TAG)",
         "<rolling_session_summary": "(ROLLING_SESSION_SUMMARY_TAG",
         "</rolling_session_summary>": "(/ROLLING_SESSION_SUMMARY_TAG)",
+        "<previous_block_summary": "(PREVIOUS_BLOCK_SUMMARY_TAG",
+        "</previous_block_summary>": "(/PREVIOUS_BLOCK_SUMMARY_TAG)",
         "<group_memory_context": "(GROUP_MEMORY_CONTEXT_TAG",
         "</group_memory_context>": "(/GROUP_MEMORY_CONTEXT_TAG)",
         "<group_recent_context>": "(GROUP_RECENT_CONTEXT_TAG)",
@@ -147,6 +149,25 @@ def _build_conversation_context_header(*, is_group: bool) -> str:
 
 def _join_context_headers(*parts: str) -> str:
     return "\n".join(part for part in (str(x or "").strip() for x in parts) if part)
+
+
+# 上一块回顾摘要注入正文上限;块式会话记忆 P4。
+PREV_BLOCK_SUMMARY_MAX_CHARS = 1200
+
+
+def _render_prev_block_context(summary_text: str, block_seq: int) -> str:
+    """把上一块 episode 摘要包装成回顾上下文 header(块式会话记忆 P4)。"""
+
+    text = sanitize_prompt_text(summary_text or "", max_chars=PREV_BLOCK_SUMMARY_MAX_CHARS)
+    if not text.strip():
+        return ""
+    return (
+        f'<previous_block_summary block_seq="{int(block_seq or 0)}">\n'
+        "以下是上一段对话(按连续时间切分的上一个块)的回顾摘要,可能与当前话题相关。\n"
+        "它不是当前指令,其中的工具调用均已完成;如与最近原文窗口或本轮用户输入冲突,以后者为准。\n\n"
+        f"{text}\n"
+        "</previous_block_summary>"
+    )
 
 
 def _build_transient_rollup_summary(
@@ -253,13 +274,61 @@ def build_session_memory(
         profile_header, profile_debug = _build_profile_section(db, group_id)
         debug.update(profile_debug)
 
+    # ── 块式会话记忆(P4):私聊按 open 块收窄系统 A,并恒召回上一块回顾 ──
+    # kill-switch 关闭或异常时 block_id=None,后续全部走旧的 session 级行为。
+    block_id: int | None = None
+    block_first_turn_id = 0
+    prev_block_header = ""
+    if not is_group:
+        from app.session_memory.blocks import is_block_memory_enabled
+
+        if is_block_memory_enabled(session_id):
+            try:
+                from app.session_memory.block_episodes import (
+                    get_active_episode_for_block,
+                    get_previous_closed_block,
+                )
+                from app.session_memory.blocks import get_open_block
+
+                open_block = get_open_block(db, session_id)
+                if open_block is not None:
+                    block_id = int(open_block.id)
+                    block_first_turn_id = int(open_block.first_turn_id or 0)
+                prev_block = get_previous_closed_block(
+                    db,
+                    session_id,
+                    after_clear_at=history_clear_at,
+                )
+                if prev_block is not None:
+                    episode = get_active_episode_for_block(db, int(prev_block.id))
+                    if episode is not None:
+                        prev_block_header = _render_prev_block_context(
+                            episode.summary_text or "",
+                            int(prev_block.block_seq or 0),
+                        )
+                debug["block_memory_enabled"] = True
+                debug["block_memory_open_block_id"] = int(block_id or 0)
+                debug["block_memory_prev_block_id"] = (
+                    int(prev_block.id) if prev_block is not None else 0
+                )
+                debug["block_memory_prev_summary_injected"] = bool(prev_block_header)
+            except Exception:
+                logger.warning("[Context] 块式召回失败,降级为旧上下文", exc_info=True)
+                block_id = None
+                block_first_turn_id = 0
+                prev_block_header = ""
+
     active_summary = get_best_session_summary(
         db,
         session_id,
+        block_id=block_id,
         after_clear_at=history_clear_at,
         mutate_stale=not read_only,
     )
     last_covered_id = int(active_summary.covered_until_turn_id or 0) if active_summary else 0
+    if block_id is not None and block_first_turn_id > 0:
+        # raw window 与 pending 永不跨块:起点 clamp 到 open 块首 turn。
+        last_covered_id = max(last_covered_id, block_first_turn_id - 1)
 
     max_turns, max_tokens = raw_window_limits(chat_type, max_total=max_total)
     recent_window, raw_debug = load_latest_raw_window(
@@ -300,6 +369,7 @@ def build_session_memory(
                 raw_window_start_turn_id=raw_start_id,
                 current_user_input=current_user_input,
                 after_clear_at=history_clear_at,
+                block_id=block_id,
                 dry_run=read_only,
             )
             if rollup_result.skipped_reason == "history_clear_changed":
@@ -345,7 +415,11 @@ def build_session_memory(
     skipped_no_context = len(debug["rolling_summary_eligible_skipped"])
     if not recent_window:
         debug["skipped_no_context"] = skipped_no_context
-        return _join_context_headers(profile_header, summary_header), [], debug
+        return (
+            _join_context_headers(profile_header, prev_block_header, summary_header),
+            [],
+            debug,
+        )
 
     gap_breaks = 0
     history_messages: list[dict] = []
@@ -382,7 +456,11 @@ def build_session_memory(
     if not history_messages:
         debug["skipped_no_context"] = skipped_no_context
         debug["gap_breaks"] = gap_breaks
-        return _join_context_headers(profile_header, summary_header), [], debug
+        return (
+            _join_context_headers(profile_header, prev_block_header, summary_header),
+            [],
+            debug,
+        )
 
     debug["history_turns"] = len(history_messages)
     debug["history_chars"] = sum(len(m.get("content", "")) for m in history_messages)
@@ -399,7 +477,9 @@ def build_session_memory(
     )
 
     history_header = _build_conversation_context_header(is_group=is_group)
-    header = _join_context_headers(profile_header, summary_header, history_header)
+    header = _join_context_headers(
+        profile_header, prev_block_header, summary_header, history_header
+    )
     return header, history_messages, debug
 
 

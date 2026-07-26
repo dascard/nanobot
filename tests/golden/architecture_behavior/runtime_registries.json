@@ -1627,6 +1627,42 @@
   "schema_version": 1,
   "settings": [
     {
+      "category": "memory",
+      "dangerous": false,
+      "default": false,
+      "env_name": "NANOBOT_BLOCK_MEMORY_ENABLED",
+      "key": "block_memory.enabled",
+      "owner_module": "core.memory",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "bool"
+    },
+    {
+      "category": "memory",
+      "dangerous": false,
+      "default": "",
+      "env_name": "NANOBOT_BLOCK_MEMORY_SESSION_ALLOWLIST",
+      "key": "block_memory.session_allowlist",
+      "owner_module": "core.memory",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
       "category": "bot",
       "dangerous": false,
       "default": "nanobot",

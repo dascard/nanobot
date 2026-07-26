@@ -67,6 +67,8 @@ from core.db.models.persona import (
 )
 from core.db.models.proactive import ProactiveOutreachLease, ProactiveOutreachLog
 from core.db.models.session_memory import (
+    ConversationBlock,
+    ConversationBlockEpisode,
     MemoryDigest,
     MemoryDigestJob,
     RollingSessionSummary,
@@ -106,6 +108,8 @@ __all__ = [
     "ChatDeliveryOutbox",
     "ChatStreamConfig",
     "ContentBlockRule",
+    "ConversationBlock",
+    "ConversationBlockEpisode",
     "ConversationTurn",
     "EvalCandidate",
     "EvalRun",

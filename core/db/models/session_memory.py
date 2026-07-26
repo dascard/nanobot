@@ -47,10 +47,108 @@ class RollingSessionSummary(Base):
     next_retry_at = Column(DateTime, nullable=True)
     supersedes_summary_id = Column(Integer, nullable=True)
     stable_hash = Column(String, index=True, default="")
+    # 系统 A 滚动摘要归属的块;群聊/旧行为为 NULL。P2 起消费。
+    block_id = Column(Integer, index=True, nullable=True)
     meta_json = Column(Text, default="{}")
 
     created_at = Column(DateTime, default=datetime.now, index=True)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ConversationBlock(Base):
+    """私聊会话按连续时间段切分的块。
+
+    相邻消息间隔小于 ``BLOCK_GAP_SECONDS`` 的连续 ConversationTurn 归为一个块，
+    块是长期记忆(系统 B episode)与跨块召回的单元。每个 session 至多一个
+    ``status='open'`` 的块，靠 ``open_key`` 唯一约束保证(SQLite 多 NULL 互异)。
+    """
+
+    __tablename__ = "conversation_blocks"
+    __table_args__ = (
+        UniqueConstraint("open_key", name="uq_conversation_block_open_key"),
+        Index("idx_conv_block_session_status", "session_id", "status", "id"),
+        Index("idx_conv_block_session_seq", "session_id", "block_seq"),
+        Index("idx_conv_block_status_last_turn", "status", "last_turn_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id = Column(String, index=True, nullable=False)
+    user_id = Column(String, index=True, default="")
+    chat_type = Column(String, index=True, default="private")
+
+    block_seq = Column(Integer, default=1)
+    status = Column(String, index=True, default="open")
+    # open 时 = session_id，closed/cleared 时 = NULL；唯一约束下每 session 至多一个 open 块。
+    open_key = Column(String, nullable=True)
+
+    first_turn_id = Column(Integer, index=True, default=0)
+    last_turn_id = Column(Integer, index=True, default=0)
+    started_at = Column(DateTime, nullable=True)
+    # 块内最新 turn 的墙钟；gap 判定、召回时距与 idle sweep 的唯一基准。
+    last_turn_at = Column(DateTime, index=True, nullable=True)
+    # 封口墙钟;仅生命周期/sweep 用，不用于时距判定。
+    closed_at = Column(DateTime, nullable=True)
+
+    turn_count = Column(Integer, default=0)
+    token_estimate = Column(Integer, default=0)
+    closed_reason = Column(String, default="")
+
+    rolling_summary_id = Column(Integer, nullable=True)  # 系统 A 当前块摘要指针(P2)
+    episode_id = Column(Integer, nullable=True)  # 系统 B episode 外键(P3)
+    meta_json = Column(Text, default="{}")
+
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ConversationBlockEpisode(Base):
+    """已封口块的长期记忆 episode(系统 B)。
+
+    一块至多一条 active episode,是块式会话记忆里唯一进入语义索引的历史长期
+    单元。封口时由块的最佳滚动摘要固化(llm_episode)或降级生成
+    (deterministic_fallback)。见块式会话记忆 spec §3.2 与机制 3。
+    """
+
+    __tablename__ = "conversation_block_episodes"
+    __table_args__ = (
+        UniqueConstraint("block_id", name="uq_block_episode_block_id"),
+        Index("idx_block_episode_session_status", "session_id", "status"),
+        Index("idx_block_episode_user_session", "user_id", "session_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    block_id = Column(Integer, index=True, nullable=False)
+    block_seq = Column(Integer, index=True, default=0)
+    session_id = Column(String, index=True, nullable=False)
+    user_id = Column(String, index=True, default="")
+    chat_type = Column(String, default="private")
+
+    status = Column(String, index=True, default="active")  # active | archived
+    # deterministic_fallback | llm_episode
+    summary_kind = Column(String, default="deterministic_fallback")
+    # "" | pending | running | done | failed —— episode 是否已升级为 LLM 版本
+    llm_status = Column(String, index=True, default="")
+
+    summary_text = Column(Text, default="")
+    summary_json = Column(Text, default="{}")
+    covered_first_turn_id = Column(Integer, default=0)
+    covered_last_turn_id = Column(Integer, default=0)
+    source_turn_ids_json = Column(Text, default="[]")
+    source_turn_count = Column(Integer, default=0)
+    seed_summary_id = Column(Integer, nullable=True)  # 初稿来源 rolling_session_summaries.id
+
+    quality_score = Column(Float, default=0.0)
+    issues_json = Column(Text, default="[]")
+    model = Column(String, default="")
+    prompt_sha256 = Column(String, default="")
+    stable_hash = Column(String, index=True, default="")
+    source_revision = Column(String, default="")
+
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    sealed_at = Column(DateTime, nullable=True)
+    refined_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    meta_json = Column(Text, default="{}")
 
 
 class SessionSummaryJob(Base):
@@ -250,6 +348,8 @@ class MemoryDigestJob(Base):
 
 
 __all__ = [
+    "ConversationBlock",
+    "ConversationBlockEpisode",
     "MemoryDigest",
     "MemoryDigestJob",
     "RollingSessionSummary",

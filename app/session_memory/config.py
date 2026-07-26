@@ -34,3 +34,19 @@ SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS = 12000
 SESSION_SUMMARY_LLM_MAX_STATE_CHARS = 4000
 SESSION_SUMMARY_LLM_REQUEST_SAFETY_CHARS = 512
 SESSION_SUMMARY_FALLBACK_ENABLED = True
+
+# ── 块式会话记忆(Block Session Memory) ──
+# 见 docs/superpowers/specs/2026-07-26-block-session-memory-design.md。
+# canonical 开关是 settings 键 block_memory.enabled(env NANOBOT_BLOCK_MEMORY_ENABLED,
+# 管理端可运行时改)+ block_memory.session_allowlist 灰度白名单;统一入口
+# app/session_memory/blocks.py::is_block_memory_enabled。本常量仅作 settings
+# 服务不可用时的最后兜底,保持 False。
+BLOCK_SESSION_MEMORY_ENABLED = False
+# 相邻 user 消息间隔达到该秒数则封口开新块;与块内 CONTEXT_GAP_HINT_MIN(视觉
+# 时间间隔提示)正交,BLOCK_GAP_SECONDS 必须大于后者。
+BLOCK_GAP_SECONDS = 1800
+# open 块静默超过该秒数由 idle sweep 兜底封口(P4);须 >= BLOCK_GAP_SECONDS。
+BLOCK_IDLE_SEAL_SECONDS = 7200
+# 单块尺寸上限;任一超限即封口开新块,防止长连续对话把块撑到无法召回。
+BLOCK_MAX_TURNS = 200
+BLOCK_MAX_TOKENS = 16000

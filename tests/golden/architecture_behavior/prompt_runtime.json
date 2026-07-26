@@ -62,8 +62,8 @@
     },
     {
       "path": "prompts.v2.default/chat/main.md",
-      "sha256": "49abbef784ad93286792c7b8d5fdb832d96fea47b7947c571fde58fe678d3698",
-      "size_bytes": 4385
+      "sha256": "0d2b335bd48b4bc99ee9f587fff5d9f1be71e891879328bb09b4d338e7ad4a5c",
+      "size_bytes": 4630
     },
     {
       "path": "prompts.v2.default/chat/platform/qq/common.md",

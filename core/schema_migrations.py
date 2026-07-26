@@ -73,6 +73,7 @@ _SANDBOX_LEASE_CONTROLLER_STATE_VERSION = (
 _SANDBOX_WORKSPACE_QUOTA_MAINTENANCE_VERSION = (
     "20260725_sandbox_workspace_quota_maintenance"
 )
+_BLOCK_SESSION_MEMORY_VERSION = "20260726_block_session_memory_schema"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -955,6 +956,96 @@ def _session_summary_job_fencing(
         "ON session_summary_jobs(status, next_retry_at, id)",
         "CREATE INDEX IF NOT EXISTS idx_ssj_lease_fencing "
         "ON session_summary_jobs(status, lease_expires_at, id)",
+    ])
+
+
+def _block_session_memory_schema(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """块式会话记忆:conversation_blocks 表 + rolling_session_summaries.block_id 列。
+
+    见 docs/superpowers/specs/2026-07-26-block-session-memory-design.md。新表由
+    create_all/本迁移幂等建立;block_id 为 rolling_session_summaries 上的新列,
+    P1 只加列、P2 起才读(严格加列先于读列)。
+    """
+
+    _add_missing_columns(conn, "rolling_session_summaries", {
+        "block_id": "INTEGER",
+    })
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS conversation_blocks ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "session_id TEXT NOT NULL, "
+        "user_id TEXT DEFAULT '', "
+        "chat_type TEXT DEFAULT 'private', "
+        "block_seq INTEGER DEFAULT 1, "
+        "status TEXT DEFAULT 'open', "
+        "open_key TEXT, "
+        "first_turn_id INTEGER DEFAULT 0, "
+        "last_turn_id INTEGER DEFAULT 0, "
+        "started_at DATETIME, "
+        "last_turn_at DATETIME, "
+        "closed_at DATETIME, "
+        "turn_count INTEGER DEFAULT 0, "
+        "token_estimate INTEGER DEFAULT 0, "
+        "closed_reason TEXT DEFAULT '', "
+        "rolling_summary_id INTEGER, "
+        "episode_id INTEGER, "
+        "meta_json TEXT DEFAULT '{}', "
+        "created_at DATETIME, "
+        "updated_at DATETIME"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS conversation_block_episodes ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "block_id INTEGER NOT NULL, "
+        "block_seq INTEGER DEFAULT 0, "
+        "session_id TEXT NOT NULL, "
+        "user_id TEXT DEFAULT '', "
+        "chat_type TEXT DEFAULT 'private', "
+        "status TEXT DEFAULT 'active', "
+        "summary_kind TEXT DEFAULT 'deterministic_fallback', "
+        "llm_status TEXT DEFAULT '', "
+        "summary_text TEXT DEFAULT '', "
+        "summary_json TEXT DEFAULT '{}', "
+        "covered_first_turn_id INTEGER DEFAULT 0, "
+        "covered_last_turn_id INTEGER DEFAULT 0, "
+        "source_turn_ids_json TEXT DEFAULT '[]', "
+        "source_turn_count INTEGER DEFAULT 0, "
+        "seed_summary_id INTEGER, "
+        "quality_score REAL DEFAULT 0.0, "
+        "issues_json TEXT DEFAULT '[]', "
+        "model TEXT DEFAULT '', "
+        "prompt_sha256 TEXT DEFAULT '', "
+        "stable_hash TEXT DEFAULT '', "
+        "source_revision TEXT DEFAULT '', "
+        "created_at DATETIME, "
+        "sealed_at DATETIME, "
+        "refined_at DATETIME, "
+        "updated_at DATETIME, "
+        "meta_json TEXT DEFAULT '{}'"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_conversation_block_open_key "
+        "ON conversation_blocks(open_key)",
+        "CREATE INDEX IF NOT EXISTS idx_conv_block_session_status "
+        "ON conversation_blocks(session_id, status, id)",
+        "CREATE INDEX IF NOT EXISTS idx_conv_block_session_seq "
+        "ON conversation_blocks(session_id, block_seq)",
+        "CREATE INDEX IF NOT EXISTS idx_conv_block_status_last_turn "
+        "ON conversation_blocks(status, last_turn_at)",
+        "CREATE INDEX IF NOT EXISTS idx_rss_block_id "
+        "ON rolling_session_summaries(block_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_block_episode_block_id "
+        "ON conversation_block_episodes(block_id)",
+        "CREATE INDEX IF NOT EXISTS idx_block_episode_session_status "
+        "ON conversation_block_episodes(session_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_block_episode_user_session "
+        "ON conversation_block_episodes(user_id, session_id)",
     ])
 
 
@@ -3613,6 +3704,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _SANDBOX_WORKSPACE_QUOTA_MAINTENANCE_VERSION,
         "sandbox workspace quota maintenance fencing",
         _sandbox_workspace_quota_maintenance,
+    ),
+    (
+        _BLOCK_SESSION_MEMORY_VERSION,
+        "block session memory: conversation_blocks table and rolling summary block_id",
+        _block_session_memory_schema,
     ),
 ]
 

@@ -199,6 +199,22 @@ SETTING_DEFS: dict[str, SettingDef] = {
         category="memory",
         description="是否允许在真实群聊回复中自动检索并注入群记忆",
     ),
+    "block_memory.enabled": SettingDef(
+        key="block_memory.enabled",
+        env_name="NANOBOT_BLOCK_MEMORY_ENABLED",
+        default=False,
+        value_type="bool",
+        category="memory",
+        description="块式会话记忆总开关(私聊按连续时间切块+块级摘要召回)",
+    ),
+    "block_memory.session_allowlist": SettingDef(
+        key="block_memory.session_allowlist",
+        env_name="NANOBOT_BLOCK_MEMORY_SESSION_ALLOWLIST",
+        default="",
+        value_type="str",
+        category="memory",
+        description="块式会话记忆灰度白名单(逗号分隔 session_id;空=全量)",
+    ),
     "group_learning.enabled": SettingDef(
         key="group_learning.enabled",
         env_name="NANOBOT_GROUP_LEARNING_ENABLED",
