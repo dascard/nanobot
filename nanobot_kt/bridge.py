@@ -757,19 +757,6 @@ class NanobotBridge(MessageContractBridgeMixin):
             audit_failure_policy=self._prompt_v2_audit_failure_policy(),
         )
 
-    def _history_context_text(
-        self, history_header: str, history_messages: list[dict[str, Any]]
-    ) -> str:
-        parts: list[str] = []
-        if history_header:
-            parts.append(history_header)
-        for msg in history_messages or []:
-            role = str(msg.get("role") or "user")
-            content = str(msg.get("content") or "").strip()
-            if content:
-                parts.append(f"{role}: {content}")
-        return "\n".join(parts)
-
     from nanobot_kt.reply_contract import ALLOWED_SEND_MODES as _ALLOWED_SEND_MODES
 
     def _extract_reply_from_tool_output(self, session_id: str = "") -> str:
@@ -1774,6 +1761,11 @@ class NanobotBridge(MessageContractBridgeMixin):
                 stream_queue=stream_queue,
                 stream_enabled=meta["stream"],
             )
+            # reply meta store 是 per-session 缓存,只靠成功路径 pop 清理;
+            # 上一请求若在错误/取消路径未 pop,残留的 _no_reply 会静默吞掉
+            # 本请求。每请求开始处无条件清一次,保证从干净状态出发。
+            if session_id:
+                self._reply_meta_store().pop(session_id, None)
             logger.info(
                 "[SessionRuntime] START session=%s user=%s query_len=%d",
                 session_id,
@@ -2072,9 +2064,11 @@ class NanobotBridge(MessageContractBridgeMixin):
                     default_api_key=NEW_API_KEY,
                 )
             except RuntimeError as e:
+                # 内部错误文本绝不能当作正常回复出站(会绕过 reply contract
+                # 且写入 ConversationTurn),与"无候选模型"路径一致静默返回。
                 logger.error("[Model Router] reply route disabled: %s", e)
                 trace_finalizer.finish("error", error=str(e))
-                return f"[系统内部错误] {e}"
+                return ""
             _route_provider_id = route_plan.provider_id
             _route_registry_provider = route_plan.registry_provider
             _route_timeout = route_plan.timeout

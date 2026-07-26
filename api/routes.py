@@ -888,7 +888,18 @@ def _prepare_chat_database_phase(
         user.name = req.sender_name
         db.commit()
 
-    if _check_user_blocked(db, req.user_id, target_type="private"):
+    # 屏蔽规则按会话类型匹配:群会话必须用 target_type="group" 且带 group_id,
+    # 否则群消息只会命中私聊规则、群规则永不生效(与群路径 service.py 对齐)。
+    if is_group:
+        blocked = _check_user_blocked(
+            db,
+            req.user_id,
+            target_type="group",
+            group_id=_extract_group_id_from_chat_request(req),
+        )
+    else:
+        blocked = _check_user_blocked(db, req.user_id, target_type="private")
+    if blocked:
         blocked_completion = chat_response_contract.build_completed_inbound_response(
             outcome="blocked",
             reason="user_blocked",

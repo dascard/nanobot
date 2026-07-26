@@ -57,6 +57,10 @@ MODEL_OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), "data", "model_ov
 
 # Retryable HTTP status codes
 _RETRYABLE_STATUS = {429, 502, 503, 504}
+# 确定性请求级错误:换模型/重试都不会改变结果,不计入模型熔断
+_DETERMINISTIC_STATUS = {400, 413, 422}
+# 请求级鉴权/权限错误:对所有候选一致,直接中止遍历
+_ABORT_STATUS = {401, 403}
 _RAW_BODY_PREVIEW_LIMIT = 4096
 
 
@@ -761,6 +765,9 @@ class NewAPIClient:
             "temperature": temperature,
             "stream": stream,
         }
+        if stream:
+            # 请求末尾 usage chunk,让 last_usage 在流式路径也能生效。
+            payload["stream_options"] = {"include_usage": True}
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if tools:
@@ -994,16 +1001,21 @@ class NewAPIClient:
             for attempt in range(_attempts):  # per-model retry from settings
                 if target_model and target_model not in attempted_models:
                     attempted_models.append(target_model)
-                payload = self._build_payload(
-                    messages,
-                    tools,
-                    temperature,
-                    False,
-                    target_model,
-                    max_tokens=max_tokens,
-                    enable_thinking=enable_thinking,
-                    model_info=model,
-                )
+                try:
+                    payload = self._build_payload(
+                        messages,
+                        tools,
+                        temperature,
+                        False,
+                        target_model,
+                        max_tokens=max_tokens,
+                        enable_thinking=enable_thinking,
+                        model_info=model,
+                    )
+                except ValueError as exc:
+                    # payload 能力校验失败(如 manual_model 不在 registry)是
+                    # 确定性错误,对所有候选一致,维持 error-dict 返回契约。
+                    return {"error": str(exc)}
                 started = time.time()
                 log_id = 0
                 # 兜底从 contextvars 读取 trace 上下文
@@ -1162,20 +1174,40 @@ class NewAPIClient:
                                     "error_type": f"http_{resp.status}",
                                 },
                             )
-                            if tracker is not None:
+                            # 确定性请求级错误(payload 超限/鉴权/参数非法)对所有
+                            # 候选模型都会同样返回,既不该计入模型熔断,也不该逐个
+                            # 重试——否则一次坏请求会级联禁用全部候选模型。
+                            deterministic = resp.status in _DETERMINISTIC_STATUS
+                            if not deterministic and tracker is not None:
                                 self.__class__._track_background_task(
                                     tracker.record_failure(target_model),
                                     label="record_failure",
                                 )
 
+                            if resp.status in _ABORT_STATUS:
+                                logger.error(
+                                    "new-api: %s status=%s 请求级错误,中止候选遍历",
+                                    target_model,
+                                    resp.status,
+                                )
+                                return {"error": last_error}
+                            if deterministic:
+                                logger.warning(
+                                    "new-api: %s status=%s 确定性错误,不重试不计熔断,切换",
+                                    target_model,
+                                    resp.status,
+                                )
+                                break
                             if resp.status == 429:
                                 logger.warning(f"new-api: {target_model} 429 rate-limited, switching")
                                 break  # break inner loop, move to next model
-                            elif attempt == 0:
+                            elif attempt + 1 < _attempts:
                                 logger.warning(
-                                    "new-api: %s status=%s, retrying",
+                                    "new-api: %s status=%s, retrying (%d/%d)",
                                     target_model,
                                     resp.status,
+                                    attempt + 1,
+                                    _attempts,
                                 )
                                 await asyncio.sleep(1)
                                 continue  # retry same model
@@ -1326,16 +1358,21 @@ class NewAPIClient:
 
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
-        payload = self._build_payload(
-            messages,
-            tools,
-            temperature,
-            True,
-            target_model,
-            max_tokens=max_tokens,
-            enable_thinking=enable_thinking,
-            model_info=target_model_info,
-        )
+        try:
+            payload = self._build_payload(
+                messages,
+                tools,
+                temperature,
+                True,
+                target_model,
+                max_tokens=max_tokens,
+                enable_thinking=enable_thinking,
+                model_info=target_model_info,
+            )
+        except ValueError as exc:
+            # 维持 error-dict 契约:payload 能力校验失败不得逃逸为异常。
+            yield {"error": str(exc)}
+            return
         started = time.time()
         log_id = 0
         # 记录 stream LLM API 请求
@@ -1438,18 +1475,20 @@ class NewAPIClient:
                             break
                         try:
                             chunk = json.loads(data_str)
-                            # Track usage from final chunk if present
                             if chunk.get("usage"):
                                 self.last_usage = chunk["usage"]
-                                if tracker is not None:
-                                    self.__class__._track_background_task(
-                                        tracker.record_success(target_model),
-                                        label="stream_record_success",
-                                    )
                             stream_trace.record_chunk(chunk)
                             yield chunk
                         except json.JSONDecodeError:
                             continue
+                    # 流正常结束即成功:success 计数必须无条件记录,不能只在
+                    # 出现 usage chunk 时才记——否则纯流式路径失败计数只增不减,
+                    # 单次瞬时故障就会把模型永久推向熔断阈值。
+                    if tracker is not None:
+                        self.__class__._track_background_task(
+                            tracker.record_success(target_model),
+                            label="stream_record_success",
+                        )
                     stream_response = stream_trace.build_response()
                     try:
                         from core.tracing import LLMRequestTracer

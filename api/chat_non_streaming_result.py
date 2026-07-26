@@ -85,17 +85,21 @@ async def finalize_non_streaming_chat_result(
             str(_request_attr(req, "user_id")),
             context.empty_assistant_placeholder,
         )
-        await _resolve_maybe_awaitable(
-            callbacks.persist_chat_turn(
-                db,
-                context.persist_req,
-                context.empty_assistant_placeholder,
-                context.guardrail_status,
-                assistant_meta=callbacks.private_prompt_audit_failure_meta(),
-                assistant_processed=1,
-                timing_meta=context.private_timing_meta,
+        # claimed 私聊的 user 行已由 request journal 建立;此处再走
+        # persist_chat_turn 会插入第二条同 message_id 的 user 日志,
+        # 使后续恢复重放的唯一性校验永久失败(与流式路径守卫一致)。
+        if context.claim_key is None:
+            await _resolve_maybe_awaitable(
+                callbacks.persist_chat_turn(
+                    db,
+                    context.persist_req,
+                    context.empty_assistant_placeholder,
+                    context.guardrail_status,
+                    assistant_meta=callbacks.private_prompt_audit_failure_meta(),
+                    assistant_processed=1,
+                    timing_meta=context.private_timing_meta,
+                )
             )
-        )
         return ChatNonStreamingResult(payload=None, prompt_audit_failed=True)
 
     answer = context.answer
