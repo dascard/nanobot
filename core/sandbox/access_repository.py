@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 from core.database import (
     SandboxAccessGrant,
     Workspace,
+    WorkspaceMaintenanceState,
     WorkspaceQuotaBinding,
+    WorkspaceRuntimeQuotaBinding,
 )
 
 
@@ -30,6 +32,24 @@ class SandboxAccessRepository:
         workspace_id: str,
     ) -> WorkspaceQuotaBinding | None:
         return self.db.get(WorkspaceQuotaBinding, str(workspace_id or ""))
+
+    def get_runtime_quota_binding(
+        self,
+        workspace_id: str,
+    ) -> WorkspaceRuntimeQuotaBinding | None:
+        return self.db.get(
+            WorkspaceRuntimeQuotaBinding,
+            str(workspace_id or ""),
+        )
+
+    def get_maintenance_state(
+        self,
+        workspace_id: str,
+    ) -> WorkspaceMaintenanceState | None:
+        return self.db.get(
+            WorkspaceMaintenanceState,
+            str(workspace_id or ""),
+        )
 
 
 __all__ = ["SandboxAccessRepository"]

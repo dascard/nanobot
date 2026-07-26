@@ -24,6 +24,12 @@ from core.sandbox.contracts import (
 )
 from core.sandbox.repositories import SandboxRunRepository
 from core.sandbox.run_ledger import SandboxRunLedger
+from core.sandbox.execution_profiles import (
+    ExecutionProfileDescriptor,
+    ExecutionProfileRegistry,
+    load_execution_profile_registry,
+)
+from core.sandbox.process_service import SandboxProcessService
 from core.sandbox.workspace_service import WorkspacePolicy, WorkspaceService
 from core.settings_service import settings
 from core.tool_registry import SANDBOX_TOOL_NAMES
@@ -105,6 +111,7 @@ class SandboxToolService:
         db: Session,
         backend: SandboxBackend,
         *,
+        profile_registry: ExecutionProfileRegistry | None = None,
         run_session_factory: Callable[[], Session] | None = None,
     ) -> None:
         self.db = db
@@ -125,7 +132,16 @@ class SandboxToolService:
                 autoflush=False,
                 expire_on_commit=False,
             )
+        self.profile_registry = (
+            profile_registry or load_execution_profile_registry()
+        )
         self.run_ledger = SandboxRunLedger(run_session_factory)
+        self.process_service = SandboxProcessService(
+            db,
+            backend,
+            profile_registry=self.profile_registry,
+            run_session_factory=run_session_factory,
+        )
 
     @classmethod
     def from_settings(cls, db: Session) -> "SandboxToolService":
@@ -212,6 +228,40 @@ class SandboxToolService:
             "path": str(args.get("path") or ""),
             "content": str(args.get("content") or ""),
             "overwrite": bool(args.get("overwrite", False)),
+            "quota_bytes": int(access.quota_bytes),
+        })
+        data = self._data(response)
+        if (
+            data.get("used_bytes") is None
+            or data.get("usage_delta_bytes") is None
+        ):
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox 控制面返回了无效响应",
+                retryable=True,
+                stop=False,
+            )
+        self.workspace_service.record_usage_delta(
+            workspace.id,
+            delta_bytes=int(data["usage_delta_bytes"]),
+            observed_used_bytes=int(data["used_bytes"]),
+        )
+        return response
+
+    def workspace_apply_patch(
+        self,
+        args: Mapping[str, Any],
+        context: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        access, _runtime = self.authorize(
+            "workspace_apply_patch",
+            context,
+        )
+        workspace = self._workspace(access)
+        response = self.backend.apply_patch({
+            "workspace_id": workspace.id,
+            "path": str(args.get("path") or ""),
+            "patch": str(args.get("patch") or ""),
             "quota_bytes": int(access.quota_bytes),
         })
         data = self._data(response)
@@ -374,11 +424,113 @@ class SandboxToolService:
                 exc_info=True,
             )
 
+    def _execution_profile(
+        self,
+        access: SandboxAccessDecision,
+    ) -> ExecutionProfileDescriptor:
+        return self.profile_registry.descriptor(
+            access.execution_profile,
+        )
+
+    @staticmethod
+    def _enforce_profile_timeout(
+        args: Mapping[str, Any],
+        descriptor: ExecutionProfileDescriptor,
+    ) -> None:
+        value = args.get("timeout_seconds")
+        if value is None:
+            return
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 1
+            or value > int(descriptor.max_timeout_seconds)
+        ):
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "Sandbox 超时参数超过当前 Profile 上限",
+                hint=(
+                    "使用不超过 "
+                    f"{int(descriptor.max_timeout_seconds)} 秒的 timeout_seconds"
+                ),
+            )
+
+    def sandbox_poll(
+        self,
+        args: Mapping[str, Any],
+        context: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        access, _runtime = self.authorize("sandbox_poll", context)
+        return self.process_service.poll(
+            access,
+            str(args.get("process_id") or ""),
+            cursor=str(args.get("cursor") or ""),
+        )
+
+    def sandbox_write_stdin(
+        self,
+        args: Mapping[str, Any],
+        context: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        access, _runtime = self.authorize(
+            "sandbox_write_stdin",
+            context,
+        )
+        return self.process_service.write_stdin(
+            access,
+            str(args.get("process_id") or ""),
+            chars=str(args.get("chars") or ""),
+        )
+
+    def sandbox_terminate(
+        self,
+        args: Mapping[str, Any],
+        context: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        access, _runtime = self.authorize(
+            "sandbox_terminate",
+            context,
+        )
+        return self.process_service.terminate(
+            access,
+            str(args.get("process_id") or ""),
+        )
+
     def sandbox_exec(self, args: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
         access, _runtime = self.authorize("sandbox_exec", context)
         workspace = self._workspace(access)
+        descriptor = self._execution_profile(access)
+        self._enforce_profile_timeout(args, descriptor)
+        workspace_id = str(workspace.id)
+        authorized_assets = self._authorized_assets(workspace_id)
+        if descriptor.execution_mode == "lease":
+            return self.process_service.start(
+                access,
+                args,
+                authorized_assets=authorized_assets,
+            )
+        if descriptor.execution_mode != "oneshot":
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "当前 Sandbox Profile 不支持命令执行",
+            )
         ready = self._data(self.backend.ready())
-        image_digest = str(ready.get("image_id") or "").lower()
+        # 镜像身份以 Profile manifest 为先：readyz 的 profiles 段就绪时取该
+        # Profile 的镜像；仅在 manifest 未就绪时回退顶层 legacy image_id，
+        # 保证 manifest-only 部署可用且 legacy-only 部署不回归。
+        image_digest = ""
+        profile_states = ready.get("profiles")
+        if isinstance(profile_states, Mapping):
+            profile_state = profile_states.get(descriptor.profile_id)
+            if (
+                isinstance(profile_state, Mapping)
+                and profile_state.get("ready") is True
+            ):
+                image_digest = str(
+                    profile_state.get("image_id") or ""
+                ).lower()
+        if not _IMAGE_ID_RE.fullmatch(image_digest):
+            image_digest = str(ready.get("image_id") or "").lower()
         if not _IMAGE_ID_RE.fullmatch(image_digest):
             raise SandboxServiceError(
                 SandboxErrorCode.RUNTIME_UNAVAILABLE,
@@ -387,9 +539,7 @@ class SandboxToolService:
 
         request_id = _request_id("sbxreq")
         run_id = _request_id("sbxrun")
-        workspace_id = str(workspace.id)
         workspace_quota_bytes = int(access.quota_bytes)
-        authorized_assets = self._authorized_assets(workspace_id)
         trace_id, agent_run_id = get_trace_context()
         tool_call_id = get_tool_trace_context()
         row = SandboxRun(

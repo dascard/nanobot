@@ -14,11 +14,14 @@ from core.chat_stream_identity import (
 from core.config_registry import SETTING_DEFS
 from core.database import SystemSetting
 from core.sandbox.access_contracts import (
+    LEASE_PROCESS_TOOL_NAMES,
     SandboxAccessDecision,
     SandboxCapability,
     TOOL_REQUIRED_CAPABILITY,
 )
 from core.sandbox.access_repository import SandboxAccessRepository
+from core.sandbox.contracts import SandboxServiceError
+from core.sandbox.execution_profiles import load_execution_profile_registry
 from core.runtime.extensions import (
     PolicyDescriptor,
     PolicyTypedFailure,
@@ -33,7 +36,7 @@ SANDBOX_ACCESS_POLICY_DESCRIPTOR = PolicyDescriptor(
     owner_module="sandbox.control_plane",
     domain="sandbox",
     input_contract="sandbox.access.input.v1",
-    output_contract="sandbox.access.decision.v1",
+    output_contract="sandbox.access.decision.v2",
     failure_policy=RuntimeFailurePolicy.FAIL_CLOSED,
     security_sensitive=True,
 )
@@ -124,7 +127,7 @@ class SandboxAccessPolicy:
     ) -> SandboxAccessDecision:
         required = TOOL_REQUIRED_CAPABILITY.get(
             str(tool_name or ""),
-            SandboxCapability.EXEC,
+            SandboxCapability.OFF,
         )
         return execute_policy(
             SANDBOX_ACCESS_POLICY_DESCRIPTOR,
@@ -168,7 +171,7 @@ class SandboxAccessPolicy:
                 False,
                 "authorization_failed",
                 "Sandbox 工具身份无效",
-                SandboxCapability.EXEC,
+                SandboxCapability.OFF,
             )
         if self.db is None or self.repository is None:
             return SandboxAccessDecision(
@@ -247,9 +250,98 @@ class SandboxAccessPolicy:
                 grant_id=str(grant.id),
                 workspace_id=str(grant.workspace_id or ""),
             )
+        profile_id = str(grant.execution_profile or "").strip()
+        try:
+            profile = load_execution_profile_registry().descriptor(profile_id)
+        except SandboxServiceError:
+            return SandboxAccessDecision(
+                False,
+                "authorization_failed",
+                "当前会话的 Sandbox 执行 Profile 不可授权",
+                required,
+                granted_capability=granted,
+                identity=identity,
+                grant_id=str(grant.id),
+                workspace_id=str(grant.workspace_id or ""),
+                execution_profile=profile_id or "restricted",
+            )
+        if (
+            required is SandboxCapability.EXEC
+            and profile.execution_mode == "lease"
+            and not settings.get_bool(
+                "sandbox.session_execution_allowed",
+                False,
+            )
+        ):
+            return SandboxAccessDecision(
+                False,
+                "sandbox_not_enabled",
+                "会话型 Sandbox 执行硬上限未允许",
+                required,
+                granted_capability=granted,
+                identity=identity,
+                grant_id=str(grant.id),
+                workspace_id=str(grant.workspace_id or ""),
+                execution_profile=profile_id,
+            )
+        if (
+            required is SandboxCapability.EXEC
+            and profile.network_policy_id != "none"
+            and not settings.get_bool(
+                "sandbox.developer_network_allowed",
+                False,
+            )
+        ):
+            return SandboxAccessDecision(
+                False,
+                "sandbox_not_enabled",
+                "开发型 Sandbox 网络出口硬上限未允许",
+                required,
+                granted_capability=granted,
+                identity=identity,
+                grant_id=str(grant.id),
+                workspace_id=str(grant.workspace_id or ""),
+                execution_profile=profile_id,
+            )
+        if (
+            tool_name in LEASE_PROCESS_TOOL_NAMES
+            and profile.execution_mode != "lease"
+        ):
+            return SandboxAccessDecision(
+                False,
+                "authorization_failed",
+                "当前 Sandbox Profile 不支持 Lease 进程控制",
+                required,
+                granted_capability=granted,
+                identity=identity,
+                grant_id=str(grant.id),
+                workspace_id=str(grant.workspace_id or ""),
+                execution_profile=profile_id,
+            )
+        if (
+            tool_name == "sandbox_write_stdin"
+            and not profile.allow_stdin
+        ):
+            return SandboxAccessDecision(
+                False,
+                "authorization_failed",
+                "当前 Sandbox Profile 不支持 stdin",
+                required,
+                granted_capability=granted,
+                identity=identity,
+                grant_id=str(grant.id),
+                workspace_id=str(grant.workspace_id or ""),
+                execution_profile=profile_id,
+            )
         workspace_id = str(grant.workspace_id or "")
         workspace = self.repository.get_workspace(workspace_id)
         binding = self.repository.get_quota_binding(workspace_id)
+        runtime_binding = (
+            self.repository.get_runtime_quota_binding(workspace_id)
+            if required is SandboxCapability.EXEC
+            else None
+        )
+        maintenance = self.repository.get_maintenance_state(workspace_id)
         if (
             workspace is None
             or workspace.status != "active"
@@ -260,6 +352,29 @@ class SandboxAccessPolicy:
             != int(binding.desired_quota_bytes or 0)
             or int(workspace.quota_bytes or 0)
             != int(binding.applied_quota_bytes or 0)
+            or (
+                required is SandboxCapability.EXEC
+                and (
+                    runtime_binding is None
+                    or runtime_binding.status != "applied"
+                    or int(runtime_binding.applied_quota_bytes or 0)
+                    != int(runtime_binding.desired_quota_bytes or 0)
+                    or int(runtime_binding.applied_quota_bytes or 0)
+                    != int(profile.runtime_quota_bytes)
+                    or int(runtime_binding.generation or 0)
+                    != int(binding.generation or 0)
+                )
+            )
+            or (
+                maintenance is not None
+                and (
+                    maintenance.status != "ready"
+                    or int(maintenance.generation or 0)
+                    != int(binding.generation or 0)
+                    or int(maintenance.applied_quota_generation or 0)
+                    != int(binding.generation or 0)
+                )
+            )
         ):
             return SandboxAccessDecision(
                 False,
@@ -281,6 +396,9 @@ class SandboxAccessPolicy:
             grant_id=str(grant.id),
             workspace_id=workspace_id,
             quota_bytes=int(binding.applied_quota_bytes),
+            execution_profile=profile_id,
+            grant_version=int(grant.version),
+            quota_generation=int(binding.generation),
         )
 
 

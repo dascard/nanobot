@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Column,
@@ -19,6 +20,29 @@ from sqlalchemy import (
 )
 
 from core.db.base import Base
+
+
+SANDBOX_EXECUTION_PROFILES = frozenset({
+    "restricted",
+    "developer",
+    "trusted_developer",
+})
+SANDBOX_LEASE_NONTERMINAL_STATUSES = frozenset({
+    "provisioning",
+    "active",
+    "idle",
+    "stopping",
+})
+SANDBOX_LEASE_TERMINAL_STATUSES = frozenset({
+    "stopped",
+    "expired",
+    "destroyed",
+    "failed",
+})
+SANDBOX_LEASE_STATUSES = (
+    SANDBOX_LEASE_NONTERMINAL_STATUSES
+    | SANDBOX_LEASE_TERMINAL_STATUSES
+)
 
 
 class Workspace(Base):
@@ -68,9 +92,9 @@ class Workspace(Base):
         default="active",
         server_default=text("'active'"),
     )
-    quota_bytes = Column(Integer, nullable=False)
+    quota_bytes = Column(BigInteger, nullable=False)
     used_bytes = Column(
-        Integer,
+        BigInteger,
         nullable=False,
         default=0,
         server_default=text("0"),
@@ -100,7 +124,7 @@ class Asset(Base):
     )
 
     sha256 = Column(String(64), primary_key=True)
-    size_bytes = Column(Integer, nullable=False)
+    size_bytes = Column(BigInteger, nullable=False)
     media_type = Column(String(255), nullable=False, default="application/octet-stream")
     storage_key = Column(String(255), nullable=False, unique=True)
     created_at = Column(
@@ -151,14 +175,193 @@ class WorkspaceAsset(Base):
     )
 
 
+class SandboxLease(Base):
+    """可复用 Sandbox 容器的 Server 侧控制账本。"""
+
+    __tablename__ = "sandbox_leases"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ("
+            "'provisioning', 'active', 'idle', 'stopping', "
+            "'stopped', 'expired', 'destroyed', 'failed'"
+            ")",
+            name="ck_sandbox_lease_status",
+        ),
+        Index("ix_sandbox_lease_grant_id", "grant_id"),
+        Index(
+            "ix_sandbox_lease_workspace_status",
+            "workspace_id",
+            "status",
+        ),
+        Index(
+            "ix_sandbox_lease_status_expiry",
+            "status",
+            "idle_expires_at",
+            "max_expires_at",
+        ),
+        Index(
+            "uq_sandbox_lease_key_current",
+            "lease_key",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('provisioning', 'active', 'idle', 'stopping')"
+            ),
+            postgresql_where=text(
+                "status IN ('provisioning', 'active', 'idle', 'stopping')"
+            ),
+        ),
+    )
+
+    lease_id = Column(String(64), primary_key=True)
+    lease_key = Column(String(64), nullable=False)
+    grant_id = Column(
+        String(36),
+        ForeignKey("sandbox_access_grants.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    chat_stream_id = Column(String(512), nullable=False)
+    workspace_id = Column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    profile_id = Column(String(32), nullable=False)
+    catalog_generation = Column(String(64), nullable=False)
+    policy_sha256 = Column(String(64), nullable=False)
+    status = Column(
+        String(16),
+        nullable=False,
+        default="provisioning",
+        server_default=text("'provisioning'"),
+    )
+    image_digest = Column(
+        String(255),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    controller_epoch = Column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    last_active_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    idle_expires_at = Column(DateTime, nullable=True)
+    max_expires_at = Column(DateTime, nullable=True)
+    stopped_at = Column(DateTime, nullable=True)
+    reconciled_at = Column(DateTime, nullable=True)
+    last_error_code = Column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    last_error_summary = Column(
+        String(255),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+
+
+class SandboxControllerState(Base):
+    """Server 侧 sandboxd epoch 与周期 reconciler leader fencing。"""
+
+    __tablename__ = "sandbox_controller_states"
+    __table_args__ = (
+        CheckConstraint(
+            "state_key = 'sandboxd'",
+            name="ck_sandbox_controller_state_key",
+        ),
+    )
+
+    state_key = Column(
+        String(32),
+        primary_key=True,
+        default="sandboxd",
+        server_default=text("'sandboxd'"),
+    )
+    controller_epoch = Column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    leader_owner = Column(
+        String(128),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    leader_token = Column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    leader_expires_at = Column(DateTime, nullable=True)
+    reconciled_at = Column(DateTime, nullable=True)
+    last_error_code = Column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    last_error_summary = Column(
+        String(255),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
 class SandboxRun(Base):
-    """一次性 Sandbox 容器的运行账本。"""
+    """Sandbox 命令的运行账本；不持久化命令和输出正文。"""
 
     __tablename__ = "sandbox_runs"
     __table_args__ = (
         CheckConstraint(
             "status IN ('pending', 'running', 'completed', 'failed', 'cancelled')",
             name="ck_sandbox_run_status",
+        ),
+        CheckConstraint(
+            "profile_id IN ('restricted', 'developer', 'trusted_developer')",
+            name="ck_sandbox_run_profile",
+        ),
+        CheckConstraint(
+            "execution_mode IN ('oneshot', 'lease')",
+            name="ck_sandbox_run_execution_mode",
+        ),
+        CheckConstraint(
+            "process_state IN ("
+            "'not_applicable', 'starting', 'running', 'exited', 'lost'"
+            ")",
+            name="ck_sandbox_run_process_state",
         ),
         CheckConstraint("cpu_time_ms >= 0", name="ck_sandbox_run_cpu_nonnegative"),
         CheckConstraint(
@@ -180,6 +383,30 @@ class SandboxRun(Base):
         ForeignKey("workspaces.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    lease_id = Column(
+        String(64),
+        ForeignKey("sandbox_leases.lease_id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    profile_id = Column(
+        String(32),
+        nullable=False,
+        default="restricted",
+        server_default=text("'restricted'"),
+    )
+    execution_mode = Column(
+        String(16),
+        nullable=False,
+        default="oneshot",
+        server_default=text("'oneshot'"),
+    )
+    process_state = Column(
+        String(16),
+        nullable=False,
+        default="not_applicable",
+        server_default=text("'not_applicable'"),
+    )
     trace_id = Column(String(64), nullable=False, default="", index=True)
     agent_run_id = Column(String(64), nullable=False, default="", index=True)
     tool_call_id = Column(String(64), nullable=False, default="", index=True)
@@ -193,9 +420,9 @@ class SandboxRun(Base):
     exit_code = Column(Integer, nullable=True)
     termination_reason = Column(String(64), nullable=False, default="")
     cpu_time_ms = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    peak_memory_bytes = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    stdout_bytes = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    stderr_bytes = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    peak_memory_bytes = Column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    stdout_bytes = Column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    stderr_bytes = Column(BigInteger, nullable=False, default=0, server_default=text("0"))
     stdout_truncated = Column(
         Boolean,
         nullable=False,
@@ -210,6 +437,7 @@ class SandboxRun(Base):
     )
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
     created_at = Column(
         DateTime,
         nullable=False,
@@ -237,6 +465,11 @@ class SandboxAccessGrant(Base):
         CheckConstraint(
             "capability_level IN ('off', 'workspace', 'assets', 'exec')",
             name="ck_sandbox_access_grant_capability",
+        ),
+        CheckConstraint(
+            "execution_profile IN "
+            "('restricted', 'developer', 'trusted_developer')",
+            name="ck_sandbox_access_grant_execution_profile",
         ),
         CheckConstraint(
             "status IN ('provisioning', 'active', 'disabled', 'error')",
@@ -272,6 +505,12 @@ class SandboxAccessGrant(Base):
         nullable=False,
         default="off",
         server_default=text("'off'"),
+    )
+    execution_profile = Column(
+        String(32),
+        nullable=False,
+        default="restricted",
+        server_default=text("'restricted'"),
     )
     status = Column(
         String(16),
@@ -325,9 +564,9 @@ class WorkspaceQuotaBinding(Base):
         primary_key=True,
     )
     project_id = Column(Integer, nullable=False, unique=True, index=True)
-    desired_quota_bytes = Column(Integer, nullable=False)
+    desired_quota_bytes = Column(BigInteger, nullable=False)
     applied_quota_bytes = Column(
-        Integer,
+        BigInteger,
         nullable=False,
         default=0,
         server_default=text("0"),
@@ -357,13 +596,158 @@ class WorkspaceQuotaBinding(Base):
     )
 
 
+class WorkspaceRuntimeQuotaBinding(Base):
+    """Workspace 的可重建 Runtime 与独立宿主 project quota 绑定。"""
+
+    __tablename__ = "workspace_runtime_quota_bindings"
+    __table_args__ = (
+        CheckConstraint(
+            "project_id >= 10000",
+            name="ck_workspace_runtime_quota_project_id",
+        ),
+        CheckConstraint(
+            "desired_quota_bytes > 0",
+            name="ck_workspace_runtime_quota_desired_positive",
+        ),
+        CheckConstraint(
+            "applied_quota_bytes >= 0",
+            name="ck_workspace_runtime_quota_applied_nonnegative",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'applying', 'applied', 'error')",
+            name="ck_workspace_runtime_quota_status",
+        ),
+        CheckConstraint(
+            "generation >= 1",
+            name="ck_workspace_runtime_quota_generation",
+        ),
+    )
+
+    workspace_id = Column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    project_id = Column(Integer, nullable=False, unique=True, index=True)
+    desired_quota_bytes = Column(BigInteger, nullable=False)
+    applied_quota_bytes = Column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    status = Column(
+        String(16),
+        nullable=False,
+        default="pending",
+        server_default=text("'pending'"),
+    )
+    generation = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    last_error_code = Column(String(64), nullable=False, default="", server_default=text("''"))
+    last_error_summary = Column(String(255), nullable=False, default="", server_default=text("''"))
+    last_applied_at = Column(DateTime, nullable=True)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class WorkspaceMaintenanceState(Base):
+    """Workspace 配额维护门禁、fencing 与已应用代际。"""
+
+    __tablename__ = "workspace_maintenance_states"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('ready', 'quiescing', 'error')",
+            name="ck_workspace_maintenance_status",
+        ),
+        CheckConstraint(
+            "generation >= 1",
+            name="ck_workspace_maintenance_generation",
+        ),
+        CheckConstraint(
+            "applied_quota_generation >= 0",
+            name="ck_workspace_maintenance_applied_generation",
+        ),
+    )
+
+    workspace_id = Column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    status = Column(
+        String(16),
+        nullable=False,
+        default="quiescing",
+        server_default=text("'quiescing'"),
+    )
+    generation = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    applied_quota_generation = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    locked_by = Column(
+        String(128),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    fencing_token = Column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    lease_expires_at = Column(DateTime, nullable=True)
+    last_error_code = Column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    last_error_summary = Column(
+        String(255),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
 class SandboxAdminOperation(Base):
     """跨数据库与 sandboxd 的可恢复管理操作账本。"""
 
     __tablename__ = "sandbox_admin_operations"
     __table_args__ = (
         CheckConstraint(
-            "operation_type IN ('set_access', 'set_quota', 'bind_workspace', 'import_quota')",
+            "operation_type IN ("
+            "'set_access', 'set_quota', 'bind_workspace', 'import_quota', "
+            "'lease_stop', 'lease_destroy', 'lease_recreate', 'kill_switch'"
+            ")",
             name="ck_sandbox_admin_operation_type",
         ),
         CheckConstraint(
@@ -405,7 +789,7 @@ class SandboxAdminOperation(Base):
     )
     desired_capability = Column(String(16), nullable=False, default="", server_default=text("''"))
     previous_capability = Column(String(16), nullable=False, default="", server_default=text("''"))
-    desired_quota_bytes = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    desired_quota_bytes = Column(BigInteger, nullable=False, default=0, server_default=text("0"))
     expected_grant_version = Column(Integer, nullable=True)
     expected_quota_generation = Column(Integer, nullable=True)
     status = Column(
@@ -463,11 +847,19 @@ class SandboxProjectSequence(Base):
 
 __all__ = [
     "Asset",
+    "SANDBOX_EXECUTION_PROFILES",
+    "SANDBOX_LEASE_NONTERMINAL_STATUSES",
+    "SANDBOX_LEASE_STATUSES",
+    "SANDBOX_LEASE_TERMINAL_STATUSES",
     "SandboxAccessGrant",
     "SandboxAdminOperation",
+    "SandboxControllerState",
+    "SandboxLease",
     "SandboxProjectSequence",
     "SandboxRun",
     "Workspace",
     "WorkspaceAsset",
+    "WorkspaceMaintenanceState",
     "WorkspaceQuotaBinding",
+    "WorkspaceRuntimeQuotaBinding",
 ]

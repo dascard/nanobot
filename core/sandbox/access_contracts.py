@@ -9,7 +9,7 @@ from core.chat_stream_identity import ChatStreamIdentity
 
 
 class SandboxCapability(IntEnum):
-    """能力等级只允许单向包含，避免七个工具各自维护授权列表。"""
+    """能力等级只允许单向包含，避免 Sandbox 工具各自维护授权列表。"""
 
     OFF = 0
     WORKSPACE = 1
@@ -45,10 +45,20 @@ TOOL_REQUIRED_CAPABILITY: dict[str, SandboxCapability] = {
     "workspace_read": SandboxCapability.WORKSPACE,
     "workspace_search": SandboxCapability.WORKSPACE,
     "workspace_write": SandboxCapability.WORKSPACE,
+    "workspace_apply_patch": SandboxCapability.WORKSPACE,
     "asset_import": SandboxCapability.ASSETS,
     "asset_publish": SandboxCapability.ASSETS,
     "sandbox_exec": SandboxCapability.EXEC,
+    "sandbox_poll": SandboxCapability.EXEC,
+    "sandbox_write_stdin": SandboxCapability.EXEC,
+    "sandbox_terminate": SandboxCapability.EXEC,
 }
+
+LEASE_PROCESS_TOOL_NAMES = frozenset({
+    "sandbox_poll",
+    "sandbox_write_stdin",
+    "sandbox_terminate",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,10 +74,14 @@ class SandboxAccessDecision:
     grant_id: str = ""
     workspace_id: str = ""
     quota_bytes: int = 0
+    execution_profile: str = "restricted"
+    grant_version: int = 0
+    quota_generation: int = 0
 
 
 __all__ = [
     "SandboxAccessDecision",
     "SandboxCapability",
+    "LEASE_PROCESS_TOOL_NAMES",
     "TOOL_REQUIRED_CAPABILITY",
 ]

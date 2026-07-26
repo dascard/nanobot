@@ -427,8 +427,9 @@ class SafeWorkspaceFilesystem:
         *,
         size_bytes: int,
         max_bytes: int,
+        overwrite: bool = False,
     ) -> WrittenFile:
-        """把已安全打开的普通文件流式复制到新的相对路径。"""
+        """把已安全打开的普通文件流式复制到相对路径。"""
 
         if size_bytes < 0 or size_bytes > max_bytes:
             raise SandboxServiceError(
@@ -440,6 +441,22 @@ class SafeWorkspaceFilesystem:
             name,
             components,
         ):
+            previous_size = 0
+            try:
+                previous = os.stat(
+                    name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                previous = None
+            except OSError as exc:
+                raise _map_os_error(exc) from exc
+            if previous is not None:
+                if not stat.S_ISREG(previous.st_mode) or not overwrite:
+                    raise _invalid_path()
+                previous_size = int(previous.st_size)
+
             temp_name = f".nanobot-copy-{uuid4().hex}.tmp"
             temp_created = False
             copied = 0
@@ -476,15 +493,24 @@ class SafeWorkspaceFilesystem:
                     os.fchmod(temp_fd, 0o400)
                 finally:
                     os.close(temp_fd)
-                os.link(
-                    temp_name,
-                    name,
-                    src_dir_fd=parent_fd,
-                    dst_dir_fd=parent_fd,
-                    follow_symlinks=False,
-                )
-                os.unlink(temp_name, dir_fd=parent_fd)
-                temp_created = False
+                if overwrite:
+                    os.replace(
+                        temp_name,
+                        name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                    temp_created = False
+                else:
+                    os.link(
+                        temp_name,
+                        name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                    os.unlink(temp_name, dir_fd=parent_fd)
+                    temp_created = False
                 os.fsync(parent_fd)
             except SandboxServiceError:
                 raise
@@ -499,5 +525,5 @@ class SafeWorkspaceFilesystem:
         return WrittenFile(
             path="/".join(components),
             size_bytes=copied,
-            previous_size_bytes=0,
+            previous_size_bytes=previous_size,
         )

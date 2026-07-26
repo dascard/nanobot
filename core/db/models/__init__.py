@@ -80,13 +80,21 @@ from core.db.models.semantic import (
 )
 from core.db.models.sandbox import (
     Asset,
+    SANDBOX_EXECUTION_PROFILES,
+    SANDBOX_LEASE_NONTERMINAL_STATUSES,
+    SANDBOX_LEASE_STATUSES,
+    SANDBOX_LEASE_TERMINAL_STATUSES,
     SandboxAccessGrant,
     SandboxAdminOperation,
+    SandboxControllerState,
+    SandboxLease,
     SandboxProjectSequence,
     SandboxRun,
     Workspace,
     WorkspaceAsset,
+    WorkspaceMaintenanceState,
     WorkspaceQuotaBinding,
+    WorkspaceRuntimeQuotaBinding,
 )
 
 __all__ = [
@@ -139,6 +147,10 @@ __all__ = [
     "ReplyEvalResult",
     "ReplyEvalRun",
     "RuntimeToolDecision",
+    "SANDBOX_EXECUTION_PROFILES",
+    "SANDBOX_LEASE_NONTERMINAL_STATUSES",
+    "SANDBOX_LEASE_STATUSES",
+    "SANDBOX_LEASE_TERMINAL_STATUSES",
     "SemanticIndexItem",
     "SemanticIndexJob",
     "SensitiveData",
@@ -147,6 +159,8 @@ __all__ = [
     "ScheduledTask",
     "SandboxAccessGrant",
     "SandboxAdminOperation",
+    "SandboxControllerState",
+    "SandboxLease",
     "SandboxProjectSequence",
     "SandboxRun",
     "StickerDuplicateCandidate",
@@ -160,5 +174,7 @@ __all__ = [
     "WebSearchProviderUsage",
     "Workspace",
     "WorkspaceAsset",
+    "WorkspaceMaintenanceState",
     "WorkspaceQuotaBinding",
+    "WorkspaceRuntimeQuotaBinding",
 ]

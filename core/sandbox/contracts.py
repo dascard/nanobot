@@ -13,6 +13,7 @@ class SandboxErrorCode(str, Enum):
     INVALID_PATH = "invalid_path"
     UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
     WORKSPACE_QUOTA_EXCEEDED = "workspace_quota_exceeded"
+    RUNTIME_QUOTA_EXCEEDED = "runtime_quota_exceeded"
     DISK_PRESSURE = "disk_pressure"
     SANDBOX_BUSY = "sandbox_busy"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"

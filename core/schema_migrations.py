@@ -61,6 +61,18 @@ _GROUP_LEARNING_STAGE7D_LEGACY_READ_ONLY_VERSION = (
 _ADMIN_IDEMPOTENCY_RECORDS_VERSION = (
     "20260724_admin_idempotency_records"
 )
+_SANDBOX_EXECUTION_PROFILES_AND_LEASES_VERSION = (
+    "20260725_sandbox_execution_profiles_and_leases"
+)
+_SANDBOX_RUNTIME_PROJECT_QUOTAS_VERSION = (
+    "20260725_sandbox_runtime_project_quotas"
+)
+_SANDBOX_LEASE_CONTROLLER_STATE_VERSION = (
+    "20260725_sandbox_lease_controller_state"
+)
+_SANDBOX_WORKSPACE_QUOTA_MAINTENANCE_VERSION = (
+    "20260725_sandbox_workspace_quota_maintenance"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -2298,8 +2310,8 @@ def _sandbox_storage_tables(conn: Any, engine: Any, db_path: str | None) -> None
         "owner_id VARCHAR(255) NOT NULL, "
         "name VARCHAR(64) NOT NULL DEFAULT 'default', "
         "status VARCHAR(16) NOT NULL DEFAULT 'active', "
-        "quota_bytes INTEGER NOT NULL, "
-        "used_bytes INTEGER NOT NULL DEFAULT 0, "
+        "quota_bytes BIGINT NOT NULL, "
+        "used_bytes BIGINT NOT NULL DEFAULT 0, "
         "last_accessed_at DATETIME, "
         "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
         "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
@@ -2316,7 +2328,7 @@ def _sandbox_storage_tables(conn: Any, engine: Any, db_path: str | None) -> None
     conn.execute(text(
         "CREATE TABLE IF NOT EXISTS assets ("
         "sha256 VARCHAR(64) PRIMARY KEY, "
-        "size_bytes INTEGER NOT NULL, "
+        "size_bytes BIGINT NOT NULL, "
         "media_type VARCHAR(255) NOT NULL DEFAULT 'application/octet-stream', "
         "storage_key VARCHAR(255) NOT NULL UNIQUE, "
         "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
@@ -2345,6 +2357,10 @@ def _sandbox_storage_tables(conn: Any, engine: Any, db_path: str | None) -> None
         "run_id VARCHAR(64) PRIMARY KEY, "
         "request_id VARCHAR(64) NOT NULL UNIQUE, "
         "workspace_id VARCHAR(36) NOT NULL, "
+        "lease_id VARCHAR(64), "
+        "profile_id VARCHAR(32) NOT NULL DEFAULT 'restricted', "
+        "execution_mode VARCHAR(16) NOT NULL DEFAULT 'oneshot', "
+        "process_state VARCHAR(16) NOT NULL DEFAULT 'not_applicable', "
         "trace_id VARCHAR(64) NOT NULL DEFAULT '', "
         "agent_run_id VARCHAR(64) NOT NULL DEFAULT '', "
         "tool_call_id VARCHAR(64) NOT NULL DEFAULT '', "
@@ -2353,19 +2369,27 @@ def _sandbox_storage_tables(conn: Any, engine: Any, db_path: str | None) -> None
         "exit_code INTEGER, "
         "termination_reason VARCHAR(64) NOT NULL DEFAULT '', "
         "cpu_time_ms INTEGER NOT NULL DEFAULT 0, "
-        "peak_memory_bytes INTEGER NOT NULL DEFAULT 0, "
-        "stdout_bytes INTEGER NOT NULL DEFAULT 0, "
-        "stderr_bytes INTEGER NOT NULL DEFAULT 0, "
+        "peak_memory_bytes BIGINT NOT NULL DEFAULT 0, "
+        "stdout_bytes BIGINT NOT NULL DEFAULT 0, "
+        "stderr_bytes BIGINT NOT NULL DEFAULT 0, "
         "stdout_truncated BOOLEAN NOT NULL DEFAULT 0, "
         "stderr_truncated BOOLEAN NOT NULL DEFAULT 0, "
         "started_at DATETIME, "
         "finished_at DATETIME, "
+        "last_seen_at DATETIME, "
         "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
         "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
         "CONSTRAINT fk_sandbox_run_workspace "
         "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT, "
         "CONSTRAINT ck_sandbox_run_status "
         "CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')), "
+        "CONSTRAINT ck_sandbox_run_profile "
+        "CHECK (profile_id IN ('restricted', 'developer', 'trusted_developer')), "
+        "CONSTRAINT ck_sandbox_run_execution_mode "
+        "CHECK (execution_mode IN ('oneshot', 'lease')), "
+        "CONSTRAINT ck_sandbox_run_process_state "
+        "CHECK (process_state IN "
+        "('not_applicable', 'starting', 'running', 'exited', 'lost')), "
         "CONSTRAINT ck_sandbox_run_cpu_nonnegative CHECK (cpu_time_ms >= 0), "
         "CONSTRAINT ck_sandbox_run_memory_nonnegative CHECK (peak_memory_bytes >= 0), "
         "CONSTRAINT ck_sandbox_run_output_nonnegative "
@@ -2387,6 +2411,8 @@ def _sandbox_storage_tables(conn: Any, engine: Any, db_path: str | None) -> None
         "ON sandbox_runs(agent_run_id)",
         "CREATE INDEX IF NOT EXISTS ix_sandbox_runs_tool_call_id "
         "ON sandbox_runs(tool_call_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_runs_lease_id "
+        "ON sandbox_runs(lease_id)",
         "CREATE INDEX IF NOT EXISTS ix_sandbox_run_workspace_created "
         "ON sandbox_runs(workspace_id, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_sandbox_run_status_created "
@@ -2410,6 +2436,7 @@ def _sandbox_control_plane_tables(
         "external_session_id VARCHAR(255) NOT NULL, "
         "workspace_id VARCHAR(36), "
         "capability_level VARCHAR(16) NOT NULL DEFAULT 'off', "
+        "execution_profile VARCHAR(32) NOT NULL DEFAULT 'restricted', "
         "status VARCHAR(16) NOT NULL DEFAULT 'disabled', "
         "version INTEGER NOT NULL DEFAULT 1, "
         "reason TEXT NOT NULL DEFAULT '', "
@@ -2423,6 +2450,9 @@ def _sandbox_control_plane_tables(
         "CHECK (chat_type IN ('private', 'group')), "
         "CONSTRAINT ck_sandbox_access_grant_capability "
         "CHECK (capability_level IN ('off', 'workspace', 'assets', 'exec')), "
+        "CONSTRAINT ck_sandbox_access_grant_execution_profile "
+        "CHECK (execution_profile IN "
+        "('restricted', 'developer', 'trusted_developer')), "
         "CONSTRAINT ck_sandbox_access_grant_status "
         "CHECK (status IN ('provisioning', 'active', 'disabled', 'error')), "
         "CONSTRAINT ck_sandbox_access_grant_version CHECK (version >= 1), "
@@ -2434,8 +2464,8 @@ def _sandbox_control_plane_tables(
         "CREATE TABLE IF NOT EXISTS workspace_quota_bindings ("
         "workspace_id VARCHAR(36) PRIMARY KEY, "
         "project_id INTEGER NOT NULL UNIQUE, "
-        "desired_quota_bytes INTEGER NOT NULL, "
-        "applied_quota_bytes INTEGER NOT NULL DEFAULT 0, "
+        "desired_quota_bytes BIGINT NOT NULL, "
+        "applied_quota_bytes BIGINT NOT NULL DEFAULT 0, "
         "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
         "generation INTEGER NOT NULL DEFAULT 1, "
         "last_error_code VARCHAR(64) NOT NULL DEFAULT '', "
@@ -2464,7 +2494,7 @@ def _sandbox_control_plane_tables(
         "workspace_id VARCHAR(36), "
         "desired_capability VARCHAR(16) NOT NULL DEFAULT '', "
         "previous_capability VARCHAR(16) NOT NULL DEFAULT '', "
-        "desired_quota_bytes INTEGER NOT NULL DEFAULT 0, "
+        "desired_quota_bytes BIGINT NOT NULL DEFAULT 0, "
         "expected_grant_version INTEGER, "
         "expected_quota_generation INTEGER, "
         "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
@@ -2487,7 +2517,8 @@ def _sandbox_control_plane_tables(
         "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT, "
         "CONSTRAINT ck_sandbox_admin_operation_type "
         "CHECK (operation_type IN "
-        "('set_access', 'set_quota', 'bind_workspace', 'import_quota')), "
+        "('set_access', 'set_quota', 'bind_workspace', 'import_quota', "
+        "'lease_stop', 'lease_destroy', 'lease_recreate', 'kill_switch')), "
         "CONSTRAINT ck_sandbox_admin_operation_status "
         "CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')), "
         "CONSTRAINT ck_sandbox_admin_desired_capability "
@@ -2545,6 +2576,535 @@ def _sandbox_project_sequence_seed(
         ),
         {"name": "workspace", "next_value": 10000},
     )
+
+
+_SANDBOX_ADMIN_OPERATION_COLUMNS = (
+    "operation_id",
+    "request_id",
+    "operation_type",
+    "chat_stream_id",
+    "workspace_id",
+    "desired_capability",
+    "previous_capability",
+    "desired_quota_bytes",
+    "expected_grant_version",
+    "expected_quota_generation",
+    "status",
+    "step",
+    "attempt_count",
+    "max_attempts",
+    "locked_by",
+    "lease_token",
+    "lease_expires_at",
+    "next_attempt_at",
+    "error_code",
+    "error_summary",
+    "reason",
+    "created_by",
+    "started_at",
+    "finished_at",
+    "created_at",
+    "updated_at",
+)
+_SANDBOX_ADMIN_OPERATION_TYPES = (
+    "set_access",
+    "set_quota",
+    "bind_workspace",
+    "import_quota",
+    "lease_stop",
+    "lease_destroy",
+    "lease_recreate",
+    "kill_switch",
+)
+
+
+def _sandbox_admin_operations_support_lease_types(conn: Any) -> bool:
+    if "sandbox_admin_operations" not in _table_names(conn):
+        return False
+    if str(getattr(conn.dialect, "name", "")) == "sqlite":
+        ddl = conn.execute(text(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'sandbox_admin_operations'"
+        )).scalar_one_or_none()
+        definitions = [ddl] if isinstance(ddl, str) else []
+    else:
+        definitions = [
+            str(constraint.get("sqltext") or "")
+            for constraint in inspect(conn).get_check_constraints(
+                "sandbox_admin_operations"
+            )
+        ]
+    normalized = " ".join(definitions).casefold()
+    return all(
+        f"'{operation_type}'" in normalized
+        for operation_type in _SANDBOX_ADMIN_OPERATION_TYPES
+    )
+
+
+def _rebuild_sandbox_admin_operations(conn: Any) -> None:
+    """重建旧管理操作表，使升级库与新库拥有同一 CHECK。"""
+
+    if _sandbox_admin_operations_support_lease_types(conn):
+        return
+    required_columns = set(_SANDBOX_ADMIN_OPERATION_COLUMNS)
+    actual_columns = _columns(conn, "sandbox_admin_operations")
+    missing_columns = sorted(required_columns - actual_columns)
+    if missing_columns:
+        raise SchemaMigrationValidationError(
+            "sandbox_admin_operations 缺少重建所需列："
+            f"{missing_columns}"
+        )
+    temporary_table = "sandbox_admin_operations__lease_migration"
+    if temporary_table in _table_names(conn):
+        raise SchemaMigrationValidationError(
+            f"迁移临时表已存在：{temporary_table}"
+        )
+
+    selected_columns = ", ".join(_SANDBOX_ADMIN_OPERATION_COLUMNS)
+    source_rows = [
+        tuple(row)
+        for row in conn.execute(text(
+            f"SELECT {selected_columns} FROM sandbox_admin_operations "
+            "ORDER BY operation_id"
+        )).fetchall()
+    ]
+    conn.execute(text(
+        f"CREATE TABLE {temporary_table} ("
+        "operation_id VARCHAR(64) PRIMARY KEY, "
+        "request_id VARCHAR(64) NOT NULL UNIQUE, "
+        "operation_type VARCHAR(32) NOT NULL, "
+        "chat_stream_id VARCHAR(512) NOT NULL DEFAULT '', "
+        "workspace_id VARCHAR(36), "
+        "desired_capability VARCHAR(16) NOT NULL DEFAULT '', "
+        "previous_capability VARCHAR(16) NOT NULL DEFAULT '', "
+        "desired_quota_bytes BIGINT NOT NULL DEFAULT 0, "
+        "expected_grant_version INTEGER, "
+        "expected_quota_generation INTEGER, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
+        "step VARCHAR(64) NOT NULL DEFAULT 'queued', "
+        "attempt_count INTEGER NOT NULL DEFAULT 0, "
+        "max_attempts INTEGER NOT NULL DEFAULT 5, "
+        "locked_by VARCHAR(128) NOT NULL DEFAULT '', "
+        "lease_token VARCHAR(64) NOT NULL DEFAULT '', "
+        "lease_expires_at DATETIME, "
+        "next_attempt_at DATETIME, "
+        "error_code VARCHAR(64) NOT NULL DEFAULT '', "
+        "error_summary VARCHAR(255) NOT NULL DEFAULT '', "
+        "reason VARCHAR(255) NOT NULL DEFAULT '', "
+        "created_by VARCHAR(128) NOT NULL DEFAULT '', "
+        "started_at DATETIME, "
+        "finished_at DATETIME, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT fk_sandbox_admin_operation_workspace "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT, "
+        "CONSTRAINT ck_sandbox_admin_operation_type "
+        "CHECK (operation_type IN "
+        "('set_access', 'set_quota', 'bind_workspace', 'import_quota', "
+        "'lease_stop', 'lease_destroy', 'lease_recreate', 'kill_switch')), "
+        "CONSTRAINT ck_sandbox_admin_operation_status "
+        "CHECK (status IN "
+        "('pending', 'running', 'succeeded', 'failed', 'cancelled')), "
+        "CONSTRAINT ck_sandbox_admin_desired_capability "
+        "CHECK (desired_capability IN "
+        "('', 'off', 'workspace', 'assets', 'exec')), "
+        "CONSTRAINT ck_sandbox_admin_previous_capability "
+        "CHECK (previous_capability IN "
+        "('', 'off', 'workspace', 'assets', 'exec')), "
+        "CONSTRAINT ck_sandbox_admin_desired_quota "
+        "CHECK (desired_quota_bytes >= 0), "
+        "CONSTRAINT ck_sandbox_admin_attempt_count "
+        "CHECK (attempt_count >= 0), "
+        "CONSTRAINT ck_sandbox_admin_max_attempts CHECK (max_attempts >= 1)"
+        ")"
+    ))
+    conn.execute(text(
+        f"INSERT INTO {temporary_table} ({selected_columns}) "
+        f"SELECT {selected_columns} FROM sandbox_admin_operations"
+    ))
+    copied_rows = [
+        tuple(row)
+        for row in conn.execute(text(
+            f"SELECT {selected_columns} FROM {temporary_table} "
+            "ORDER BY operation_id"
+        )).fetchall()
+    ]
+    if copied_rows != source_rows:
+        raise SchemaMigrationValidationError(
+            "sandbox_admin_operations 重建前后行数或关键字段不一致"
+        )
+
+    conn.execute(text("DROP TABLE sandbox_admin_operations"))
+    conn.execute(text(
+        f"ALTER TABLE {temporary_table} RENAME TO sandbox_admin_operations"
+    ))
+    _create_indexes(conn, [
+        "CREATE UNIQUE INDEX ix_sandbox_admin_operations_request_id "
+        "ON sandbox_admin_operations(request_id)",
+        "CREATE INDEX ix_sandbox_admin_operations_workspace_id "
+        "ON sandbox_admin_operations(workspace_id)",
+        "CREATE INDEX ix_sandbox_admin_operation_status_retry "
+        "ON sandbox_admin_operations(status, next_attempt_at)",
+        "CREATE INDEX ix_sandbox_admin_operation_session_created "
+        "ON sandbox_admin_operations(chat_stream_id, created_at)",
+    ])
+    if str(getattr(conn.dialect, "name", "")) == "sqlite":
+        violations = conn.execute(text(
+            "PRAGMA foreign_key_check(sandbox_admin_operations)"
+        )).fetchall()
+        if violations:
+            raise SchemaMigrationValidationError(
+                "sandbox_admin_operations 重建后外键校验失败"
+            )
+
+
+def _sandbox_execution_profiles_and_leases(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """增加执行 Profile、Lease 与可续接进程账本字段。"""
+
+    del engine, db_path
+    _add_missing_columns(
+        conn,
+        "sandbox_access_grants",
+        {
+            "execution_profile": (
+                "VARCHAR(32) NOT NULL DEFAULT 'restricted' "
+                "CHECK (execution_profile IN "
+                "('restricted', 'developer', 'trusted_developer'))"
+            ),
+        },
+    )
+    _add_missing_columns(
+        conn,
+        "sandbox_runs",
+        {
+            "lease_id": "VARCHAR(64)",
+            "profile_id": (
+                "VARCHAR(32) NOT NULL DEFAULT 'restricted' "
+                "CHECK (profile_id IN "
+                "('restricted', 'developer', 'trusted_developer'))"
+            ),
+            "execution_mode": (
+                "VARCHAR(16) NOT NULL DEFAULT 'oneshot' "
+                "CHECK (execution_mode IN ('oneshot', 'lease'))"
+            ),
+            "process_state": (
+                "VARCHAR(16) NOT NULL DEFAULT 'not_applicable' "
+                "CHECK (process_state IN "
+                "('not_applicable', 'starting', 'running', 'exited', 'lost'))"
+            ),
+            "last_seen_at": "DATETIME",
+        },
+    )
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS sandbox_leases ("
+        "lease_id VARCHAR(64) PRIMARY KEY, "
+        "lease_key VARCHAR(64) NOT NULL, "
+        "grant_id VARCHAR(36) NOT NULL, "
+        "chat_stream_id VARCHAR(512) NOT NULL, "
+        "workspace_id VARCHAR(36) NOT NULL, "
+        "profile_id VARCHAR(32) NOT NULL, "
+        "catalog_generation VARCHAR(64) NOT NULL, "
+        "policy_sha256 VARCHAR(64) NOT NULL, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'provisioning', "
+        "image_digest VARCHAR(255) NOT NULL DEFAULT '', "
+        "controller_epoch VARCHAR(64) NOT NULL DEFAULT '', "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "last_active_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "idle_expires_at DATETIME, "
+        "max_expires_at DATETIME, "
+        "stopped_at DATETIME, "
+        "reconciled_at DATETIME, "
+        "last_error_code VARCHAR(64) NOT NULL DEFAULT '', "
+        "last_error_summary VARCHAR(255) NOT NULL DEFAULT '', "
+        "CONSTRAINT fk_sandbox_lease_grant "
+        "FOREIGN KEY (grant_id) "
+        "REFERENCES sandbox_access_grants(id) ON DELETE RESTRICT, "
+        "CONSTRAINT fk_sandbox_lease_workspace "
+        "FOREIGN KEY (workspace_id) "
+        "REFERENCES workspaces(id) ON DELETE RESTRICT, "
+        "CONSTRAINT ck_sandbox_lease_status "
+        "CHECK (status IN "
+        "('provisioning', 'active', 'idle', 'stopping', "
+        "'stopped', 'expired', 'destroyed', 'failed'))"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_runs_lease_id "
+        "ON sandbox_runs(lease_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_lease_grant_id "
+        "ON sandbox_leases(grant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_lease_workspace_status "
+        "ON sandbox_leases(workspace_id, status)",
+        "CREATE INDEX IF NOT EXISTS ix_sandbox_lease_status_expiry "
+        "ON sandbox_leases(status, idle_expires_at, max_expires_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sandbox_lease_key_current "
+        "ON sandbox_leases(lease_key) "
+        "WHERE status IN ('provisioning', 'active', 'idle', 'stopping')",
+    ])
+    _rebuild_sandbox_admin_operations(conn)
+
+
+def _sandbox_execution_profiles_and_leases_needs_backup(conn: Any) -> bool:
+    """只有旧管理表确实需要重建时才要求文件 SQLite 快照。"""
+
+    return (
+        "sandbox_admin_operations" in _table_names(conn)
+        and not _sandbox_admin_operations_support_lease_types(conn)
+    )
+
+
+def _sandbox_runtime_project_quotas(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """为每个 Workspace 建立独立的 Runtime project quota 绑定。"""
+
+    del engine, db_path
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS workspace_runtime_quota_bindings ("
+        "workspace_id VARCHAR(36) PRIMARY KEY, "
+        "project_id INTEGER NOT NULL UNIQUE, "
+        "desired_quota_bytes BIGINT NOT NULL, "
+        "applied_quota_bytes BIGINT NOT NULL DEFAULT 0, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'pending', "
+        "generation INTEGER NOT NULL DEFAULT 1, "
+        "last_error_code VARCHAR(64) NOT NULL DEFAULT '', "
+        "last_error_summary VARCHAR(255) NOT NULL DEFAULT '', "
+        "last_applied_at DATETIME, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT fk_workspace_runtime_quota_binding_workspace "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE, "
+        "CONSTRAINT ck_workspace_runtime_quota_project_id "
+        "CHECK (project_id >= 10000), "
+        "CONSTRAINT ck_workspace_runtime_quota_desired_positive "
+        "CHECK (desired_quota_bytes > 0), "
+        "CONSTRAINT ck_workspace_runtime_quota_applied_nonnegative "
+        "CHECK (applied_quota_bytes >= 0), "
+        "CONSTRAINT ck_workspace_runtime_quota_status "
+        "CHECK (status IN ('pending', 'applying', 'applied', 'error')), "
+        "CONSTRAINT ck_workspace_runtime_quota_generation "
+        "CHECK (generation >= 1)"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "ix_workspace_runtime_quota_bindings_project_id "
+        "ON workspace_runtime_quota_bindings(project_id)",
+    ])
+
+    existing_workspace_projects = {
+        int(row[0])
+        for row in conn.execute(text(
+            "SELECT project_id FROM workspace_quota_bindings"
+        )).fetchall()
+    }
+    existing_runtime_projects = {
+        int(row[0])
+        for row in conn.execute(text(
+            "SELECT project_id FROM workspace_runtime_quota_bindings"
+        )).fetchall()
+    }
+    collisions = existing_workspace_projects & existing_runtime_projects
+    if collisions:
+        raise SchemaMigrationValidationError(
+            "Workspace 与 Runtime project ID 发生冲突："
+            f"{sorted(collisions)[:10]}"
+        )
+
+    sequence_value = conn.execute(text(
+        "SELECT next_value FROM sandbox_project_sequences "
+        "WHERE name = 'workspace'"
+    )).scalar_one_or_none()
+    next_project_id = max(
+        10000,
+        int(sequence_value or 10000),
+        max(existing_workspace_projects | existing_runtime_projects, default=9999) + 1,
+    )
+    profile_runtime_quotas = {
+        "restricted": 512 * 1024 * 1024,
+        "developer": 10 * 1024 * 1024 * 1024,
+        "trusted_developer": 10 * 1024 * 1024 * 1024,
+    }
+    profile_rows = conn.execute(text(
+        "SELECT workspace_id, execution_profile "
+        "FROM sandbox_access_grants "
+        "WHERE workspace_id IS NOT NULL"
+    )).fetchall()
+    profiles_by_workspace: dict[str, str] = {}
+    for workspace_id, profile_id in profile_rows:
+        normalized_workspace = str(workspace_id)
+        normalized_profile = str(profile_id or "restricted")
+        previous = profiles_by_workspace.get(normalized_workspace)
+        if (
+            previous is None
+            or profile_runtime_quotas.get(normalized_profile, 0)
+            > profile_runtime_quotas.get(previous, 0)
+        ):
+            profiles_by_workspace[normalized_workspace] = normalized_profile
+
+    bindings = conn.execute(text(
+        "SELECT workspace_id, generation "
+        "FROM workspace_quota_bindings "
+        "WHERE workspace_id NOT IN ("
+        "SELECT workspace_id FROM workspace_runtime_quota_bindings"
+        ") "
+        "ORDER BY workspace_id"
+    )).fetchall()
+    for workspace_id, generation in bindings:
+        if next_project_id > 2_147_483_647:
+            raise SchemaMigrationValidationError(
+                "Runtime project ID 已耗尽"
+            )
+        normalized_workspace = str(workspace_id)
+        profile_id = profiles_by_workspace.get(
+            normalized_workspace,
+            "restricted",
+        )
+        runtime_quota = profile_runtime_quotas.get(
+            profile_id,
+            profile_runtime_quotas["restricted"],
+        )
+        conn.execute(
+            text(
+                "INSERT INTO workspace_runtime_quota_bindings("
+                "workspace_id, project_id, desired_quota_bytes, "
+                "applied_quota_bytes, status, generation"
+                ") VALUES ("
+                ":workspace_id, :project_id, :desired_quota_bytes, "
+                "0, 'pending', :generation"
+                ")"
+            ),
+            {
+                "workspace_id": normalized_workspace,
+                "project_id": next_project_id,
+                "desired_quota_bytes": runtime_quota,
+                "generation": max(1, int(generation or 1)),
+            },
+        )
+        next_project_id += 1
+
+    conn.execute(
+        text(
+            "UPDATE sandbox_project_sequences "
+            "SET next_value = :next_value, updated_at = :updated_at "
+            "WHERE name = 'workspace' AND next_value < :next_value"
+        ),
+        {
+            "next_value": next_project_id,
+            "updated_at": db_now_naive(),
+        },
+    )
+
+
+def _sandbox_lease_controller_state(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """增加 sandboxd epoch 与 Server reconciler leader fencing 状态。"""
+
+    del engine, db_path
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS sandbox_controller_states ("
+        "state_key VARCHAR(32) PRIMARY KEY DEFAULT 'sandboxd', "
+        "controller_epoch VARCHAR(64) NOT NULL DEFAULT '', "
+        "leader_owner VARCHAR(128) NOT NULL DEFAULT '', "
+        "leader_token VARCHAR(64) NOT NULL DEFAULT '', "
+        "leader_expires_at DATETIME, "
+        "reconciled_at DATETIME, "
+        "last_error_code VARCHAR(64) NOT NULL DEFAULT '', "
+        "last_error_summary VARCHAR(255) NOT NULL DEFAULT '', "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT ck_sandbox_controller_state_key "
+        "CHECK (state_key = 'sandboxd')"
+        ")"
+    ))
+    conn.execute(text(
+        "INSERT INTO sandbox_controller_states(state_key) "
+        "SELECT 'sandboxd' "
+        "WHERE NOT EXISTS ("
+        "SELECT 1 FROM sandbox_controller_states "
+        "WHERE state_key = 'sandboxd'"
+        ")"
+    ))
+
+
+def _sandbox_workspace_quota_maintenance(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """增加 Workspace 定向配额维护门禁与已应用 generation。"""
+
+    del engine, db_path
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS workspace_maintenance_states ("
+        "workspace_id VARCHAR(36) PRIMARY KEY, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'quiescing', "
+        "generation INTEGER NOT NULL DEFAULT 1, "
+        "applied_quota_generation INTEGER NOT NULL DEFAULT 0, "
+        "locked_by VARCHAR(128) NOT NULL DEFAULT '', "
+        "fencing_token VARCHAR(64) NOT NULL DEFAULT '', "
+        "lease_expires_at DATETIME, "
+        "last_error_code VARCHAR(64) NOT NULL DEFAULT '', "
+        "last_error_summary VARCHAR(255) NOT NULL DEFAULT '', "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT fk_workspace_maintenance_state_workspace "
+        "FOREIGN KEY (workspace_id) "
+        "REFERENCES workspaces(id) ON DELETE CASCADE, "
+        "CONSTRAINT ck_workspace_maintenance_status "
+        "CHECK (status IN ('ready', 'quiescing', 'error')), "
+        "CONSTRAINT ck_workspace_maintenance_generation "
+        "CHECK (generation >= 1), "
+        "CONSTRAINT ck_workspace_maintenance_applied_generation "
+        "CHECK (applied_quota_generation >= 0)"
+        ")"
+    ))
+    # 回填只依据 Workspace 硬配额自身的一致性：存量 Workspace 的 Runtime
+    # binding 由本批迁移新建、恒为 pending，若计入条件则所有存量 Workspace
+    # 都落为 error，WORKSPACE 级能力在管理员逐个重发配额前全部被拒。
+    # EXEC 对 Runtime quota 的 fail-closed 门禁由 access_policy 独立承担。
+    conn.execute(text(
+        "INSERT INTO workspace_maintenance_states("
+        "workspace_id, status, generation, applied_quota_generation, "
+        "last_error_code, last_error_summary"
+        ") "
+        "SELECT workspace_binding.workspace_id, "
+        "CASE WHEN "
+        "workspace_binding.status = 'applied' "
+        "AND workspace_binding.desired_quota_bytes = "
+        "workspace_binding.applied_quota_bytes "
+        "THEN 'ready' ELSE 'error' END, "
+        "workspace_binding.generation, "
+        "CASE WHEN "
+        "workspace_binding.status = 'applied' "
+        "AND workspace_binding.desired_quota_bytes = "
+        "workspace_binding.applied_quota_bytes "
+        "THEN workspace_binding.generation ELSE 0 END, "
+        "CASE WHEN "
+        "workspace_binding.status = 'applied' "
+        "AND workspace_binding.desired_quota_bytes = "
+        "workspace_binding.applied_quota_bytes "
+        "THEN '' ELSE 'quota_maintenance_required' END, "
+        "CASE WHEN "
+        "workspace_binding.status = 'applied' "
+        "AND workspace_binding.desired_quota_bytes = "
+        "workspace_binding.applied_quota_bytes "
+        "THEN '' ELSE 'Workspace 硬配额需要重新验证' END "
+        "FROM workspace_quota_bindings AS workspace_binding "
+        "WHERE NOT EXISTS ("
+        "SELECT 1 FROM workspace_maintenance_states AS maintenance "
+        "WHERE maintenance.workspace_id = workspace_binding.workspace_id"
+        ")"
+    ))
 
 
 def _sandbox_tool_overrides_retired(
@@ -3034,6 +3594,26 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "admin mutation idempotency records",
         _admin_idempotency_records,
     ),
+    (
+        _SANDBOX_EXECUTION_PROFILES_AND_LEASES_VERSION,
+        "sandbox execution profiles and lease ledger",
+        _sandbox_execution_profiles_and_leases,
+    ),
+    (
+        _SANDBOX_RUNTIME_PROJECT_QUOTAS_VERSION,
+        "sandbox runtime project quota bindings",
+        _sandbox_runtime_project_quotas,
+    ),
+    (
+        _SANDBOX_LEASE_CONTROLLER_STATE_VERSION,
+        "sandbox lease controller epoch and reconciler fencing",
+        _sandbox_lease_controller_state,
+    ),
+    (
+        _SANDBOX_WORKSPACE_QUOTA_MAINTENANCE_VERSION,
+        "sandbox workspace quota maintenance fencing",
+        _sandbox_workspace_quota_maintenance,
+    ),
 ]
 
 
@@ -3077,6 +3657,11 @@ def _prepare_schema_migration_backup(
             conn
         )
     )
+    sandbox_lease_backup_needed = (
+        _SANDBOX_EXECUTION_PROFILES_AND_LEASES_VERSION
+        not in applied_before_transaction
+        and _sandbox_execution_profiles_and_leases_needs_backup(conn)
+    )
     drivername = str(getattr(getattr(engine, "url", None), "drivername", ""))
     if drivername.startswith("sqlite") and (
         chat_log_backup_needed
@@ -3086,6 +3671,7 @@ def _prepare_schema_migration_backup(
         or group_learning_stage7b_backup_needed
         or group_learning_stage7c_backup_needed
         or group_learning_stage7d_backup_needed
+        or sandbox_lease_backup_needed
     ):
         backup_path = _migration_backup_path(engine, db_path)
         if backup_path is not None:

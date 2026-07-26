@@ -27,6 +27,8 @@ class SandboxBackend(Protocol):
 
     def write_file(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
 
+    def apply_patch(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
+
     def publish_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
 
     def stage_assets(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
@@ -36,6 +38,80 @@ class SandboxBackend(Protocol):
     def cancel_run(self, run_id: str, *, request_id: str) -> dict[str, Any]: ...
 
     def get_run(self, run_id: str) -> dict[str, Any]: ...
+
+    def ensure_lease(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
+
+    def get_lease(self, lease_id: str) -> dict[str, Any]: ...
+
+    def sync_lease_assets(
+        self,
+        lease_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]: ...
+
+    def start_process(
+        self,
+        lease_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]: ...
+
+    def get_process(
+        self,
+        process_id: str,
+        *,
+        cursor: str = "",
+    ) -> dict[str, Any]: ...
+
+    def write_process_stdin(
+        self,
+        process_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]: ...
+
+    def terminate_process(
+        self,
+        process_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]: ...
+
+    def stop_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]: ...
+
+    def destroy_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]: ...
+
+    def recreate_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]: ...
+
+    def controller_state(self) -> dict[str, Any]: ...
+
+    def list_leases(self) -> dict[str, Any]: ...
+
+    def list_processes(self) -> dict[str, Any]: ...
+
+    def workspace_usage(self) -> dict[str, Any]: ...
+
+    def reconcile_leases(self, *, request_id: str) -> dict[str, Any]: ...
+
+    def terminate_all_leases(
+        self,
+        *,
+        request_id: str,
+        reason: str,
+    ) -> dict[str, Any]: ...
 
     def apply_workspace_quota(
         self,
@@ -93,6 +169,9 @@ class FakeSandboxBackend:
     def write_file(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._call("write_file", payload)
 
+    def apply_patch(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._call("apply_patch", payload)
+
     def publish_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._call("publish_asset", payload)
 
@@ -107,6 +186,121 @@ class FakeSandboxBackend:
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         return self._call("get_run", {"run_id": run_id})
+
+    def ensure_lease(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._call("ensure_lease", payload)
+
+    def get_lease(self, lease_id: str) -> dict[str, Any]:
+        return self._call("get_lease", {"lease_id": lease_id})
+
+    def sync_lease_assets(
+        self,
+        lease_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._call(
+            "sync_lease_assets",
+            {"lease_id": lease_id, **dict(payload)},
+        )
+
+    def start_process(
+        self,
+        lease_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._call(
+            "start_process",
+            {"lease_id": lease_id, **dict(payload)},
+        )
+
+    def get_process(
+        self,
+        process_id: str,
+        *,
+        cursor: str = "",
+    ) -> dict[str, Any]:
+        return self._call(
+            "get_process",
+            {"process_id": process_id, "cursor": cursor},
+        )
+
+    def write_process_stdin(
+        self,
+        process_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._call(
+            "write_process_stdin",
+            {"process_id": process_id, **dict(payload)},
+        )
+
+    def terminate_process(
+        self,
+        process_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._call(
+            "terminate_process",
+            {
+                "process_id": process_id,
+                "request_id": request_id,
+            },
+        )
+
+    def stop_lease(self, lease_id: str, *, request_id: str) -> dict[str, Any]:
+        return self._call(
+            "stop_lease",
+            {"lease_id": lease_id, "request_id": request_id},
+        )
+
+    def destroy_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._call(
+            "destroy_lease",
+            {"lease_id": lease_id, "request_id": request_id},
+        )
+
+    def recreate_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._call(
+            "recreate_lease",
+            {"lease_id": lease_id, "request_id": request_id},
+        )
+
+    def controller_state(self) -> dict[str, Any]:
+        return self._call("controller_state", {})
+
+    def list_leases(self) -> dict[str, Any]:
+        return self._call("list_leases", {})
+
+    def list_processes(self) -> dict[str, Any]:
+        return self._call("list_processes", {})
+
+    def workspace_usage(self) -> dict[str, Any]:
+        return self._call("workspace_usage", {})
+
+    def reconcile_leases(self, *, request_id: str) -> dict[str, Any]:
+        return self._call("reconcile_leases", {"request_id": request_id})
+
+    def terminate_all_leases(
+        self,
+        *,
+        request_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        return self._call(
+            "terminate_all_leases",
+            {"request_id": request_id, "reason": reason},
+        )
 
     def apply_workspace_quota(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._call("apply_workspace_quota", payload)

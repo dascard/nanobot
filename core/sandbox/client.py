@@ -8,6 +8,7 @@ import stat
 from collections.abc import AsyncIterable, Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -162,6 +163,13 @@ class HttpSandboxdBackend:
     def write_file(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/files/write", payload=payload)
 
+    def apply_patch(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/v1/files/apply-patch",
+            payload=payload,
+        )
+
     def publish_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/assets/publish", payload=payload)
 
@@ -189,6 +197,149 @@ class HttpSandboxdBackend:
     def get_run(self, run_id: str) -> dict[str, Any]:
         return self._request("GET", f"/v1/runs/{run_id}")
 
+    def ensure_lease(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        request_id = str(payload.get("request_id") or "")
+        return self._request(
+            "POST",
+            "/v1/leases/ensure",
+            payload=payload,
+            request_id=request_id or None,
+        )
+
+    def get_lease(self, lease_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/leases/{lease_id}")
+
+    def sync_lease_assets(
+        self,
+        lease_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        request_id = str(payload.get("request_id") or "")
+        return self._request(
+            "PUT",
+            f"/v1/leases/{lease_id}/assets",
+            payload=payload,
+            request_id=request_id or None,
+        )
+
+    def start_process(
+        self,
+        lease_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        request_id = str(payload.get("request_id") or "")
+        return self._request(
+            "POST",
+            f"/v1/leases/{lease_id}/processes",
+            payload=payload,
+            request_id=request_id or None,
+            run_request=True,
+        )
+
+    def get_process(
+        self,
+        process_id: str,
+        *,
+        cursor: str = "",
+    ) -> dict[str, Any]:
+        path = f"/v1/processes/{process_id}"
+        if cursor:
+            path = f"{path}?cursor={quote(str(cursor), safe='')}"
+        return self._request("GET", path)
+
+    def write_process_stdin(
+        self,
+        process_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        request_id = str(payload.get("request_id") or "")
+        return self._request(
+            "POST",
+            f"/v1/processes/{process_id}/stdin",
+            payload=payload,
+            request_id=request_id or None,
+        )
+
+    def terminate_process(
+        self,
+        process_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/v1/processes/{process_id}/terminate",
+            payload={"request_id": request_id},
+            request_id=request_id,
+        )
+
+    def stop_lease(self, lease_id: str, *, request_id: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/v1/leases/{lease_id}/stop",
+            payload={"request_id": request_id},
+            request_id=request_id,
+        )
+
+    def destroy_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "DELETE",
+            f"/v1/leases/{lease_id}",
+            payload={"request_id": request_id},
+            request_id=request_id,
+        )
+
+    def recreate_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/v1/admin/leases/{lease_id}/recreate",
+            payload={"request_id": request_id},
+            request_id=request_id,
+        )
+
+    def controller_state(self) -> dict[str, Any]:
+        return self._request("GET", "/v1/admin/controller-state")
+
+    def list_leases(self) -> dict[str, Any]:
+        return self._request("GET", "/v1/admin/leases")
+
+    def list_processes(self) -> dict[str, Any]:
+        return self._request("GET", "/v1/admin/processes")
+
+    def workspace_usage(self) -> dict[str, Any]:
+        return self._request("GET", "/v1/admin/workspace-usage")
+
+    def reconcile_leases(self, *, request_id: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/v1/admin/leases/reconcile",
+            payload={"request_id": request_id},
+            request_id=request_id,
+        )
+
+    def terminate_all_leases(
+        self,
+        *,
+        request_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/v1/admin/leases/terminate-all",
+            payload={"request_id": request_id, "reason": reason},
+            request_id=request_id,
+        )
+
     def apply_workspace_quota(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         request_id = str(payload.get("request_id") or "")
         return self._request(
@@ -212,6 +363,46 @@ class HttpSandboxdBackend:
 
 class HttpSandboxdAdminBackend(HttpSandboxdBackend):
     """只由持久化管理 runner 使用的 sandboxd 管理端口适配器。"""
+
+    def stop_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/v1/admin/leases/{lease_id}/stop",
+            payload={"request_id": request_id},
+            request_id=request_id,
+        )
+
+    def destroy_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "DELETE",
+            f"/v1/admin/leases/{lease_id}",
+            payload={"request_id": request_id},
+            request_id=request_id,
+        )
+
+    def recreate_lease(
+        self,
+        lease_id: str,
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/v1/admin/leases/{lease_id}/recreate",
+            payload={"request_id": request_id},
+            request_id=request_id,
+            run_request=True,
+        )
 
     def ensure_workspace(self, workspace_id: str, *, request_id: str) -> dict[str, Any]:
         return self._request(
