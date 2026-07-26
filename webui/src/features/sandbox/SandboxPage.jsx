@@ -20,6 +20,20 @@ const CAPABILITY_OPTIONS = [
   { value: 'assets', label: 'Assets', description: '包含 Workspace，并允许导入和发布资产' },
   { value: 'exec', label: 'Exec', description: '包含 Assets，并允许执行受限 Python / Shell' },
 ]
+const PROFILE_OPTIONS = [
+  {
+    value: 'restricted',
+    label: 'Restricted',
+    executionMode: 'oneshot',
+    description: '单次执行、默认断网、无 stdin，不保留后台进程。',
+  },
+  {
+    value: 'developer',
+    label: 'Developer',
+    executionMode: 'lease',
+    description: '复用 Lease，支持 stdin、长任务和固定域名白名单网络。',
+  },
+]
 
 function formatApiError(error, fallback = '请求失败') {
   const detail = error?.response?.data?.detail
@@ -63,10 +77,10 @@ function formatDate(value) {
 }
 
 function statusTone(value) {
-  if (['active', 'applied', 'succeeded', 'completed', 'ready'].includes(value)) return 'emerald'
-  if (['pending', 'running', 'provisioning', 'applying'].includes(value)) return 'amber'
-  if (['failed', 'error'].includes(value)) return 'red'
-  if (value === 'cancelled' || value === 'disabled' || value === 'off') return 'slate'
+  if (['active', 'applied', 'succeeded', 'completed', 'ready', 'exited'].includes(value)) return 'emerald'
+  if (['pending', 'running', 'provisioning', 'applying', 'starting'].includes(value)) return 'amber'
+  if (['failed', 'error', 'lost'].includes(value)) return 'red'
+  if (['cancelled', 'disabled', 'off', 'not_applicable', 'stopped', 'destroyed'].includes(value)) return 'slate'
   return 'blue'
 }
 
@@ -83,6 +97,7 @@ export function SandboxPage() {
     { key: 'overview', label: '概览' },
     { key: 'access', label: '访问授权' },
     { key: 'workspaces', label: 'Workspace' },
+    { key: 'leases', label: 'Lease' },
     { key: 'runs', label: '运行记录' },
     { key: 'operations', label: '操作与审计' },
   ]
@@ -91,6 +106,7 @@ export function SandboxPage() {
   const [sessions, setSessions] = useState([])
   const [grants, setGrants] = useState([])
   const [workspaces, setWorkspaces] = useState([])
+  const [leases, setLeases] = useState([])
   const [operations, setOperations] = useState([])
   const [auditLogs, setAuditLogs] = useState([])
   const [runs, setRuns] = useState([])
@@ -109,6 +125,7 @@ export function SandboxPage() {
       api.get('/sandbox/sessions', { params: { limit: 100 } }),
       api.get('/sandbox/access-grants'),
       api.get('/sandbox/workspaces'),
+      api.get('/sandbox/leases'),
       api.get('/sandbox/operations', { params: { limit: 100 } }),
       api.get('/sandbox/audit-logs', { params: { limit: 100 } }),
       api.get('/sandbox/runs', { params: { limit: 100 } }),
@@ -119,6 +136,7 @@ export function SandboxPage() {
       result => setSessions(result.items || []),
       result => setGrants(result.items || []),
       result => setWorkspaces(result.items || []),
+      result => setLeases(result.items || []),
       result => setOperations(result.items || []),
       result => setAuditLogs(result.items || []),
       result => setRuns(result.items || []),
@@ -269,6 +287,14 @@ export function SandboxPage() {
           setNotice={setNotice}
         />
       )}
+      {tab === 'leases' && (
+        <LeasesTab
+          leases={leases}
+          onChanged={() => loadAll({ silent: true })}
+          setError={setError}
+          setNotice={setNotice}
+        />
+      )}
       {tab === 'operations' && <OperationsTab operations={operations} auditLogs={auditLogs} />}
     </div>
   )
@@ -313,10 +339,16 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
     setSaving(true)
     setError('')
     try {
-      const response = await api.post('/sandbox/kill-switch', { reason: 'Web 管理员触发无损关闭' })
+      const response = await api.post('/sandbox/kill-switch', {
+        request_id: requestId('sbx_kill'),
+        reason: 'Web 管理员触发真实终止',
+      })
       setEnabledDraft(false)
       setExecEnabledDraft(false)
-      setNotice(`Sandbox 已关闭；数据已保留，当前活动运行 ${response.data.active_run_count || 0} 个。`)
+      setNotice(
+        `Sandbox 已关闭并确认终止 ${response.data.terminated_lease_count || 0} 个 Lease、`
+        + `${response.data.terminated_run_count || 0} 个 Run；失败 ${response.data.failed_count || 0} 个。`,
+      )
       await onChanged()
       setEnabledDraft(null)
       setExecEnabledDraft(null)
@@ -395,8 +427,9 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
           <InfoItem label="进程健康" value={<StatusBadge value={controller.health?.ok ? 'active' : 'error'} label={controller.health?.ok ? '健康' : '不可用'} />} />
           <InfoItem label="控制面 Ready" value={<StatusBadge value={ready.ok ? 'ready' : 'error'} label={ready.ok ? 'Ready' : '未就绪'} />} />
           <InfoItem label="Docker" value={<StatusBadge value={ready.docker ? 'active' : 'error'} label={ready.docker ? '可用' : '不可用'} />} />
-          <InfoItem label="镜像 ID" value={<code className="break-all text-[11px]">{ready.image_id || '-'}</code>} />
-          <InfoItem label="AppArmor" value={<code className="break-all text-[11px]">{ready.apparmor_profile || '-'}</code>} />
+          <InfoItem label="策略握手" value={<StatusBadge value={ready.policy_matches_server ? 'active' : 'error'} label={ready.policy_matches_server ? '一致' : '漂移'} />} />
+          <InfoItem label="Catalog generation" value={<code className="break-all text-[11px]">{ready.catalog_generation || '-'}</code>} />
+          <InfoItem label="Project quota" value={<StatusBadge value={ready.project_quota_ready ? 'ready' : 'error'} label={ready.project_quota_ready ? 'Ready' : '未就绪'} />} />
           <InfoItem label="磁盘" value={`${ready.disk_used_percent ?? '-'}% · 可用 ${formatBytes(ready.disk_free_bytes)}`} />
           <InfoItem label="磁盘硬水位" value={`${status?.disk_watermark?.max_used_percent ?? '-'}% / 保留 ${formatBytes(status?.disk_watermark?.min_free_bytes)}`} />
           <InfoItem label="Asset 物理占用" value={formatBytes(usage.asset_physical_bytes)} />
@@ -404,6 +437,32 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
           <InfoItem label="Workspace 默认配额" value={formatBytes(limits.workspace_default_quota_bytes)} />
           <InfoItem label="Workspace 配额总预算" value={formatBytes(limits.total_quota_bytes)} />
           <InfoItem label="单个 Asset 上限" value={formatBytes(limits.asset_max_bytes)} />
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          {[...PROFILE_OPTIONS, {
+            value: 'trusted_developer',
+            label: 'Trusted Developer',
+            executionMode: 'lease',
+            description: '本阶段不可授权；仅显示失败关闭的 readiness。',
+          }].map(option => {
+            const profile = ready.profiles?.[option.value] || {}
+            return (
+              <div key={option.value} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <strong className="text-slate-200">{option.label}</strong>
+                  <StatusBadge value={profile.ready ? 'ready' : 'error'} label={profile.ready ? 'Ready' : '未就绪'} />
+                </div>
+                <div className="mt-2 text-[11px] leading-5 text-slate-500">{option.description}</div>
+                <div className="mt-2 space-y-1 text-[11px] text-slate-500">
+                  <div>模式：<code>{profile.execution_mode || option.executionMode}</code></div>
+                  <div>可授权：{profile.grantable ? '是' : '否'}</div>
+                  <div className="break-all">镜像：<code>{profile.image_id || '-'}</code></div>
+                  <div className="break-all">AppArmor：<code>{profile.apparmor_profile || '-'}</code></div>
+                  {profile.error_code && <div className="text-red-300">错误：{profile.error_code}</div>}
+                </div>
+              </div>
+            )
+          })}
         </div>
       </Card>
     </div>
@@ -457,19 +516,26 @@ function AccessTab({ sessions, grants, defaultQuotaBytes, onAccepted, setError, 
     selectedId,
     grant?.version || 0,
     grant?.capability || 'off',
+    grant?.execution_profile || 'restricted',
     grantQuotaBytes || 0,
     defaultQuotaMiB,
   ].join(':')
   const formDefaults = {
     key: formKey,
     capability: grant?.capability || 'off',
+    executionProfile: grant?.execution_profile || 'restricted',
     quotaMiB: grantQuotaBytes
       ? quotaBytesToMiB(grantQuotaBytes)
       : defaultQuotaMiB,
     reason: grant?.reason || '',
   }
   const form = draft?.key === formKey ? draft : formDefaults
-  const { capability, quotaMiB, reason } = form
+  const {
+    capability,
+    executionProfile,
+    quotaMiB,
+    reason,
+  } = form
   const updateDraft = patch => {
     setDraft(current => ({
       ...(current?.key === formKey ? current : formDefaults),
@@ -499,6 +565,7 @@ function AccessTab({ sessions, grants, defaultQuotaBytes, onAccepted, setError, 
         chat_type: 'private',
         session_id: selected.session_id,
         capability,
+        execution_profile: executionProfile,
         quota_bytes: capability === 'off' ? null : parsedQuota * MIB,
         reason,
       }
@@ -583,6 +650,29 @@ function AccessTab({ sessions, grants, defaultQuotaBytes, onAccepted, setError, 
               </div>
             </fieldset>
 
+            <fieldset>
+              <legend className="mb-2 text-[11px] font-medium text-slate-400">Execution Profile</legend>
+              <div className="grid gap-2 md:grid-cols-2">
+                {PROFILE_OPTIONS.map(option => (
+                  <label key={option.value} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${executionProfile === option.value ? 'border-cyan-500/50 bg-cyan-500/10' : 'border-slate-800 bg-slate-950'}`}>
+                    <input
+                      type="radio"
+                      name="sandbox-execution-profile"
+                      value={option.value}
+                      checked={executionProfile === option.value}
+                      onChange={() => updateDraft({ executionProfile: option.value })}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <strong className="block text-xs text-slate-200">{option.label}</strong>
+                      <span className="mt-1 block text-[11px] leading-4 text-slate-500">{option.description}</span>
+                      <code className="mt-1 block text-[10px] text-cyan-300">mode={option.executionMode}</code>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
             <Field
               id="sandbox-access-quota"
               label="Workspace 配额（MiB）"
@@ -613,9 +703,11 @@ function AccessTab({ sessions, grants, defaultQuotaBytes, onAccepted, setError, 
             {grant && (
               <div className="grid gap-2 md:grid-cols-2">
                 <InfoItem label="授权状态 / 版本" value={<><StatusBadge value={grant.status} /> <span className="ml-2">v{grant.version}</span></>} />
+                <InfoItem label="Execution Profile" value={<code>{grant.execution_profile || 'restricted'}</code>} />
                 <InfoItem label="Workspace" value={<code className="break-all text-[11px]">{grant.workspace_id || '-'}</code>} />
                 <InfoItem label="期望 / 已应用配额" value={`${formatBytes(grant.quota?.desired_quota_bytes)} / ${formatBytes(grant.quota?.applied_quota_bytes)}`} />
                 <InfoItem label="project ID / generation" value={`${grant.quota?.project_id ?? '-'} / ${grant.quota?.generation ?? '-'}`} />
+                <InfoItem label="Runtime 配额" value={`${formatBytes(grant.runtime_quota?.desired_quota_bytes)} / ${formatBytes(grant.runtime_quota?.applied_quota_bytes)}`} />
               </div>
             )}
 
@@ -725,6 +817,126 @@ function WorkspacesTab({ workspaces, onAccepted, setError, setNotice }) {
   )
 }
 
+function LeasesTab({ leases, onChanged, setError, setNotice }) {
+  const [acting, setActing] = useState('')
+
+  const runAction = async (lease, action) => {
+    const labels = {
+      stop: '停止',
+      destroy: '销毁',
+      recreate: '重建并重新准备环境',
+    }
+    if (!globalThis.confirm(
+      `确认${labels[action]} Lease ${lease.lease_id}？Workspace 与 Runtime 均会保留。`,
+    )) return
+    const actionKey = `${lease.lease_id}:${action}`
+    setActing(actionKey)
+    setError('')
+    try {
+      const response = await api.post(
+        `/sandbox/leases/${encodeURIComponent(lease.lease_id)}/${action}`,
+        {
+          request_id: requestId(`sbx_lease_${action}`),
+          reason: `Web 管理员${labels[action]} Lease`,
+        },
+      )
+      const environment = response.data.environment_action
+        ? `，环境动作 ${response.data.environment_action}`
+        : ''
+      setNotice(
+        `Lease ${lease.lease_id} 已${labels[action]}${environment}；Workspace/Runtime 已保留。`,
+      )
+      await onChanged()
+    } catch (actionError) {
+      setError(formatApiError(actionError, `Lease ${labels[action]}失败`))
+    } finally {
+      setActing('')
+    }
+  }
+
+  return (
+    <Card className="overflow-x-auto p-4">
+      <SectionHeader
+        title="Lease 管理"
+        description="会话只显示不可逆摘要；不返回命令、输出、活动 process_id、宿主路径或 Secret。"
+      />
+      <table className="w-full min-w-[96rem] text-xs">
+        <thead>
+          <tr className="border-b border-slate-800 text-left text-slate-500">
+            <th className="px-2 py-2">Lease / 状态</th>
+            <th className="px-2 py-2">会话摘要</th>
+            <th className="px-2 py-2">Workspace</th>
+            <th className="px-2 py-2">Profile / 策略</th>
+            <th className="px-2 py-2">运行时</th>
+            <th className="px-2 py-2">镜像 / Controller</th>
+            <th className="px-2 py-2">活动与配额</th>
+            <th className="px-2 py-2">活跃与过期</th>
+            <th className="px-2 py-2">错误</th>
+            <th className="px-2 py-2">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {leases.map(lease => {
+            const serverManaged = Boolean(lease.session_summary)
+            const mutable = serverManaged
+              && ['provisioning', 'active', 'idle', 'stopping'].includes(lease.status)
+            return (
+              <tr key={lease.lease_id} className="border-b border-slate-800/60 align-top">
+                <td className="px-2 py-3">
+                  <code className="break-all text-[11px] text-slate-300">{lease.lease_id}</code>
+                  <div className="mt-1"><StatusBadge value={lease.status} /></div>
+                </td>
+                <td className="px-2 py-3 font-mono text-[11px] text-slate-400">{lease.session_summary || 'controller-only'}</td>
+                <td className="px-2 py-3 font-mono text-[11px] text-slate-500">{lease.workspace_id || '-'}</td>
+                <td className="px-2 py-3 text-slate-500">
+                  <code>{lease.profile_id || '-'}</code>
+                  <div className="mt-1">catalog {lease.catalog_generation || '-'}</div>
+                  <div className="mt-1 max-w-[12rem] break-all font-mono text-[10px]">{lease.policy_sha256 || '-'}</div>
+                </td>
+                <td className="px-2 py-3">
+                  <StatusBadge value={lease.runtime_present ? 'active' : 'disabled'} label={lease.runtime_present ? '存在' : '缺失'} />
+                  <div className="mt-1"><StatusBadge value={lease.runtime_running ? 'running' : 'disabled'} label={lease.runtime_running ? '运行中' : '已停止'} /></div>
+                </td>
+                <td className="px-2 py-3 max-w-[14rem] break-all font-mono text-[10px] text-slate-500">
+                  {lease.image_digest || '-'}
+                  <div className="mt-1">{lease.controller_epoch || '-'}</div>
+                </td>
+                <td className="px-2 py-3 text-slate-500">
+                  活动进程 {lease.active_process_count || 0}
+                  <div className="mt-1">quota generation {lease.quota_generation || '-'}</div>
+                </td>
+                <td className="px-2 py-3 text-slate-500">
+                  {formatDate(lease.last_active_at)}
+                  <div className="mt-1">idle {formatDate(lease.idle_expires_at)}</div>
+                  <div className="mt-1">max {formatDate(lease.max_expires_at)}</div>
+                </td>
+                <td className="px-2 py-3 max-w-[14rem] text-red-300">
+                  {lease.last_error_code
+                    ? `${lease.last_error_code}：${lease.last_error_summary || '-'}`
+                    : '-'}
+                </td>
+                <td className="px-2 py-3">
+                  <div className="flex min-w-[12rem] flex-wrap gap-2">
+                    <ActionButton type="button" disabled={!mutable || Boolean(acting)} onClick={() => runAction(lease, 'stop')}>停止</ActionButton>
+                    <ActionButton type="button" tone="red" disabled={!mutable || Boolean(acting)} onClick={() => runAction(lease, 'destroy')}>销毁</ActionButton>
+                    <ActionButton type="button" tone="emerald" disabled={!serverManaged || !lease.runtime_present || !lease.runtime_running || Boolean(acting)} onClick={() => runAction(lease, 'recreate')}>重建</ActionButton>
+                  </div>
+                  {!serverManaged && (
+                    <div className="mt-2 max-w-[12rem] text-[10px] leading-4 text-amber-300">
+                      仅有控制面事实；等待 reconciler 收敛，或使用 kill switch 回收。
+                    </div>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      {leases.length === 0 && <EmptyState>当前没有 Server 或 sandboxd Lease 事实</EmptyState>}
+    </Card>
+  )
+}
+
 function RunsTab({ runs, onChanged, setError, setNotice }) {
   const [cancelling, setCancelling] = useState('')
 
@@ -746,17 +958,19 @@ function RunsTab({ runs, onChanged, setError, setNotice }) {
   return (
     <Card className="overflow-x-auto p-4">
       <SectionHeader title="运行记录" description="仅展示安全账本元数据，不展示命令、stdout、stderr 或宿主路径。" />
-      <table className="w-full min-w-[70rem] text-xs">
+      <table className="w-full min-w-[88rem] text-xs">
         <thead><tr className="border-b border-slate-800 text-left text-slate-500">
-          <th className="px-2 py-2">运行</th><th className="px-2 py-2">状态</th><th className="px-2 py-2">终止原因</th><th className="px-2 py-2">Workspace</th><th className="px-2 py-2">资源</th><th className="px-2 py-2">输出元数据</th><th className="px-2 py-2">时间</th><th className="px-2 py-2">操作</th>
+          <th className="px-2 py-2">运行</th><th className="px-2 py-2">Profile / 模式</th><th className="px-2 py-2">状态</th><th className="px-2 py-2">进程状态</th><th className="px-2 py-2">终止原因</th><th className="px-2 py-2">Workspace / Lease</th><th className="px-2 py-2">资源</th><th className="px-2 py-2">输出元数据</th><th className="px-2 py-2">时间</th><th className="px-2 py-2">操作</th>
         </tr></thead>
         <tbody>
           {runs.map(run => (
             <tr key={run.run_id} className="border-b border-slate-800/60 align-top">
               <td className="px-2 py-3 font-mono text-slate-300">{run.run_id}</td>
+              <td className="px-2 py-3 text-slate-500"><code>{run.profile_id || 'restricted'}</code><br />{run.execution_mode || 'oneshot'}</td>
               <td className="px-2 py-3"><StatusBadge value={run.status} /></td>
+              <td className="px-2 py-3"><StatusBadge value={run.process_state} /></td>
               <td className="px-2 py-3 text-slate-400">{run.termination_reason || '-'}{run.exit_code !== null && run.exit_code !== undefined ? ` / exit ${run.exit_code}` : ''}</td>
-              <td className="px-2 py-3 font-mono text-[11px] text-slate-500">{run.workspace_id}</td>
+              <td className="px-2 py-3 max-w-[14rem] break-all font-mono text-[11px] text-slate-500">{run.workspace_id}<br />{run.lease_id || '-'}</td>
               <td className="px-2 py-3 text-slate-500">CPU {run.cpu_time_ms || 0}ms<br />峰值 {formatBytes(run.peak_memory_bytes)}</td>
               <td className="px-2 py-3 text-slate-500">stdout {formatBytes(run.stdout_bytes)}{run.stdout_truncated ? '（截断）' : ''}<br />stderr {formatBytes(run.stderr_bytes)}{run.stderr_truncated ? '（截断）' : ''}</td>
               <td className="px-2 py-3 text-slate-500">{formatDate(run.started_at || run.created_at)}<br />{formatDate(run.finished_at)}</td>
