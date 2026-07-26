@@ -6,6 +6,7 @@ import os
 import secrets
 import socket
 import stat
+import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.sandbox.contracts import (
     SandboxErrorCode,
@@ -25,6 +26,10 @@ from sandboxd.auth import TokenAuthenticator
 from sandboxd.config import SandboxdConfig
 from sandboxd.docker_backend import LocalDockerBackend
 from sandboxd.filesystem import AssetFileService, WorkspaceFileService
+from sandboxd.lease_backend import LeaseBackend
+from sandboxd.lease_reconciler import LeaseReconciler
+from sandboxd.lease_store import LeaseStore
+from sandboxd.process_manager import LeaseProcessManager
 from sandboxd.quota import ProjectQuotaManager
 from sandboxd.reconciler import OrphanReconciler
 from core.sandbox.paths import SafeWorkspaceFilesystem, validate_sha256, validate_workspace_id
@@ -105,6 +110,12 @@ class FileWriteRequest(WorkspaceRequest):
     quota_bytes: int = Field(gt=0, le=1024 * 1024 * 1024 * 1024)
 
 
+class FilePatchRequest(WorkspaceRequest):
+    path: str = Field(min_length=1, max_length=4096)
+    patch: str = Field(min_length=1, max_length=256 * 1024)
+    quota_bytes: int = Field(gt=0, le=1024 * 1024 * 1024 * 1024)
+
+
 class AssetPublishRequest(WorkspaceRequest):
     path: str = Field(min_length=1, max_length=4096)
     media_type: str = Field(default="application/octet-stream", max_length=255)
@@ -119,6 +130,70 @@ class StagedAsset(StrictModel):
 class AssetStageRequest(WorkspaceRequest):
     run_id: str = Field(min_length=8, max_length=64)
     assets: list[StagedAsset] = Field(default_factory=list, max_length=100)
+
+
+class LeaseEnsureRequest(WorkspaceRequest):
+    request_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    lease_id: str = Field(
+        min_length=10,
+        max_length=64,
+        pattern=r"^sbxlease_[A-Za-z0-9_-]+$",
+    )
+    profile_id: str = Field(min_length=1, max_length=32)
+    catalog_generation: str = Field(min_length=1, max_length=64)
+    policy_sha256: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    quota_generation: int = Field(ge=1, le=2_147_483_647)
+
+
+class LeaseAssetStageRequest(WorkspaceRequest):
+    request_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    assets: list[StagedAsset] = Field(default_factory=list, max_length=100)
+
+
+class LeaseActionRequest(StrictModel):
+    request_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
+
+class ProcessStartRequest(StrictModel):
+    request_id: str = Field(
+        min_length=8,
+        max_length=64,
+        pattern=r"^sbxrun_[A-Za-z0-9_-]+$",
+    )
+    command: str = Field(min_length=1, max_length=16 * 1024)
+    cwd: str = Field(default="", max_length=4096)
+    yield_time_ms: int = Field(default=10_000, ge=0, le=30_000)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
+
+
+class ProcessStdinRequest(LeaseActionRequest):
+    chars: str = Field(min_length=1, max_length=64 * 1024)
+
+
+class TerminateAllRequest(LeaseActionRequest):
+    reason: str = Field(
+        default="admin_terminated",
+        pattern=(
+            r"^(admin_terminated|kill_switch|controller_restarted|"
+            r"lease_recycled)$"
+        ),
+    )
 
 
 class RunRequest(WorkspaceRequest):
@@ -138,7 +213,18 @@ class WorkspaceQuotaRequest(WorkspaceRequest):
     request_id: str = Field(min_length=8, max_length=64, pattern=r"^[!-~]+$")
     project_id: int = Field(ge=10000, le=2_147_483_647)
     quota_bytes: int = Field(ge=1024 * 1024, le=1024 * 1024 * 1024 * 1024)
+    runtime_project_id: int = Field(ge=10000, le=2_147_483_647)
+    runtime_quota_bytes: int = Field(
+        ge=1024 * 1024,
+        le=1024 * 1024 * 1024 * 1024,
+    )
     generation: int = Field(ge=1, le=2_147_483_647)
+
+    @model_validator(mode="after")
+    def validate_distinct_project_ids(self) -> "WorkspaceQuotaRequest":
+        if self.project_id == self.runtime_project_id:
+            raise ValueError("Workspace 与 Runtime project ID 必须不同")
+        return self
 
 
 @dataclass
@@ -150,11 +236,43 @@ class SandboxRuntime:
     docker_backend: LocalDockerBackend
     admin_authenticator: TokenAuthenticator | None = None
     quota_manager: ProjectQuotaManager | None = None
+    lease_store: LeaseStore | None = None
+    lease_backend: LeaseBackend | None = None
+    lease_reconciler: LeaseReconciler | None = None
+    process_manager: LeaseProcessManager | None = None
 
     @classmethod
     def build(cls, config: SandboxdConfig) -> "SandboxRuntime":
         workspace_files = WorkspaceFileService(config)
         asset_files = AssetFileService(config)
+        quota_manager = ProjectQuotaManager(
+            data_root=config.data_root,
+            helper_path=config.quota_helper_path,
+        )
+        docker_backend = LocalDockerBackend(
+            config,
+            workspace_files=workspace_files,
+            asset_files=asset_files,
+            quota_manager=quota_manager,
+        )
+        lease_store = LeaseStore(
+            config.data_root / "runtime" / ".sandboxd-leases"
+        )
+        lease_backend = LeaseBackend(
+            config,
+            docker_client=docker_backend.client,
+            workspace_files=workspace_files,
+            asset_files=asset_files,
+            lease_store=lease_store,
+            profile_image_resolver=docker_backend.require_profile_image,
+            network_policy=docker_backend.network_policy,
+        )
+        process_manager = LeaseProcessManager(
+            config,
+            lease_backend=lease_backend,
+            lease_store=lease_store,
+            concurrency_limiter=docker_backend.concurrency_limiter,
+        )
         return cls(
             config=config,
             authenticator=TokenAuthenticator(
@@ -163,20 +281,71 @@ class SandboxRuntime:
             ),
             workspace_files=workspace_files,
             asset_files=asset_files,
-            docker_backend=LocalDockerBackend(
-                config,
-                workspace_files=workspace_files,
-                asset_files=asset_files,
-            ),
+            docker_backend=docker_backend,
             admin_authenticator=TokenAuthenticator(
                 config.admin_token_file,
                 config.admin_client_token_path,
             ),
-            quota_manager=ProjectQuotaManager(
-                data_root=config.data_root,
-                helper_path=config.quota_helper_path,
+            quota_manager=quota_manager,
+            lease_store=lease_store,
+            lease_backend=lease_backend,
+            lease_reconciler=LeaseReconciler(
+                lease_backend,
+                lease_store,
+                interval_seconds=config.lease_reconcile_interval_seconds,
             ),
+            process_manager=process_manager,
         )
+
+    def ensure_lease_components(self) -> None:
+        if self.lease_store is None:
+            self.lease_store = LeaseStore(
+                self.config.data_root / "runtime" / ".sandboxd-leases"
+            )
+        if self.lease_backend is None:
+            resolver = getattr(
+                self.docker_backend,
+                "require_profile_image",
+                None,
+            )
+            if not callable(resolver):
+                def resolver(_profile_id: str):
+                    raise SandboxServiceError(
+                        SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                        "Sandbox Lease Profile 镜像校验器不可用",
+                    )
+            self.lease_backend = LeaseBackend(
+                self.config,
+                docker_client=self.docker_backend.client,
+                workspace_files=self.workspace_files,
+                asset_files=self.asset_files,
+                lease_store=self.lease_store,
+                profile_image_resolver=resolver,
+                network_policy=getattr(
+                    self.docker_backend,
+                    "network_policy",
+                    None,
+                ),
+            )
+        if self.lease_reconciler is None:
+            self.lease_reconciler = LeaseReconciler(
+                self.lease_backend,
+                self.lease_store,
+                interval_seconds=(
+                    self.config.lease_reconcile_interval_seconds
+                ),
+            )
+        if self.process_manager is None:
+            self.process_manager = LeaseProcessManager(
+                self.config,
+                lease_backend=self.lease_backend,
+                lease_store=self.lease_store,
+                concurrency_limiter=getattr(
+                    self.docker_backend,
+                    "concurrency_limiter",
+                    None,
+                ),
+            )
 
 
 def _error_status(error: SandboxServiceError) -> int:
@@ -189,6 +358,7 @@ def _error_status(error: SandboxServiceError) -> int:
         return 429
     if error.code in {
         SandboxErrorCode.WORKSPACE_QUOTA_EXCEEDED,
+        SandboxErrorCode.RUNTIME_QUOTA_EXCEEDED,
     }:
         return 507
     if error.code is SandboxErrorCode.ASSET_TOO_LARGE:
@@ -257,6 +427,22 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
         if current.admin_authenticator is not None:
             current.admin_authenticator.prepare_client_token()
         current.workspace_files.layout.ensure_roots()
+        current.ensure_lease_components()
+        if (
+            current.lease_store is None
+            or current.lease_backend is None
+            or current.lease_reconciler is None
+            or current.process_manager is None
+        ):
+            raise RuntimeError("sandboxd Lease 控制面初始化失败")
+        current.lease_store.start_controller(now_unix=time.time())
+        recovery = current.lease_reconciler.recover_previous_controller()
+        logger.info(
+            "sandboxd controller epoch 已启动 epoch=%s recovered=%d failed=%d",
+            recovery["controller_epoch"],
+            len(recovery["recovered_lease_ids"]),
+            len(recovery["failed_lease_ids"]),
+        )
         try:
             result = OrphanReconciler(current.docker_backend.client).reconcile()
             logger.info(
@@ -267,7 +453,23 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
         except Exception as exc:
             logger.error("sandboxd 启动孤儿回收失败 type=%s", type(exc).__name__)
         app.state.runtime = current
-        yield
+        current.workspace_files.start_usage_reconciler()
+        current.lease_reconciler.start()
+        try:
+            yield
+        finally:
+            current.lease_reconciler.stop()
+            try:
+                current.lease_backend.terminate_all(
+                    reason="controller_restarted",
+                )
+            except Exception:
+                logger.error(
+                    "sandboxd 停止时回收 Lease 失败",
+                    exc_info=True,
+                )
+            current.process_manager.close()
+            current.workspace_files.stop_usage_reconciler()
 
     app = FastAPI(
         title="Nanobot sandboxd",
@@ -336,9 +538,424 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
 
     @app.get("/v1/readyz")
     def readyz(current: RuntimeDependency):
+        if current.lease_store is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox Lease 控制面不可用",
+            )
+        data = current.docker_backend.ready()
+        data["controller_epoch"] = current.lease_store.controller_epoch
         return success_result(
             "sandboxd 已就绪",
-            data=current.docker_backend.ready(),
+            data=data,
+        )
+
+    @app.post("/v1/leases/ensure")
+    def ensure_lease(
+        body: LeaseEnsureRequest,
+        current: RuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd Lease 请求幂等标识无效",
+            )
+        data = current.lease_backend.ensure(
+            request_id=body.request_id,
+            lease_id=body.lease_id,
+            workspace_id=body.workspace_id,
+            profile_id=body.profile_id,
+            catalog_generation=body.catalog_generation,
+            policy_sha256=body.policy_sha256,
+            quota_generation=body.quota_generation,
+        )
+        return success_result("Sandbox Lease 已就绪", data=data)
+
+    @app.get("/v1/leases/{lease_id}")
+    def get_lease(lease_id: str, current: RuntimeDependency):
+        if current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox Lease 控制面不可用",
+            )
+        return success_result(
+            "Sandbox Lease 状态读取完成",
+            data=current.lease_backend.get(lease_id),
+        )
+
+    @app.put("/v1/leases/{lease_id}/assets")
+    def sync_lease_assets(
+        lease_id: str,
+        body: LeaseAssetStageRequest,
+        current: RuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd Lease 资产请求幂等标识无效",
+            )
+        with current.workspace_files.maintenance.execution(
+            body.workspace_id,
+        ):
+            fact = current.lease_backend.get(lease_id)
+            if (
+                fact.get("present") is not True
+                or fact.get("running") is not True
+                or str(fact.get("workspace_id") or "")
+                != body.workspace_id
+                or str(fact.get("controller_epoch") or "")
+                != (
+                    current.lease_store.controller_epoch
+                    if current.lease_store is not None
+                    else ""
+                )
+            ):
+                raise SandboxServiceError(
+                    SandboxErrorCode.AUTHORIZATION_FAILED,
+                    "Sandbox Lease 资产归属校验失败",
+                )
+            data = current.asset_files.sync_lease(
+                body.workspace_id,
+                lease_id,
+                [asset.model_dump() for asset in body.assets],
+            )
+        return success_result("Sandbox Lease 授权资产已同步", data=data)
+
+    @app.post("/v1/leases/{lease_id}/processes")
+    def start_lease_process(
+        lease_id: str,
+        body: ProcessStartRequest,
+        current: RuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if (
+            request_id != body.request_id
+            or current.process_manager is None
+        ):
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd 进程启动请求幂等标识无效",
+            )
+        data = current.process_manager.start(
+            lease_id=lease_id,
+            request_id=body.request_id,
+            command=body.command,
+            cwd=body.cwd,
+            yield_time_ms=body.yield_time_ms,
+            timeout_seconds=body.timeout_seconds,
+        )
+        return success_result("Sandbox Lease 进程已启动", data=data)
+
+    @app.get("/v1/processes/{process_id}")
+    def get_lease_process(
+        process_id: str,
+        current: RuntimeDependency,
+        cursor: Annotated[str, Query(max_length=96)] = "",
+    ):
+        if current.process_manager is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox 进程控制面不可用",
+            )
+        return success_result(
+            "Sandbox 进程状态读取完成",
+            data=current.process_manager.get(
+                process_id,
+                cursor=cursor,
+            ),
+        )
+
+    @app.post("/v1/processes/{process_id}/stdin")
+    def write_lease_process_stdin(
+        process_id: str,
+        body: ProcessStdinRequest,
+        current: RuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if (
+            request_id != body.request_id
+            or current.process_manager is None
+        ):
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd stdin 请求幂等标识无效",
+            )
+        return success_result(
+            "Sandbox stdin 已写入",
+            data=current.process_manager.write_stdin(
+                process_id,
+                request_id=body.request_id,
+                chars=body.chars,
+            ),
+        )
+
+    @app.post("/v1/processes/{process_id}/terminate")
+    def terminate_lease_process(
+        process_id: str,
+        body: LeaseActionRequest,
+        current: RuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if (
+            request_id != body.request_id
+            or current.process_manager is None
+        ):
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd 进程终止请求幂等标识无效",
+            )
+        return success_result(
+            "Sandbox Lease 进程终止请求已处理",
+            data=current.process_manager.terminate(
+                process_id,
+                request_id=body.request_id,
+            ),
+        )
+
+    @app.post("/v1/leases/{lease_id}/stop")
+    def stop_lease(
+        lease_id: str,
+        body: LeaseActionRequest,
+        current: RuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd Lease 停止请求幂等标识无效",
+            )
+        return success_result(
+            "Sandbox Lease 已停止",
+            data=current.lease_backend.recycle(
+                lease_id,
+                reason="lease_recycled",
+            ),
+        )
+
+    @app.delete("/v1/leases/{lease_id}")
+    def destroy_lease(
+        lease_id: str,
+        body: LeaseActionRequest,
+        current: RuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd Lease 销毁请求幂等标识无效",
+            )
+        return success_result(
+            "Sandbox Lease 已销毁",
+            data=current.lease_backend.recycle(
+                lease_id,
+                reason="lease_recycled",
+            ),
+        )
+
+    @app.get("/v1/admin/controller-state")
+    def controller_state(current: AdminRuntimeDependency):
+        if (
+            current.lease_store is None
+            or current.lease_backend is None
+        ):
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox Lease 控制面不可用",
+            )
+        recovery = current.lease_store.startup_recovery()
+        leases = current.lease_backend.list()
+        return success_result(
+            "sandboxd controller 状态读取完成",
+            data={
+                **recovery,
+                "lease_count": len(
+                    [item for item in leases if item.get("present")]
+                ),
+            },
+        )
+
+    @app.get("/v1/admin/leases")
+    def list_leases(current: AdminRuntimeDependency):
+        if current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox Lease 控制面不可用",
+            )
+        return success_result(
+            "Sandbox Lease 列表读取完成",
+            data={"leases": current.lease_backend.list()},
+        )
+
+    @app.post("/v1/admin/leases/{lease_id}/stop")
+    def admin_stop_lease(
+        lease_id: str,
+        body: LeaseActionRequest,
+        current: AdminRuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd 管理端 Lease 停止请求幂等标识无效",
+            )
+        return success_result(
+            "Sandbox Lease 已由管理员停止",
+            data=current.lease_backend.admin_recycle(
+                lease_id,
+                reason="admin_lease_stop",
+            ),
+        )
+
+    @app.delete("/v1/admin/leases/{lease_id}")
+    def admin_destroy_lease(
+        lease_id: str,
+        body: LeaseActionRequest,
+        current: AdminRuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd 管理端 Lease 销毁请求幂等标识无效",
+            )
+        return success_result(
+            "Sandbox Lease 已由管理员销毁",
+            data=current.lease_backend.admin_recycle(
+                lease_id,
+                reason="admin_lease_destroy",
+            ),
+        )
+
+    @app.post("/v1/admin/leases/{lease_id}/recreate")
+    def admin_recreate_lease(
+        lease_id: str,
+        body: LeaseActionRequest,
+        current: AdminRuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd 管理端 Lease 重建请求幂等标识无效",
+            )
+        return success_result(
+            "Sandbox Lease 已由管理员重建",
+            data=current.lease_backend.recreate(
+                lease_id,
+                request_id=body.request_id,
+            ),
+        )
+
+    @app.get("/v1/admin/processes")
+    def list_processes(current: AdminRuntimeDependency):
+        if current.process_manager is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox 进程控制面不可用",
+            )
+        return success_result(
+            "Sandbox 进程事实读取完成",
+            data={
+                "controller_epoch": (
+                    current.lease_store.controller_epoch
+                    if current.lease_store is not None
+                    else ""
+                ),
+                "processes": current.process_manager.list_facts(),
+            },
+        )
+
+    @app.get("/v1/admin/workspace-usage")
+    def admin_workspace_usage(current: AdminRuntimeDependency):
+        ledger = current.workspace_files.usage_ledger
+        facts: list[dict[str, Any]] = []
+        for workspace_id in ledger.discover_workspace_ids():
+            try:
+                snapshot = ledger.snapshot(workspace_id)
+            except SandboxServiceError:
+                continue
+            facts.append({
+                "workspace_id": snapshot.workspace_id,
+                "workspace_bytes": snapshot.workspace_bytes,
+                "runtime_bytes": snapshot.runtime_bytes,
+                "dirty": snapshot.dirty,
+            })
+        return success_result(
+            "Workspace 用量事实读取完成",
+            data={"workspaces": facts},
+        )
+
+    @app.post("/v1/admin/leases/reconcile")
+    def reconcile_leases(
+        body: LeaseActionRequest,
+        current: AdminRuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if (
+            request_id != body.request_id
+            or current.lease_reconciler is None
+        ):
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd Lease 对账请求幂等标识无效",
+            )
+        return success_result(
+            "Sandbox Lease 对账完成",
+            data=current.lease_reconciler.reconcile(),
+        )
+
+    @app.post("/v1/admin/leases/terminate-all")
+    def terminate_all_leases(
+        body: TerminateAllRequest,
+        current: AdminRuntimeDependency,
+        request_id: Annotated[
+            str | None,
+            Header(alias="X-Nanobot-Request-ID"),
+        ] = None,
+    ):
+        if request_id != body.request_id or current.lease_backend is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "sandboxd Lease 全量终止请求幂等标识无效",
+            )
+        return success_result(
+            "Sandbox Lease 全量终止完成",
+            data=current.lease_backend.terminate_all(reason=body.reason),
         )
 
     @app.post("/v1/workspaces/ensure")
@@ -363,17 +980,90 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
             Header(alias="X-Nanobot-Request-ID"),
         ] = None,
     ):
-        if request_id != body.request_id or current.quota_manager is None:
+        if (
+            request_id != body.request_id
+            or current.quota_manager is None
+            or current.lease_backend is None
+        ):
             raise SandboxServiceError(
                 SandboxErrorCode.AUTHORIZATION_FAILED,
                 "sandboxd quota 请求幂等标识无效",
             )
-        data = current.quota_manager.apply(
-            workspace_id=body.workspace_id,
-            project_id=body.project_id,
-            quota_bytes=body.quota_bytes,
+        with current.workspace_files.maintenance.quota_maintenance(
+            body.workspace_id,
             generation=body.generation,
-        )
+        ):
+            terminated = current.lease_backend.terminate_workspace(
+                body.workspace_id,
+                reason="quota_reconfigured",
+            )
+            workspace_data = current.quota_manager.apply(
+                workspace_id=body.workspace_id,
+                project_id=body.project_id,
+                quota_bytes=body.quota_bytes,
+                generation=body.generation,
+                scope="workspace",
+            )
+            workspace_check = current.quota_manager.inspect(
+                workspace_id=body.workspace_id,
+                project_id=body.project_id,
+                quota_bytes=body.quota_bytes,
+                generation=body.generation,
+                scope="workspace",
+            )
+            runtime_data = current.quota_manager.apply(
+                workspace_id=body.workspace_id,
+                project_id=body.runtime_project_id,
+                quota_bytes=body.runtime_quota_bytes,
+                generation=body.generation,
+                scope="runtime",
+            )
+            runtime_check = current.quota_manager.inspect(
+                workspace_id=body.workspace_id,
+                project_id=body.runtime_project_id,
+                quota_bytes=body.runtime_quota_bytes,
+                generation=body.generation,
+                scope="runtime",
+            )
+            if not (
+                workspace_data.get("applied") is True
+                and workspace_check.get("project_id_matches") is True
+                and workspace_check.get("quota_bytes_matches") is True
+                and runtime_data.get("applied") is True
+                and runtime_check.get("project_id_matches") is True
+                and runtime_check.get("quota_bytes_matches") is True
+            ):
+                raise SandboxServiceError(
+                    SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                    "Workspace 或 Runtime 硬配额验证失败",
+                    retryable=True,
+                    stop=False,
+                )
+        data = {
+            "workspace_id": body.workspace_id,
+            "project_id": body.project_id,
+            "quota_bytes": body.quota_bytes,
+            "runtime_project_id": body.runtime_project_id,
+            "runtime_quota_bytes": body.runtime_quota_bytes,
+            "generation": body.generation,
+            "workspace_used_bytes": int(
+                workspace_data.get("used_bytes") or 0
+            ),
+            "runtime_used_bytes": int(runtime_data.get("used_bytes") or 0),
+            "terminated_lease_ids": list(
+                terminated["terminated_lease_ids"]
+            ),
+            "affected_process_ids": list(
+                terminated["affected_process_ids"]
+            ),
+            "failed_lease_ids": [],
+            "workspace_project_id_matches": True,
+            "workspace_quota_bytes_matches": True,
+            "runtime_project_id_matches": True,
+            "runtime_quota_bytes_matches": True,
+            "quota_verified": True,
+            "applied": True,
+        }
         return success_result("Workspace project quota 已应用", data=data)
 
     @app.post("/v1/admin/workspaces/quota/inspect")
@@ -390,12 +1080,48 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
                 SandboxErrorCode.AUTHORIZATION_FAILED,
                 "sandboxd quota 请求幂等标识无效",
             )
-        data = current.quota_manager.inspect(
+        workspace_data = current.quota_manager.inspect(
             workspace_id=body.workspace_id,
             project_id=body.project_id,
             quota_bytes=body.quota_bytes,
             generation=body.generation,
+            scope="workspace",
         )
+        runtime_data = current.quota_manager.inspect(
+            workspace_id=body.workspace_id,
+            project_id=body.runtime_project_id,
+            quota_bytes=body.runtime_quota_bytes,
+            generation=body.generation,
+            scope="runtime",
+        )
+        data = {
+            "workspace_id": body.workspace_id,
+            "project_id": body.project_id,
+            "quota_bytes": body.quota_bytes,
+            "runtime_project_id": body.runtime_project_id,
+            "runtime_quota_bytes": body.runtime_quota_bytes,
+            "generation": body.generation,
+            "workspace_used_bytes": int(
+                workspace_data.get("used_bytes") or 0
+            ),
+            "runtime_used_bytes": int(runtime_data.get("used_bytes") or 0),
+            "workspace_project_id_matches": (
+                workspace_data.get("project_id_matches") is True
+            ),
+            "workspace_quota_bytes_matches": (
+                workspace_data.get("quota_bytes_matches") is True
+            ),
+            "runtime_project_id_matches": (
+                runtime_data.get("project_id_matches") is True
+            ),
+            "runtime_quota_bytes_matches": (
+                runtime_data.get("quota_bytes_matches") is True
+            ),
+            "quota_verified": (
+                workspace_data.get("verified") is True
+                and runtime_data.get("verified") is True
+            ),
+        }
         return success_result("Workspace project quota 检查完成", data=data)
 
     @app.post("/v1/files/list")
@@ -440,6 +1166,25 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
         )
         return success_result(
             "文件写入完成",
+            data=data,
+            artifacts=[{
+                "type": "workspace_file",
+                "ref": f"workspace://current/{data['path']}",
+                "path": data["path"],
+                "size_bytes": data["size_bytes"],
+            }],
+        )
+
+    @app.post("/v1/files/apply-patch")
+    def apply_patch(body: FilePatchRequest, current: RuntimeDependency):
+        data = current.workspace_files.apply_patch(
+            body.workspace_id,
+            path=body.path,
+            patch=body.patch,
+            quota_bytes=body.quota_bytes,
+        )
+        return success_result(
+            "Workspace 补丁应用完成",
             data=data,
             artifacts=[{
                 "type": "workspace_file",
@@ -568,15 +1313,18 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
 
     @app.post("/v1/runs")
     def create_run(body: RunRequest, current: RuntimeDependency):
-        result = current.docker_backend.execute(
-            request_id=body.request_id,
-            run_id=body.run_id,
-            workspace_id=body.workspace_id,
-            command=body.command,
-            cwd=body.cwd,
-            timeout_seconds=body.timeout_seconds,
-            quota_bytes=body.quota_bytes,
-        )
+        with current.workspace_files.maintenance.execution(
+            body.workspace_id,
+        ):
+            result = current.docker_backend.execute(
+                request_id=body.request_id,
+                run_id=body.run_id,
+                workspace_id=body.workspace_id,
+                command=body.command,
+                cwd=body.cwd,
+                timeout_seconds=body.timeout_seconds,
+                quota_bytes=body.quota_bytes,
+            )
         data = result.get("data") if isinstance(result.get("data"), dict) else {}
         reason = str(data.get("termination_reason") or result.get("error_code") or "")
         if reason == "execution_timeout":
@@ -594,10 +1342,15 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
                 SandboxErrorCode.PROCESS_OOM_KILLED,
                 "Sandbox 进程超过内存上限并被终止",
             )
-        if reason in {"workspace_quota_exceeded", "runtime_quota_exceeded"}:
+        if reason == "workspace_quota_exceeded":
             raise SandboxServiceError(
                 SandboxErrorCode.WORKSPACE_QUOTA_EXCEEDED,
                 "Sandbox 写入超过空间配额，容器已终止",
+            )
+        if reason == "runtime_quota_exceeded":
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_QUOTA_EXCEEDED,
+                "Sandbox Runtime 缓存已达到硬配额，容器已终止",
             )
         if result.get("status") == "failed" and not data:
             raise SandboxServiceError(

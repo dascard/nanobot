@@ -14,12 +14,17 @@ from typing import Any
 from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError
 from core.sandbox.paths import validate_relative_path, validate_workspace_id
 from sandboxd.config import SandboxdConfig
+from sandboxd.concurrency import ProfileConcurrencyLimiter
+from sandboxd.container_security import (
+    ContainerMountPaths,
+    build_container_kwargs,
+)
 from sandboxd.filesystem import (
     AssetFileService,
     WorkspaceFileService,
-    directory_usage,
 )
 from sandboxd.output_limiter import OutputLimiter
+from sandboxd.network_policy import NetworkPolicyManager
 
 
 MANAGED_LABEL = "com.nanobot.sandbox"
@@ -147,6 +152,8 @@ class LocalDockerBackend:
         docker_client: Any | None = None,
         workspace_files: WorkspaceFileService | None = None,
         asset_files: AssetFileService | None = None,
+        quota_manager: Any | None = None,
+        network_policy: NetworkPolicyManager | None = None,
     ) -> None:
         self.config = config.validated()
         if docker_client is None:
@@ -165,8 +172,19 @@ class LocalDockerBackend:
         self.client = docker_client
         self.workspace_files = workspace_files or WorkspaceFileService(config)
         self.asset_files = asset_files or AssetFileService(config)
+        self.quota_manager = quota_manager
+        self.network_policy = network_policy or NetworkPolicyManager(
+            self.config,
+            docker_client=self.client,
+        )
         self.run_store = RunStore(config.data_root / "runtime" / ".sandboxd-runs")
-        self._global_slots = threading.BoundedSemaphore(config.global_concurrency)
+        catalog = self.config.profile_catalog
+        if catalog is None:  # validated() 已保证存在，仅作类型收窄
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox Profile catalog 不可用",
+            )
+        self.concurrency_limiter = ProfileConcurrencyLimiter(catalog)
         self._active: dict[str, tuple[Any, threading.Event]] = {}
         self._active_guard = threading.RLock()
         self._request_locks: dict[str, threading.Lock] = {}
@@ -186,16 +204,34 @@ class LocalDockerBackend:
                 options.add(str(value))
         return options
 
-    def _allowed_image(self) -> Any:
+    def _allowed_image(self, profile_id: str | None = None) -> Any:
+        if profile_id is None:
+            image_reference = self.config.image_reference
+            image_allowlist = self.config.image_allowlist
+            expected_user = (
+                f"{self.config.workspace_uid}:{self.config.workspace_gid}"
+            )
+        else:
+            profile = self.config.profile(profile_id)
+            image_reference = profile.image_reference
+            image_allowlist = profile.image_allowlist
+            expected_user = (
+                f"{self.config.workspace_uid}:{self.config.workspace_gid}"
+            )
+        if not image_reference or not image_allowlist:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "固定 Sandbox 镜像尚未配置",
+            )
         try:
-            image = self.client.images.get(self.config.image_reference)
+            image = self.client.images.get(image_reference)
         except Exception as exc:
             raise SandboxServiceError(
                 SandboxErrorCode.RUNTIME_UNAVAILABLE,
                 "固定 Sandbox 镜像不存在，sandboxd 不会自动拉取",
             ) from exc
         image_id = str(getattr(image, "id", "") or "").lower()
-        if image_id not in self.config.image_allowlist:
+        if image_id not in image_allowlist:
             raise SandboxServiceError(
                 SandboxErrorCode.AUTHORIZATION_FAILED,
                 "Sandbox 镜像不在固定 allowlist 中",
@@ -203,17 +239,63 @@ class LocalDockerBackend:
         configured_user = str(
             getattr(image, "attrs", {}).get("Config", {}).get("User") or ""
         )
-        if configured_user != f"{self.config.workspace_uid}:{self.config.workspace_gid}":
+        if configured_user != expected_user:
             raise SandboxServiceError(
                 SandboxErrorCode.RUNTIME_UNAVAILABLE,
                 "Sandbox 镜像默认用户不符合固定策略",
             )
         return image
 
-    def _require_apparmor_profile(self) -> None:
+    def _oneshot_image(self) -> Any:
+        """oneshot 路径的镜像身份：manifest 的 oneshot Profile 优先，legacy 后备。
+
+        与 Server 侧 sandbox_exec 的解析顺序保持一致，保证 manifest-only
+        部署可执行、legacy-only 部署不回归。
+        """
+
+        catalog = self.config.profile_catalog
+        if catalog is not None:
+            for profile in catalog.profiles:
+                if (
+                    profile.execution_mode == "oneshot"
+                    and profile.grantable
+                    and profile.image_configured
+                ):
+                    return self._allowed_image(profile.profile_id)
+        return self._allowed_image()
+
+    def require_profile_image(self, profile_id: str) -> Any:
+        """在创建容器前重新验证 Profile、AppArmor、镜像和硬配额能力。"""
+
+        profile = self.config.profile(profile_id)
+        if not profile.grantable:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "当前 Sandbox Profile 不可用",
+            )
+        self._require_apparmor_profile(profile.apparmor_profile)
+        image = self._allowed_image(profile.profile_id)
+        if profile.execution_mode == "lease":
+            capability: dict[str, Any] = {}
+            if self.quota_manager is not None:
+                capability = dict(self.quota_manager.capability())
+            if not (
+                capability.get("project_quota") is True
+                and capability.get("workspace_scope") is True
+                and capability.get("runtime_scope") is True
+            ):
+                raise SandboxServiceError(
+                    SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                    "宿主 project quota 能力未就绪",
+                )
+        self.network_policy.require_profile_ready(profile)
+        return image
+
+    def _require_apparmor_profile(self, profile_name: str | None = None) -> None:
         """确认固定 profile 已加载；securityfs 不可读时同样失败关闭。"""
 
-        expected = f"{self.config.apparmor_profile} "
+        expected_name = profile_name or self.config.apparmor_profile
+        expected = f"{expected_name} "
         try:
             with APPARMOR_PROFILES_PATH.open("r", encoding="utf-8") as handle:
                 for index, line in enumerate(handle):
@@ -249,15 +331,85 @@ class LocalDockerBackend:
                 SandboxErrorCode.RUNTIME_UNAVAILABLE,
                 "宿主 Docker 未启用 AppArmor，Sandbox 按失败关闭处理",
             )
-        self._require_apparmor_profile()
-        image = self._allowed_image()
         disk = self.workspace_files.disk_guard.ensure_available()
         self.workspace_files.layout.ensure_roots()
         self.run_store.ensure()
+        legacy_image = None
+        if self.config.image_reference and self.config.image_allowlist:
+            self._require_apparmor_profile()
+            legacy_image = self._allowed_image()
+
+        catalog = self.config.profile_catalog
+        if catalog is None:  # validated() 已保证存在，仅作类型收窄
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox Profile catalog 不可用",
+            )
+        quota_capability: dict[str, Any] = {}
+        if self.quota_manager is not None:
+            try:
+                quota_capability = dict(self.quota_manager.capability())
+            except SandboxServiceError:
+                quota_capability = {}
+        project_quota_ready = (
+            quota_capability.get("project_quota") is True
+            and quota_capability.get("workspace_scope") is True
+            and quota_capability.get("runtime_scope") is True
+        )
+        profile_states: dict[str, dict[str, Any]] = {}
+        for profile in sorted(
+            catalog.profiles,
+            key=lambda item: item.profile_id,
+        ):
+            state: dict[str, Any] = {
+                "profile_id": profile.profile_id,
+                "execution_mode": profile.execution_mode,
+                "grantable": profile.grantable,
+                "ready": False,
+                "image_id": "",
+                "apparmor_profile": profile.apparmor_profile,
+                "network_policy_id": profile.network_policy_id,
+                "network_proxy_image_id": "",
+                "error_code": "",
+            }
+            if not profile.grantable:
+                state["error_code"] = "profile_disabled"
+                profile_states[profile.profile_id] = state
+                continue
+            if not profile.image_configured:
+                state["error_code"] = "image_digest_missing"
+                profile_states[profile.profile_id] = state
+                continue
+            try:
+                self._require_apparmor_profile(profile.apparmor_profile)
+                image = self._allowed_image(profile.profile_id)
+            except SandboxServiceError as exc:
+                state["error_code"] = exc.code.value
+            else:
+                if profile.execution_mode == "lease" and not project_quota_ready:
+                    state["error_code"] = "project_quota_unavailable"
+                else:
+                    try:
+                        network_state = (
+                            self.network_policy.require_profile_ready(profile)
+                        )
+                    except SandboxServiceError as exc:
+                        state["error_code"] = exc.code.value
+                    else:
+                        state["ready"] = True
+                        state["image_id"] = str(image.id)
+                        state["network_proxy_image_id"] = str(
+                            network_state.get("proxy_image_id") or ""
+                        )
+            profile_states[profile.profile_id] = state
         return {
             "docker": True,
-            "image_id": image.id,
+            "image_id": "" if legacy_image is None else legacy_image.id,
             "apparmor_profile": self.config.apparmor_profile,
+            "catalog_generation": catalog.catalog_generation,
+            "policy_sha256": catalog.policy_sha256,
+            "profiles": profile_states,
+            "project_quota_ready": project_quota_ready,
             "disk_used_percent": round(disk.used_percent, 2),
             "disk_free_bytes": disk.free_bytes,
         }
@@ -275,73 +427,28 @@ class LocalDockerBackend:
         workspace_path = self.workspace_files.layout.workspace_data_dir(workspace_id)
         runtime_path = self.workspace_files.layout.ensure_runtime(workspace_id)
         working_dir = "/workspace" if not cwd else f"/workspace/{cwd}"
+        profile = self.config.profile("restricted")
         labels = {
             MANAGED_LABEL: "true",
             MANAGED_BY_LABEL: "sandboxd",
             WORKSPACE_LABEL: workspace_id,
             RUN_LABEL: run_id,
         }
-        kwargs: dict[str, Any] = {
-            "image": image.id,
-            "name": f"{CONTAINER_PREFIX}{run_id}",
-            "command": ["/bin/sh", "-lc", command],
-            "user": f"{self.config.workspace_uid}:{self.config.workspace_gid}",
-            "working_dir": working_dir,
-            "detach": True,
-            "stdin_open": False,
-            "tty": False,
-            "auto_remove": False,
-            "network_disabled": True,
-            "network_mode": "none",
-            "read_only": True,
-            "cap_drop": ["ALL"],
-            "security_opt": [
-                "no-new-privileges",
-                f"apparmor={self.config.apparmor_profile}",
-            ],
-            "privileged": False,
-            "init": True,
-            "pids_limit": self.config.pids_limit,
-            "mem_limit": self.config.memory_bytes,
-            "memswap_limit": self.config.memory_bytes,
-            "nano_cpus": self.config.cpu_nano,
-            "oom_kill_disable": False,
-            "ipc_mode": "private",
-            "volumes": {
-                str(workspace_path): {"bind": "/workspace", "mode": "rw"},
-                str(inputs_path): {"bind": "/inputs", "mode": "ro"},
-                str(runtime_path): {"bind": "/runtime", "mode": "rw"},
-            },
-            "tmpfs": {
-                "/tmp": (
-                    "rw,nosuid,nodev,noexec,mode=1777,"
-                    f"size={self.config.tmpfs_bytes}"
-                ),
-            },
-            "labels": labels,
-            "environment": {
-                "HOME": "/runtime/home",
-                "XDG_CACHE_HOME": "/runtime/cache",
-                "PYTHONPYCACHEPREFIX": "/runtime/pycache",
-                "PIP_CACHE_DIR": "/runtime/pip-cache",
-                "PIP_NO_INDEX": "1",
-                "TMPDIR": "/tmp",
-            },
-            "log_config": {
-                "type": "local",
-                "config": {
-                    "max-size": "1m",
-                    "max-file": "1",
-                    "compress": "false",
-                },
-            },
-        }
-        if self.config.io_device_path:
-            kwargs["device_write_bps"] = [{
-                "Path": self.config.io_device_path,
-                "Rate": self.config.io_write_bps,
-            }]
-        return kwargs
+        return build_container_kwargs(
+            self.config,
+            profile,
+            lifecycle="oneshot",
+            image_id=str(image.id),
+            name=f"{CONTAINER_PREFIX}{run_id}",
+            command=command,
+            working_dir=working_dir,
+            labels=labels,
+            mounts=ContainerMountPaths(
+                workspace=workspace_path,
+                inputs=inputs_path,
+                runtime=runtime_path,
+            ),
+        )
 
     @staticmethod
     def _safe_kill(container: Any) -> None:
@@ -419,6 +526,10 @@ class LocalDockerBackend:
             termination_reason = "completed"
         else:
             termination_reason = "nonzero_exit"
+        if termination_reason == "nonzero_exit":
+            quota_reason = self._quota_reason(output.stdout, output.stderr)
+            if quota_reason:
+                termination_reason = quota_reason
         return {
             "exit_code": int(exit_code) if isinstance(exit_code, int) else None,
             "termination_reason": termination_reason,
@@ -432,6 +543,21 @@ class LocalDockerBackend:
             "stdout_truncated": output.stdout_truncated,
             "stderr_truncated": output.stderr_truncated,
         }
+
+    @staticmethod
+    def _quota_reason(stdout: str, stderr: str) -> str:
+        """把常见 EDQUOT 文本映射为稳定原因；内核 quota 仍是强制边界。"""
+
+        combined = f"{stdout}\n{stderr}".casefold()
+        if (
+            "disk quota exceeded" not in combined
+            and "errno 122" not in combined
+            and "edquot" not in combined
+        ):
+            return ""
+        if "/runtime" in combined:
+            return "runtime_quota_exceeded"
+        return "workspace_quota_exceeded"
 
     def execute(
         self,
@@ -490,7 +616,7 @@ class LocalDockerBackend:
 
             self.workspace_files.ensure_workspace(workspace_id)
             self.workspace_files.disk_guard.ensure_available()
-            image = self._allowed_image()
+            image = self._oneshot_image()
             requested_quota = min(
                 max(1, int(quota_bytes or self.config.workspace_quota_bytes)),
                 self.config.workspace_quota_bytes,
@@ -504,20 +630,7 @@ class LocalDockerBackend:
                 "created_at_unix": time.time(),
             }
 
-            if not self._global_slots.acquire(blocking=False):
-                raise SandboxServiceError(
-                    SandboxErrorCode.SANDBOX_BUSY,
-                    "Sandbox 全局并发已满",
-                    retryable=True,
-                    stop=False,
-                )
-            try:
-                workspace_lock = self.workspace_files.acquire_workspace_mutation(
-                    workspace_id,
-                )
-            except SandboxServiceError:
-                self._global_slots.release()
-                raise
+            concurrency_permit = self.concurrency_limiter.acquire("restricted")
 
             container = None
             output_stream = None
@@ -591,7 +704,7 @@ class LocalDockerBackend:
                     ) from exc
 
                 deadline = time.monotonic() + timeout
-                next_usage_check = 0.0
+                next_stats_check = 0.0
                 while True:
                     if output_failures:
                         raise SandboxServiceError(
@@ -620,24 +733,8 @@ class LocalDockerBackend:
                         self._safe_kill(container)
                         break
                     now = time.monotonic()
-                    if now >= next_usage_check:
-                        next_usage_check = now + 0.5
-                        workspace_usage = directory_usage(
-                            self.workspace_files.filesystem(workspace_id),
-                        )
-                        runtime_usage = directory_usage(
-                            SafeRuntimeFilesystem(
-                                self.workspace_files.layout.ensure_runtime(workspace_id),
-                            ).filesystem,
-                        )
-                        if workspace_usage > effective_quota:
-                            forced_reason = "workspace_quota_exceeded"
-                            self._safe_kill(container)
-                            break
-                        if runtime_usage > self.config.runtime_quota_bytes:
-                            forced_reason = "runtime_quota_exceeded"
-                            self._safe_kill(container)
-                            break
+                    if now >= next_stats_check:
+                        next_stats_check = now + 0.5
                         memory, cpu_ms = self._stats(container)
                         peak_memory = max(peak_memory, memory)
                         cpu_time_ms = max(cpu_time_ms, cpu_ms)
@@ -658,13 +755,8 @@ class LocalDockerBackend:
                     peak_memory_bytes=peak_memory,
                     cpu_time_ms=cpu_time_ms,
                 )
-                workspace_usage_after = directory_usage(
-                    self.workspace_files.filesystem(workspace_id),
-                )
-                result_data["workspace_used_bytes"] = workspace_usage_after
-                result_data["workspace_usage_delta_bytes"] = (
-                    workspace_usage_after - workspace_usage_before
-                )
+                self.workspace_files.usage_ledger.mark_dirty(workspace_id)
+                result_data["workspace_usage_reconciliation_pending"] = True
                 status = (
                     "completed"
                     if result_data["termination_reason"] == "completed"
@@ -707,8 +799,7 @@ class LocalDockerBackend:
                 self.asset_files.cleanup_stage(workspace_id, run_id)
                 if capacity_reserved:
                     self.workspace_files.release_run_capacity(run_id)
-                workspace_lock.release()
-                self._global_slots.release()
+                concurrency_permit.release()
         finally:
             request_lock.release()
 
@@ -742,12 +833,3 @@ class LocalDockerBackend:
                 "Sandbox 运行不存在",
             )
         return value
-
-
-class SafeRuntimeFilesystem:
-    """让 runtime 用量复用同一套不跟随符号链接的核算。"""
-
-    def __init__(self, root: Path) -> None:
-        from core.sandbox.paths import SafeWorkspaceFilesystem
-
-        self.filesystem = SafeWorkspaceFilesystem(root)
