@@ -28,19 +28,25 @@
 
 - 测试文件命名：`tests/test_<module>.py`
 - 使用 pytest + in-memory SQLite
-- 测试必须在提交前运行：`python -m pytest tests/ -v`
+- 测试必须在提交前运行：`python -m pytest tests/ -n auto --dist loadfile -v`（20 核并行约 2 分钟；`--dist worksteal` 更快但会拆散同文件用例，仅在需要时使用）
+- 单文件/单测调试直接 `python -m pytest tests/test_<module>.py -v`，不加 `-n`（避免 worker 启动开销）
 - 0 failures 才能提交
 
 ## 项目结构
 
 | 路径 | 用途 |
 |------|------|
-| `api/routes.py` | FastAPI 路由和端点 |
-| `clients/` | 外部 API 客户端（new-api, dify, model registry） |
+| `api/routes.py` | FastAPI 聊天路由（proxy_chat 主链路） |
+| `api/admin/` | 管理端路由（模型/工具/画像/群记忆/Sandbox 等） |
+| `app/` | 领域服务模块（session_memory、group_memory、persona、memory_digest、group_learning、prompt_runtime 等） |
+| `clients/` | 外部 API 客户端（new-api, model registry） |
 | `nanobot_kt/bridge.py` | KT Agent 生命周期 + 请求处理 |
-| `core/` | 数据库、进化、状态管理 |
+| `core/` | 数据库、进化、状态管理、Prompt v2、语义索引、主动外呼 |
+| `core/sandbox/` | Sandbox Server 侧（授权/Lease 账本/管理操作，不接触 Docker） |
+| `sandboxd/` | Sandbox 独立控制面（唯一接触 Docker Socket 与 `/srv/nanobot`，经 UDS 调用） |
 | `creatures/nanobot/` | KT creature 配置 + 工具 |
 | `vendor/KohakuTerrarium/` | KT 框架源码 |
+| `webui/` | 管理前端（React + Vite；`npm run lint && npm run build`，测试 `npx vitest run`） |
 | `tests/` | 测试 |
 | `docs/superpowers/specs/` | 设计文档 |
 
@@ -62,6 +68,7 @@
 - **历史清除**：`mark-clear` 打 `history_clear_at` 标记 + 删 `ConversationTurn`；`ChatLog` 保留不删
 - **模型路由**：`get_ordered_candidates()` 按 priority score 排序，向下遍历（便宜优先）
 - **熔断器**：`ModelFailureTracker` 连续 3 次失败后自动禁用 5min
+- **Sandbox 边界**：Nanobot Server 不挂 Docker Socket、不知道宿主 Workspace 路径，只经 sandboxd UDS 操作；Profile 只能由 `SandboxAccessGrant` 决定，模型不能在参数中选择；Server 是 `SandboxLease`/`SandboxRun` 业务账本唯一写入方（周期 reconciler 主动拉取 sandboxd 事实）
 - **Token 估算**：CJK 字符按 1.0，ASCII 按 0.35（不求精确，量级判断）
 - **中文优先**：bot 使用者是中文用户，所有 prompt 和回复用中文
 - **提示词同步**：修改 `enriched_query` 组装逻辑、历史注入方式、conversation 结构、工具输出契约或 prompt runtime 输入时，**必须检查 canonical Prompt Runtime 模板是否仍然准确**，重点包括 `prompts.v2.default/chat/*`、`prompts.v2.default/tasks/*`、`prompts.v2.default/tools/*/usage.md`、`core/prompt_v2/variables.py` 和 `core/prompt_v2/template_registry.py`。如果模板引用的变量、标记或行为描述已过时，必须在同一 PR 中更新默认模板与必要的 `data/prompts_v2/` 运行时模板。
