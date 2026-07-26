@@ -666,11 +666,25 @@ async def proactive_outreach_run_once(
         },
         ip_address=request_ip,
     )
+    from core.proactive.scheduler import (
+        outreach_check_threshold_kwargs,
+        outreach_due_threshold_kwargs,
+    )
+
     try:
+        # 与后台调度器共用托管阈值组装,run-once 不得退回代码默认值。
         if body.mode == "check":
-            result = await run_outreach_once(user_id, db=db)
+            result = await run_outreach_once(
+                user_id,
+                db=db,
+                **outreach_check_threshold_kwargs(),
+            )
         else:
-            result = await run_outreach_due_once(user_id, db=db)
+            result = await run_outreach_due_once(
+                user_id,
+                db=db,
+                **outreach_due_threshold_kwargs(),
+            )
     except Exception:
         db.rollback()
         _write_run_once_audit(

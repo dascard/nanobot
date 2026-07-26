@@ -303,6 +303,23 @@ async def _run_outreach_once_acquired(
                     "forced": bool(schedule_row.forced),
                 }
             session.commit()
+            # 刚改判的 ambiguous 行必须立即执行与入口处一致的冷静期
+            # 判定:消息可能已实际送达,同轮继续评估会在 hold 期内再次
+            # 外呼,与下一轮的 skipped_ambiguous 行为自相矛盾。
+            if (
+                schedule_row.created_at is not None
+                and (clear_at is None or schedule_row.created_at > clear_at)
+            ):
+                hold_until = schedule_row.created_at + timedelta(
+                    minutes=max(0, int(ambiguous_hold_min))
+                )
+                if current < hold_until:
+                    return {
+                        "status": "skipped_ambiguous",
+                        "next_check_at": hold_until.isoformat(),
+                        "log_id": schedule_row.id,
+                        "forced": bool(schedule_row.forced),
+                    }
             schedule_row = None
         last_effective = _last_effective_outreach(session, user_id)
         first_attempt = _first_outreach_attempt(session, user_id)

@@ -27,6 +27,63 @@ from core.settings_service import settings
 logger = logging.getLogger("nanobot.proactive.scheduler")
 
 
+def outreach_due_threshold_kwargs(settings_port: Any = settings) -> dict[str, Any]:
+    """从托管设置组装 run_outreach_due_once 的阈值参数。
+
+    调度器与管理端 run-once 必须共用同一组装,否则 run-once 会退回代码
+    默认值,与线上调度行为不一致。
+    """
+    return {
+        "min_interval_min": settings_port.get_int(
+            "proactive_outreach.min_interval_min",
+            DEFAULT_MIN_INTERVAL_MIN,
+        ),
+        "max_check_interval_min": settings_port.get_int(
+            "proactive_outreach.max_check_interval_min",
+            DEFAULT_MAX_CHECK_INTERVAL_MIN,
+        ),
+        "max_silence_min": settings_port.get_int(
+            "proactive_outreach.max_silence_min",
+            DEFAULT_MAX_SILENCE_MIN,
+        ),
+        "ambiguous_hold_min": settings_port.get_int(
+            "proactive_outreach.ambiguous_hold_min",
+            DEFAULT_AMBIGUOUS_HOLD_MIN,
+        ),
+        "repeat_topic_cooldown_min": settings_port.get_int(
+            "proactive_outreach.repeat_topic_cooldown_min",
+            DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
+        ),
+        "allow_early_surge": settings_port.get_bool(
+            "proactive_outreach.allow_early_surge",
+            False,
+        ),
+        "surge_min_prob": settings_port.get_float(
+            "proactive_outreach.surge_min_prob",
+            DEFAULT_SURGE_MIN_PROB,
+        ),
+        "surge_max_prob": settings_port.get_float(
+            "proactive_outreach.surge_max_prob",
+            DEFAULT_SURGE_MAX_PROB,
+        ),
+    }
+
+
+_CHECK_THRESHOLD_KEYS = (
+    "min_interval_min",
+    "max_check_interval_min",
+    "max_silence_min",
+    "ambiguous_hold_min",
+    "repeat_topic_cooldown_min",
+)
+
+
+def outreach_check_threshold_kwargs(settings_port: Any = settings) -> dict[str, Any]:
+    """run_outreach_once(check 模式)可接受的托管阈值子集。"""
+    due_kwargs = outreach_due_threshold_kwargs(settings_port)
+    return {key: due_kwargs[key] for key in _CHECK_THRESHOLD_KEYS}
+
+
 def proactive_outreach_scheduler(
     stop_event: threading.Event,
     *,
@@ -66,38 +123,7 @@ def proactive_outreach_scheduler(
                         break
                     result = awaitable_runner(due_runner(
                         user_id,
-                        min_interval_min=settings_port.get_int(
-                            "proactive_outreach.min_interval_min",
-                            DEFAULT_MIN_INTERVAL_MIN,
-                        ),
-                        max_check_interval_min=settings_port.get_int(
-                            "proactive_outreach.max_check_interval_min",
-                            DEFAULT_MAX_CHECK_INTERVAL_MIN,
-                        ),
-                        max_silence_min=settings_port.get_int(
-                            "proactive_outreach.max_silence_min",
-                            DEFAULT_MAX_SILENCE_MIN,
-                        ),
-                        ambiguous_hold_min=settings_port.get_int(
-                            "proactive_outreach.ambiguous_hold_min",
-                            DEFAULT_AMBIGUOUS_HOLD_MIN,
-                        ),
-                        repeat_topic_cooldown_min=settings_port.get_int(
-                            "proactive_outreach.repeat_topic_cooldown_min",
-                            DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
-                        ),
-                        allow_early_surge=settings_port.get_bool(
-                            "proactive_outreach.allow_early_surge",
-                            False,
-                        ),
-                        surge_min_prob=settings_port.get_float(
-                            "proactive_outreach.surge_min_prob",
-                            DEFAULT_SURGE_MIN_PROB,
-                        ),
-                        surge_max_prob=settings_port.get_float(
-                            "proactive_outreach.surge_max_prob",
-                            DEFAULT_SURGE_MAX_PROB,
-                        ),
+                        **outreach_due_threshold_kwargs(settings_port),
                     ))
                     status = str((result or {}).get("status") or "")
                     if status in {
