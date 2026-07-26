@@ -328,12 +328,18 @@ def _action_after_readiness(
     min_interval_active: bool,
     min_interval_remaining: float,
     model_action: str = "",
+    wait_exhausted: bool = False,
 ) -> tuple[str, int | None, str]:
     if not participate:
         return "no_reply", None, "participation_score_below_theta"
     if min_interval_active:
         delay = _clip_delay(math.ceil(max(0.0, min_interval_remaining)))
         return "wait", delay, "min_interval"
+    # wait 已超时且无新消息时,静态 wait 信号(文件/标记/未完句)不会衰减,
+    # 必须抑制,否则参与中的直呼消息会在 wait↔timeout 间循环直至被防死循环
+    # 强制 no_reply 而永久沉默。
+    if wait_exhausted:
+        return "continue", None, "ready_after_wait_exhausted"
     if wait_signal >= 0.8:
         return "wait", 8, "strong_wait_signal"
     if wait_signal >= 0.4:
@@ -390,6 +396,7 @@ def decide_timing(
     min_interval_remaining: float = 0.0,
     model_hint: TimingModelHint | None = None,
     margin: float = DECISION_MARGIN,
+    wait_exhausted: bool = False,
 ) -> TimingDecision:
     signals = extract_signals(
         text,
@@ -431,6 +438,7 @@ def decide_timing(
                 wait_signal=signals.wait_signal,
                 min_interval_active=min_interval_active,
                 min_interval_remaining=min_interval_remaining,
+            wait_exhausted=wait_exhausted,
                 model_action=model_action,
             )
             return TimingDecision(
@@ -457,6 +465,7 @@ def decide_timing(
             wait_signal=signals.wait_signal,
             min_interval_active=min_interval_active,
             min_interval_remaining=min_interval_remaining,
+            wait_exhausted=wait_exhausted,
             model_action="",
         )
         return TimingDecision(
@@ -484,6 +493,7 @@ def decide_timing(
             wait_signal=signals.wait_signal,
             min_interval_active=min_interval_active,
             min_interval_remaining=min_interval_remaining,
+            wait_exhausted=wait_exhausted,
             model_action="",
         )
         return TimingDecision(
@@ -537,6 +547,7 @@ def decide_timing(
             wait_signal=signals.wait_signal,
             min_interval_active=min_interval_active,
             min_interval_remaining=min_interval_remaining,
+            wait_exhausted=wait_exhausted,
             model_action=model_action,
         )
         return TimingDecision(
@@ -564,6 +575,7 @@ def decide_timing(
         wait_signal=signals.wait_signal,
         min_interval_active=min_interval_active,
         min_interval_remaining=min_interval_remaining,
+            wait_exhausted=wait_exhausted,
         model_action="",
     )
     return TimingDecision(

@@ -1520,6 +1520,86 @@ class TestGroupRuntime:
         assert signals["sub_signals"]["s_transport"] == 0.0
 
     @pytest.mark.asyncio
+    async def test_wait_timeout_direct_message_model_continue_survives_scoring(
+        self, monkeypatch,
+    ):
+        """@bot+图片 wait 超时后模型 continue 不得被静态 wait 信号推翻成沉默。"""
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda *_args: TimingModelPolicy("enabled", "test")
+        )
+
+        async def noop_gate(_gid, _p, _ctx, _tr):
+            raise AssertionError("首轮应由评分短路,不调用 gate")
+
+        monkeypatch.setattr(runtime, "_call_gate", noop_gate)
+        first = await runtime.process_message("g1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "@bot 看这个",
+            "is_at_bot": True,
+            "segments": [{"type": "image", "url": "https://example.com/a.png"}],
+        }, trigger_reason="at_bot")
+        assert first["action"] == "wait"
+
+        state = runtime._states["group_g1"]
+        assert state.wait_count == 1
+        assert state.new_messages_during_wait == []
+        state.last_gate_completed_ts = 0  # 绕过 MIN_INTERVAL 频控
+
+        async def continue_gate(_gid, _p, ctx, _tr):
+            assert ctx.get("wait_timeout") is True
+            return {
+                "action": "continue",
+                "reason": "wait timed out, answer now",
+                "parse_quality": "json",
+                "model_confidence": 0.9,
+            }
+
+        monkeypatch.setattr(runtime, "_call_gate", continue_gate)
+        result = await runtime.handle_timer_fired(
+            "g1", generation=state.generation, trigger_reason="at_bot",
+        )
+
+        assert result["action"] == "continue"
+        assert runtime._states["group_g1"].pending == []
+
+    @pytest.mark.asyncio
+    async def test_rules_only_timer_wait_timeout_direct_message_continues(
+        self, monkeypatch,
+    ):
+        """rules_only 下 wait 超时重判不得再次 wait(死循环),直呼消息应 continue。"""
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda *_args: TimingModelPolicy("rules_only", "test")
+        )
+
+        async def forbidden_gate(_gid, _p, _ctx, _tr):
+            raise AssertionError("rules_only 不应调用模型 gate")
+
+        monkeypatch.setattr(runtime, "_call_gate", forbidden_gate)
+        state = runtime._states.setdefault("group_g1", GateState(group_id="group_g1"))
+        state.add_message(PendingMessage(
+            "u1", "A", "@bot 等一下我发代码", is_at_bot=True,
+        ))
+        state.last_trigger_reason = "at_bot"
+        state.start_wait(8, "wait marker")
+        assert state.wait_count == 1
+        state.last_gate_completed_ts = 0
+
+        result = await runtime.handle_timer_fired(
+            "g1", generation=state.generation, trigger_reason="at_bot",
+        )
+
+        assert result["action"] == "continue"
+        assert state.pending == []
+        assert state.waiting_for_more is False
+
+    @pytest.mark.asyncio
     async def test_direct_at_bot_transport_conflict_reaches_gate(self, monkeypatch):
         """@bot + URL 是参与/抑制冲突，应进入 TimingGate 而不是被强制 continue。"""
         runtime = GroupRuntime()

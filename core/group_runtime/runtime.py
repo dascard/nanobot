@@ -575,6 +575,17 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             if not state:
                 return {"action": "no_reply", "delay_seconds": None, "reason": "state cleaned up"}
 
+            # generation 校验必须先于 talk_value 门:过期 timer 若先命中
+            # talk_value 分支会被返回 wait 续命,永远杀不掉。
+            if generation != state.generation:
+                logger.info("[GroupRuntime] timer gen mismatch %d!=%d for %s",
+                            generation, state.generation, group_id)
+                return self._attach_shadow_scoring({
+                    "action": "no_reply", "delay_seconds": None,
+                    "generation": state.generation,
+                    "reason": "generation mismatch, timer expired",
+                }, state, trigger_reason or state.last_trigger_reason or "timer")
+
             # 检查 talk_value gate——linger 激活时豁免(与消息路径 process_message 对齐)
             if (state.last_trigger_reason == "ambient"
                     and self._active_linger_score(state) <= 0
@@ -592,16 +603,12 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     ),
                 }, state, trigger_reason or state.last_trigger_reason or "timer")
 
-            if generation != state.generation:
-                logger.info("[GroupRuntime] timer gen mismatch %d!=%d for %s",
-                            generation, state.generation, group_id)
-                return self._attach_shadow_scoring({
-                    "action": "no_reply", "delay_seconds": None,
-                    "generation": state.generation,
-                    "reason": "generation mismatch, timer expired",
-                }, state, trigger_reason or state.last_trigger_reason or "timer")
-
-            if self._should_cooldown(state, trigger_reason or "timer"):
+            # 冷却豁免与消息路径对齐:linger 激活时不进入冷却分支
+            if self._should_cooldown(
+                state,
+                trigger_reason or "timer",
+                has_active_linger=self._active_linger_score(state) > 0,
+            ):
                 ago = state.bot_reply_ago()
                 snapshot = state.take_snapshot()
                 transaction = self._begin_gate(group_id, state)
@@ -761,19 +768,12 @@ class GroupRuntime(GroupRuntimeScoringMixin):
         elif action == "wait":
             delay_source = scoring_delay if scoring_delay is not None else result.get("delay_seconds", 5)
             delay = _clip_timing_wait_delay(delay_source or 5)
-            # 防死循环：wait_count>=1 且无新消息 → force no_reply
-            if state.wait_count >= 1 and not state.new_messages_during_wait:
-                logger.info("[GroupRuntime] anti-loop: wait_count=%d no_new_msgs → force no_reply",
-                            state.wait_count)
-                state.handle_no_reply()
-                action = "no_reply"
-                delay = None
-            elif state.wait_count >= 2:
-                logger.info("[GroupRuntime] anti-loop: wait_count>=2 → force no_reply")
-                state.handle_no_reply()
-                action = "no_reply"
-                delay = None
-            elif state.is_wait_exhausted():
+            # 防死循环判定与评分短路路径共用 _wait_anti_loop_reason
+            anti_loop = self._wait_anti_loop_reason(state)
+            if anti_loop:
+                logger.info(
+                    "[GroupRuntime] anti-loop: %s → force no_reply", anti_loop
+                )
                 state.handle_no_reply()
                 action = "no_reply"
                 delay = None
@@ -1008,18 +1008,35 @@ class GroupRuntime(GroupRuntimeScoringMixin):
 
         rc = str(recent_context or "").strip()
         if rc:
-            lines.append(rc)
+            # recent_context 单独限额:它只是背景,不得挤占 pending 预算。
+            lines.append(sanitize_prompt_text(rc, 500))
 
+        # pending 从最新往回填充预算:整体尾部截断会把最新 pending 与闭合
+        # 标记截掉,模型将看不到真正待判定的消息。
+        closing = "</timing_context>"
+        header_text = "\n".join(lines)
+        budget = 1600 - len(header_text) - len(closing) - 2
         msgs = pending[:MAX_PENDING]
-        for p in msgs:
-            lines.append(
-                _pending_payload([p])["pending_text"]
+        pending_lines: list[str] = []
+        used = 0
+        dropped = 0
+        for p in reversed(msgs):
+            line = sanitize_prompt_text(
+                _pending_payload([p])["pending_text"], 400,
             )
-        if len(pending) > MAX_PENDING:
-            lines.append(f"...[pending 截断: 原{len(pending)}条]")
-        lines.append("</timing_context>")
+            if pending_lines and used + len(line) + 1 > budget:
+                dropped += 1
+                continue
+            pending_lines.append(line)
+            used += len(line) + 1
+        pending_lines.reverse()
+        dropped += len(pending) - len(msgs)
+        if dropped > 0:
+            lines.append(f"...[pending 截断: 已省略更早 {dropped} 条]")
+        lines.extend(pending_lines)
+        lines.append(closing)
 
-        return sanitize_prompt_text("\n".join(lines), 1600)
+        return sanitize_prompt_text("\n".join(lines), 2400)
 
 
 # ── 全局单例 ──

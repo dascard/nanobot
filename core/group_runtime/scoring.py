@@ -87,6 +87,22 @@ class GroupRuntimeScoringMixin:
         threshold = cls._talk_threshold(state, talk_value)
         return len(state.pending) >= threshold
 
+    @staticmethod
+    def _wait_anti_loop_reason(state: GroupChatState) -> str:
+        """wait 防死循环判定;非空表示不得再次进入 wait。
+
+        与 _apply_gate_result 的模型路径共用同一组条件,评分短路路径
+        (rules_only/shadow/cooldown)必须一致,否则静态 wait 信号会让
+        timer 循环永不终止。
+        """
+        if state.wait_count >= 1 and not state.new_messages_during_wait:
+            return f"wait_count={state.wait_count} no_new_msgs"
+        if state.wait_count >= 2:
+            return "wait_count>=2"
+        if state.is_wait_exhausted():
+            return "wait_exhausted"
+        return ""
+
     def _shadow_scoring(
         self,
         state: GroupChatState,
@@ -189,6 +205,7 @@ class GroupRuntimeScoringMixin:
             min_interval_active=min_interval_active,
             min_interval_remaining=max(0.0, min_interval_remaining),
             model_hint=model_hint,
+            wait_exhausted=bool(self._wait_anti_loop_reason(state)),
         )
 
     def _apply_scoring_shortcut(
@@ -206,8 +223,18 @@ class GroupRuntimeScoringMixin:
         if action == "continue":
             state.handle_continue()
         elif action == "wait":
-            delay = int(delay or 5)
-            state.start_wait(delay, decision.reason)
+            anti_loop = self._wait_anti_loop_reason(state)
+            if anti_loop:
+                logger.info(
+                    "[GroupRuntime] anti-loop(scoring): %s → force no_reply",
+                    anti_loop,
+                )
+                action = "no_reply"
+                delay = None
+                state.handle_no_reply()
+            else:
+                delay = int(delay or 5)
+                state.start_wait(delay, decision.reason)
         else:
             action = "no_reply"
             delay = None
