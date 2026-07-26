@@ -88,6 +88,7 @@ class GroupMemoryQueryRepositoryPort(Protocol):
         memory_type: str,
         content_hash: str,
         exclude_id: int,
+        alternate_hashes: Sequence[str] = (),
     ) -> GroupMemoryRecord | None: ...
 
     def list_all_memories(self) -> Sequence[GroupMemoryRecord]: ...

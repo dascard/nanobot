@@ -120,6 +120,102 @@ def test_old_but_relevant_memory_can_be_selected(db_session):
     assert old.id in result.selected_ids
 
 
+def test_reranker_runtime_failure_degrades_to_lexical_instead_of_dropping_all(
+    db_session,
+):
+    """reranker 运行中抛错必须降级为词面门控,不得整批静默丢弃。"""
+    from app.group_memory.retrieval_service import GroupMemoryRetrievalService
+
+    class ExplodingReranker:
+        def rerank(self, query, candidates, *, top_k=None):
+            raise RuntimeError("reranker service down")
+
+    relevant = _memory(
+        db_session,
+        content="模型部署记忆: 本地模型部署要检查量化参数",
+        content_hash="gm-degrade-relevant",
+    )
+    db_session.commit()
+
+    result = GroupMemoryRetrievalService(
+        db_session,
+        reranker_provider=ExplodingReranker(),
+    ).select(
+        group_id="1097666427",
+        current_user_input="本地模型部署量化参数怎么调？",
+        recent_messages=[],
+        max_items=5,
+    )
+
+    assert relevant.id in result.selected_ids
+    assert all(
+        item.get("reason") != "low_reranker" for item in result.skipped
+    )
+
+
+def test_group_memory_rag_cache_store_evicts_expired_entries():
+    """写缓存时必须清扫过期条目,滚动 key 不会有同 key 复读来触发清理。"""
+    import time as _time
+
+    from app.group_memory import injection_service as injection_module
+    from app.group_memory.injection_service import (
+        GroupMemoryInjectionResult,
+        _store_group_memory_rag_cache,
+    )
+
+    injection_module.GROUP_MEMORY_RAG_CACHE.clear()
+    try:
+        expired_deadline = _time.monotonic() - 1
+        for idx in range(5):
+            injection_module.GROUP_MEMORY_RAG_CACHE[f"expired-{idx}"] = (
+                expired_deadline,
+                "rev",
+                GroupMemoryInjectionResult(),
+            )
+        _store_group_memory_rag_cache("fresh", (
+            _time.monotonic() + 120,
+            "rev",
+            GroupMemoryInjectionResult(),
+        ))
+
+        assert set(injection_module.GROUP_MEMORY_RAG_CACHE) == {"fresh"}
+    finally:
+        injection_module.GROUP_MEMORY_RAG_CACHE.clear()
+
+
+def test_group_memory_rag_cache_store_caps_total_entries():
+    import time as _time
+
+    from app.group_memory import injection_service as injection_module
+    from app.group_memory.injection_service import (
+        GROUP_MEMORY_RAG_CACHE_MAX_ENTRIES,
+        GroupMemoryInjectionResult,
+        _store_group_memory_rag_cache,
+    )
+
+    injection_module.GROUP_MEMORY_RAG_CACHE.clear()
+    try:
+        base = _time.monotonic() + 300
+        for idx in range(GROUP_MEMORY_RAG_CACHE_MAX_ENTRIES):
+            injection_module.GROUP_MEMORY_RAG_CACHE[f"live-{idx}"] = (
+                base + idx,
+                "rev",
+                GroupMemoryInjectionResult(),
+            )
+        _store_group_memory_rag_cache("newest", (
+            base + 10_000,
+            "rev",
+            GroupMemoryInjectionResult(),
+        ))
+
+        cache = injection_module.GROUP_MEMORY_RAG_CACHE
+        assert len(cache) == GROUP_MEMORY_RAG_CACHE_MAX_ENTRIES
+        assert "newest" in cache
+        assert "live-0" not in cache
+    finally:
+        injection_module.GROUP_MEMORY_RAG_CACHE.clear()
+
+
 def test_group_memory_retrieval_isolated_by_canonical_platform(db_session):
     from app.group_memory.retrieval_service import (
         GroupMemoryRetrievalService,

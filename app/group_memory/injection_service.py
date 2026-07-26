@@ -33,6 +33,33 @@ GROUP_MEMORY_RAG_CACHE: dict[
     tuple[float, str, GroupMemoryInjectionResult],
 ] = {}
 GROUP_MEMORY_RAG_CACHE_TTL_SECONDS = 120
+GROUP_MEMORY_RAG_CACHE_MAX_ENTRIES = 256
+
+
+def _store_group_memory_rag_cache(
+    cache_key: str,
+    entry: tuple[float, str, GroupMemoryInjectionResult],
+) -> None:
+    """写缓存并顺带清扫:key 含滚动消息窗口,几乎每条新消息生成新 key,
+    过期条目只靠同 key 复读永远清不掉,必须在写入时逐出。"""
+    now = time.monotonic()
+    expired = [
+        key
+        for key, (deadline, _revision, _result) in GROUP_MEMORY_RAG_CACHE.items()
+        if deadline <= now
+    ]
+    for key in expired:
+        GROUP_MEMORY_RAG_CACHE.pop(key, None)
+    if len(GROUP_MEMORY_RAG_CACHE) >= GROUP_MEMORY_RAG_CACHE_MAX_ENTRIES:
+        oldest = sorted(
+            GROUP_MEMORY_RAG_CACHE.items(),
+            key=lambda item: item[1][0],
+        )
+        for key, _value in oldest[
+            : len(GROUP_MEMORY_RAG_CACHE) - GROUP_MEMORY_RAG_CACHE_MAX_ENTRIES + 1
+        ]:
+            GROUP_MEMORY_RAG_CACHE.pop(key, None)
+    GROUP_MEMORY_RAG_CACHE[cache_key] = entry
 
 
 @dataclass
@@ -208,11 +235,11 @@ class GroupMemoryInjectionService:
                 debug=debug,
             )
             if not record_injection:
-                GROUP_MEMORY_RAG_CACHE[cache_key] = (
+                _store_group_memory_rag_cache(cache_key, (
                     time.monotonic() + GROUP_MEMORY_RAG_CACHE_TTL_SECONDS,
                     prompt_revision,
                     result,
-                )
+                ))
             return result
         result = GroupMemoryInjectionResult(
             context="",
@@ -222,11 +249,11 @@ class GroupMemoryInjectionService:
             debug=debug,
         )
         if not record_injection:
-            GROUP_MEMORY_RAG_CACHE[cache_key] = (
+            _store_group_memory_rag_cache(cache_key, (
                 time.monotonic() + GROUP_MEMORY_RAG_CACHE_TTL_SECONDS,
                 prompt_revision,
                 result,
-            )
+            ))
         return result
 
     def record_injected(self, selected_ids: list[int]) -> int:

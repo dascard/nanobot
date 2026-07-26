@@ -60,6 +60,13 @@ def _memory_content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _admin_content_hash(content: str) -> str:
+    """管理端归一化 32 位哈希;延迟导入避免 core.db↔core.group_memory 循环。"""
+    from core.group_memory import _content_hash
+
+    return _content_hash(content)
+
+
 def _conflict_group_id(
     *,
     chat_stream_id: str,
@@ -143,13 +150,20 @@ class SqlAlchemyGroupLearningGovernanceRepository:
         chat_stream_id: str,
         memory_type: str,
         content_hash: str,
+        alternate_hashes: tuple[str, ...] = (),
     ) -> GroupMemory | None:
+        # 管理端编辑过的行使用归一化 32 位 content_hash,治理去重必须
+        # 同时匹配两种格式,否则同文候选会绕过去重重复入库。
+        hashes = sorted({
+            str(content_hash),
+            *(str(item) for item in alternate_hashes if str(item)),
+        })
         return (
             self._session.query(GroupMemory)
             .filter(
                 GroupMemory.chat_stream_id == chat_stream_id,
                 GroupMemory.memory_type == memory_type,
-                GroupMemory.content_hash == content_hash,
+                GroupMemory.content_hash.in_(hashes),
             )
             .first()
         )
@@ -250,6 +264,7 @@ class SqlAlchemyGroupLearningGovernanceRepository:
             chat_stream_id=identity.chat_stream_id,
             memory_type=str(candidate.candidate_type),
             content_hash=content_hash,
+            alternate_hashes=(_admin_content_hash(rendered_content),),
         )
         if existing is not None:
             return existing, False
@@ -410,6 +425,7 @@ class SqlAlchemyGroupLearningGovernanceRepository:
             chat_stream_id=str(candidate.chat_stream_id),
             memory_type=str(candidate.candidate_type),
             content_hash=_memory_content_hash(rendered_content),
+            alternate_hashes=(_admin_content_hash(rendered_content),),
         )
         if exact is not None:
             self._mark_candidate(
@@ -700,6 +716,7 @@ class SqlAlchemyGroupLearningGovernanceRepository:
                 chat_stream_id=str(candidate.chat_stream_id),
                 memory_type=str(candidate.candidate_type),
                 content_hash=content_hash,
+                alternate_hashes=(_admin_content_hash(rendered_content),),
             )
             if duplicate is not None and int(duplicate.id) != int(target.id):
                 raise ValueError("冲突替换内容已存在于另一条正式记忆")

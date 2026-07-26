@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 
 from core.chat_stream_identity import identity_storage_aliases
@@ -105,13 +106,31 @@ class GroupMemoryCommandService:
                 memory_type=row.memory_type,
                 content_hash=content_hash,
                 exclude_id=row.id,
+                # 治理管线写入的行使用原文完整 sha256,必须一并匹配。
+                alternate_hashes=(
+                    hashlib.sha256(
+                        normalized_content.encode("utf-8")
+                    ).hexdigest(),
+                ),
             )
             if duplicate is not None:
                 raise GroupMemoryDuplicate("已有相同记忆，可合并或归档")
+            # 管理端改写正文属于人工治理动作:必须同步 approved_content_hash
+            # 与治理来源字段(对齐 governance adapter 的 _mark_human_target
+            # 契约),否则未经审核的新文本会顶着指向旧内容的审批哈希继续
+            # 注入,后续同 key 冲突判定也会基于失效哈希。
             values.update({
                 "content": normalized_content,
                 "content_hash": content_hash,
                 "cluster_key": _cluster_key(normalized_content),
+                "approved_content_hash": hashlib.sha256(
+                    normalized_content.encode("utf-8")
+                ).hexdigest(),
+                "approval_source": "human",
+                "governance_mode": "human_managed",
+                "human_reviewer_id": "admin",
+                "human_reviewed_at": db_now_naive(),
+                "human_action": "update",
             })
         if status is not None:
             normalized_status = str(status).strip()

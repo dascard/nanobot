@@ -140,7 +140,14 @@ class SqlAlchemyGroupMemoryRepository:
         memory_type: str,
         content_hash: str,
         exclude_id: int,
+        alternate_hashes: Sequence[str] = (),
     ) -> GroupMemoryRecord | None:
+        # 管理端(归一化 32 位)与群学习治理管线(原文 64 位)历史上使用
+        # 不同的 content_hash 算法,存量行两种格式并存;查重必须同时匹配。
+        hashes = sorted({
+            str(content_hash),
+            *(str(item) for item in alternate_hashes if str(item)),
+        })
         row = (
             self._session.query(GroupMemory)
             .filter(
@@ -150,7 +157,7 @@ class SqlAlchemyGroupMemoryRepository:
                     legacy_group_ids=legacy_group_ids,
                 ),
                 GroupMemory.memory_type == str(memory_type),
-                GroupMemory.content_hash == str(content_hash),
+                GroupMemory.content_hash.in_(hashes),
             )
             .first()
         )

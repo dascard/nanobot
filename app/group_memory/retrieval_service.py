@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -39,6 +40,8 @@ from core.retrieval import (
 )
 from core.semantic.reranker import SemanticCandidate
 from core.time_utils import db_now_naive
+
+logger = logging.getLogger("nanobot.group_memory.retrieval")
 
 
 TYPE_LIMITS = {
@@ -203,7 +206,10 @@ class GroupMemoryRetrievalService:
             provider_id="group_memory",
         )
 
-    def _reranker_scores(self, query_text: str, rows: list[Any]) -> dict[int, float]:
+    def _reranker_scores(
+        self, query_text: str, rows: list[Any]
+    ) -> dict[int, float] | None:
+        """返回 reranker 分数;运行时失败返回 None 表示需要降级。"""
         if self.reranker_provider is None or not rows:
             return {}
         candidates = [
@@ -258,7 +264,13 @@ class GroupMemoryRetrievalService:
         except GroupMemoryRerankerTimeout:
             raise
         except Exception:
-            return {}
+            # 运行时失败若按空分数处理,所有候选都会因 low_reranker 被静默
+            # 丢弃;返回 None 让调用方走词面相关度降级路径。
+            logger.warning(
+                "[GroupMemory] reranker 调用失败,按运行时降级继续",
+                exc_info=True,
+            )
+            return None
         scores: dict[int, float] = {}
         for result in results:
             parts = str(result.candidate_id).split(":")
@@ -399,10 +411,11 @@ class _GroupMemoryScoringPolicy:
             str(key): dict(value)
             for key, value in dict(outcome.metadata.get("score_components", {})).items()
         }
+        reranker_degraded = bool(outcome.metadata.get("reranker_degraded"))
         ranked: list[_GroupMemoryCandidate] = []
         for candidate in outcome.items:
             components = dict(candidate.components)
-            if self.service.reranker_provider is None:
+            if self.service.reranker_provider is None or reranker_degraded:
                 minimum = (
                     STRICT_MIN_RELEVANCE
                     if candidate.memory_type in STRICT_RELEVANCE_TYPES
@@ -462,6 +475,17 @@ class _GroupMemoryReranker:
 
         all_rows = list(candidates.metadata.get("all_rows", ()))
         scores = self.service._reranker_scores(request.query, all_rows)
+        if scores is None:
+            # 运行时降级:保留候选,交由 final_rank 按词面相关度门控。
+            return RerankOutcome(
+                items=candidates.items,
+                reranker_items=(),
+                metadata={
+                    "skipped": tuple(skipped),
+                    "score_components": score_components,
+                    "reranker_degraded": True,
+                },
+            )
         accepted: list[_GroupMemoryCandidate] = []
         for candidate in candidates.items:
             components = dict(candidate.components)
