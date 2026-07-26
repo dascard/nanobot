@@ -885,3 +885,196 @@ def test_push_failure_log_is_redacted_and_bounded(caplog, monkeypatch):
     assert "响应正文已省略" in message
     assert len(message) <= 800
     assert text_calls["count"] == 0
+
+
+def _seed_schedule_task(db_session, *, schedule: str, now, next_fire_at=None):
+    from core.schedule_spec import (
+        parse_schedule,
+        schedule_fields,
+    )
+    from core.scheduled_task_outbound import scheduled_cron_occurrence
+
+    now_utc = (
+        scheduled_cron_occurrence(task_id=1, local_time=now).scheduled_for
+        + timedelta(seconds=now.second)
+    )
+    spec = parse_schedule(schedule, now_utc=now_utc)
+    kind, spec_json, cron_expr = schedule_fields(spec)
+    task = ScheduledTask(
+        name=f"schedule-{kind}",
+        cron_expr=cron_expr,
+        schedule_kind=kind,
+        schedule_spec=spec_json,
+        next_fire_at=next_fire_at,
+        target_type="private",
+        target_id="0000000000",
+        prompt_template="生成内容",
+        enabled=True,
+        delivery_status="idle",
+    )
+    db_session.add(task)
+    db_session.commit()
+    return task
+
+
+def test_run_scheduled_tasks_once_task_fires_then_completes(
+    db_session,
+    monkeypatch,
+):
+    now = _local_time(2026, 7, 15, 12, 0, 20)
+    _seed_scheduled_task_outbox_control(db_session, now)
+    task = _seed_schedule_task(db_session, schedule="2026-07-15T12:00", now=now)
+    task_id = task.id
+    calls = {"generate": 0}
+
+    async def fake_generate(_task):
+        calls["generate"] += 1
+        return "一次性提醒内容"
+
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: now)
+    monkeypatch.setattr(daily_digest, "_generate_task_message", fake_generate)
+
+    executed = run_async(daily_digest.run_scheduled_tasks())
+    repeated = run_async(daily_digest.run_scheduled_tasks())
+
+    db_session.expire_all()
+    task = db_session.get(ScheduledTask, task_id)
+    assert executed == 1
+    assert repeated == 0
+    assert calls == {"generate": 1}
+    # once 触发后视为完成:禁用且不再有下一次
+    assert not bool(task.enabled)
+    assert task.next_fire_at is None
+    assert db_session.query(OutboundDeliveryOutbox).count() == 1
+
+
+def test_run_scheduled_tasks_once_task_missed_beyond_grace_disabled(
+    db_session,
+    monkeypatch,
+):
+    from core.schedule_spec import MAX_GRACE_SECONDS
+
+    now = _local_time(2026, 7, 15, 12, 0, 20)
+    _seed_scheduled_task_outbox_control(db_session, now)
+    # 原定时刻已超过宽限窗口(模拟停机错过):直接构造 spec
+    missed_at = "2026-07-15T09:00:00+08:00"
+    task = ScheduledTask(
+        name="错过的一次性任务",
+        cron_expr="",
+        schedule_kind="once",
+        schedule_spec=json.dumps({
+            "kind": "once",
+            "run_at": missed_at,
+            "display": "单次 2026-07-15 09:00",
+        }, ensure_ascii=False, sort_keys=True),
+        next_fire_at=None,
+        target_type="private",
+        target_id="0000000000",
+        prompt_template="生成内容",
+        enabled=True,
+        delivery_status="idle",
+    )
+    db_session.add(task)
+    db_session.commit()
+    task_id = task.id
+    assert (12 - 9) * 3600 > MAX_GRACE_SECONDS
+
+    async def forbidden_generate(_task):
+        raise AssertionError("超宽限的 once 任务不得触发生成")
+
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: now)
+    monkeypatch.setattr(
+        daily_digest, "_generate_task_message", forbidden_generate
+    )
+
+    executed = run_async(daily_digest.run_scheduled_tasks())
+
+    db_session.expire_all()
+    task = db_session.get(ScheduledTask, task_id)
+    assert executed == 0
+    assert not bool(task.enabled)
+    assert task.next_fire_at is None
+
+
+def test_run_scheduled_tasks_fast_forwards_missed_cron_beyond_grace(
+    db_session,
+    monkeypatch,
+):
+    now = _local_time(2026, 7, 15, 12, 0, 20)
+    _seed_scheduled_task_outbox_control(db_session, now)
+    # 每天 09:00(上海),上一槽是昨天 01:00 UTC,迟到超过 2h 宽限
+    task = _seed_schedule_task(
+        db_session,
+        schedule="0 9 * * *",
+        now=now,
+        next_fire_at=datetime(2026, 7, 14, 1, 0, 0),
+    )
+    task_id = task.id
+
+    async def forbidden_generate(_task):
+        raise AssertionError("超宽限的 cron 槽不得补发")
+
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: now)
+    monkeypatch.setattr(
+        daily_digest, "_generate_task_message", forbidden_generate
+    )
+
+    executed = run_async(daily_digest.run_scheduled_tasks())
+
+    db_session.expire_all()
+    task = db_session.get(ScheduledTask, task_id)
+    assert executed == 0
+    assert bool(task.enabled)
+    # 快进到下一个未来槽:2026-07-16 09:00 上海 = 01:00 UTC
+    assert task.next_fire_at == datetime(2026, 7, 16, 1, 0, 0)
+
+
+def test_run_scheduled_tasks_interval_task_advances_next_fire(
+    db_session,
+    monkeypatch,
+):
+    now = _local_time(2026, 7, 15, 12, 0, 20)
+    _seed_scheduled_task_outbox_control(db_session, now)
+    # 槽 = 12:00 上海 = 04:00 UTC,已到期
+    task = _seed_schedule_task(
+        db_session,
+        schedule="every 30m",
+        now=now,
+        next_fire_at=datetime(2026, 7, 15, 4, 0, 0),
+    )
+    task_id = task.id
+
+    async def fake_generate(_task):
+        return "间隔任务内容"
+
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: now)
+    monkeypatch.setattr(daily_digest, "_generate_task_message", fake_generate)
+
+    executed = run_async(daily_digest.run_scheduled_tasks())
+
+    db_session.expire_all()
+    task = db_session.get(ScheduledTask, task_id)
+    assert executed == 1
+    assert bool(task.enabled)
+    assert task.next_fire_at == datetime(2026, 7, 15, 4, 30, 0)
+    assert db_session.query(OutboundDeliveryOutbox).count() == 1
+
+
+def test_scheduled_task_metadata_disables_schedule_task_tool():
+    task = ScheduledTask(
+        name="递归防护",
+        cron_expr="0 9 * * *",
+        target_type="private",
+        target_id="0000000000",
+        prompt_template="生成内容",
+        enabled=True,
+    )
+
+    metadata = daily_digest._scheduled_task_metadata(task)
+
+    # 定时任务会话必须屏蔽 schedule_task,防止任务递归创建任务
+    assert metadata["disabled_tool_names"] == ["schedule_task"]

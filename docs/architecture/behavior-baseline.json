@@ -1,7 +1,7 @@
 {
   "approved_changes": [
     {
-      "after_sha256": "ad6e92b28b53ee8ac4e5ad2c208f43eb3eea6596710fd9ed1325f8b2518b4457",
+      "after_sha256": "b663928a61a8e9f406439d2e2ed221248f773ed5b678a9fe5f6ed3d070392b04",
       "before_sha256": "5f369375cd179c523d77fc5728228fa1f6d70ef5d68b40f8dc55935213a4dbed",
       "id": "stage1_admin_structured_views",
       "reason": "删除 Admin 任意 SQL 产品入口，改为代码所有的结构化 Table View Registry；Sandbox、URL、CQ 和 Prompt 安全基线保持不变。",
@@ -73,7 +73,7 @@
       "stage": "阶段 7B"
     },
     {
-      "after_sha256": "a38635a895c5442dd3a1a853f614fa2d8e89b9fc8dac68e844ba6ded6534c2c9",
+      "after_sha256": "fad5823cc90ffdfe486e734426a76a5d35ed5d1125b102c0f8ae9bae14e40ff6",
       "before_sha256": "d6127b3f19ff082bdbb3163a384f394ca5b748fa524ecab0b176aa26e8fb54d5",
       "id": "stage7c_group_analysis_prompt",
       "reason": "为 group_analysis 增加 Registry 驱动的可选 aspects，同步显式工具兼容默认和定时学习默认；同时把经来源审核且无冲突的正式群体记忆作为不可信背景接入 canonical Prompt Contribution，未选择方面不创建模型分支或报告区块。",
@@ -113,7 +113,7 @@
       "stage": "阶段 8"
     }
   ],
-  "baseline_git_commit": "35b8904eef449e8fd7beb7831685abf033249aa6",
+  "baseline_git_commit": "708fa3fb90b4b072b359da4c2a74dabcafc41272",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -124,7 +124,7 @@
   },
   "runtime_versions": {
     "generated_with_python": "3.12.7",
-    "kt_commit": "6c2c5f1d059ac7f99379b0cddeea21da8e9b55c0",
+    "kt_commit": "708fa3fb90b4b072b359da4c2a74dabcafc41272",
     "prompt_runtime_schema": "v2",
     "python_constraint": ">=3.11"
   },
@@ -156,7 +156,7 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "a38635a895c5442dd3a1a853f614fa2d8e89b9fc8dac68e844ba6ded6534c2c9"
+      "sha256": "fad5823cc90ffdfe486e734426a76a5d35ed5d1125b102c0f8ae9bae14e40ff6"
     },
     {
       "classification": "preserve",
@@ -170,7 +170,7 @@
       "id": "security_invariants",
       "note": "Sandbox 路径、Admin 结构化视图、URL、CQ 和 Prompt 权威边界不得削弱。",
       "path": "tests/golden/architecture_behavior/security_invariants.json",
-      "sha256": "ad6e92b28b53ee8ac4e5ad2c208f43eb3eea6596710fd9ed1325f8b2518b4457"
+      "sha256": "b663928a61a8e9f406439d2e2ed221248f773ed5b678a9fe5f6ed3d070392b04"
     }
   ]
 }

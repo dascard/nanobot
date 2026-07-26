@@ -6770,6 +6770,17 @@
             "title": "Prompt Template",
             "type": "string"
           },
+          "schedule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule"
+          },
           "target_id": {
             "title": "Target Id",
             "type": "string"

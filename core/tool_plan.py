@@ -10,7 +10,7 @@ import copy
 import hashlib
 import inspect
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
@@ -188,6 +188,7 @@ def build_tool_plan(
     session_id: str = "",
     runtime_preset: str = "full",
     db: Any = None,
+    extra_disabled: Mapping[str, str] | None = None,
 ) -> ToolPlan:
     enabled, disabled = resolve_effective_tools(
         chat_type=chat_type,
@@ -198,6 +199,14 @@ def build_tool_plan(
         runtime_preset=runtime_preset,
         db=db,
     )
+    # 请求来源级硬禁用(如定时任务会话防递归):只减不增,
+    # 在效果表之后、计划冻结之前应用。
+    for raw_name, raw_reason in (extra_disabled or {}).items():
+        name = str(raw_name or "").strip()
+        if not name:
+            continue
+        enabled[name] = False
+        disabled[name] = str(raw_reason or "来源上下文禁用").strip()
     return ToolPlan.from_effective_tools(
         enabled=enabled,
         disabled=disabled,

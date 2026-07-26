@@ -232,8 +232,17 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "schedule_task": {
         "description": (
             "管理定时推送任务。支持创建、查看、修改、启停、立即执行和删除。"
-            "用户说'每天X点推送Y'时创建，'看看定时任务'时列出，'停掉XX任务'时禁用，"
-            "'现在执行XX任务'时立即运行。cron 按 Asia/Shanghai 解释，格式为'分 时 日 月 周'。"
+            "判断标准是意图而非措辞：只要用户的意图涉及未来某时刻或持续跟进，"
+            "就应主动创建，不必等用户说出'定时任务'。"
+            "'提醒我/叫我/别忘了'或'X小时后再看看'=一次性任务；"
+            "'每天/每周推送、总结某内容'=循环任务；"
+            "'帮我关注XX/盯着XX/有进展告诉我'这类暗示=循环任务，"
+            "自行选择合理频率(如每天上午)定期搜集推送，创建后说明频率即可。"
+            "'看看定时任务'时列出，'停掉XX任务'时禁用，'现在执行XX任务'时立即运行。"
+            "schedule 支持四种写法(按 Asia/Shanghai 解释): "
+            "'30m'=30分钟后触发一次; 'every 2h'=每2小时循环; "
+            "'0 9 * * *'=cron(分 时 日 月 周); "
+            "'2026-08-01T15:00'=指定时刻触发一次。"
             "创建任务时如果用户没有明确目标会话，可使用当前 runtime_context 对应的私聊或群聊。"
         ),
         "parameters": {
@@ -246,7 +255,16 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "task_id": {"type": "integer", "description": "任务ID（update/toggle/delete 必填）"},
                 "name": {"type": "string", "description": "任务名（create/update）"},
-                "cron_expr": {"type": "string", "description": "cron 表达式（create/update），Asia/Shanghai 时区，格式'分 时 日 月 周'，如每天9点为 0 9 * * *"},
+                "schedule": {
+                    "type": "string",
+                    "description": (
+                        "触发规则（create/update），Asia/Shanghai 时区。"
+                        "四种写法: '30m'=30分钟后一次; 'every 2h'=每2小时; "
+                        "'0 9 * * *'=cron(分 时 日 月 周); "
+                        "'2026-08-01T15:00'=指定时刻一次"
+                    ),
+                },
+                "cron_expr": {"type": "string", "description": "旧参数，等价于 schedule 的 cron 写法（Asia/Shanghai 时区，分 时 日 月 周）"},
                 "target_type": {"type": "string", "description": "推送类型: private 或 group；创建时留空则尝试使用当前会话类型", "enum": ["private", "group"]},
                 "target_id": {"type": "string", "description": "QQ号或群号；创建时留空则尝试使用当前 runtime_context 的 user_id/group_id"},
                 "prompt_template": {"type": "string", "description": "LLM 生成推送内容的提示模板，不是直接发送的固定文本"},
