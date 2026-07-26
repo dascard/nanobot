@@ -2,13 +2,39 @@
 
 ## 1. 控制面与事实源
 
-Sandbox 由宿主 systemd 服务 sandboxd 通过 Docker Engine API 创建一次性容器。Nanobot Server 只访问 Unix Socket，不挂载 Docker Socket 或 /srv/nanobot；Worker 不访问 sandboxd。
+Sandbox 由宿主 systemd 服务 sandboxd 通过 Docker Engine API 创建受控容器。`restricted` Profile 每条命令使用一次性容器；`developer` Profile 使用可重建 Lease，并在同一 Lease 内通过多次 Docker Exec 支持长任务和本地开发服务。Nanobot Server 只访问 Unix Socket，不挂载 Docker Socket 或 `/srv/nanobot`；Worker 不访问 sandboxd。
 
 生产控制面有三类彼此独立的状态：
 
-- 宿主硬上限：sandbox.infrastructure_enable_allowed，只允许由 root 管理的环境变量设置，默认关闭，Web 不可修改。
-- 业务开关：sandbox.enabled 与 sandbox.exec_enabled，由 Web「Sandbox 管理」页控制；sandbox.group_enabled 首期固定关闭。
-- 会话授权：sandbox_access_grants 是七个 Sandbox 工具的唯一授权事实源，通用 ToolOverride 和 private_superuser 均不能授权 Sandbox。
+- 宿主硬上限：`sandbox.infrastructure_enable_allowed`，只允许由 root 管理的环境变量设置，默认关闭，Web 不可修改。
+- 业务开关：`sandbox.enabled` 与 `sandbox.exec_enabled`，由 Web「Sandbox 管理」页控制；`sandbox.group_enabled` 首期固定关闭。
+- 网络硬上限：Server 和 sandboxd 的 `NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED` 必须同时为 `true`，缺少任一侧都拒绝新的 Developer 网络执行。
+- 会话授权：`sandbox_access_grants` 是 11 个 Sandbox 工具的唯一授权事实源，通用 ToolOverride 和 `private_superuser` 均不能授权 Sandbox。
+- 执行策略：部署 Profile manifest 是 Server 与 sandboxd 共享的完整策略事实源。双方必须同时核对 `catalog_generation` 和完整 `policy_sha256`，不能只比较镜像摘要。
+
+构建阶段从 `config/sandbox-execution-profiles.v1.json` 生成固定镜像身份的部署 manifest。生产安装位置为：
+
+```text
+/etc/nanobot/sandbox-execution-profiles.v1.json
+```
+
+sandboxd 启动前把同一文件以 `root:nanobot-sandboxd`、`0640` 复制到：
+
+```text
+/run/nanobot-sandboxd/profile-manifest.json
+```
+
+sandboxd 和 Nanobot Server 都读取该运行时文件。禁止分别维护两份 Profile 配置，也禁止把新 Server 与旧 manifest 混合部署。
+
+### 1.1 执行 Profile
+
+| Profile | 执行模式 | 网络 | 长任务与 stdin | 授权状态 |
+|---|---|---|---|---|
+| `restricted` | 每条命令一次性容器 | `network=none` | 不支持 | 可授权 |
+| `developer` | Workspace 级 Lease + Docker Exec | 每个 Lease 的受控代理网络 | 支持前台长任务、轮询和 stdin；不支持 detached | 可授权，但受双网络硬开关限制 |
+| `trusted_developer` | 预留 Lease | 未开放 | 未开放 | `grantable=false`，镜像 allowlist 为空 |
+
+`trusted_developer` 只是不可授权占位。当前里程碑不注入 PAT、SSH key、GitHub App Token、宿主 SSH Agent 或其他私有仓库凭据。
 
 授权主体是 canonical chat session：
 
@@ -16,9 +42,9 @@ Sandbox 由宿主 systemd 服务 sandboxd 通过 Docker Engine API 创建一次�
 chat_stream_id = platform:encoded_external_session_id:chat_type
 ~~~
 
-user_id 只用于页面显示、操作者识别和审计，不能作为授权键。首期每个私聊 session 默认拥有独立 Workspace；未来如需共享，必须通过显式 Workspace 绑定功能实现，不能自动按 user_id 合并。
+`user_id` 只用于页面显示、操作者识别和审计，不能作为授权键。首期每个私聊 session 默认拥有独立 Workspace；未来如需共享，必须通过显式 Workspace 绑定功能实现，不能自动按 `user_id` 合并。
 
-project quota 的唯一事实源是 workspace_quota_bindings。project ID 由数据库从 10000 起原子分配，宿主 TSV 不再参与日常分配。
+project quota 的唯一事实源是 `workspace_quota_bindings`。project ID 由数据库从 10000 起原子分配，宿主 TSV 不再参与日常分配。
 
 ## 2. 上线硬门禁
 
@@ -27,14 +53,28 @@ project quota 的唯一事实源是 workspace_quota_bindings。project ID 由数
 1. /srv/nanobot 是独立 XFS/ext4 文件系统挂载点，并启用 project quota；允许使用受控的 16 GiB 预分配 XFS loopback。
 2. Workspace、Asset Store、runtime 的容量预算、备份和磁盘水位已配置。
 3. Docker SecurityOptions 包含 builtin seccomp 和 AppArmor。
-4. nanobot-sandbox AppArmor profile 已精确加载；profile 缺失时必须失败关闭。
-5. 固定 Sandbox 镜像存在，IMAGE ID 位于 sandboxd allowlist，默认用户为 10001:10001。
+4. `nanobot-sandbox-restricted` 与 `nanobot-sandbox-developer` 两个 AppArmor profile 已精确加载；任一 profile 缺失时必须失败关闭。
+5. Restricted、Developer 和出口代理三个固定镜像都存在，实际 IMAGE ID 与部署 manifest 一致；两个执行镜像的默认用户为 `10001:10001`，代理默认用户为 `13:13`。
 6. 普通 sandboxd Token 与独立管理 Token 均为 root 管理的 0600 文件。
-7. scripts/sandbox-smoke-test.sh 的真实 Docker 隔离矩阵全部通过。
-8. Nanobot Server、Worker 和 Sandbox 容器均看不到 Docker Socket。
-9. 协调备份、恢复和无损 kill switch 已演练。
+7. Server 与 sandboxd 读取同一份部署 manifest，并同时匹配 generation 与完整策略 SHA。
+8. `scripts/sandbox-smoke-test.sh` 的六组真实 Docker 隔离矩阵全部通过；任何失败、跳过、0 tests、JUnit 缺失或前置条件缺失都不得记为通过。
+9. Developer 网络只在 Server 与 sandboxd 两侧硬开关都打开时可用，`trusted_developer` 仍不可授权。
+10. Nanobot Server、Worker 和 Sandbox 容器均看不到 Docker Socket。
+11. 协调备份、恢复、controller 重启回收和无损 kill switch 已演练。
 
 代码测试通过、healthz 成功或 Docker 配置看起来正确，都不能替代真实隔离 Smoke。
+
+### 2.1 当前宿主验收状态
+
+截至 2026-07-26，当前开发宿主只能完成实现和静态回归，不能作为生产隔离验收通过的证据：
+
+- 当前会话 EUID 为 `1000`，不能运行要求 root 的真实 Smoke；
+- Docker SecurityOptions 只有 builtin seccomp 与 cgroup namespace，没有报告 AppArmor；
+- `/sys/kernel/security/apparmor/profiles` 不可读；
+- `/srv/nanobot` 尚未建立为独立 project quota 数据盘；
+- `xfs_quota` 与 `quota` 工具未安装。
+
+因此当前状态是 `BLOCKED`，不是 `passed`。必须在满足本节全部宿主前置条件的生产候选机上重新运行完整六组矩阵。
 
 ## 3. 安装与部署顺序
 
@@ -49,7 +89,16 @@ sudo scripts/manage-sandbox-production.sh install-control-plane
 sudo scripts/manage-sandbox-production.sh deploy
 ~~~
 
-deploy 完成后所有 Sandbox 开关仍应关闭。provision-owner、enable-workspace、enable-assets、enable-exec 和 disable-owner 是兼容拒绝入口，不会执行旧 ToolOverride 或 TSV 操作。
+`build-image` 构建并固定以下发布单元：
+
+- `nanobot-sandbox-python:<VERSION>`；
+- `nanobot-sandbox-developer:<VERSION>`；
+- `nanobot-sandbox-egress-proxy:2026.07.25`；
+- 包含以上三个实际 IMAGE ID 的部署 Profile manifest。
+
+`image-built` 阶段凭据同时绑定三个镜像引用、三个 IMAGE ID 和部署 manifest SHA256。`--reuse-built-image` 只有在 Restricted、Developer、代理的全部构建输入、canonical manifest 和 manifest 渲染器均未漂移时才允许复用。
+
+`deploy` 完成后所有 Sandbox 开关、session 执行硬开关和 Developer 网络硬开关仍应关闭。`provision-owner`、`enable-workspace`、`enable-assets`、`enable-exec` 和 `disable-owner` 是兼容拒绝入口，不会执行旧 ToolOverride 或 TSV 操作。
 
 接受单盘故障风险时，配置必须显式写出同盘模式和风险确认；不能通过省略参数或调用普通 Compose 绕过：
 
@@ -209,10 +258,20 @@ Workspace/Asset 必须位于单独挂载到 `/srv/nanobot` 的受控文件系统
 
 sandboxd 使用两个独立 Token：
 
-- 普通 Token：文件、资产和运行接口。
-- 管理 Token：Workspace ensure 与 project quota apply/inspect 接口。
+- 普通 Token：文件、资产、Lease 和 Process 执行接口。
+- 管理 Token：Workspace ensure、project quota apply/inspect、Lease 管理和 controller 状态接口。
 
 管理接口只接受 request_id、workspace UUID、project ID、quota bytes 和 generation，不接受宿主路径、命令或 Docker 参数。普通 Token 调用管理接口必须返回拒绝。
+
+Lease 和 Process 的对象级授权每次都重新核对：
+
+- canonical session 与 Grant；
+- `workspace_id`；
+- `lease_id`；
+- `process_id` 归属；
+- `profile_id`、controller epoch、catalog generation 与完整策略 SHA。
+
+只知道 `process_id` 不能读取输出、写 stdin 或终止其他 session／Workspace 的进程。`sandbox_terminate` 的最小安全终止边界是整个 Lease：它会回收容器并终止该 Lease 内全部活动进程，不承诺只杀单个 PID。
 
 systemd 单元因 project quota helper 需要 CAP_SYS_ADMIN；sandboxd 同时持有 Docker Socket，本身就是 root 等价控制面。必须保持：
 
@@ -221,6 +280,31 @@ systemd 单元因 project quota helper 需要 CAP_SYS_ADMIN；sandboxd 同时持
 - 结构化 argv，shell=False；
 - subprocess stdout/stderr 不进入 API、日志或 Web 错误详情。
 
+## 5.1 Lease 与 Process 生命周期
+
+Developer 执行流程如下：
+
+1. Server 根据 Grant 选择 `developer` Profile，确认 quota 和双网络硬开关。
+2. sandboxd 创建或复用当前 Workspace 的 Lease，并重新验证容器、挂载、镜像、AppArmor、网络拓扑和 controller epoch。
+3. 每次 `sandbox_exec` 都以新的 `/bin/bash -lc` 创建 Docker Exec；`cd`、`export`、`alias` 和 shell 激活状态不跨命令保存。
+4. 命令在 `yield_time_ms` 内未结束时返回不透明 `process_id`；后续通过 `sandbox_poll` 读取增量输出，通过 `sandbox_write_stdin` 写入 stdin。
+5. 命令完成后由 Server 根据 sandboxd 的权威结果写入 `SandboxRun` 终态；没有 sandboxd 主动反向写数据库的通道。
+
+以下事件会整体回收 Lease：
+
+- `sandbox_terminate`；
+- 命令硬超时；
+- 输出硬上限；
+- controller epoch 漂移；
+- sandboxd 正常停止或重启；
+- kill switch；
+- 管理员 stop、destroy 或 recreate；
+- 周期 reconciler 发现策略、镜像、网络或归属事实漂移。
+
+sandboxd 重启时不尝试恢复旧 Docker Exec。旧 Lease 被定向回收，相关运行由 Server 主动 reconcile 为 `controller_restarted`。`/workspace` 和 `/runtime` 保留，`/tmp`、旧容器与旧 `process_id` 失效；下一次已授权执行会创建新 Lease。
+
+后台进程不得通过 `cmd &`、`nohup` 或 detached 模式逃离控制。需要运行 dev server 时，必须以前台命令启动，使用较短 `yield_time_ms` 返回，再用第二条 `sandbox_exec` 访问同一 Lease 的 loopback。
+
 ## 6. Web 会话授权
 
 在 Web「Sandbox 管理」页完成授权：
@@ -228,10 +312,12 @@ systemd 单元因 project quota helper 需要 CAP_SYS_ADMIN；sandboxd 同时持
 1. 从服务端真实出现过的私聊 session 中选择目标。
 2. 核对 canonical chat_stream_id；user_id 仅作显示。
 3. 选择 off、workspace、assets、exec 四档能力。
-4. 输入 Workspace 配额和审计原因。
-5. 一次保存产生一个 set_access operation。
-6. 等待 operation succeeded，且 quota 状态为 applied、desired 与 applied 完全一致。
-7. 最后再按灰度阶段打开对应业务开关。
+4. 选择 `restricted` 或 `developer` 执行 Profile；`trusted_developer` 不得出现在可授权选项中。
+5. 核对页面展示的执行模式、网络、工具链、最长命令时间、stdin 与长期进程能力摘要。
+6. 输入 Workspace 配额和审计原因。
+7. 一次保存产生一个 set_access operation。
+8. 等待 operation succeeded，且 quota 状态为 applied、desired 与 applied 完全一致。
+9. 最后再按灰度阶段打开对应业务开关；Developer 网络还要单独满足两侧硬开关。
 
 能力包含关系固定为：
 
@@ -250,8 +336,19 @@ Workspace 配额可从 Web 独立修改：
 - 每次修改增加或沿用受 fencing 保护的 generation。
 - desired 与 applied 不一致、状态非 applied 或应用失败时，该 Workspace 的全部 Sandbox 工具保持拒绝。
 - project ID 只读且不会因关闭能力而回收。
+- Workspace 与 `/runtime` 使用独立 project ID 和硬配额；`/runtime` 不能只依赖目录用量软核算。
 
 管理写操作返回 202 和 operation_id。持久化 runner 使用租约、幂等 request ID、有限重试、指数退避、generation/version fencing 和重启恢复；不得把 HTTP 202 误判为宿主配额已经生效。
+
+配额 helper 只按 `com.nanobot.workspace-id=<目标 Workspace UUID>` 查询活动 Lease。修改目标 Workspace A 的配额时，流程固定为：
+
+1. 定向 quiesce A；
+2. 停止 A 的 Lease；
+3. 分别应用并读回 Workspace 与 Runtime quota；
+4. 按 A 原 Profile 重建 Lease；
+5. 解除 A 的 quiesce。
+
+其他 Workspace 的活动 Lease 不构成阻塞条件。特别是 Workspace B 的 Lease 活跃时，仍必须能够为 A 应用配额。禁止恢复为全局 `docker ps` 判定，也禁止为了修改单个 Workspace 配额而停止所有 Lease。
 
 ## 8. 旧 TSV 一次性迁移
 
@@ -297,7 +394,10 @@ sudo scripts/manage-sandbox-production.sh runtime-cleanup --apply
 默认测试会跳过真实 Docker 隔离项。生产验收必须显式运行：
 
 ~~~bash
-scripts/sandbox-smoke-test.sh nanobot-sandbox-python:<version>
+sudo scripts/sandbox-smoke-test.sh \
+  --manifest /run/nanobot-sandboxd/profile-manifest.json \
+  --data-root /srv/nanobot \
+  --evidence-root /var/cache/nanobot/sandbox-smoke
 ~~~
 
 生产管理入口会在宿主机临时 worktree 中创建独立 Python 3.11 测试环境，
@@ -305,9 +405,30 @@ scripts/sandbox-smoke-test.sh nanobot-sandbox-python:<version>
 依赖。该环境不是模型执行 Sandbox，也不得安装 Nanobot 完整测试依赖、
 KT、Torch 或执行未锁定的 pip 自升级。
 
-至少验证非 root、只读根、network=none、无 Docker Socket、cap drop、AppArmor、seccomp、CPU/内存/PID/tmpfs 限制、超时终止整个进程树、输出硬上限、Workspace 跨容器持久化、A/B Workspace 隔离，以及 reconciler 不触碰非 Nanobot 容器。
+脚本先执行 root、Docker、seccomp、AppArmor、两个已加载 profile、独立数据盘、project quota、三个固定镜像和 `trusted_developer` 不可授权等前置检查，再运行六组矩阵：
 
-Smoke 前后保存 df、inode、Docker 占用、容器与镜像清单和 inspect 证据。禁止把 skipped 当作 passed。
+1. 基础安全；
+2. Lease；
+3. Process；
+4. Developer 工具链；
+5. 网络；
+6. 数据连续性。
+
+每组保存独立 pytest 日志、JUnit XML 和退出码，最终生成 `summary.json`。只有六组都包含真实测试，且 `failures=0`、`errors=0`、`skipped=0`，才允许写入 `smoke-passed` 阶段凭据。任一 skip、0 tests、JUnit 缺失、解析失败或前置检查失败都必须记为 `blocked` 或 `failed`。
+
+矩阵至少验证非 root、只读根、无 Docker Socket、cap drop、AppArmor、seccomp、CPU／内存／PID／tmpfs 限制、Lease 重建、Docker Exec loopback、增量输出、stdin、整 Lease 终止、controller 重启回收、Developer 工具链、真实出口拒绝矩阵、Workspace／Runtime project quota、跨 Lease 数据连续性和 A／B Workspace 隔离。
+
+Smoke 前后保存 df、inode、Docker 占用、容器、网络、镜像和 AppArmor 清单。脚本只清理本轮随机 Lease、Workspace、网络和 project ID，禁止全局 prune，也禁止删除未知资源。
+
+只检查宿主前置条件时可运行：
+
+```bash
+sudo scripts/sandbox-smoke-test.sh \
+  --manifest /run/nanobot-sandboxd/profile-manifest.json \
+  --data-root /srv/nanobot \
+  --evidence-root /var/cache/nanobot/sandbox-smoke \
+  --preflight-only
+```
 
 ## 11. 监控与应急关闭
 
@@ -317,8 +438,9 @@ Web 页面展示 sandboxd 健康、镜像 ID、AppArmor、磁盘水位、Workspa
 
 1. 调用 POST /api/v1/admin/sandbox/kill-switch。
 2. 确认 sandbox.enabled 与 sandbox.exec_enabled 均为 false。
-3. 必要时取消单个活动运行。
-4. 只检查同时满足名称前缀和双标签的 sandboxd 容器。
-5. 保留数据库、Workspace、Asset、grant、quota binding 和 operation 账本。
+3. 核对返回的 `terminated` 与 `failed` 计数；kill switch 必须拒绝新 Lease／Process，并真实回收全部托管 Lease，不能只改数据库状态。
+4. 对失败项通过管理 Token 定向重试，不得按名称模糊删除容器。
+5. 只检查同时满足固定名称前缀、`com.nanobot.managed=true` 与 `com.nanobot.managed-by=sandboxd` 的资源。
+6. 保留数据库、Workspace、Runtime、Asset、grant、quota binding、operation 和 Run 历史。
 
 禁止全局 prune、删除 volume 或通过恢复旧 KT bash/read/write/edit/grep/glob 绕过故障。

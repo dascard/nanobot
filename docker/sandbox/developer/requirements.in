@@ -1,0 +1,2 @@
+# 开发型 Sandbox 只预装测试运行器；项目依赖由用户写入 /runtime 中的 venv。
+pytest==8.3.5

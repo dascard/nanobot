@@ -24,6 +24,7 @@ MAX_MAP_BYTES = 1024 * 1024
 REQUIRED_MIGRATIONS = {
     "20260722_sandbox_control_plane_tables",
     "20260722_sandbox_project_sequence_seed",
+    "20260725_sandbox_runtime_project_quotas",
 }
 
 
@@ -250,6 +251,7 @@ def _require_tables(connection: sqlite3.Connection) -> None:
         "schema_migrations",
         "workspaces",
         "workspace_quota_bindings",
+        "workspace_runtime_quota_bindings",
         "sandbox_project_sequences",
     }
     rows = connection.execute(
@@ -258,10 +260,12 @@ def _require_tables(connection: sqlite3.Connection) -> None:
     available = {str(row[0]) for row in rows}
     if not required <= available:
         raise MigrationError("数据库尚未完成 Sandbox 控制面 Schema 迁移")
+    placeholders = ", ".join("?" for _ in REQUIRED_MIGRATIONS)
     applied = {
         str(row[0])
         for row in connection.execute(
-            "SELECT version FROM schema_migrations WHERE version IN (?, ?)",
+            "SELECT version FROM schema_migrations "
+            f"WHERE version IN ({placeholders})",
             tuple(sorted(REQUIRED_MIGRATIONS)),
         ).fetchall()
     }
@@ -313,8 +317,17 @@ def migrate_database(
                 "SELECT workspace_id FROM workspace_quota_bindings WHERE project_id = ?",
                 (item.project_id,),
             ).fetchone()
+            runtime_by_project = connection.execute(
+                "SELECT workspace_id FROM workspace_runtime_quota_bindings "
+                "WHERE project_id = ?",
+                (item.project_id,),
+            ).fetchone()
             if by_project is not None and str(by_project[0]) != item.workspace_id:
                 raise MigrationError("数据库 project_id 已绑定其他 Workspace")
+            if runtime_by_project is not None:
+                raise MigrationError(
+                    "数据库 project_id 已绑定 Workspace Runtime"
+                )
             if by_workspace is not None:
                 if (
                     int(by_workspace[0]) != item.project_id
@@ -336,9 +349,16 @@ def migrate_database(
 
         max_project_id = max(item.project_id for item in items)
         existing_max = connection.execute(
-            "SELECT COALESCE(MAX(project_id), 9999) FROM workspace_quota_bindings"
+            "SELECT MAX(project_id) FROM ("
+            "SELECT project_id FROM workspace_quota_bindings "
+            "UNION ALL "
+            "SELECT project_id FROM workspace_runtime_quota_bindings"
+            ")"
         ).fetchone()
-        next_value = max(max_project_id, int(existing_max[0])) + 1
+        next_value = max(
+            max_project_id,
+            int(existing_max[0] or PROJECT_ID_MIN - 1),
+        ) + 1
         sequence = connection.execute(
             "SELECT next_value FROM sandbox_project_sequences WHERE name = 'workspace'"
         ).fetchone()

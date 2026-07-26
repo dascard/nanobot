@@ -37,6 +37,15 @@ uv pip compile docker/sandbox/python/requirements.in \
   --custom-compile-command scripts/compile-requirements.sh \
   --output-file docker/sandbox/python/requirements.lock
 
+uv pip compile docker/sandbox/developer/requirements.in \
+  --python-version 3.11 \
+  --python-platform x86_64-manylinux_2_36 \
+  --generate-hashes \
+  --emit-index-url \
+  --emit-index-annotation \
+  --custom-compile-command scripts/compile-requirements.sh \
+  --output-file docker/sandbox/developer/requirements.lock
+
 uv pip compile requirements-sandboxd.in \
   --python-version 3.11 \
   --python-platform x86_64-manylinux_2_36 \

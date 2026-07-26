@@ -1,6 +1,6 @@
 #include <tunables/global>
 
-profile nanobot-sandbox flags=(attach_disconnected,mediate_deleted) {
+profile nanobot-sandbox-restricted flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
 
   deny network,

@@ -1,0 +1,50 @@
+#include <tunables/global>
+
+profile nanobot-sandbox-developer flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Docker network=none 只保留容器自身 network namespace 的 loopback。
+  # AppArmor 无法按远端地址细分 inet，因此仅在 developer Profile 放行
+  # 本地开发服务器所需的 stream/datagram；外部边界仍由 network=none 承担。
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+  deny network raw,
+  deny network packet,
+
+  deny mount,
+  deny umount,
+  deny pivot_root,
+  deny ptrace,
+  deny capability,
+
+  /bin/** ixr,
+  /usr/bin/** ixr,
+  /usr/local/bin/** ixr,
+  /usr/local/lib/** mr,
+  /lib/** mr,
+  /usr/lib/** mr,
+
+  /etc/** r,
+  /proc/** r,
+  /sys/devices/system/cpu/** r,
+  /dev/null rw,
+  /dev/zero rw,
+  /dev/random r,
+  /dev/urandom r,
+
+  /workspace/ rw,
+  /workspace/** rwklix,
+  /runtime/ rw,
+  /runtime/** rwklix,
+  /inputs/ r,
+  /inputs/** rix,
+  /tmp/ rw,
+  /tmp/** rwkl,
+
+  deny /var/run/docker.sock rw,
+  deny /run/docker.sock rw,
+}

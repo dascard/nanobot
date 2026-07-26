@@ -5,6 +5,7 @@ Requires=docker.service
 After=docker.service local-fs.target
 RequiresMountsFor=/srv/nanobot
 ConditionPathExists=/var/run/docker.sock
+ConditionPathExists=/etc/nanobot/sandbox-execution-profiles.v1.json
 ConditionPathIsMountPoint=/srv/nanobot
 
 [Service]
@@ -15,6 +16,7 @@ WorkingDirectory=/opt/nanobot-server
 EnvironmentFile=/etc/nanobot/sandboxd.env
 ExecStartPre=/usr/bin/test -S /var/run/docker.sock
 ExecStartPre=/usr/bin/mountpoint -q /srv/nanobot
+ExecStartPre=/usr/bin/install -m 0640 -o root -g nanobot-sandboxd /etc/nanobot/sandbox-execution-profiles.v1.json /run/nanobot-sandboxd/profile-manifest.json
 ExecStart=/opt/nanobot-sandboxd/venv/bin/python -m sandboxd.app
 Restart=on-failure
 RestartSec=3s
@@ -24,8 +26,9 @@ UMask=0117
 
 RuntimeDirectory=nanobot-sandboxd
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=restart
 ReadWritePaths=/srv/nanobot /run/nanobot-sandboxd
-ReadOnlyPaths=/opt/nanobot-server /etc/nanobot/sandboxd.token /etc/nanobot/sandboxd-admin.token /var/run/docker.sock
+ReadOnlyPaths=/opt/nanobot-server /etc/nanobot/sandboxd.token /etc/nanobot/sandboxd-admin.token /etc/nanobot/sandbox-execution-profiles.v1.json /var/run/docker.sock
 ProtectSystem=strict
 ProtectHome=true
 ProtectHostname=true

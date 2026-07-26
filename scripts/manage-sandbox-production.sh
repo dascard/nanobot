@@ -27,6 +27,10 @@ readonly PYTHON_ROOT="/opt/nanobot-python"
 readonly UV_CACHE_DIR="/var/cache/nanobot-uv"
 readonly EVIDENCE_CACHE_ROOT="/var/cache/nanobot"
 readonly DATA_ROOT="/srv/nanobot"
+readonly BUILT_PROFILE_MANIFEST="${STATE_DIR}/profile-manifest.json"
+readonly INSTALLED_PROFILE_MANIFEST="/etc/nanobot/sandbox-execution-profiles.v1.json"
+readonly RUNTIME_PROFILE_MANIFEST="/run/nanobot-sandboxd/profile-manifest.json"
+readonly CANONICAL_PROXY_IMAGE="nanobot-sandbox-egress-proxy:2026.07.25"
 readonly LOOPBACK_STORAGE_DIR="/var/lib/nanobot-sandbox-storage"
 readonly LOOPBACK_IMAGE="${LOOPBACK_STORAGE_DIR}/data.xfs"
 readonly XFS_LABEL="nanobot-sbx"
@@ -54,12 +58,15 @@ readonly -a SANDBOX_CONTROL_PLANE_PATHS=(
   docker/sandbox
   deploy/apparmor
   deploy/systemd
+  config/sandbox-execution-profiles.v1.json
   requirements-sandbox-smoke.in
   requirements-sandbox-smoke.lock
   requirements-sandboxd.in
   requirements-sandboxd.lock
   scripts/assign-sandbox-project-quota.sh
   scripts/build-sandbox-image.sh
+  scripts/render-sandbox-profile-manifest.py
+  scripts/sandbox-smoke-test.sh
 )
 CURRENT_COMMAND="${1:-help}"
 ACTIVATED_FROM_RELEASE=""
@@ -118,6 +125,7 @@ Nanobot Sandbox 生产管理脚本
   enable-workspace      已停用；请使用 Web「Sandbox 管理」页
   enable-assets         已停用；请使用 Web「Sandbox 管理」页
   enable-exec           已停用；请使用 Web「Sandbox 管理」页
+  terminate-leases      通过 sandboxd 管理通道回收全部托管 Lease
   kill-switch           无损关闭 sandbox.enabled 与 sandbox.exec_enabled
   disable-owner         已停用；请使用 kill-switch 和 Web 管理页
   runtime-cleanup       预览或执行 runtime TTL 清理
@@ -404,7 +412,11 @@ load_config() {
 
   validate_config_values
   RELEASE_DIR="/opt/nanobot-releases/${RELEASE}"
-  SANDBOX_IMAGE="nanobot-sandbox-python:${VERSION}"
+  RESTRICTED_IMAGE="nanobot-sandbox-python:${VERSION}"
+  DEVELOPER_IMAGE="nanobot-sandbox-developer:${VERSION}"
+  PROXY_IMAGE="${CANONICAL_PROXY_IMAGE}"
+  # 兼容现有一次性执行路径；生产凭据仍同时绑定三个镜像。
+  SANDBOX_IMAGE="${RESTRICTED_IMAGE}"
 }
 
 write_config() {
@@ -742,7 +754,11 @@ update_release_command() {
       || die "复用已构建镜像只允许更新到当前 RELEASE 的快进后代"
     if ! repo_git diff --quiet "${previous_release}" "${new_release}" -- \
         scripts/build-sandbox-image.sh \
-        docker/sandbox/python; then
+        scripts/render-sandbox-profile-manifest.py \
+        config/sandbox-execution-profiles.v1.json \
+        docker/sandbox/python \
+        docker/sandbox/developer \
+        docker/sandbox/egress-proxy; then
       die "Sandbox 镜像构建脚本或上下文已变化，必须重新构建，禁止复用"
     fi
     [[ -z "${new_version}" || "${new_version}" == "${previous_version}" ]] \
@@ -1500,12 +1516,15 @@ install_host_packages() {
 install_apparmor_profile() {
   [[ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || true)" == "Y" ]] \
     || die "宿主机 AppArmor 未启用"
-  install -m 0644 \
-    "${REPO_ROOT}/deploy/apparmor/nanobot-sandbox" \
-    /etc/apparmor.d/nanobot-sandbox
-  apparmor_parser -r /etc/apparmor.d/nanobot-sandbox
-  grep -q '^nanobot-sandbox ' /sys/kernel/security/apparmor/profiles \
-    || die "nanobot-sandbox AppArmor profile 未实际加载"
+  local profile
+  for profile in nanobot-sandbox-restricted nanobot-sandbox-developer; do
+    install -m 0644 \
+      "${REPO_ROOT}/deploy/apparmor/${profile}" \
+      "/etc/apparmor.d/${profile}"
+    apparmor_parser -r "/etc/apparmor.d/${profile}"
+    grep -q "^${profile} " /sys/kernel/security/apparmor/profiles \
+      || die "${profile} AppArmor profile 未实际加载"
+  done
   docker info --format '{{json .SecurityOptions}}' \
     | grep -qi apparmor \
     || die "Docker SecurityOptions 未报告 AppArmor"
@@ -1640,66 +1659,306 @@ build_image_command() {
   assert_prepared_storage_current
   assert_host_prepared_current
   check_build_disk_gate
+  require_command python3
 
-  log "构建固定 Sandbox 镜像 ${SANDBOX_IMAGE}"
+  local canonical_manifest="${REPO_ROOT}/config/sandbox-execution-profiles.v1.json"
+  local canonical_generation
+  local expected_proxy_id
+  local proxy_candidate
+  local restricted_id
+  local developer_id
+  local proxy_id
+  local restricted_user
+  local developer_user
+  local proxy_user
+  local image_id
+  local manifest_generation
+  local manifest_sha256
+
+  [[ -f "${canonical_manifest}" && ! -L "${canonical_manifest}" ]] \
+    || die "canonical Profile manifest 不是受管普通文件"
+  canonical_generation="$(jq -er '.catalog_generation' "${canonical_manifest}")"
+  expected_proxy_id="$(jq -er '
+    .profiles[]
+    | select(.profile_id == "developer")
+    | .network_proxy_image_allowlist
+    | if length == 1 then .[0] else error("代理 allowlist 必须唯一") end
+  ' "${canonical_manifest}")"
+  [[ "${expected_proxy_id}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || die "canonical Profile manifest 的代理 IMAGE ID 无效"
+  [[ "$(jq -er '
+    .profiles[]
+    | select(.profile_id == "developer")
+    | .network_proxy_image_reference
+  ' "${canonical_manifest}")" == "${PROXY_IMAGE}" ]] \
+    || die "生产脚本固定代理引用与 canonical Profile manifest 不一致"
+
+  log "构建固定 Restricted 镜像 ${RESTRICTED_IMAGE}"
   run_as_deploy env \
     -u http_proxy -u https_proxy \
     -u HTTP_PROXY -u HTTPS_PROXY \
     -u all_proxy -u ALL_PROXY \
     "${REPO_ROOT}/scripts/build-sandbox-image.sh" "${VERSION}"
 
-  local image_id
-  local image_user
-  image_id="$(docker image inspect "${SANDBOX_IMAGE}" --format '{{.Id}}')"
-  image_user="$(docker image inspect "${SANDBOX_IMAGE}" --format '{{.Config.User}}')"
-  [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] \
-    || die "Sandbox IMAGE ID 格式无效"
-  [[ "${image_user}" == "10001:10001" ]] \
-    || die "Sandbox 镜像默认用户不是 10001:10001"
+  log "构建固定 Developer 镜像 ${DEVELOPER_IMAGE}"
+  run_as_deploy env \
+    -u http_proxy -u https_proxy \
+    -u HTTP_PROXY -u HTTPS_PROXY \
+    -u all_proxy -u ALL_PROXY \
+    "${REPO_ROOT}/scripts/build-sandbox-image.sh" \
+      "${VERSION}" --profile developer
 
-  mark_stage image-built "${SANDBOX_IMAGE}|${image_id}"
-  log "Sandbox 镜像构建通过：${image_id}"
+  if ! docker image inspect "${PROXY_IMAGE}" >/dev/null 2>&1; then
+    proxy_candidate="nanobot-sandbox-egress-proxy:candidate-${VERSION}"
+    log "构建候选出口代理镜像并核对已审查摘要"
+    run_as_deploy env \
+      -u http_proxy -u https_proxy \
+      -u HTTP_PROXY -u HTTPS_PROXY \
+      -u all_proxy -u ALL_PROXY \
+      docker build \
+        --tag "${proxy_candidate}" \
+        "${REPO_ROOT}/docker/sandbox/egress-proxy"
+    proxy_id="$(docker image inspect "${proxy_candidate}" --format '{{.Id}}')"
+    [[ "${proxy_id}" == "${expected_proxy_id}" ]] \
+      || die "候选出口代理 IMAGE ID 与 canonical allowlist 不一致；保留候选 tag 供调查"
+    docker image tag "${proxy_id}" "${PROXY_IMAGE}"
+    docker image rm "${proxy_candidate}" >/dev/null
+  fi
+
+  restricted_id="$(docker image inspect "${RESTRICTED_IMAGE}" --format '{{.Id}}')"
+  developer_id="$(docker image inspect "${DEVELOPER_IMAGE}" --format '{{.Id}}')"
+  proxy_id="$(docker image inspect "${PROXY_IMAGE}" --format '{{.Id}}')"
+  restricted_user="$(docker image inspect "${RESTRICTED_IMAGE}" --format '{{.Config.User}}')"
+  developer_user="$(docker image inspect "${DEVELOPER_IMAGE}" --format '{{.Config.User}}')"
+  proxy_user="$(docker image inspect "${PROXY_IMAGE}" --format '{{.Config.User}}')"
+  for image_id in "${restricted_id}" "${developer_id}" "${proxy_id}"; do
+    [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+      || die "Sandbox IMAGE ID 格式无效"
+  done
+  [[ "${restricted_user}" == "10001:10001" ]] \
+    || die "Restricted 镜像默认用户不是 10001:10001"
+  [[ "${developer_user}" == "10001:10001" ]] \
+    || die "Developer 镜像默认用户不是 10001:10001"
+  [[ "${proxy_user}" == "13:13" ]] \
+    || die "出口代理镜像默认用户不是 13:13"
+  [[ "${proxy_id}" == "${expected_proxy_id}" ]] \
+    || die "出口代理 IMAGE ID 与 canonical allowlist 不一致"
+
+  ensure_state_dir
+  manifest_generation="${canonical_generation}.${RELEASE:0:12}"
+  log "生成同时绑定三个 IMAGE ID 的部署 Profile manifest"
+  PYTHONPATH="${REPO_ROOT}" python3 \
+    "${REPO_ROOT}/scripts/render-sandbox-profile-manifest.py" \
+    --source "${canonical_manifest}" \
+    --output "${BUILT_PROFILE_MANIFEST}" \
+    --generation "${manifest_generation}" \
+    --restricted-reference "${RESTRICTED_IMAGE}" \
+    --restricted-image-id "${restricted_id}" \
+    --developer-reference "${DEVELOPER_IMAGE}" \
+    --developer-image-id "${developer_id}" \
+    --proxy-reference "${PROXY_IMAGE}" \
+    --proxy-image-id "${proxy_id}"
+  chown root:root "${BUILT_PROFILE_MANIFEST}"
+  chmod 0600 "${BUILT_PROFILE_MANIFEST}"
+  manifest_sha256="$(sha256sum "${BUILT_PROFILE_MANIFEST}" | awk '{print $1}')"
+
+  mark_stage image-built \
+    "restricted=${RESTRICTED_IMAGE}@${restricted_id}|developer=${DEVELOPER_IMAGE}@${developer_id}|proxy=${PROXY_IMAGE}@${proxy_id}|manifest=${manifest_sha256}"
+  image_id_from_stage >/dev/null
+  log "Sandbox 三镜像与部署 manifest 构建通过：${manifest_sha256}"
   printf '下一步：sudo %s smoke\n' "$0"
 }
 
-image_id_from_stage() {
+image_bundle_from_stage() {
   local marker
-  local marker_image
-  local marker_id
+  local restricted_part
+  local developer_part
+  local proxy_part
+  local manifest_part
+  local extra_part
+  local restricted_id
+  local developer_id
+  local proxy_id
+  local manifest_sha256
   marker="$(read_stage image-built)"
-  IFS='|' read -r marker_image marker_id <<<"${marker}"
-  [[ "${marker_image}" == "${SANDBOX_IMAGE}" ]] \
-    || die "image-built 阶段对应其他镜像：${marker_image}"
-  [[ "${marker_id}" =~ ^sha256:[0-9a-f]{64}$ ]] \
-    || die "image-built 阶段 IMAGE ID 无效"
-  [[ "$(docker image inspect "${SANDBOX_IMAGE}" --format '{{.Id}}')" == "${marker_id}" ]] \
-    || die "当前 Sandbox 镜像已变化，请重新运行 build-image 与 smoke"
-  printf '%s\n' "${marker_id}"
+  IFS='|' read -r \
+    restricted_part developer_part proxy_part manifest_part extra_part \
+    <<<"${marker}"
+  [[ -z "${extra_part}" ]] \
+    || die "image-built 阶段凭据字段数量无效"
+  [[ "${restricted_part}" == "restricted=${RESTRICTED_IMAGE}@"* ]] \
+    || die "image-built 阶段 Restricted 镜像引用无效"
+  [[ "${developer_part}" == "developer=${DEVELOPER_IMAGE}@"* ]] \
+    || die "image-built 阶段 Developer 镜像引用无效"
+  [[ "${proxy_part}" == "proxy=${PROXY_IMAGE}@"* ]] \
+    || die "image-built 阶段代理镜像引用无效"
+  [[ "${manifest_part}" == "manifest="* ]] \
+    || die "image-built 阶段缺少 manifest 摘要"
+  restricted_id="${restricted_part#*@}"
+  developer_id="${developer_part#*@}"
+  proxy_id="${proxy_part#*@}"
+  manifest_sha256="${manifest_part#manifest=}"
+  for image_id in "${restricted_id}" "${developer_id}" "${proxy_id}"; do
+    [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+      || die "image-built 阶段 IMAGE ID 无效"
+  done
+  [[ "${manifest_sha256}" =~ ^[0-9a-f]{64}$ ]] \
+    || die "image-built 阶段 manifest 摘要无效"
+  [[ "$(docker image inspect "${RESTRICTED_IMAGE}" --format '{{.Id}}')" \
+      == "${restricted_id}" ]] \
+    || die "当前 Restricted 镜像已变化，请重新运行 build-image 与 smoke"
+  [[ "$(docker image inspect "${DEVELOPER_IMAGE}" --format '{{.Id}}')" \
+      == "${developer_id}" ]] \
+    || die "当前 Developer 镜像已变化，请重新运行 build-image 与 smoke"
+  [[ "$(docker image inspect "${PROXY_IMAGE}" --format '{{.Id}}')" \
+      == "${proxy_id}" ]] \
+    || die "当前出口代理镜像已变化，请重新运行 build-image 与 smoke"
+  [[ -f "${BUILT_PROFILE_MANIFEST}" \
+      && ! -L "${BUILT_PROFILE_MANIFEST}" \
+      && "$(sha256sum "${BUILT_PROFILE_MANIFEST}" | awk '{print $1}')" \
+        == "${manifest_sha256}" ]] \
+    || die "部署 Profile manifest 已变化或丢失，请重新运行 build-image 与 smoke"
+  PYTHONPATH="${REPO_ROOT}" python3 - \
+    "${BUILT_PROFILE_MANIFEST}" \
+    "${RESTRICTED_IMAGE}" "${restricted_id}" \
+    "${DEVELOPER_IMAGE}" "${developer_id}" \
+    "${PROXY_IMAGE}" "${proxy_id}" <<'PY'
+import sys
+
+from core.sandbox.profile_catalog import load_profile_catalog
+
+(
+    manifest,
+    restricted_reference,
+    restricted_id,
+    developer_reference,
+    developer_id,
+    proxy_reference,
+    proxy_id,
+) = sys.argv[1:]
+catalog = load_profile_catalog(manifest)
+restricted = catalog.profile("restricted")
+developer = catalog.profile("developer")
+trusted = catalog.profile("trusted_developer")
+if (
+    restricted.image_reference != restricted_reference
+    or restricted.image_allowlist != (restricted_id,)
+    or developer.image_reference != developer_reference
+    or developer.image_allowlist != (developer_id,)
+    or developer.network_proxy_image_reference != proxy_reference
+    or developer.network_proxy_image_allowlist != (proxy_id,)
+    or trusted.image_reference != developer_reference
+    or trusted.image_allowlist
+    or trusted.grantable
+):
+    raise SystemExit("部署 Profile manifest 与 image-built 凭据不一致")
+PY
+  printf '%s|%s|%s|%s\n' \
+    "${restricted_id}" "${developer_id}" "${proxy_id}" "${manifest_sha256}"
+}
+
+image_id_from_stage() {
+  image_bundle_from_stage | cut -d'|' -f1
+}
+
+developer_image_id_from_stage() {
+  image_bundle_from_stage | cut -d'|' -f2
+}
+
+proxy_image_id_from_stage() {
+  image_bundle_from_stage | cut -d'|' -f3
+}
+
+profile_manifest_sha256_from_stage() {
+  image_bundle_from_stage | cut -d'|' -f4
+}
+
+validate_smoke_evidence() {
+  local evidence_dir="$1"
+  local summary_file="${evidence_dir}/summary.json"
+  [[ -d "${evidence_dir}" && ! -L "${evidence_dir}" \
+      && -f "${summary_file}" && ! -L "${summary_file}" ]] \
+    || die "Smoke 结构化证据已丢失或路径不安全"
+  python3 - "${evidence_dir}" "${summary_file}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+evidence_candidate = Path(sys.argv[1])
+summary_candidate = Path(sys.argv[2])
+if evidence_candidate.is_symlink() or summary_candidate.is_symlink():
+    raise SystemExit("Smoke 结构化证据路径不得是符号链接")
+evidence_dir = evidence_candidate.resolve(strict=True)
+summary_file = summary_candidate.resolve(strict=True)
+try:
+    summary_file.relative_to(evidence_dir)
+except ValueError as exc:
+    raise SystemExit("Smoke summary 越出证据目录") from exc
+value = json.loads(summary_file.read_text(encoding="utf-8"))
+expected_groups = {
+    "basic-security",
+    "lease",
+    "process",
+    "developer-toolchain",
+    "network",
+    "data-continuity",
+}
+groups = value.get("groups")
+if (
+    value.get("schema_version") != 1
+    or value.get("result") != "passed"
+    or (value.get("preflight") or {}).get("status") != "passed"
+    or not isinstance(groups, list)
+    or {item.get("id") for item in groups} != expected_groups
+):
+    raise SystemExit("Smoke summary 未报告完整通过")
+for item in groups:
+    if (
+        item.get("status") != "passed"
+        or item.get("exit_code") != 0
+        or item.get("tests", 0) <= 0
+        or item.get("failures") != 0
+        or item.get("errors") != 0
+        or item.get("skipped") != 0
+        or item.get("parse_error")
+    ):
+        raise SystemExit(f"Smoke 分组未完整通过：{item.get('id')}")
+    for field in ("junit", "log"):
+        artifact_candidate = Path(str(item.get(field) or ""))
+        if artifact_candidate.is_symlink() or not artifact_candidate.is_file():
+            raise SystemExit(
+                f"Smoke 分组证据不是普通文件：{item.get('id')}"
+            )
+        artifact = artifact_candidate.resolve(strict=True)
+        try:
+            artifact.relative_to(evidence_dir)
+        except ValueError as exc:
+            raise SystemExit(
+                f"Smoke 分组证据越出目录：{item.get('id')}"
+            ) from exc
+PY
 }
 
 assert_smoke_current() {
   local marker
-  local expected_image_id
+  local expected_manifest_sha256
   local evidence_dir
   marker="$(read_stage smoke-passed)"
-  expected_image_id="$(image_id_from_stage)"
-  [[ "${marker}" == "image=${expected_image_id}|evidence="* ]] \
-    || die "Smoke 凭据与当前 Sandbox 镜像不匹配"
+  expected_manifest_sha256="$(profile_manifest_sha256_from_stage)"
+  [[ "${marker}" == \
+      "manifest=${expected_manifest_sha256}|evidence="* ]] \
+    || die "Smoke 凭据与当前 Profile manifest 不匹配"
   evidence_dir="${marker#*|evidence=}"
-  [[ -f "${evidence_dir}/pytest.txt" ]] \
-    || die "Smoke pytest 证据已丢失"
-  grep -Eq '1 passed' "${evidence_dir}/pytest.txt" \
-    || die "Smoke pytest 证据不再满足 1 passed"
-  if grep -Eq '[1-9][0-9]* (failed|skipped)' "${evidence_dir}/pytest.txt"; then
-    die "Smoke pytest 证据包含 failure 或 skip"
-  fi
+  validate_smoke_evidence "${evidence_dir}"
 }
 
 assert_control_plane_current() {
   local marker
   marker="$(read_stage control-plane-ready)"
-  [[ "${marker}" == "release=${RELEASE}|image=$(image_id_from_stage)" ]] \
-    || die "控制面凭据与当前 RELEASE/IMAGE 不匹配"
+  image_bundle_from_stage >/dev/null
+  [[ "${marker}" \
+      == "release=${RELEASE}|manifest=$(profile_manifest_sha256_from_stage)" ]] \
+    || die "控制面凭据与当前 RELEASE/Profile manifest 不匹配"
 }
 
 runtime_release_from_stage() {
@@ -1819,31 +2078,29 @@ smoke_command() {
     'import docker, pytest; assert docker.__version__ == "7.1.0"; assert pytest.__version__ == "9.1.1"'
 
   install -d -m 0700 "${EVIDENCE_CACHE_ROOT}"
-  log "运行真实 Docker 安全矩阵"
+  log "运行六组真实 Docker Sandbox 验收矩阵"
   env \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="${smoke_dir}/.venv/bin:/usr/local/bin:/usr/bin:/bin" \
     XDG_CACHE_HOME="${EVIDENCE_CACHE_ROOT}" \
-    "${smoke_dir}/scripts/sandbox-smoke-test.sh" "${SANDBOX_IMAGE}"
+    "${smoke_dir}/scripts/sandbox-smoke-test.sh" \
+      --manifest "${BUILT_PROFILE_MANIFEST}" \
+      --data-root "${DATA_ROOT}" \
+      --evidence-root "${EVIDENCE_CACHE_ROOT}/nanobot-sandbox-smoke"
 
   evidence_dir="$(find "${EVIDENCE_CACHE_ROOT}/nanobot-sandbox-smoke" \
     -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
     | sort -n | tail -n 1 | cut -d' ' -f2-)"
-  [[ -n "${evidence_dir}" && -f "${evidence_dir}/pytest.txt" ]] \
-    || die "找不到 Smoke pytest 证据"
-  grep -Eq '1 passed' "${evidence_dir}/pytest.txt" \
-    || die "真实 Docker 安全矩阵没有得到 1 passed"
-  if grep -Eq '[1-9][0-9]* (failed|skipped)' "${evidence_dir}/pytest.txt"; then
-    die "真实 Docker 安全矩阵存在 failure 或 skip"
-  fi
+  [[ -n "${evidence_dir}" ]] || die "找不到 Smoke 结构化证据"
+  validate_smoke_evidence "${evidence_dir}"
 
   log "清理本轮隔离 worktree"
   repo_git worktree remove --force "${smoke_dir}"
   [[ ! -e "${smoke_dir}" ]] || die "Smoke worktree 清理失败"
 
   mark_stage smoke-passed \
-    "image=$(image_id_from_stage)|evidence=${evidence_dir}"
-  log "真实 Docker 安全矩阵通过且未跳过"
+    "manifest=$(profile_manifest_sha256_from_stage)|evidence=${evidence_dir}"
+  log "六组真实 Docker 验收全部通过且没有跳过"
   printf '下一步：sudo %s install-control-plane\n' "$0"
 }
 
@@ -2019,9 +2276,13 @@ NANOBOT_SANDBOXD_ADMIN_TOKEN_FILE=/etc/nanobot/sandboxd-admin.token
 NANOBOT_SANDBOXD_ADMIN_CLIENT_TOKEN_FILE=/run/nanobot-sandboxd/admin-client.token
 NANOBOT_SANDBOXD_QUOTA_HELPER=/opt/nanobot-server/scripts/assign-sandbox-project-quota.sh
 NANOBOT_SANDBOXD_DOCKER_SOCKET=unix:///var/run/docker.sock
+NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE=${RUNTIME_PROFILE_MANIFEST}
+NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED=false
+NANOBOT_SANDBOX_EGRESS_UPLINK_NETWORK=nanobot-sbx-egress-uplink-v1
+NANOBOT_SANDBOX_EGRESS_NETWORK_MTU=1450
 NANOBOT_SANDBOX_IMAGE=${SANDBOX_IMAGE}
 NANOBOT_SANDBOX_IMAGE_ALLOWLIST=${image_id}
-NANOBOT_SANDBOX_APPARMOR_PROFILE=nanobot-sandbox
+NANOBOT_SANDBOX_APPARMOR_PROFILE=nanobot-sandbox-restricted
 NANOBOT_SANDBOX_UID=10001
 NANOBOT_SANDBOX_GID=10001
 NANOBOT_SANDBOX_GLOBAL_CONCURRENCY=2
@@ -2030,6 +2291,8 @@ NANOBOT_SANDBOX_MAX_TIMEOUT=120
 NANOBOT_SANDBOX_WORKSPACE_QUOTA_BYTES=${WORKSPACE_QUOTA_BYTES}
 NANOBOT_SANDBOX_ASSET_MAX_BYTES=${ASSET_MAX_BYTES}
 NANOBOT_SANDBOX_TOTAL_QUOTA_BYTES=${TOTAL_QUOTA_BYTES}
+NANOBOT_SANDBOX_USAGE_RECONCILE_INTERVAL_SECONDS=60
+NANOBOT_SANDBOX_LEASE_RECONCILE_INTERVAL_SECONDS=15
 NANOBOT_SANDBOX_DISK_MAX_PERCENT=${DISK_MAX_PERCENT}
 NANOBOT_SANDBOX_DISK_MIN_FREE_BYTES=${DISK_MIN_FREE_BYTES}
 NANOBOT_SANDBOX_IO_DEVICE=${io_device}
@@ -2039,6 +2302,26 @@ NANOBOT_SANDBOX_RUNTIME_MAX_BYTES=10737418240
 EOF
   chown root:nanobot-sandboxd /etc/nanobot/sandboxd.env
   chmod 0640 /etc/nanobot/sandboxd.env
+}
+
+install_profile_manifest() {
+  local expected_sha256
+  expected_sha256="$(profile_manifest_sha256_from_stage)"
+  install -d -m 0700 -o root -g root /etc/nanobot
+  install -m 0640 -o root -g nanobot-sandboxd \
+    "${BUILT_PROFILE_MANIFEST}" \
+    "${INSTALLED_PROFILE_MANIFEST}"
+  [[ "$(sha256sum "${INSTALLED_PROFILE_MANIFEST}" | awk '{print $1}')" \
+      == "${expected_sha256}" ]] \
+    || die "安装后的 Profile manifest 摘要不一致"
+  PYTHONPATH="${RELEASE_DIR}" "${SANDBOXD_VENV}/bin/python" - \
+    "${INSTALLED_PROFILE_MANIFEST}" <<'PY'
+import sys
+
+from core.sandbox.profile_catalog import load_profile_catalog
+
+load_profile_catalog(sys.argv[1])
+PY
 }
 
 probe_sandboxd() {
@@ -2086,6 +2369,58 @@ for path in ("/v1/healthz", "/v1/readyz"):
 PY
 }
 
+sandboxd_admin_terminate_all() {
+  local reason="$1"
+  "${SANDBOXD_VENV}/bin/python" - "${reason}" <<'PY'
+import json
+import secrets
+import socket
+import sys
+from pathlib import Path
+
+socket_path = "/run/nanobot-sandboxd/sandboxd.sock"
+token = Path("/etc/nanobot/sandboxd-admin.token").read_bytes().strip()
+reason = sys.argv[1]
+request_id = f"sbxops_{secrets.token_hex(12)}"
+body = json.dumps(
+    {"request_id": request_id, "reason": reason},
+    separators=(",", ":"),
+).encode("utf-8")
+request = (
+    b"POST /v1/admin/leases/terminate-all HTTP/1.1\r\n"
+    b"Host: sandboxd\r\n"
+    b"Authorization: Bearer " + token + b"\r\n"
+    b"X-Nanobot-Request-ID: " + request_id.encode("ascii") + b"\r\n"
+    b"Content-Type: application/json\r\n"
+    b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+    b"Connection: close\r\n\r\n"
+    + body
+)
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(30.0)
+    client.connect(socket_path)
+    client.sendall(request)
+    response = bytearray()
+    while True:
+        chunk = client.recv(65536)
+        if not chunk:
+            break
+        response.extend(chunk)
+
+header, separator, raw_body = bytes(response).partition(b"\r\n\r\n")
+status_line = header.split(b"\r\n", 1)[0]
+if not separator or b" 200 " not in status_line:
+    raise SystemExit(
+        "sandboxd terminate-all failed: "
+        + status_line.decode("ascii", "replace")
+    )
+result = json.loads(raw_body)
+if result.get("status") != "success":
+    raise SystemExit("sandboxd terminate-all returned non-success result")
+print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+PY
+}
+
 install_control_plane_command() {
   require_no_extra_args "$@"
   require_root
@@ -2101,6 +2436,7 @@ install_control_plane_command() {
   log "安装独立 Python 3.11 与 sandboxd 依赖"
   install_sandboxd_python
   log "创建 sandboxd Token 与固定策略配置"
+  install_profile_manifest
   install_sandboxd_credentials_and_env
 
   install -m 0644 \
@@ -2151,9 +2487,16 @@ install_control_plane_command() {
   [[ "$(stat -c '%a:%G' /run/nanobot-sandboxd/sandboxd.sock)" \
       == "660:nanobot-sandboxd" ]] \
     || die "sandboxd UDS 权限错误"
+  [[ -f "${RUNTIME_PROFILE_MANIFEST}" \
+      && ! -L "${RUNTIME_PROFILE_MANIFEST}" \
+      && "$(stat -c '%a:%G' "${RUNTIME_PROFILE_MANIFEST}")" \
+        == "640:nanobot-sandboxd" \
+      && "$(sha256sum "${RUNTIME_PROFILE_MANIFEST}" | awk '{print $1}')" \
+        == "$(profile_manifest_sha256_from_stage)" ]] \
+    || die "sandboxd 运行时 Profile manifest 权限或摘要错误"
 
   mark_stage control-plane-ready \
-    "release=${RELEASE}|image=$(image_id_from_stage)"
+    "release=${RELEASE}|manifest=$(profile_manifest_sha256_from_stage)"
   log "sandboxd healthz/readyz 均通过"
   printf '下一步：sudo %s deploy\n' "$0"
 }
@@ -2187,6 +2530,11 @@ configure_application_env_off() {
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_EXEC_ENABLED false
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_GROUP_ENABLED false
   upsert_env_value "${env_file}" NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED false
+  upsert_env_value "${env_file}" NANOBOT_SANDBOX_SESSION_EXECUTION_ALLOWED false
+  upsert_env_value "${env_file}" NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED false
+  upsert_env_value "${env_file}" \
+    NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE \
+    "${RUNTIME_PROFILE_MANIFEST}"
   upsert_env_value "${env_file}" NANOBOT_RUNTIME_UID "${RUNTIME_UID}"
   upsert_env_value "${env_file}" NANOBOT_RUNTIME_GID "${RUNTIME_GID}"
   upsert_env_value "${env_file}" NANOBOT_SANDBOXD_GID "${SANDBOXD_GID}"
@@ -2718,12 +3066,30 @@ deploy_runtime_command() {
     "${RELEASE}" "${target_release}"
 }
 
+terminate_leases_command() {
+  require_root
+  load_config
+  require_stage control-plane-ready
+  (( $# <= 2 )) || die "terminate-leases 最多接受一个 reason 参数"
+  local reason="${2:-admin_terminated}"
+  case "${reason}" in
+    admin_terminated|kill_switch|controller_restarted|lease_recycled) ;;
+    *) die "terminate-leases reason 无效：${reason}" ;;
+  esac
+  sandboxd_admin_terminate_all "${reason}" | jq
+}
+
 kill_switch_command() {
   require_root
   (( $# <= 2 )) || die "kill-switch 最多接受一个 reason 参数"
   local reason="${2:-管理员紧急关闭 Sandbox}"
+  local request_id
   local body
-  body="$(jq -nc --arg reason "${reason}" '{reason:$reason}')"
+  request_id="sbxkill_$(openssl rand -hex 16)"
+  body="$(jq -nc \
+    --arg request_id "${request_id}" \
+    --arg reason "${reason}" \
+    '{request_id:$request_id,reason:$reason}')"
   admin_api POST /sandbox/kill-switch "${body}" | jq
 }
 
@@ -2839,11 +3205,17 @@ status_command() {
 
   printf 'AppArmor 内核：%s\n' \
     "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || printf unknown)"
-  if grep -q '^nanobot-sandbox ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
-    printf 'nanobot-sandbox profile：LOADED\n'
-  else
-    printf 'nanobot-sandbox profile：NOT LOADED\n'
-  fi
+  local apparmor_profile
+  for apparmor_profile in \
+      nanobot-sandbox-restricted \
+      nanobot-sandbox-developer; do
+    if grep -q "^${apparmor_profile} " \
+        /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+      printf '%s profile：LOADED\n' "${apparmor_profile}"
+    else
+      printf '%s profile：NOT LOADED\n' "${apparmor_profile}"
+    fi
+  done
   if mountpoint -q "${DATA_ROOT}"; then
     printf 'Sandbox 数据盘：MOUNTED\n'
     findmnt -n -o SOURCE,FSTYPE,OPTIONS "${DATA_ROOT}"
@@ -2864,7 +3236,7 @@ status_command() {
     printf 'Docker SecurityOptions：'
     docker info --format '{{json .SecurityOptions}}'
     docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' \
-      | grep '^nanobot-sandbox-python:' || true
+      | grep -E '^nanobot-sandbox-(python|developer):' || true
     if docker inspect nanobot-server >/dev/null 2>&1; then
       printf '运行 Runtime 提交：%s\n' "$(docker image inspect nanobot-runtime:latest \
         --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
@@ -2950,6 +3322,9 @@ main() {
       ;;
     enable-exec)
       sandbox_web_management_required_command "$@"
+      ;;
+    terminate-leases)
+      terminate_leases_command "$@"
       ;;
     kill-switch)
       kill_switch_command "$@"
