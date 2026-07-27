@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`ea080472db64cde5c29ba7a503ea47944c969639`
-- 规则总数：6543
+- 源提交：`605b77a37df8a4794395065931cafbb088376a8f`
+- 规则总数：6546
 - 扫描错误：0
 - 人工复核队列：691
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -17,7 +17,7 @@
 | `natural_language_semantic` | 32 |
 | `presentation` | 5 |
 | `protocol_syntax` | 3458 |
-| `security_invariant` | 1340 |
+| `security_invariant` | 1343 |
 
 ## 文件汇总
 
@@ -84,6 +84,7 @@
 | `app/memory_digest/jobs.py` | 28 |
 | `core/group_memory.py` | 28 |
 | `core/runtime_tool_service.py` | 28 |
+| `core/sandbox/profile_catalog.py` | 28 |
 | `sandboxd/filesystem.py` | 28 |
 | `core/proactive/generation.py` | 27 |
 | `core/sticker_memory.py` | 27 |
@@ -97,7 +98,6 @@
 | `webui/src/api/generated/adminClient.ts` | 26 |
 | `api/admin/runtime_routes.py` | 25 |
 | `core/prompts/manager.py` | 25 |
-| `core/sandbox/profile_catalog.py` | 25 |
 | `core/timing_score.py` | 25 |
 | `sandboxd/process_manager.py` | 25 |
 | `api/admin/eval_routes.py` | 24 |
