@@ -28,6 +28,7 @@ from sandboxd.network_policy import (
     MANAGED_LABEL,
     NETWORK_ROLE_LABEL,
     POLICY_SHA_LABEL,
+    PROXY_DNS_SERVERS,
     PROXY_MEMORY_BYTES,
     PROXY_NANO_CPUS,
     PROXY_PIDS_LIMIT,
@@ -336,7 +337,7 @@ def _valid_proxy_attrs(
             "Devices": [],
             "DeviceRequests": [],
             "ExtraHosts": [],
-            "Dns": [],
+            "Dns": list(PROXY_DNS_SERVERS),
             "PidMode": "",
             "IpcMode": "private",
             "Sysctls": PROXY_SYSCTLS,
@@ -382,6 +383,7 @@ def test_reused_proxy_rejects_runtime_security_drift(tmp_path):
         ("SecurityOpt", []),
         ("Sysctls", {"net.ipv4.ip_forward": "1"}),
         ("Binds", ["/var/run/docker.sock:/var/run/docker.sock"]),
+        ("Dns", ["8.8.8.8"]),
         ("Memory", 0),
         ("PidsLimit", 0),
     ]
@@ -655,6 +657,9 @@ def test_real_docker_developer_egress_and_rejection_matrix(tmp_path):
         assert proxy.attrs["HostConfig"]["ReadonlyRootfs"] is True
         assert proxy.attrs["HostConfig"]["CapDrop"] == ["ALL"]
         assert proxy.attrs["HostConfig"]["PortBindings"] == {}
+        assert proxy.attrs["HostConfig"]["Dns"] == list(
+            PROXY_DNS_SERVERS
+        )
         assert proxy.attrs["HostConfig"]["Sysctls"] == {
             "net.ipv4.ip_forward": "0",
             "net.ipv6.conf.all.forwarding": "0",
@@ -917,22 +922,66 @@ def test_real_docker_developer_egress_and_rejection_matrix(tmp_path):
             internal=True,
             check_duplicate=True,
             ipam=IPAMConfig(pool_configs=[
-                IPAMPool(subnet="8.8.8.0/24"),
+                IPAMPool(
+                    subnet="1.1.0.0/16",
+                    gateway="1.1.0.1",
+                ),
             ]),
             options={
                 "com.docker.network.bridge.inhibit_ipv4": "true",
             },
         )
         extra_networks.append(public_network)
-        redirect_program = (
-            "from http.server import BaseHTTPRequestHandler,HTTPServer;"
-            "H=type('H',(BaseHTTPRequestHandler,),{"
-            "'do_GET':lambda s:(s.send_response(302),"
-            "s.send_header('Location','http://10.0.0.1/metadata'),"
-            "s.end_headers()),"
-            "'log_message':lambda *a:None});"
-            "HTTPServer(('0.0.0.0',80),H).serve_forever()"
+        redirect_program = r"""
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+def serve_dns():
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind(("0.0.0.0", 53))
+    while True:
+        query, address = server.recvfrom(512)
+        offset = 12
+        while query[offset]:
+            offset += query[offset] + 1
+        question_end = offset + 5
+        query_type = int.from_bytes(
+            query[offset + 1:offset + 3],
+            "big",
         )
+        answer_count = 1 if query_type == 1 else 0
+        response = (
+            query[:2]
+            + b"\x81\x80\x00\x01"
+            + answer_count.to_bytes(2, "big")
+            + b"\x00\x00\x00\x00"
+            + query[12:question_end]
+        )
+        if answer_count:
+            response += (
+                b"\xc0\x0c\x00\x01\x00\x01"
+                + (0).to_bytes(4, "big")
+                + b"\x00\x04"
+                + socket.inet_aton("1.1.1.1")
+            )
+        server.sendto(response, address)
+
+
+class RedirectHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(302)
+        self.send_header("Location", "http://10.0.0.1/metadata")
+        self.end_headers()
+
+    def log_message(self, *_args):
+        return
+
+
+threading.Thread(target=serve_dns, daemon=True).start()
+HTTPServer(("0.0.0.0", 80), RedirectHandler).serve_forever()
+"""
         redirect = client.containers.create(
             image=developer_image_id,
             name=redirect_name,
@@ -949,8 +998,7 @@ def test_real_docker_developer_egress_and_rejection_matrix(tmp_path):
         containers.append(redirect)
         public_network.connect(
             redirect,
-            aliases=["raw.githubusercontent.com"],
-            ipv4_address="8.8.8.8",
+            ipv4_address="1.1.1.1",
         )
         public_network.connect(proxy)
         redirect.start()

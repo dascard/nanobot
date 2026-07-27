@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`0abf39c8fb6080fd8cbc518f2c9e8498ca293cf7`
-- 规则总数：6548
+- 源提交：`f62402f617bef3d9857d85237dec147ebf44e226`
+- 规则总数：6549
 - 扫描错误：0
 - 人工复核队列：691
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -17,7 +17,7 @@
 | `natural_language_semantic` | 32 |
 | `presentation` | 5 |
 | `protocol_syntax` | 3458 |
-| `security_invariant` | 1345 |
+| `security_invariant` | 1346 |
 
 ## 文件汇总
 
@@ -55,10 +55,10 @@
 | `app/memory_digest/builder.py` | 42 |
 | `core/persona_preprocess.py` | 41 |
 | `clients/model_registry.py` | 40 |
+| `sandboxd/network_policy.py` | 40 |
 | `api/admin/chat_config_routes.py` | 39 |
 | `core/memory_cleanup.py` | 39 |
 | `core/tracing.py` | 39 |
-| `sandboxd/network_policy.py` | 39 |
 | `creatures/nanobot/prompts/skills/news_search/evidence.py` | 38 |
 | `scripts/assign-sandbox-project-quota.sh` | 38 |
 | `app/session_memory/admin_browser.py` | 37 |

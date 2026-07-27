@@ -33,6 +33,7 @@ LEASE_NETWORK_ROLE = "lease-internal"
 UPLINK_NETWORK_ROLE = "egress-uplink"
 
 PROXY_USER = "13:13"
+PROXY_DNS_SERVERS = ("1.1.1.1",)
 PROXY_MEMORY_BYTES = 256 * 1024 * 1024
 PROXY_NANO_CPUS = 500_000_000
 PROXY_PIDS_LIMIT = 128
@@ -553,7 +554,8 @@ class NetworkPolicyManager:
             and not list(host_config.get("Devices") or [])
             and not list(host_config.get("DeviceRequests") or [])
             and not list(host_config.get("ExtraHosts") or [])
-            and not list(host_config.get("Dns") or [])
+            and list(host_config.get("Dns") or [])
+            == list(PROXY_DNS_SERVERS)
             and str(host_config.get("PidMode") or "") == ""
             and str(host_config.get("IpcMode") or "") == "private"
             and dict(host_config.get("Sysctls") or {}) == PROXY_SYSCTLS
@@ -607,6 +609,7 @@ class NetworkPolicyManager:
                 user="13:13",
                 hostname=name,
                 network=str(lease_network.name),
+                dns=list(PROXY_DNS_SERVERS),
                 detach=True,
                 stdin_open=False,
                 tty=False,

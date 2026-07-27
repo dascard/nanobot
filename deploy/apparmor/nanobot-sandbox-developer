@@ -23,6 +23,7 @@ profile nanobot-sandbox-developer flags=(attach_disconnected,mediate_deleted) {
 
   /bin/** ixr,
   /usr/bin/** ixr,
+  /usr/share/nodejs/** rix,
   /usr/local/bin/** ixr,
   /usr/local/lib/** mr,
   /lib/** mr,
