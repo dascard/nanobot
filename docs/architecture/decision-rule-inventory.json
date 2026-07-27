@@ -88760,7 +88760,8 @@
       "confidence": 0.68,
       "control_flow": true,
       "current_tests": [
-        "tests/test_release_artifacts.py"
+        "tests/test_release_artifacts.py",
+        "tests/test_release_manifest_cli.py"
       ],
       "detector": "python.string_control_flow",
       "disposition": "policy",
@@ -148704,7 +148705,7 @@
       "excerpt": "args.profile == \"nanobot-runtime\"",
       "input_boundary": "运维命令行参数、环境变量或宿主状态",
       "language": "python",
-      "line": 189,
+      "line": 186,
       "model_call": false,
       "normalized_fingerprint": "9711a30a4ac925256e386e1ce69541528d18c30f1a615c7af42481460dd08fcc",
       "owner": "operations",
@@ -148728,7 +148729,7 @@
       "excerpt": "runtime.provenance != \"built\"",
       "input_boundary": "运维命令行参数、环境变量或宿主状态",
       "language": "python",
-      "line": 264,
+      "line": 265,
       "model_call": false,
       "normalized_fingerprint": "943e8a5e192244d31739434c3c9a3656b63da0fe911d195706d52a62619b89d5",
       "owner": "operations",
@@ -148752,7 +148753,7 @@
       "excerpt": "__name__ == \"__main__\"",
       "input_boundary": "运维命令行参数、环境变量或宿主状态",
       "language": "python",
-      "line": 368,
+      "line": 369,
       "model_call": false,
       "normalized_fingerprint": "44533dcbac93e1e4672a884c6480032ad04bf9505ca1d0b49182334a1f1173d7",
       "owner": "operations",
@@ -167723,7 +167724,7 @@
     "server.py"
   ],
   "schema_version": 1,
-  "source_revision": "605b77a37df8a4794395065931cafbb088376a8f",
+  "source_revision": "3a04d31fecac49fea704214858b65f002d7b647b",
   "summary": {
     "by_category": {
       "compatibility": 132,

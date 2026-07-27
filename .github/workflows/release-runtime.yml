@@ -190,7 +190,7 @@ jobs:
             --input python_lock=requirements-prod.lock \
             --input web_lock=webui/package-lock.json \
             --input prompt_defaults=prompts.v2.default \
-            --schema-migration-head 20260724_admin_idempotency_records \
+            --schema-migration-head 20260726_scheduled_task_schedule_columns \
             --image-reference "${NANOBOT_RUNTIME_IMAGE}" \
             --image-id "${RUNTIME_IMAGE_ID}" \
             --sbom-file "${EVIDENCE_DIR}/runtime.spdx.json" \

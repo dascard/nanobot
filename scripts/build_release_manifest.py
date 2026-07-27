@@ -170,9 +170,6 @@ def _artifact_command(args: argparse.Namespace) -> int:
         build_artifact_manifest,
         dump_artifact_manifest,
     )
-    from core.release.runtime_verify import (
-        current_schema_migration_head,
-    )
 
     root = args.root.resolve()
     source = _resolve_source(args, root)
@@ -187,6 +184,10 @@ def _artifact_command(args: argparse.Namespace) -> int:
     )
     schema_head = args.schema_migration_head
     if schema_head is None and args.profile == "nanobot-runtime":
+        from core.release.runtime_verify import (
+            current_schema_migration_head,
+        )
+
         schema_head = current_schema_migration_head()
     artifact = build_artifact_manifest(
         profile_id=args.profile,

@@ -452,6 +452,10 @@ def test_runtime_release_workflow_builds_sbom_and_manifest_after_both_gates():
     assert "anchore/sbom-action@v0" in workflow
     assert "build_release_manifest.py artifact" in workflow
     assert "build_release_manifest.py release" in workflow
+    assert (
+        "--schema-migration-head "
+        "20260726_scheduled_task_schedule_columns"
+    ) in workflow
     assert "--require-built" in workflow
     assert 'tar --create --file "${bundle}" "${EVIDENCE_DIR}"' in workflow
     assert 'sha256sum "${bundle}" >"${bundle}.sha256"' in workflow

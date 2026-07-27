@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import sys
 
 
 def _write_evidence(root: Path) -> dict[str, Path]:
@@ -35,6 +36,7 @@ def _write_evidence(root: Path) -> dict[str, Path]:
 
 def test_manifest_cli_builds_artifact_release_and_validates_target(
     tmp_path: Path,
+    monkeypatch,
 ):
     from core.release.artifacts import (
         load_artifact_manifest,
@@ -86,6 +88,7 @@ def test_manifest_cli_builds_artifact_release_and_validates_target(
         "--output",
         str(artifact_path),
     ]
+    monkeypatch.setitem(sys.modules, "core.release.runtime_verify", None)
     assert main(artifact_args) == 0
 
     artifact = load_artifact_manifest(artifact_path)
