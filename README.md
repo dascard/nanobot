@@ -204,7 +204,9 @@ pull-only 磁盘水位，再把四个固定服务作为不可拆分单元切换�
 Runtime revision、Schema migration head 或非 Nanobot 容器快照验证失败时，会把四个
 服务全部恢复到前一镜像。`/var/lib/nanobot/release-state/` 保存 `current.json`、
 `pending.json`、`rollback.json` 和历史 ReleaseManifest，用于中断恢复；它不保存环境
-变量、Token 或业务正文。
+变量、Token 或业务正文。镜像身份以 ReleaseManifest 中的精确 RepoDigest 为准；部署器
+同时接受 legacy 镜像存储返回的 config Image ID 和 Docker 29 containerd 镜像存储返回
+的 OCI 索引 digest，但不接受二者之外的 ID。
 前端生产依赖审计当前仍报告 React Router RSC 模式同一 advisory 对应的 2 个 high
 包节点；本项目只使用 BrowserRouter SPA，不启用 RSC 或 data-router action，并有静态
 回归守卫。Axios 与 form-data 已升级到修复版本。CI 会记录完整 audit 并阻断 Critical；

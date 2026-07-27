@@ -119,10 +119,24 @@ def _same_runtime(
 ) -> bool:
     return (
         first.oci_image_reference == second.oci_image_reference
-        and first.oci_image_id == second.oci_image_id
+        and bool(
+            _runtime_image_identity_digests(first)
+            & _runtime_image_identity_digests(second)
+        )
         and first.source.git_full_commit
         == second.source.git_full_commit
     )
+
+
+def _runtime_image_identity_digests(
+    artifact: ArtifactManifest,
+) -> frozenset[str]:
+    """兼容 legacy config ID 与 containerd OCI 索引 ID。"""
+
+    return frozenset((
+        artifact.oci_image_digest,
+        artifact.oci_image_id,
+    ))
 
 
 class ReleaseStateStore:
@@ -607,7 +621,8 @@ class AtomicRuntimeDeployer:
         if (
             observation.image_reference
             != artifact.oci_image_reference
-            or observation.image_id != artifact.oci_image_id
+            or observation.image_id
+            not in _runtime_image_identity_digests(artifact)
             or observation.revision
             != artifact.source.git_full_commit
         ):
@@ -640,13 +655,13 @@ class AtomicRuntimeDeployer:
                 "已拉取 Runtime RepoDigest 格式无效"
             ) from exc
         if (
-            fields[0] != artifact.oci_image_id
+            fields[0] not in _runtime_image_identity_digests(artifact)
             or fields[1] != artifact.source.git_full_commit
             or not isinstance(repo_digests, list)
             or artifact.oci_image_reference not in repo_digests
         ):
             raise DeploymentVerificationError(
-                "已拉取 Runtime 的 Image ID、revision 或 RepoDigest 与 ArtifactManifest 不一致"
+                "已拉取 Runtime 的镜像存储 ID、revision 或 RepoDigest 与 ArtifactManifest 不一致"
             )
 
     def _check_ready(self) -> None:
@@ -746,15 +761,21 @@ class AtomicRuntimeDeployer:
         current: ReleaseManifest,
         rollback: ReleaseManifest | None,
     ) -> None:
-        """只按精确 Image ID 淘汰不再属于 current／rollback 的镜像。"""
+        """只按精确不可变引用淘汰不再属于 current／rollback 的镜像。"""
 
         if obsolete is None:
             return
-        obsolete_id = obsolete.runtime_artifact.oci_image_id
-        kept_ids = {current.runtime_artifact.oci_image_id}
+        obsolete_reference = (
+            obsolete.runtime_artifact.oci_image_reference
+        )
+        kept_references = {
+            current.runtime_artifact.oci_image_reference
+        }
         if rollback is not None:
-            kept_ids.add(rollback.runtime_artifact.oci_image_id)
-        if obsolete_id in kept_ids:
+            kept_references.add(
+                rollback.runtime_artifact.oci_image_reference
+            )
+        if obsolete_reference in kept_references:
             return
         references = self.runner.run(
             (
@@ -762,13 +783,13 @@ class AtomicRuntimeDeployer:
                 "ps",
                 "-aq",
                 "--filter",
-                f"ancestor={obsolete_id}",
+                f"ancestor={obsolete_reference}",
             )
         )
         if references.returncode != 0 or references.stdout.strip():
             return
         self.runner.run(
-            ("docker", "image", "rm", obsolete_id)
+            ("docker", "image", "rm", obsolete_reference)
         )
 
     def deploy(self, target: ReleaseManifest) -> DeploymentResult:

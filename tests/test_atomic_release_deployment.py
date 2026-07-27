@@ -24,6 +24,7 @@ CONTAINERS = {
 def _release(
     *,
     marker: str,
+    image_id_marker: str | None = None,
     provenance: str = "built",
     created_at: str = "2026-07-23T12:00:00+00:00",
 ):
@@ -37,7 +38,7 @@ def _release(
     image_reference = (
         f"registry.example/nanobot-{marker}@sha256:" + marker * 64
     )
-    image_id = "sha256:" + marker * 64
+    image_id = "sha256:" + (image_id_marker or marker) * 64
     revision = marker * 40
     if provenance == "observed":
         artifact = build_observed_runtime_artifact(
@@ -100,6 +101,7 @@ class _FakeRunner:
         nonfixed_snapshot_after_switch: tuple[str, ...] | None = None,
         active_sandbox_names: tuple[str, ...] = (),
         pulled_image_id: str | None = None,
+        containerd_image_store: bool = False,
         insecure_target_runtime: bool = False,
     ):
         from core.release.deployment import CommandResult
@@ -115,6 +117,7 @@ class _FakeRunner:
         self.nonfixed_snapshot_after_switch = nonfixed_snapshot_after_switch
         self.active_sandbox_names = active_sandbox_names
         self.pulled_image_id = pulled_image_id
+        self.containerd_image_store = containerd_image_store
         self.insecure_target_runtime = insecure_target_runtime
         self.commands: list[_Command] = []
 
@@ -188,7 +191,11 @@ class _FakeRunner:
                 health = "unhealthy"
             output = "|".join((
                 artifact.oci_image_reference,
-                artifact.oci_image_id,
+                (
+                    artifact.oci_image_digest
+                    if self.containerd_image_store
+                    else artifact.oci_image_id
+                ),
                 artifact.source.git_full_commit,
                 health,
             ))
@@ -197,7 +204,12 @@ class _FakeRunner:
         if command[:3] == ("docker", "image", "inspect"):
             artifact = self.target
             output = "|".join((
-                self.pulled_image_id or artifact.oci_image_id,
+                self.pulled_image_id
+                or (
+                    artifact.oci_image_digest
+                    if self.containerd_image_store
+                    else artifact.oci_image_id
+                ),
                 artifact.source.git_full_commit,
                 f'["{artifact.oci_image_reference}"]',
             ))
@@ -265,7 +277,7 @@ def test_successful_release_switches_all_services_and_rotates_state(
     from core.release.artifacts import load_release_manifest
 
     previous = _release(marker="a", provenance="observed")
-    target = _release(marker="b")
+    target = _release(marker="b", image_id_marker="c")
     runner = _FakeRunner(previous=previous, target=target)
     deployer = _deployer(tmp_path, runner)
 
@@ -322,13 +334,46 @@ def test_idempotent_target_adopts_full_built_manifest_without_recreate(
     )
 
 
-def test_successful_release_removes_only_superseded_exact_image_id(
+def test_containerd_index_id_switches_and_reconciles_without_recreate(
+    tmp_path: Path,
+):
+    previous = _release(marker="a", provenance="observed")
+    target = _release(marker="b", image_id_marker="c")
+    first_runner = _FakeRunner(
+        previous=previous,
+        target=target,
+        containerd_image_store=True,
+    )
+
+    first_result = _deployer(tmp_path, first_runner).deploy(target)
+
+    assert first_result.changed is True
+    second_runner = _FakeRunner(
+        previous=target,
+        target=target,
+        containerd_image_store=True,
+    )
+
+    second_result = _deployer(tmp_path, second_runner).deploy(target)
+
+    assert second_result.changed is False
+    assert not any(
+        "compose" in command.args and "up" in command.args
+        for command in second_runner.commands
+    )
+
+
+def test_successful_release_removes_only_superseded_immutable_reference(
     tmp_path: Path,
 ):
     from core.release.artifacts import load_release_manifest
 
-    first = _release(marker="a", provenance="observed")
-    second = _release(marker="b")
+    first = _release(
+        marker="a",
+        image_id_marker="e",
+        provenance="observed",
+    )
+    second = _release(marker="b", image_id_marker="f")
     first_runner = _FakeRunner(previous=first, target=second)
     _deployer(tmp_path, first_runner).deploy(second)
 
@@ -352,8 +397,16 @@ def test_successful_release_removes_only_superseded_exact_image_id(
             "docker",
             "image",
             "rm",
-            first.runtime_artifact.oci_image_id,
+            first.runtime_artifact.oci_image_reference,
         )
+    ]
+    ancestor_checks = [
+        command.args[-1]
+        for command in second_runner.commands
+        if command.args[:3] == ("docker", "ps", "-aq")
+    ]
+    assert ancestor_checks == [
+        f"ancestor={first.runtime_artifact.oci_image_reference}"
     ]
     assert not any(
         "prune" in argument
@@ -512,14 +565,14 @@ def test_pulled_image_id_mismatch_fails_before_container_switch(tmp_path):
     from core.release.deployment import DeploymentVerificationError
 
     previous = _release(marker="a", provenance="observed")
-    target = _release(marker="b")
+    target = _release(marker="b", image_id_marker="c")
     runner = _FakeRunner(
         previous=previous,
         target=target,
         pulled_image_id="sha256:" + "f" * 64,
     )
 
-    with pytest.raises(DeploymentVerificationError, match="Image ID"):
+    with pytest.raises(DeploymentVerificationError, match="镜像存储 ID"):
         _deployer(tmp_path, runner).deploy(target)
 
     assert runner.current == previous.runtime_artifact
