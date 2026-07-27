@@ -205,6 +205,51 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _canonical_cidr(
+    network: ipaddress.IPv4Network | ipaddress.IPv6Network,
+) -> str:
+    """生成不受 Python IPv4-mapped IPv6 渲染差异影响的规范 CIDR。"""
+    if isinstance(network, ipaddress.IPv4Network):
+        address = ".".join(str(octet) for octet in network.network_address.packed)
+        return f"{address}/{network.prefixlen}"
+
+    packed = network.network_address.packed.hex()
+    groups = [
+        format(int(packed[index : index + 4], 16), "x")
+        for index in range(0, len(packed), 4)
+    ]
+    best_start = -1
+    best_length = 0
+    index = 0
+    while index < len(groups):
+        if groups[index] != "0":
+            index += 1
+            continue
+        end = index
+        while end < len(groups) and groups[end] == "0":
+            end += 1
+        length = end - index
+        if length > best_length:
+            best_start = index
+            best_length = length
+        index = end
+
+    if best_length < 2:
+        address = ":".join(groups)
+    else:
+        left = ":".join(groups[:best_start])
+        right = ":".join(groups[best_start + best_length :])
+        if left and right:
+            address = f"{left}::{right}"
+        elif left:
+            address = f"{left}::"
+        elif right:
+            address = f"::{right}"
+        else:
+            address = "::"
+    return f"{address}/{network.prefixlen}"
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionProfileDefinition:
     profile_id: str
@@ -360,7 +405,7 @@ def _parse_profile(raw: object) -> ExecutionProfileDefinition:
             raise ProfileCatalogError(
                 f"{profile_id}.network_denied_cidrs 无效"
             ) from exc
-        if str(network) != value:
+        if _canonical_cidr(network) != value:
             raise ProfileCatalogError(
                 f"{profile_id}.network_denied_cidrs 必须使用规范 CIDR"
             )

@@ -98,6 +98,31 @@ def test_policy_sha_uses_normalized_complete_policy_not_json_key_order():
     )
 
 
+def test_ipv4_mapped_ipv6_cidr_uses_version_independent_canonical_text():
+    raw = _raw_catalog()
+
+    catalog = parse_profile_catalog(raw)
+
+    assert "::ffff:a00:0/104" in catalog.profile(
+        "developer"
+    ).network_denied_cidrs
+
+    drifted = deepcopy(raw)
+    developer = next(
+        profile
+        for profile in drifted["profiles"]
+        if profile["profile_id"] == "developer"
+    )
+    developer["network_denied_cidrs"] = [
+        "::ffff:10.0.0.0/104"
+        if cidr == "::ffff:a00:0/104"
+        else cidr
+        for cidr in developer["network_denied_cidrs"]
+    ]
+    with pytest.raises(ProfileCatalogError, match="必须使用规范 CIDR"):
+        parse_profile_catalog(drifted)
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
