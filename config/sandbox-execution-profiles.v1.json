@@ -1,6 +1,6 @@
 {
   "catalog_version": 1,
-  "catalog_generation": "20260725.2",
+  "catalog_generation": "20260728.1",
   "profiles": [
     {
       "profile_id": "restricted",
@@ -98,9 +98,7 @@
         443
       ],
       "network_proxy_image_reference": "nanobot-sandbox-egress-proxy:2026.07.25",
-      "network_proxy_image_allowlist": [
-        "sha256:05a5bbc3966ef22b15a0fa708722cf5ad730e8266473ab35ecfc932fb1b4e2ed"
-      ],
+      "network_proxy_image_allowlist": [],
       "network_proxy_port": 3128,
       "shell_path": "/bin/bash",
       "idle_ttl_seconds": 1800,

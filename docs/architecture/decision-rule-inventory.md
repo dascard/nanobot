@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`465057c60ad4e49da1f0515d37792d94a1150a51`
-- 规则总数：6546
+- 源提交：`1e942041f87c81bfc1ec8cb1d51bf964765e9c16`
+- 规则总数：6548
 - 扫描错误：0
 - 人工复核队列：691
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -17,14 +17,14 @@
 | `natural_language_semantic` | 32 |
 | `presentation` | 5 |
 | `protocol_syntax` | 3458 |
-| `security_invariant` | 1343 |
+| `security_invariant` | 1345 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
 | `core/schema_migrations.py` | 198 |
-| `scripts/manage-sandbox-production.sh` | 185 |
+| `scripts/manage-sandbox-production.sh` | 187 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
 | `core/proactive_research.py` | 82 |

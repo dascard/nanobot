@@ -38,6 +38,8 @@ def _configured_catalog(tmp_path):
     for profile in raw["profiles"]:
         if profile["profile_id"] != "trusted_developer":
             profile["image_allowlist"] = [IMAGE_ID]
+        if profile["profile_id"] == "developer":
+            profile["network_proxy_image_allowlist"] = [PROXY_IMAGE_ID]
     return _write_catalog(tmp_path, raw)
 
 
@@ -52,11 +54,34 @@ def test_canonical_catalog_has_three_complete_profiles_and_fixed_timeouts():
     assert catalog.profile("restricted").max_timeout_seconds == 120
     assert catalog.profile("developer").max_timeout_seconds == 1800
     assert catalog.profile("developer").runtime_quota_bytes > 512 * 1024 * 1024
+    assert catalog.profile("developer").network_proxy_image_allowlist == ()
     trusted = catalog.profile("trusted_developer")
     assert trusted.grantable is False
     assert trusted.image_configured is False
     assert trusted.network_policy_id == "trusted_not_ready"
     assert len(catalog.policy_sha256) == 64
+
+
+def test_developer_proxy_binding_allows_zero_or_one_id_only():
+    raw = _raw_catalog()
+    developer = next(
+        profile
+        for profile in raw["profiles"]
+        if profile["profile_id"] == "developer"
+    )
+
+    assert parse_profile_catalog(raw).profile(
+        "developer"
+    ).network_proxy_image_allowlist == ()
+
+    developer["network_proxy_image_allowlist"] = [PROXY_IMAGE_ID]
+    assert parse_profile_catalog(raw).profile(
+        "developer"
+    ).network_proxy_image_allowlist == (PROXY_IMAGE_ID,)
+
+    developer["network_proxy_image_allowlist"].append(IMAGE_ID)
+    with pytest.raises(ProfileCatalogError, match="必须是有界数组"):
+        parse_profile_catalog(raw)
 
 
 def test_trusted_profile_cannot_be_enabled_by_manifest_only():
@@ -259,7 +284,7 @@ def test_ready_returns_per_profile_state_without_unready_profile_blocking(
 
     ready = backend.ready()
 
-    assert ready["catalog_generation"] == "20260725.2"
+    assert ready["catalog_generation"] == "20260728.1"
     assert ready["policy_sha256"] == config.profile_catalog.policy_sha256
     assert ready["profiles"]["restricted"]["ready"] is True
     assert ready["profiles"]["developer"]["ready"] is True

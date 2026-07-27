@@ -871,8 +871,23 @@ def test_production_image_stage_binds_two_profiles_proxy_and_manifest():
     )
     assert '"${VERSION}" --profile developer' in build_body
     assert "render-sandbox-profile-manifest.py" in build_body
-    assert "expected_proxy_id" in build_body
-    assert '[[ "${proxy_id}" == "${expected_proxy_id}" ]]' in build_body
+    assert "expected_proxy_id" not in build_body
+    assert "canonical Profile manifest 的代理 IMAGE ID 必须留空" in build_body
+    assert 'if ! docker image inspect "${PROXY_IMAGE}"' not in build_body
+    assert '--tag "${proxy_candidate}"' in build_body
+    assert "--resume-failed-build-from" in build_body
+    assert '[[ "${VERSION}" == "${resume_failed_build_release:0:7}-"* ]]' in (
+        build_body
+    )
+    for required_path in (
+        "scripts/build-sandbox-image.sh",
+        "docker/sandbox/python",
+        "docker/sandbox/developer",
+        "docker/sandbox/egress-proxy",
+    ):
+        assert required_path in build_body
+    assert "失败构建后的镜像输入已变化，禁止复用" in build_body
+    assert "check_build_disk_gate" in build_body
     assert "restricted=${RESTRICTED_IMAGE}@" in build_body
     assert "developer=${DEVELOPER_IMAGE}@" in build_body
     assert "proxy=${PROXY_IMAGE}@" in build_body

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import os
 import socket
 import time
@@ -17,6 +18,7 @@ from core.sandbox.profile_catalog import (
     DEVELOPER_REQUIRED_DENIED_CIDRS,
     DEVELOPER_REQUIRED_DOMAINS,
     load_profile_catalog,
+    parse_profile_catalog,
 )
 from sandboxd.config import SandboxdConfig
 from sandboxd.network_policy import (
@@ -54,6 +56,20 @@ def _config(
     network_allowed: bool,
     uplink_name: str = "nanobot-sbx-egress-uplink-test",
 ) -> SandboxdConfig:
+    manifest_path = Path(os.environ.get(
+        "NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE",
+        os.fspath(DEFAULT_PROFILE_MANIFEST_PATH),
+    ))
+    catalog = load_profile_catalog(manifest_path)
+    if not catalog.profile("developer").network_proxy_image_allowlist:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        developer = next(
+            profile
+            for profile in raw["profiles"]
+            if profile["profile_id"] == "developer"
+        )
+        developer["network_proxy_image_allowlist"] = [PROXY_IMAGE_ID]
+        catalog = parse_profile_catalog(raw)
     return SandboxdConfig(
         data_root=tmp_path / "data",
         socket_path=tmp_path / "run" / "sandboxd.sock",
@@ -62,10 +78,8 @@ def _config(
         admin_token_file=tmp_path / "admin-token",
         admin_client_token_path=tmp_path / "run" / "admin-client.token",
         quota_helper_path=tmp_path / "quota-helper",
-        profile_manifest_path=Path(os.environ.get(
-            "NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE",
-            os.fspath(DEFAULT_PROFILE_MANIFEST_PATH),
-        )),
+        profile_manifest_path=manifest_path,
+        profile_catalog=catalog,
         developer_network_allowed=network_allowed,
         egress_uplink_network_name=uplink_name,
         disk_min_free_bytes=0,
@@ -86,7 +100,7 @@ def test_canonical_developer_policy_binds_proxy_domains_ports_and_cidrs():
     assert profile.network_proxy_image_reference == (
         "nanobot-sandbox-egress-proxy:2026.07.25"
     )
-    assert profile.network_proxy_image_allowlist == (PROXY_IMAGE_ID,)
+    assert profile.network_proxy_image_allowlist == ()
     assert profile.network_proxy_port == 3128
 
     restricted = catalog.profile("restricted")

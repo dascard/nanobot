@@ -163,6 +163,11 @@ update-release 参数：
                             仅在 Runtime 已部署且健康时，归档完整旧阶段凭据
                             必须同时使用 --reuse-built-image --rerun-smoke
 
+build-image 参数：
+  [--resume-failed-build-from <40 位提交>]
+                            仅复用同 VERSION 的失败构建遗留镜像；要求该提交到
+                            当前 RELEASE 的所有镜像构建输入完全未变
+
 promote-release 参数：
   不接受参数。仅在 Smoke 与 control-plane-ready 完成且相同提交已进入
   origin/master 后，将 Sandbox 控制面来源提升为 origin/master；Runtime
@@ -1653,18 +1658,35 @@ assert_host_prepared_current() {
 }
 
 build_image_command() {
-  require_no_extra_args "$@"
   require_root
   load_config
+  local resume_failed_build_release=""
+
+  shift
+  while (( $# )); do
+    case "$1" in
+      --resume-failed-build-from)
+        [[ $# -ge 2 ]] || die "--resume-failed-build-from 缺少参数"
+        resume_failed_build_release="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        die "build-image 未知参数：$1"
+        ;;
+    esac
+  done
+
   assert_release_checkout_current
   assert_prepared_storage_current
   assert_host_prepared_current
-  check_build_disk_gate
   require_command python3
 
   local canonical_manifest="${REPO_ROOT}/config/sandbox-execution-profiles.v1.json"
   local canonical_generation
-  local expected_proxy_id
   local proxy_candidate
   local restricted_id
   local developer_id
@@ -1672,6 +1694,7 @@ build_image_command() {
   local restricted_user
   local developer_user
   local proxy_user
+  local image_reference
   local image_id
   local manifest_generation
   local manifest_sha256
@@ -1679,14 +1702,13 @@ build_image_command() {
   [[ -f "${canonical_manifest}" && ! -L "${canonical_manifest}" ]] \
     || die "canonical Profile manifest 不是受管普通文件"
   canonical_generation="$(jq -er '.catalog_generation' "${canonical_manifest}")"
-  expected_proxy_id="$(jq -er '
+  jq -e '
     .profiles[]
     | select(.profile_id == "developer")
     | .network_proxy_image_allowlist
-    | if length == 1 then .[0] else error("代理 allowlist 必须唯一") end
-  ' "${canonical_manifest}")"
-  [[ "${expected_proxy_id}" =~ ^sha256:[0-9a-f]{64}$ ]] \
-    || die "canonical Profile manifest 的代理 IMAGE ID 无效"
+    | type == "array" and length == 0
+  ' "${canonical_manifest}" >/dev/null \
+    || die "canonical Profile manifest 的代理 IMAGE ID 必须留空"
   [[ "$(jq -er '
     .profiles[]
     | select(.profile_id == "developer")
@@ -1694,24 +1716,51 @@ build_image_command() {
   ' "${canonical_manifest}")" == "${PROXY_IMAGE}" ]] \
     || die "生产脚本固定代理引用与 canonical Profile manifest 不一致"
 
-  log "构建固定 Restricted 镜像 ${RESTRICTED_IMAGE}"
-  run_as_deploy env \
-    -u http_proxy -u https_proxy \
-    -u HTTP_PROXY -u HTTPS_PROXY \
-    -u all_proxy -u ALL_PROXY \
-    "${REPO_ROOT}/scripts/build-sandbox-image.sh" "${VERSION}"
+  proxy_candidate="nanobot-sandbox-egress-proxy:candidate-${VERSION}"
+  if [[ -n "${resume_failed_build_release}" ]]; then
+    [[ "${resume_failed_build_release}" =~ ^[0-9a-f]{40}$ ]] \
+      || die "失败构建来源必须是 40 位小写提交哈希"
+    repo_git cat-file -e \
+      "${resume_failed_build_release}^{commit}" 2>/dev/null \
+      || die "本地仓库不存在失败构建来源提交"
+    repo_git merge-base --is-ancestor \
+      "${resume_failed_build_release}" "${RELEASE}" \
+      || die "失败构建来源不是当前 RELEASE 的祖先"
+    [[ "${VERSION}" == "${resume_failed_build_release:0:7}-"* ]] \
+      || die "VERSION 与失败构建来源提交不匹配"
+    repo_git diff --quiet \
+      "${resume_failed_build_release}" "${RELEASE}" -- \
+      scripts/build-sandbox-image.sh \
+      docker/sandbox/python \
+      docker/sandbox/developer \
+      docker/sandbox/egress-proxy \
+      || die "失败构建后的镜像输入已变化，禁止复用"
+    for image_reference in \
+      "${RESTRICTED_IMAGE}" \
+      "${DEVELOPER_IMAGE}" \
+      "${proxy_candidate}"; do
+      docker image inspect "${image_reference}" >/dev/null 2>&1 \
+        || die "失败构建遗留镜像不存在：${image_reference}"
+    done
+    log "镜像构建输入未变；复用失败阶段已完成的三张镜像"
+  else
+    check_build_disk_gate
+    log "构建固定 Restricted 镜像 ${RESTRICTED_IMAGE}"
+    run_as_deploy env \
+      -u http_proxy -u https_proxy \
+      -u HTTP_PROXY -u HTTPS_PROXY \
+      -u all_proxy -u ALL_PROXY \
+      "${REPO_ROOT}/scripts/build-sandbox-image.sh" "${VERSION}"
 
-  log "构建固定 Developer 镜像 ${DEVELOPER_IMAGE}"
-  run_as_deploy env \
-    -u http_proxy -u https_proxy \
-    -u HTTP_PROXY -u HTTPS_PROXY \
-    -u all_proxy -u ALL_PROXY \
-    "${REPO_ROOT}/scripts/build-sandbox-image.sh" \
-      "${VERSION}" --profile developer
+    log "构建固定 Developer 镜像 ${DEVELOPER_IMAGE}"
+    run_as_deploy env \
+      -u http_proxy -u https_proxy \
+      -u HTTP_PROXY -u HTTPS_PROXY \
+      -u all_proxy -u ALL_PROXY \
+      "${REPO_ROOT}/scripts/build-sandbox-image.sh" \
+        "${VERSION}" --profile developer
 
-  if ! docker image inspect "${PROXY_IMAGE}" >/dev/null 2>&1; then
-    proxy_candidate="nanobot-sandbox-egress-proxy:candidate-${VERSION}"
-    log "构建候选出口代理镜像并核对已审查摘要"
+    log "从当前固定提交构建候选出口代理镜像"
     run_as_deploy env \
       -u http_proxy -u https_proxy \
       -u HTTP_PROXY -u HTTPS_PROXY \
@@ -1719,19 +1768,14 @@ build_image_command() {
       docker build \
         --tag "${proxy_candidate}" \
         "${REPO_ROOT}/docker/sandbox/egress-proxy"
-    proxy_id="$(docker image inspect "${proxy_candidate}" --format '{{.Id}}')"
-    [[ "${proxy_id}" == "${expected_proxy_id}" ]] \
-      || die "候选出口代理 IMAGE ID 与 canonical allowlist 不一致；保留候选 tag 供调查"
-    docker image tag "${proxy_id}" "${PROXY_IMAGE}"
-    docker image rm "${proxy_candidate}" >/dev/null
   fi
 
   restricted_id="$(docker image inspect "${RESTRICTED_IMAGE}" --format '{{.Id}}')"
   developer_id="$(docker image inspect "${DEVELOPER_IMAGE}" --format '{{.Id}}')"
-  proxy_id="$(docker image inspect "${PROXY_IMAGE}" --format '{{.Id}}')"
+  proxy_id="$(docker image inspect "${proxy_candidate}" --format '{{.Id}}')"
   restricted_user="$(docker image inspect "${RESTRICTED_IMAGE}" --format '{{.Config.User}}')"
   developer_user="$(docker image inspect "${DEVELOPER_IMAGE}" --format '{{.Config.User}}')"
-  proxy_user="$(docker image inspect "${PROXY_IMAGE}" --format '{{.Config.User}}')"
+  proxy_user="$(docker image inspect "${proxy_candidate}" --format '{{.Config.User}}')"
   for image_id in "${restricted_id}" "${developer_id}" "${proxy_id}"; do
     [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] \
       || die "Sandbox IMAGE ID 格式无效"
@@ -1742,8 +1786,7 @@ build_image_command() {
     || die "Developer 镜像默认用户不是 10001:10001"
   [[ "${proxy_user}" == "13:13" ]] \
     || die "出口代理镜像默认用户不是 13:13"
-  [[ "${proxy_id}" == "${expected_proxy_id}" ]] \
-    || die "出口代理 IMAGE ID 与 canonical allowlist 不一致"
+  docker image tag "${proxy_id}" "${PROXY_IMAGE}"
 
   ensure_state_dir
   manifest_generation="${canonical_generation}.${RELEASE:0:12}"
@@ -1766,6 +1809,7 @@ build_image_command() {
   mark_stage image-built \
     "restricted=${RESTRICTED_IMAGE}@${restricted_id}|developer=${DEVELOPER_IMAGE}@${developer_id}|proxy=${PROXY_IMAGE}@${proxy_id}|manifest=${manifest_sha256}"
   image_id_from_stage >/dev/null
+  docker image rm "${proxy_candidate}" >/dev/null
   log "Sandbox 三镜像与部署 manifest 构建通过：${manifest_sha256}"
   printf '下一步：sudo %s smoke\n' "$0"
 }

@@ -430,6 +430,7 @@ def _parse_profile(raw: object) -> ExecutionProfileDefinition:
         raw["network_proxy_image_allowlist"],
         name=f"{profile_id}.network_proxy_image_allowlist",
         pattern=_IMAGE_ID_RE,
+        maximum_items=1,
         maximum_length=71,
     )
     network_proxy_port = _integer(
@@ -592,7 +593,6 @@ def _parse_profile(raw: object) -> ExecutionProfileDefinition:
             or not profile.grantable
             or not profile.network_proxy_image_reference
             or profile.network_proxy_image_reference.endswith(":latest")
-            or not profile.network_proxy_image_allowlist
             or profile.network_proxy_port != 3128
             or not DEVELOPER_REQUIRED_DOMAINS.issubset(
                 profile.network_allowlist

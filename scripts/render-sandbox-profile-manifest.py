@@ -110,11 +110,10 @@ def render_manifest(arguments: argparse.Namespace) -> tuple[str, str]:
     source_proxy_allowlist = developer.get("network_proxy_image_allowlist")
     if (
         arguments.proxy_reference != source_proxy_reference
-        or not isinstance(source_proxy_allowlist, list)
-        or arguments.proxy_image_id not in source_proxy_allowlist
+        or source_proxy_allowlist != []
     ):
         raise ValueError(
-            "代理镜像引用或 IMAGE ID 与已审查 canonical 网络策略不一致"
+            "代理镜像引用必须匹配，且 canonical 代理 IMAGE ID 必须留空"
         )
 
     raw["catalog_generation"] = arguments.generation

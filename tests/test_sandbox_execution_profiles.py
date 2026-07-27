@@ -15,6 +15,7 @@ from core.sandbox.profile_catalog import (
 
 
 IMAGE_ID = "sha256:" + "a" * 64
+PROXY_IMAGE_ID = "sha256:" + "b" * 64
 
 
 def _raw_catalog():
@@ -26,6 +27,8 @@ def _registry_with_images():
     for profile in raw["profiles"]:
         if profile["profile_id"] != "trusted_developer":
             profile["image_allowlist"] = [IMAGE_ID]
+        if profile["profile_id"] == "developer":
+            profile["network_proxy_image_allowlist"] = [PROXY_IMAGE_ID]
     return ExecutionProfileRegistry(parse_profile_catalog(raw))
 
 
@@ -128,6 +131,8 @@ def test_same_image_digest_cannot_hide_other_policy_drift():
     for profile in raw["profiles"]:
         if profile["profile_id"] != "trusted_developer":
             profile["image_allowlist"] = [IMAGE_ID]
+        if profile["profile_id"] == "developer":
+            profile["network_proxy_image_allowlist"] = [PROXY_IMAGE_ID]
     raw["profiles"][1]["pids_limit"] += 1
     drifted = ExecutionProfileRegistry(parse_profile_catalog(raw))
     state = _controller_state(drifted)

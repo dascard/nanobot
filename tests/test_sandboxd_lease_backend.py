@@ -29,6 +29,7 @@ from sandboxd.network_policy import LeaseNetworkAttachment
 
 
 IMAGE_ID = "sha256:" + "d" * 64
+PROXY_IMAGE_ID = "sha256:" + "e" * 64
 WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
 LEASE_ID = "sbxlease_backend_test"
 
@@ -173,6 +174,8 @@ def _manifest(tmp_path: Path) -> Path:
         }:
             profile["image_reference"] = "nanobot-sandbox-developer:test"
             profile["image_allowlist"] = [IMAGE_ID]
+        if profile["profile_id"] == "developer":
+            profile["network_proxy_image_allowlist"] = [PROXY_IMAGE_ID]
     target = tmp_path / "profiles.json"
     target.write_text(json.dumps(raw), encoding="utf-8")
     return target
