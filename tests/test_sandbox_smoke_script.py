@@ -70,6 +70,11 @@ def test_smoke_script_preflight_checks_real_host_security_and_three_images():
     assert 'for profile_id in ("restricted", "developer")' in body
     assert "network_proxy_image_allowlist" in body
     assert "trusted.grantable" in body
+    assert '.profile("restricted").image_reference' in source
+    assert (
+        'NANOBOT_SANDBOX_TEST_IMAGE="${sandbox_test_image}"'
+        in source
+    )
 
 
 def test_smoke_script_contains_no_global_or_unknown_resource_cleanup():

@@ -87,6 +87,8 @@ def test_matching_fingerprint_skips_repeated_setup(tmp_path):
     assert second["action"] == "unchanged"
     assert first["ready"] is second["ready"] is True
     assert len(container.exec_calls) == 1
+    assert container.exec_calls[0]["stdout"] is True
+    assert container.exec_calls[0]["stderr"] is True
     runtime = workspace_files.layout.ensure_runtime(WORKSPACE_A)
     for relative in (
         "cache",

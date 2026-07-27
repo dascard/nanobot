@@ -26,6 +26,7 @@ manifest=""
 data_root="/srv/nanobot"
 evidence_root="${XDG_CACHE_HOME:-${HOME}/.cache}/nanobot-sandbox-smoke"
 preflight_only=false
+sandbox_test_image=""
 
 while (( $# )); do
   case "$1" in
@@ -307,6 +308,20 @@ if [[ "${preflight_only}" == "true" ]]; then
   exit 0
 fi
 
+sandbox_test_image="$(PYTHONPATH="${repo_root}" python - \
+  "${manifest}" <<'PY'
+import sys
+
+from core.sandbox.profile_catalog import load_profile_catalog
+
+print(load_profile_catalog(sys.argv[1]).profile("restricted").image_reference)
+PY
+)"
+[[ -n "${sandbox_test_image}" ]] || {
+  echo "BLOCKED：无法从部署 manifest 绑定 Restricted 测试镜像。" >&2
+  exit 2
+}
+
 # ProjectQuotaManager 以当前 EUID 校验 helper 所有权。Smoke 以 root 运行，
 # 因而把本发布树内两个只读脚本复制到本轮证据目录，避免信任 deploy 用户拥有的
 # worktree 文件；只复制本轮固定文件，不改变发布树和宿主全局路径。
@@ -330,6 +345,7 @@ run_group() {
       PYTHONDONTWRITEBYTECODE=1 \
       NANOBOT_RUN_DOCKER_TESTS=1 \
       NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE="${manifest}" \
+      NANOBOT_SANDBOX_TEST_IMAGE="${sandbox_test_image}" \
       NANOBOT_SANDBOX_TEST_DATA_ROOT="${data_root}" \
       NANOBOT_SANDBOX_QUOTA_HELPER="${quota_helper}" \
       NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED=true \

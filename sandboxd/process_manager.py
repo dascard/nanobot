@@ -70,8 +70,17 @@ class DockerExecHandle:
         with self._write_lock:
             if self._closed:
                 raise OSError("Docker Exec socket 已关闭")
-            if hasattr(self.socket, "sendall"):
-                self.socket.sendall(data)
+            sendall = getattr(self.socket, "sendall", None)
+            if not callable(sendall):
+                # Docker SDK 7.1 在 Unix Socket 上返回只读 SocketIO，
+                # 双向 hijack socket 位于其 _sock 中。
+                sendall = getattr(
+                    getattr(self.socket, "_sock", None),
+                    "sendall",
+                    None,
+                )
+            if callable(sendall):
+                sendall(data)
                 return len(data)
             write = getattr(self.socket, "write", None)
             if not callable(write):

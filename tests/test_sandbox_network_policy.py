@@ -282,7 +282,7 @@ def test_reused_lease_network_rejects_host_route_drift(
                 "com.docker.network.bridge.enable_ip_masquerade": "false",
                 "com.docker.network.bridge.inhibit_ipv4": "true",
             },
-            "IPAM": {"Config": [{"Gateway": ""}]},
+            "IPAM": {"Config": [{}]},
         },
     )
     manager.client.networks.list.return_value = [network]
@@ -678,7 +678,10 @@ def test_real_docker_developer_egress_and_rejection_matrix(tmp_path):
             ]
             == "true"
         )
-        assert lease_network.attrs["IPAM"]["Config"][0]["Gateway"] == ""
+        assert (
+            lease_network.attrs["IPAM"]["Config"][0].get("Gateway", "")
+            == ""
+        )
 
         assert_success(
             sandbox,

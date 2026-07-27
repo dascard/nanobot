@@ -387,8 +387,12 @@ class EnvironmentManager:
                     privileged=False,
                     stdin=False,
                     tty=False,
-                    stdout=False,
-                    stderr=False,
+                    # Docker Engine 29 配合 Docker SDK 7.1 时，如果两个
+                    # 输出流都关闭，exec_run 会返回 exit_code=None。
+                    # 命令来自固定模板且输出不会持久化，保持流开启以等待
+                    # 并取得可信退出码。
+                    stdout=True,
+                    stderr=True,
                 )
                 if hasattr(result, "exit_code"):
                     exit_code = int(result.exit_code)

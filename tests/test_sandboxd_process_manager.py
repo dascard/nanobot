@@ -13,7 +13,7 @@ from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError
 from sandboxd.app import SandboxRuntime, create_app
 from sandboxd.auth import TokenAuthenticator
 from sandboxd.lease_reconciler import LeaseReconciler
-from sandboxd.process_manager import LeaseProcessManager
+from sandboxd.process_manager import DockerExecHandle, LeaseProcessManager
 from tests.test_sandboxd_lease_backend import (
     LEASE_ID,
     WORKSPACE_ID,
@@ -80,6 +80,38 @@ class _Adapter:
         self.handles[process_id] = handle
         self.calls.append(dict(kwargs))
         return handle
+
+
+class _RawSocket:
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+
+    def sendall(self, payload: bytes) -> None:
+        self.writes.append(bytes(payload))
+
+
+class _ReadOnlySocketIO:
+    def __init__(self) -> None:
+        self._sock = _RawSocket()
+        self.closed = False
+
+    def write(self, _payload: bytes):
+        raise AssertionError("不得调用只读 SocketIO.write")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_docker_exec_handle_writes_through_sdk_socketio_raw_socket():
+    socket_io = _ReadOnlySocketIO()
+    handle = DockerExecHandle(object(), "exec_test", socket_io)
+    payload = "真实输入\n".encode()
+
+    assert handle.write(payload) == len(payload)
+    assert socket_io._sock.writes == [payload]
+
+    handle.close()
+    assert socket_io.closed is True
 
 
 def _manager_components(tmp_path, *, config_transform=None):
