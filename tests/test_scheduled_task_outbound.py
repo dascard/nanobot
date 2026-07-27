@@ -279,6 +279,8 @@ def test_scheduled_task_projection_is_atomic_from_generation_to_delivery(db_sess
         duration_ms=8,
         now=NOW + timedelta(seconds=5),
     )
+    # 真实 worker 提交投递结算后，下一请求才会读取会话上下文。
+    db_session.commit()
 
     db_session.expire_all()
     projected = db_session.get(ScheduledTask, task.id)

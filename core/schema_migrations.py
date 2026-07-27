@@ -74,6 +74,9 @@ _SANDBOX_WORKSPACE_QUOTA_MAINTENANCE_VERSION = (
     "20260725_sandbox_workspace_quota_maintenance"
 )
 _BLOCK_SESSION_MEMORY_VERSION = "20260726_block_session_memory_schema"
+_SCHEDULED_TASK_SCHEDULE_COLUMNS_VERSION = (
+    "20260726_scheduled_task_schedule_columns"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3536,6 +3539,53 @@ def _admin_idempotency_records(
     ))
 
 
+def _scheduled_task_schedule_columns(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """定时任务 schedule 规格列、到期索引与存量 cron 行回填。"""
+
+    if "scheduled_tasks" not in _table_names(conn):
+        return
+    _add_missing_columns(conn, "scheduled_tasks", {
+        "schedule_kind": "VARCHAR(16) NOT NULL DEFAULT 'cron'",
+        "schedule_spec": "TEXT NOT NULL DEFAULT ''",
+        "next_fire_at": "DATETIME",
+    })
+    # 合成/退化 legacy 表可能缺基础列;仅在列齐备时建索引与回填。
+    columns = _columns(conn, "scheduled_tasks")
+    if {"enabled", "next_fire_at"} <= columns:
+        _create_indexes(conn, [
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_scheduled_tasks_enabled_next_fire_at "
+            "ON scheduled_tasks(enabled, next_fire_at)",
+        ])
+    if not ({"cron_expr", "schedule_kind", "schedule_spec"} <= columns):
+        return
+
+    from core.schedule_spec import schedule_fields, spec_from_fields
+
+    rows = conn.execute(text(
+        "SELECT id, cron_expr FROM scheduled_tasks "
+        "WHERE schedule_spec = '' OR schedule_spec IS NULL"
+    )).fetchall()
+    for row_id, cron_expr in rows:
+        spec = spec_from_fields("", "", cron_expr)
+        if spec is None:
+            # 无效表达式保持空 spec:调度器会跳过并告警,
+            # 与旧匹配器"永不触发"的行为一致。
+            continue
+        _kind, spec_json, _expr = schedule_fields(spec)
+        conn.execute(
+            text(
+                "UPDATE scheduled_tasks SET schedule_kind = 'cron', "
+                "schedule_spec = :spec_json WHERE id = :row_id"
+            ),
+            {"spec_json": spec_json, "row_id": row_id},
+        )
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -3709,6 +3759,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _BLOCK_SESSION_MEMORY_VERSION,
         "block session memory: conversation_blocks table and rolling summary block_id",
         _block_session_memory_schema,
+    ),
+    (
+        _SCHEDULED_TASK_SCHEDULE_COLUMNS_VERSION,
+        "scheduled task schedule spec and next fire columns",
+        _scheduled_task_schedule_columns,
     ),
 ]
 

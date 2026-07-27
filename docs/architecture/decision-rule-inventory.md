@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`496819a3208a64c6803ab4b27a89915c8898dfe9`
-- 规则总数：6535
+- 源提交：`ea080472db64cde5c29ba7a503ea47944c969639`
+- 规则总数：6543
 - 扫描错误：0
 - 人工复核队列：691
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -16,14 +16,14 @@
 | `data_consistency` | 429 |
 | `natural_language_semantic` | 32 |
 | `presentation` | 5 |
-| `protocol_syntax` | 3450 |
+| `protocol_syntax` | 3458 |
 | `security_invariant` | 1340 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `core/schema_migrations.py` | 195 |
+| `core/schema_migrations.py` | 198 |
 | `scripts/manage-sandbox-production.sh` | 185 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
@@ -54,7 +54,6 @@
 | `nanobot_kt/bridge.py` | 43 |
 | `app/memory_digest/builder.py` | 42 |
 | `core/persona_preprocess.py` | 41 |
-| `core/scheduled_task_outbound.py` | 41 |
 | `clients/model_registry.py` | 40 |
 | `api/admin/chat_config_routes.py` | 39 |
 | `core/memory_cleanup.py` | 39 |
@@ -68,6 +67,7 @@
 | `core/release/deployment.py` | 36 |
 | `core/sticker_preview.py` | 36 |
 | `core/db/group_learning_governance_adapter.py` | 35 |
+| `core/scheduled_task_outbound.py` | 35 |
 | `sandboxd/unified_patch.py` | 35 |
 | `core/group_runtime/runtime.py` | 34 |
 | `core/group_runtime/scoring.py` | 34 |
@@ -207,6 +207,7 @@
 | `core/proactive/serialization.py` | 11 |
 | `core/prompt_v2/task_templates.py` | 11 |
 | `core/reply_postprocess.py` | 11 |
+| `core/schedule_spec.py` | 11 |
 | `core/settings_service.py` | 11 |
 | `core/tool_registration.py` | 11 |
 | `creatures/nanobot/prompts/skills/schedule_task/tool.py` | 11 |
@@ -1129,13 +1130,13 @@
 | `decision.7394f0a8e35745a4fecb` | `core/context_legacy.py:156` | `python.numeric_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：len(parts) <= 3 |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.4d04ce9359769d72985c` | `core/daily_digest.py:78` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.4d04ce9359769d72985c` | `core/daily_digest.py:83` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：MODEL_HINTS = [ "qwen", "deepseek", "kimi", "gpt", "claude", "gemini", "llama", "mistral", "hunyuan", "glm", "通义", "豆包", "混元", "智谱", "阶跃", "minimax", ] |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.76a46241e9db8ec981b3` | `core/daily_digest.py:226` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.76a46241e9db8ec981b3` | `core/daily_digest.py:233` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要："日报" in c |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.ee061c0ba1dbf62f8028` | `core/daily_digest.py:228` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.ee061c0ba1dbf62f8028` | `core/daily_digest.py:235` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要："群聊分析" in c |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.52a58c1f6f59aa737780` | `core/db/group_learning_adapter.py:62` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 7A–7D | `reviewed` |
@@ -1789,19 +1790,19 @@
 | `decision.9eca082101b144c19f32` | `core/sandbox/admin_operations.py:701` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：int(data.get("generation") or 0) != generation |  |  |  |  |  |
 |  | 原因：人工复核：Sandbox Admin 操作结果必须匹配活动租约 generation |  |  |  |  |  |
-| `decision.039e7fdb58b87b8a5019` | `core/scheduled_task_outbound.py:568` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.039e7fdb58b87b8a5019` | `core/scheduled_task_outbound.py:584` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：result.delivery_mode != "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:699` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:715` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:669` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:672` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:669` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:672` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2057` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2060` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |

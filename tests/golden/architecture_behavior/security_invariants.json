@@ -4,7 +4,7 @@
     "registry": {
       "generation": 1,
       "namespace": "admin_table_view",
-      "sha256": "12a2906615bfa8b8a985cafa4c290362abb0aa1abb652f4de0d375d5a8e434a8"
+      "sha256": "fe084c545b03d9504830b391a89fb590f6f43d59d1c8afbcf826fa5436fae12b"
     },
     "request_fields": [
       "cursor",

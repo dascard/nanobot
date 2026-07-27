@@ -320,3 +320,33 @@ def test_effective_tool_schema_preview_uses_real_descriptions():
     assert "Asia/Shanghai" in by_name["schedule_task"]["parameters"]["properties"]["cron_expr"]["description"]
     assert by_name["schedule_task"]["parameters"]["properties"]["target_type"]["enum"] == ["private", "group"]
     assert by_name["memory_query"]["parameters"]["properties"]["run_in_background"]
+
+
+def test_build_tool_plan_extra_disabled_removes_tool():
+    from core.tool_plan import build_tool_plan
+
+    reason = "定时任务会话禁用(防递归)"
+    plan = build_tool_plan(
+        chat_type="private",
+        runtime_preset="full",
+        extra_disabled={"schedule_task": reason},
+    )
+
+    assert "schedule_task" not in plan.executable_tool_names
+    assert "schedule_task" not in plan.sent_tool_names
+    assert plan.disabled_reason("schedule_task") == reason
+
+
+def test_build_tool_plan_extra_disabled_only_disables():
+    from core.tool_plan import build_tool_plan
+
+    baseline = build_tool_plan(chat_type="private", runtime_preset="full")
+    plan = build_tool_plan(
+        chat_type="private",
+        runtime_preset="full",
+        extra_disabled={"not_a_real_tool": "无效名不引入能力"},
+    )
+
+    # 未知名字只减不增:可执行集合不得超出基线
+    assert plan.executable_tool_names <= baseline.executable_tool_names
+    assert "not_a_real_tool" not in plan.executable_tool_names

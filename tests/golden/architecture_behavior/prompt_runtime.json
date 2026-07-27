@@ -327,8 +327,8 @@
     },
     {
       "path": "prompts.v2.default/tools/schedule_task/usage.md",
-      "sha256": "280cc97806e1aaca9a3c485a1b4c1353115432e538613d3529db3b90778f188f",
-      "size_bytes": 650
+      "sha256": "159f47af7f2e0304838020f0168c9a05adc4d9ae25f134db22ae4c65b1620e2f",
+      "size_bytes": 2592
     },
     {
       "path": "prompts.v2.default/tools/sql_analysis/usage.md",

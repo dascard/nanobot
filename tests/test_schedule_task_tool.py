@@ -208,3 +208,67 @@ def test_schedule_task_create_uses_runtime_context_target(monkeypatch):
     assert result.success
     assert added[0].target_type == "group"
     assert added[0].target_id == "10001"
+
+
+def test_schedule_task_create_one_shot_via_schedule(monkeypatch):
+    from core import database
+    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+
+    added = []
+
+    class FakeDB:
+        def add(self, obj):
+            obj.id = 321
+            added.append(obj)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: FakeDB())
+
+    result = run_async(ScheduleTaskTool().execute({
+        "action": "create",
+        "name": "半小时后提醒",
+        "schedule": "30m",
+        "target_type": "private",
+        "target_id": "0000000000",
+        "prompt_template": "提醒喝水",
+    }))
+
+    assert result.success
+    assert added[0].schedule_kind == "once"
+    assert added[0].cron_expr == ""
+    assert added[0].next_fire_at is not None
+    assert "下次触发" in result.output
+
+
+def test_schedule_task_create_rejects_invalid_schedule(monkeypatch):
+    from core import database
+    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+
+    class FakeDB:
+        def add(self, obj):
+            raise AssertionError("无效 schedule 不得落库")
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: FakeDB())
+
+    result = run_async(ScheduleTaskTool().execute({
+        "action": "create",
+        "name": "坏任务",
+        "schedule": "明天九点",
+        "target_type": "private",
+        "target_id": "0000000000",
+        "prompt_template": "提醒",
+    }))
+
+    assert not result.success
+    assert "schedule 无效" in str(result.error)

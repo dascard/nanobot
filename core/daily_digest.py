@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -48,11 +48,16 @@ from core.outbound_transport import (
     resolve_qq_push_token,
 )
 from core.safe_diagnostics import safe_response_summary
+from core.schedule_spec import (
+    SHANGHAI,
+    grace_seconds,
+    initial_anchor,
+    next_fire_after,
+    spec_from_fields,
+)
 from core.scheduled_task_outbound import (
     enqueue_scheduled_task_occurrence,
     recover_expired_scheduled_task_occurrences,
-    scheduled_cron_matches,
-    scheduled_cron_occurrence,
 )
 from core.settings_service import settings
 from core.time_utils import db_now_naive
@@ -143,6 +148,8 @@ def _scheduled_task_metadata(task: ScheduledTask) -> dict:
         "raw_query": task.prompt_template or "",
         "session_name": f"定时任务:{task.name or task.id}",
         "is_group": is_group,
+        # 防递归:定时任务会话内不得再创建/修改定时任务
+        "disabled_tool_names": ["schedule_task"],
     }
 
 
@@ -1432,11 +1439,46 @@ async def _generate_task_message(task: ScheduledTask) -> str | None:
             )
 
 
+def _local_naive_to_utc(local_now: datetime) -> datetime:
+    """把上海墙钟 naive 时间转换为 UTC naive(next_fire_at 的约定)。"""
+
+    localized = (
+        local_now.replace(tzinfo=SHANGHAI)
+        if local_now.tzinfo is None
+        else local_now.astimezone(SHANGHAI)
+    )
+    return localized.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _advance_task_after_slot(
+    task: ScheduledTask,
+    spec: dict,
+    *,
+    slot: datetime,
+) -> None:
+    """槽已消费(领取/去重/失败记账)后推进下一次触发。
+
+    once 不再有下一次:清空 next_fire_at 并禁用,视为已完成。
+    """
+
+    advanced = next_fire_after(spec, base_utc=slot)
+    if advanced is None:
+        task.enabled = 0
+        task.next_fire_at = None
+        logger.info(
+            "Scheduled one-shot completed task_id=%s",
+            task.id,
+        )
+    else:
+        task.next_fire_at = advanced
+
+
 async def run_scheduled_tasks(at: datetime | None = None) -> int:
     """检查到期任务并交给持久化出站 producer。
 
-    ``at`` 允许调度循环对错过的分钟槽逐一补扫;省略时使用当前时间。
-    每分钟槽的 occurrence_key 保证补扫与实时 tick 之间幂等去重。
+    到期判定基于预计算的 ``next_fire_at``(UTC naive);迟到超过
+    自适应宽限(周期一半,钳制 [2min, 2h])时 cron/interval 快进、
+    once 过期禁用。``at`` 允许循环补扫错过的上海墙钟分钟槽。
     """
     executed = 0
     try:
@@ -1457,6 +1499,7 @@ async def run_scheduled_tasks(at: datetime | None = None) -> int:
         )
 
     local_now = at or db_now_naive()
+    now_utc = _local_naive_to_utc(local_now)
     discovery_db = SessionLocal()
     try:
         task_ids = [
@@ -1474,25 +1517,58 @@ async def run_scheduled_tasks(at: datetime | None = None) -> int:
         db = SessionLocal()
         try:
             task = db.get(ScheduledTask, task_id)
-            if task is None or not task.enabled or not _should_run(task, local_now):
+            if task is None or not task.enabled:
                 continue
-            occurrence = scheduled_cron_occurrence(
-                task_id=task_id,
-                local_time=local_now,
+            spec = spec_from_fields(
+                task.schedule_kind,
+                task.schedule_spec,
+                task.cron_expr,
             )
-            occurrence_now = occurrence.scheduled_for + timedelta(
-                seconds=local_now.second,
-                microseconds=local_now.microsecond,
-            )
+            if spec is None:
+                logger.warning(
+                    "Scheduled task schedule unparseable task_id=%s",
+                    task_id,
+                )
+                continue
+            if task.next_fire_at is None:
+                initialized = next_fire_after(
+                    spec,
+                    base_utc=initial_anchor(now_utc),
+                    include_missed=True,
+                )
+                if initialized is None:
+                    task.enabled = 0
+                    db.commit()
+                    logger.info(
+                        "Scheduled task has no future fire task_id=%s",
+                        task_id,
+                    )
+                    continue
+                task.next_fire_at = initialized
+                db.commit()
+            slot = task.next_fire_at
+            if slot > now_utc:
+                continue
+            late_seconds = (now_utc - slot).total_seconds()
+            if late_seconds > grace_seconds(spec, base_utc=slot):
+                _advance_task_after_slot(task, spec, slot=now_utc)
+                db.commit()
+                logger.warning(
+                    "Scheduled task missed beyond grace task_id=%s "
+                    "late_seconds=%s",
+                    task_id,
+                    int(late_seconds),
+                )
+                continue
             logger.info("Running scheduled task task_id=%s", task_id)
             result = await enqueue_scheduled_task_occurrence(
                 db,
                 task_id=task_id,
                 trigger_type="cron",
-                scheduled_for=occurrence.scheduled_for,
+                scheduled_for=slot,
                 generator=_generate_task_message,
                 session_factory=SessionLocal,
-                now=occurrence_now,
+                now=now_utc,
             )
             if (
                 not result.deduplicated
@@ -1507,6 +1583,8 @@ async def run_scheduled_tasks(at: datetime | None = None) -> int:
                 result.status,
                 result.deduplicated,
             )
+            _advance_task_after_slot(task, spec, slot=slot)
+            db.commit()
         except Exception as exc:
             db.rollback()
             logger.error(
@@ -1517,11 +1595,6 @@ async def run_scheduled_tasks(at: datetime | None = None) -> int:
         finally:
             db.close()
     return executed
-
-
-def _should_run(task: ScheduledTask, now: datetime) -> bool:
-    """简单 cron 匹配（只支持分 时 日 月 周）。"""
-    return scheduled_cron_matches(task.cron_expr or "", now)
 
 
 _SCHEDULED_CATCHUP_MAX_SLOTS = 10

@@ -11,6 +11,12 @@ from sqlalchemy.orm import Session
 from api.common_auth import verify_token
 from core.database import get_db
 from core.outbound_delivery import OutboundFencingError, OutboundSafetyError
+from core.schedule_spec import (
+    ResolvedScheduleFields,
+    ScheduleSpecError,
+    resolve_schedule_fields,
+    utc_now_naive,
+)
 from core.scheduled_task_outbound import (
     ScheduledTaskNotFoundError,
     cancel_scheduled_task_deliveries,
@@ -24,10 +30,25 @@ router = APIRouter(tags=["tasks"])
 
 class ScheduledTaskCreate(BaseModel):
     name: str
+    schedule: str | None = None
     cron_expr: str = "0 9 * * *"
     target_type: str = "private"
     target_id: str
     prompt_template: str
+
+
+def _resolved_schedule_or_422(req: ScheduledTaskCreate) -> ResolvedScheduleFields:
+    try:
+        return resolve_schedule_fields(
+            schedule=req.schedule,
+            cron_expr=req.cron_expr,
+            now_utc=utc_now_naive(),
+        )
+    except ScheduleSpecError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"schedule 无效: {exc}",
+        ) from exc
 
 
 @router.post("/tasks")
@@ -39,16 +60,22 @@ def create_scheduled_task(
     """创建定时任务。例如每天9点推送AI新闻到私聊。"""
     from core.database import ScheduledTask as ST
 
+    fields = _resolved_schedule_or_422(req)
     task = ST(
         name=req.name,
-        cron_expr=req.cron_expr,
+        cron_expr=fields.cron_expr,
+        schedule_kind=fields.schedule_kind,
+        schedule_spec=fields.schedule_spec,
+        next_fire_at=fields.next_fire_at,
         target_type=req.target_type,
         target_id=req.target_id,
         prompt_template=req.prompt_template,
     )
     db.add(task)
     db.commit()
-    logger.info("Scheduled task created: %s cron=%s", req.name, req.cron_expr)
+    logger.info(
+        "Scheduled task created: %s schedule=%s", req.name, fields.display
+    )
     return {"status": "ok", "id": task.id}
 
 
@@ -66,6 +93,10 @@ def list_scheduled_tasks(
             "id": t.id,
             "name": t.name,
             "cron": t.cron_expr,
+            "schedule_kind": t.schedule_kind,
+            "next_fire_at": (
+                t.next_fire_at.isoformat() if t.next_fire_at else None
+            ),
             "target_type": t.target_type,
             "target_configured": bool(str(t.target_id or "").strip()),
             "enabled": t.enabled,
@@ -104,8 +135,12 @@ def update_scheduled_task(
     if cancellation.unsafe:
         db.rollback()
         raise HTTPException(status_code=409, detail="任务仍有投递中或结果不确定记录")
+    fields = _resolved_schedule_or_422(req)
     t.name = req.name
-    t.cron_expr = req.cron_expr
+    t.cron_expr = fields.cron_expr
+    t.schedule_kind = fields.schedule_kind
+    t.schedule_spec = fields.schedule_spec
+    t.next_fire_at = fields.next_fire_at
     t.target_type = req.target_type
     t.target_id = req.target_id
     t.prompt_template = req.prompt_template

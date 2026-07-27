@@ -1921,3 +1921,71 @@ def test_file_sqlite_sandbox_admin_rebuild_creates_pre_migration_backup(
             )).scalar_one() == "set_quota"
     finally:
         backup_engine.dispose()
+
+
+def test_scheduled_task_schedule_columns_backfills_cron_spec():
+    from core.schema_migrations import MIGRATIONS, run_schema_migrations
+
+    version = "20260726_scheduled_task_schedule_columns"
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations ("
+            "version TEXT PRIMARY KEY, name TEXT NOT NULL, "
+            "applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(
+            text(
+                "INSERT INTO schema_migrations(version, name) "
+                "VALUES (:version, :name)"
+            ),
+            [
+                {"version": migration_version, "name": name}
+                for migration_version, name, _migration in MIGRATIONS
+                if migration_version != version
+            ],
+        )
+        conn.execute(text(
+            "CREATE TABLE scheduled_tasks ("
+            "id INTEGER PRIMARY KEY, name TEXT, cron_expr TEXT, "
+            "target_type TEXT, target_id TEXT, prompt_template TEXT, "
+            "enabled INTEGER)"
+        ))
+        conn.execute(text(
+            "INSERT INTO scheduled_tasks"
+            "(id, name, cron_expr, target_type, target_id, "
+            "prompt_template, enabled) VALUES "
+            "(1, '早报', '0 9 * * *', 'private', 'u1', '生成早报', 1), "
+            "(2, '坏表达式', 'not a cron', 'private', 'u1', '生成', 1)"
+        ))
+
+    run_schema_migrations(engine)
+    # 幂等:重复执行不报错
+    run_schema_migrations(engine)
+
+    with engine.connect() as conn:
+        columns = {
+            str(col["name"])
+            for col in inspect(conn).get_columns("scheduled_tasks")
+        }
+        assert {"schedule_kind", "schedule_spec", "next_fire_at"} <= columns
+        indexes = {
+            str(index["name"])
+            for index in inspect(conn).get_indexes("scheduled_tasks")
+        }
+        assert "ix_scheduled_tasks_enabled_next_fire_at" in indexes
+        good = conn.execute(text(
+            "SELECT schedule_kind, schedule_spec, next_fire_at "
+            "FROM scheduled_tasks WHERE id = 1"
+        )).one()
+        assert good[0] == "cron"
+        assert json.loads(good[1]) == {
+            "kind": "cron",
+            "expr": "0 9 * * *",
+            "display": "0 9 * * *",
+        }
+        assert good[2] is None
+        bad = conn.execute(text(
+            "SELECT schedule_spec FROM scheduled_tasks WHERE id = 2"
+        )).one()
+        assert bad[0] == ""

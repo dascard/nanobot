@@ -17,11 +17,20 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from croniter import croniter
 from sqlalchemy import exists, or_
 from sqlalchemy.orm import Session
 
 from core.db.models.outbound import OutboundDeliveryOutbox, OutboundRun
 from core.db.models.scheduling import ScheduledTask
+from core.schedule_spec import (
+    KIND_CRON,
+    KIND_INTERVAL,
+    KIND_ONCE,
+    grace_seconds,
+    once_run_at_utc,
+    spec_from_fields,
+)
 from core.message_envelope import is_html_reply
 from core.message_transport_adapters import render_chat_json
 from core.outbound.contracts import (
@@ -68,7 +77,6 @@ DEFAULT_CLAIM_LEASE_SECONDS = 900.0
 DEFAULT_WRITER_LEASE_SECONDS = 900.0
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_RETRY_DEADLINE_SECONDS = 86400.0
-CRON_OCCURRENCE_LATE_CLAIM_GRACE_SECONDS = 120.0
 _PROCESS_OWNER = (
     f"scheduled-task:{socket.gethostname().strip() or 'host'}:{uuid4().hex}"
 )[:128]
@@ -281,43 +289,8 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _cron_field_matches(
-    value: int,
-    expression: str,
-    *,
-    field_min: int = 0,
-    is_weekday: bool = False,
-) -> bool:
-    if expression == "*":
-        return True
-
-    def _dow(n: int) -> int:
-        # 标准 cron 周字段 0/7 都表示周日;归一到 0..6。
-        return 0 if int(n) == 7 else int(n)
-
-    target = _dow(value) if is_weekday else value
-    for part in expression.split(","):
-        normalized = part.strip()
-        if "-" in normalized:
-            lower, upper = normalized.split("-", 1)
-            lo, hi = int(lower), int(upper)
-            if is_weekday:
-                lo, hi = _dow(lo), _dow(hi)
-            if lo <= target <= hi:
-                return True
-        elif normalized.startswith("*/"):
-            step = int(normalized[2:])
-            if step > 0 and (value - field_min) % step == 0:
-                return True
-        elif normalized.isdigit():
-            literal = _dow(int(normalized)) if is_weekday else int(normalized)
-            if literal == target:
-                return True
-    return False
-
-
 def scheduled_cron_matches(cron_expr: str, local_time: datetime) -> bool:
-    """按调度器现有的五段 cron 子集判断上海本地时间。"""
+    """按标准五段 cron 语义(croniter,0=周日)判断上海本地时间。"""
 
     try:
         localized = (
@@ -328,17 +301,8 @@ def scheduled_cron_matches(cron_expr: str, local_time: datetime) -> bool:
         parts = str(cron_expr or "").strip().split()
         if len(parts) != 5:
             return False
-        minute, hour, day, month, day_of_week = parts
-        return all((
-            _cron_field_matches(localized.minute, minute, field_min=0),
-            _cron_field_matches(localized.hour, hour, field_min=0),
-            _cron_field_matches(localized.day, day, field_min=1),
-            _cron_field_matches(localized.month, month, field_min=1),
-            _cron_field_matches(
-                localized.isoweekday(), day_of_week, is_weekday=True,
-            ),
-        ))
-    except (TypeError, ValueError, ZeroDivisionError):
+        return bool(croniter.match(str(cron_expr).strip(), localized))
+    except (TypeError, ValueError):
         return False
 
 
@@ -497,14 +461,20 @@ def _occurrence(
     scheduled_for: datetime | None,
     manual_idempotency_key: str | None,
     now: datetime,
+    schedule_kind: str = KIND_CRON,
 ) -> ScheduledOccurrence:
     if trigger_type == "cron":
         if scheduled_for is None:
             raise ValueError("cron 执行必须提供 scheduled_for")
         slot = _utc_naive(scheduled_for).replace(second=0, microsecond=0)
+        key_kind = (
+            schedule_kind
+            if schedule_kind in {KIND_ONCE, KIND_INTERVAL}
+            else KIND_CRON
+        )
         return ScheduledOccurrence(
             occurrence_key=(
-                f"scheduled-task:{task_id}:cron:"
+                f"scheduled-task:{task_id}:{key_kind}:"
                 f"{slot.strftime('%Y%m%dT%H%M%SZ')}"
             ),
             scheduled_for=slot,
@@ -516,6 +486,52 @@ def _occurrence(
             now=now,
         )
     raise ValueError("trigger_type 只支持 cron/manual")
+
+
+def _validate_schedule_slot(
+    schedule: dict,
+    *,
+    slot: datetime,
+    now: datetime,
+) -> None:
+    """校验 schedule 驱动的 occurrence:定义仍匹配 + 在补领窗口内。
+
+    宽限窗口自适应(周期一半,钳制 [2min, 2h]),高频任务保持
+    与旧 120s 常量一致的下限。interval 槽由调度器状态推进,无法
+    静态复验,只做窗口校验。
+    """
+
+    kind = schedule.get("kind")
+    if kind == KIND_CRON:
+        local_slot = slot.replace(
+            tzinfo=timezone.utc,
+        ).astimezone(SHANGHAI)
+        if not scheduled_cron_matches(
+            str(schedule.get("expr") or ""),
+            local_slot,
+        ):
+            raise ScheduledTaskOutboundError(
+                "定时任务当前槽已不再匹配最新 cron"
+            )
+    elif kind == KIND_ONCE:
+        run_at = once_run_at_utc(schedule)
+        expected = (
+            run_at.replace(second=0, microsecond=0)
+            if run_at is not None
+            else None
+        )
+        if expected is None or expected != slot:
+            raise ScheduledTaskOutboundError(
+                "once 任务槽与计划触发时刻不符"
+            )
+    slot_age_seconds = (now - slot).total_seconds()
+    if (
+        slot_age_seconds < 0
+        or slot_age_seconds > grace_seconds(schedule, base_utc=slot)
+    ):
+        raise ScheduledTaskOutboundError(
+            "cron occurrence 只能在到点后的补领窗口内创建"
+        )
 
 
 def _existing_result(
@@ -872,31 +888,29 @@ async def enqueue_scheduled_task_occurrence(
         snapshot = _snapshot_task(task)
         if trigger_type == "cron" and not snapshot.enabled:
             raise ScheduledTaskOutboundError("已禁用任务不能由 cron 执行")
+        schedule = spec_from_fields(
+            getattr(task, "schedule_kind", None),
+            getattr(task, "schedule_spec", None),
+            task.cron_expr,
+        )
         occurrence = _occurrence(
             task_id=snapshot.task_id,
             trigger_type=trigger_type,
             scheduled_for=scheduled_for,
             manual_idempotency_key=manual_idempotency_key,
             now=current,
+            schedule_kind=(schedule or {}).get("kind", KIND_CRON),
         )
         if trigger_type == "cron":
-            local_slot = occurrence.scheduled_for.replace(
-                tzinfo=timezone.utc,
-            ).astimezone(SHANGHAI)
-            if not scheduled_cron_matches(snapshot.cron_expr, local_slot):
+            if schedule is None:
                 raise ScheduledTaskOutboundError(
-                    "定时任务当前槽已不再匹配最新 cron"
+                    "定时任务 schedule 无法解析"
                 )
-            slot_age_seconds = (
-                current - occurrence.scheduled_for
-            ).total_seconds()
-            if (
-                slot_age_seconds < 0
-                or slot_age_seconds > CRON_OCCURRENCE_LATE_CLAIM_GRACE_SECONDS
-            ):
-                raise ScheduledTaskOutboundError(
-                    "cron occurrence 只能在到点后的补领窗口内创建"
-                )
+            _validate_schedule_slot(
+                schedule,
+                slot=occurrence.scheduled_for,
+                now=current,
+            )
         destination_snapshot = {
             "target_type": snapshot.target_type,
             "target_id": snapshot.target_id,

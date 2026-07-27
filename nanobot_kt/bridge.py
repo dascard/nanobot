@@ -1807,6 +1807,12 @@ class NanobotBridge(MessageContractBridgeMixin):
                     session_id=session_id,
                 )
                 run_meta.update(guidance.debug)
+                # 来源上下文声明的硬禁用(只减不增),如定时任务会话防递归
+                source_disabled = {
+                    str(name).strip(): "来源上下文禁用(防递归)"
+                    for name in (meta.get("disabled_tool_names") or ())
+                    if str(name or "").strip()
+                }
                 tool_plan = build_tool_plan(
                     chat_type=runtime_chat_type,
                     group_id=group_id,
@@ -1815,6 +1821,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     session_id=session_id,
                     runtime_preset=runtime_preset,
                     db=uow.db,
+                    extra_disabled=source_disabled or None,
                 )
                 decision_recorded = record_runtime_tool_decision(
                     session_id=session_id,
