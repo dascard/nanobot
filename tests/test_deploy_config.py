@@ -273,6 +273,10 @@ def test_production_compose_requires_immutable_runtime_image():
 def test_production_compose_uses_external_prompt_runtime_and_absolute_mounts():
     compose = Path("docker-compose.prod.yml").read_text(encoding="utf-8")
     server = _service_block(compose, "nanobot-server")
+    base_server = _service_block(
+        Path("docker-compose.yml").read_text(encoding="utf-8"),
+        "nanobot-server",
+    )
     summary_worker = _service_block(compose, "session-summary-worker")
 
     assert "NANOBOT_PRODUCTION_ENV_FILE" in server
@@ -285,8 +289,17 @@ def test_production_compose_uses_external_prompt_runtime_and_absolute_mounts():
     assert "./data/prompts_v2" not in server
     assert "/var/lib/nanobot/prompt-runtime/live:ro" in summary_worker
     assert "/var/lib/nanobot/prompt-runtime/state:ro" in summary_worker
+    infrastructure_default = (
+        "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED: "
+        "${NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED:-true}"
+    )
+    assert infrastructure_default in server
+    assert infrastructure_default in base_server
+    assert (
+        "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED=true"
+        in Path(".env.example").read_text(encoding="utf-8").splitlines()
+    )
     for key in (
-        "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
         "NANOBOT_SANDBOX_ENABLED",
         "NANOBOT_SANDBOX_EXEC_ENABLED",
         "NANOBOT_SANDBOX_GROUP_ENABLED",

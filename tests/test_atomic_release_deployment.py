@@ -505,9 +505,9 @@ def test_observed_manifest_cannot_be_used_as_new_target(tmp_path: Path):
     assert runner.commands == []
 
 
-def test_enabled_runtime_feature_blocks_before_any_compose_mutation(tmp_path):
-    from core.release.deployment import DeploymentVerificationError
-
+def test_enabled_runtime_infrastructure_permission_allows_release_switch(
+    tmp_path,
+):
     previous = _release(marker="a", provenance="observed")
     target = _release(marker="b")
     runner = _FakeRunner(
@@ -518,7 +518,49 @@ def test_enabled_runtime_feature_blocks_before_any_compose_mutation(tmp_path):
         ),
     )
 
+    result = _deployer(tmp_path, runner).deploy(target)
+
+    assert result.changed is True
+    assert runner.current == target.runtime_artifact
+
+
+def test_enabled_runtime_business_feature_blocks_before_any_compose_mutation(
+    tmp_path,
+):
+    from core.release.deployment import DeploymentVerificationError
+
+    previous = _release(marker="a", provenance="observed")
+    target = _release(marker="b")
+    runner = _FakeRunner(
+        previous=previous,
+        target=target,
+        feature_environment=(
+            "NANOBOT_SANDBOX_ENABLED=true",
+        ),
+    )
+
     with pytest.raises(DeploymentVerificationError, match="硬开关"):
+        _deployer(tmp_path, runner).deploy(target)
+
+    assert not any("compose" in command.args for command in runner.commands)
+
+
+def test_invalid_runtime_infrastructure_permission_blocks_before_compose(
+    tmp_path,
+):
+    from core.release.deployment import DeploymentVerificationError
+
+    previous = _release(marker="a", provenance="observed")
+    target = _release(marker="b")
+    runner = _FakeRunner(
+        previous=previous,
+        target=target,
+        feature_environment=(
+            "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED=invalid",
+        ),
+    )
+
+    with pytest.raises(DeploymentVerificationError, match="不是合法布尔值"):
         _deployer(tmp_path, runner).deploy(target)
 
     assert not any("compose" in command.args for command in runner.commands)

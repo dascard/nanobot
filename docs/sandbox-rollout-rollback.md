@@ -40,9 +40,9 @@ platform:encoded_external_session_id:chat_type
 ## 3. 灰度顺序
 
 1. 部署数据库迁移、Nanobot 客户端、Web 管理页和 sandboxd。
-2. 保持宿主硬上限、`sandbox.enabled`、`sandbox.exec_enabled`、session 执行硬开关，以及 Server／sandboxd 两侧 Developer 网络硬开关全部关闭。
-3. 核对安装 manifest 与运行时 manifest 字节一致；在 feature off 状态完成 UDS health/ready、三个镜像、两个 AppArmor profile、磁盘和六组真实 Docker Smoke。
-4. 由 root 设置 `infrastructure_enable_allowed=true`；业务开关仍保持关闭。
+2. 保持 `sandbox.enabled`、`sandbox.exec_enabled`、session 执行硬开关，以及 Server／sandboxd 两侧 Developer 网络硬开关全部关闭；生产默认开启的 `infrastructure_enable_allowed` 不直接启用工具。
+3. 核对安装 manifest 与运行时 manifest 字节一致；在业务 feature off 状态完成 UDS health/ready、三个镜像、两个 AppArmor profile、磁盘和六组真实 Docker Smoke。
+4. 核对 `infrastructure_enable_allowed=true`；如维护期间曾显式关闭，只能在上述门禁通过后由 root 恢复，业务开关仍保持关闭。
 5. 在 Web 中选择一个真实私聊 canonical session，授予 Workspace 能力并设置配额。
 6. 等待 set_access operation 为 succeeded，quota 为 applied，desired 与 applied 一致。
 7. 只打开 sandbox.enabled，验证 workspace_list/read/search/write、容量和 Trace。

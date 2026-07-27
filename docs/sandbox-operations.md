@@ -6,7 +6,7 @@ Sandbox 由宿主 systemd 服务 sandboxd 通过 Docker Engine API 创建受控�
 
 生产控制面有三类彼此独立的状态：
 
-- 宿主硬上限：`sandbox.infrastructure_enable_allowed`，只允许由 root 管理的环境变量设置，默认关闭，Web 不可修改。
+- 宿主基础设施许可：`sandbox.infrastructure_enable_allowed` 只允许由 root 管理的环境变量设置，生产默认开启，Web 不可修改；它只允许 Web 进一步开启能力，不直接授权 session 或启用工具，维护与应急时仍可显式关闭。
 - 业务开关：`sandbox.enabled` 与 `sandbox.exec_enabled`，由 Web「Sandbox 管理」页控制；`sandbox.group_enabled` 首期固定关闭。
 - 网络硬上限：Server 和 sandboxd 的 `NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED` 必须同时为 `true`，缺少任一侧都拒绝新的 Developer 网络执行。
 - 会话授权：`sandbox_access_grants` 是 11 个 Sandbox 工具的唯一授权事实源，通用 ToolOverride 和 `private_superuser` 均不能授权 Sandbox。
@@ -48,7 +48,7 @@ project quota 的唯一事实源是 `workspace_quota_bindings`。project ID 由�
 
 ## 2. 上线硬门禁
 
-以下条件全部满足前，必须同时保持宿主硬上限、sandbox.enabled 和 sandbox.exec_enabled 关闭：
+以下条件全部满足前，必须保持 `sandbox.enabled`、`sandbox.exec_enabled`、session 执行硬开关和两侧 Developer 网络硬开关关闭；生产默认开启的宿主基础设施许可不能越过这些业务、授权与隔离门禁：
 
 1. /srv/nanobot 是独立 XFS/ext4 文件系统挂载点，并启用 project quota；允许使用受控的 16 GiB 预分配 XFS loopback。
 2. Workspace、Asset Store、runtime 的容量预算、备份和磁盘水位已配置。
@@ -99,8 +99,9 @@ sudo scripts/manage-sandbox-production.sh install-control-plane
 
 `deploy` 与 `deploy-runtime` 已停用。Runtime 只能从独立发布树通过完整 OCI digest、
 SBOM、验证结果和 ReleaseManifest 交给 `scripts/deploy-production.sh`；Sandbox 管理脚本
-不会再调用 `docker-build.sh` 或切换 `nanobot-runtime:latest`。正式部署前后所有 Sandbox
-开关仍应关闭。provision-owner、enable-workspace、enable-assets、enable-exec 和
+不会再调用 `docker-build.sh` 或切换 `nanobot-runtime:latest`。正式部署前后 Sandbox
+业务、session 执行和 Developer 网络开关仍应关闭；宿主基础设施许可生产默认开启，
+但不会自动启用工具或授予 session。provision-owner、enable-workspace、enable-assets、enable-exec 和
 disable-owner 是兼容拒绝入口，不会执行旧 ToolOverride 或 TSV 操作。
 
 接受单盘故障风险时，配置必须显式写出同盘模式和风险确认；不能通过省略参数或调用普通 Compose 绕过：
@@ -227,13 +228,14 @@ current/pending/rollback 由 ReleaseManifest 部署器独立管理。`origin/mas
 sandboxd。旧发布目录继续保留用于回滚。当前链接若不属于受管发布目录、版本标记
 无效，或不是目标 RELEASE 的祖先，脚本都会失败关闭，不会覆盖该链接。
 
-宿主硬上限只能在全部基础设施门禁通过后，由 root 修改 Nanobot Runtime 环境：
+宿主基础设施许可在生产 Runtime 中默认为：
 
 ~~~text
 NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED=true
 ~~~
 
-设置硬上限只代表“允许 Web 开启”，不会自动打开业务开关或授予任何 session。
+该值只代表“允许 Web 开启”，不会自动打开业务开关或授予任何 session。维护或应急期间
+如曾由 root 显式设为 `false`，只能在基础设施门禁恢复后再改回 `true`。
 
 ## 4. 数据盘与目录
 

@@ -28,7 +28,7 @@ services:
       NANOBOT_SANDBOXD_SOCKET: /run/nanobot-sandboxd/sandboxd.sock
       NANOBOT_SANDBOXD_TOKEN_FILE: /run/nanobot-sandboxd/client.token
       NANOBOT_SANDBOXD_ADMIN_TOKEN_FILE: /run/nanobot-sandboxd/admin-client.token
-      NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED: ${NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED:-false}
+      NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED: ${NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED:-true}
     group_add:
       - "${NANOBOT_SANDBOXD_GID:-10001}"
     volumes:

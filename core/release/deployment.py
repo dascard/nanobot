@@ -43,8 +43,10 @@ _SECURITY_INSPECT_FORMAT = (
     "{{.HostConfig.Memory}}|{{.HostConfig.NanoCpus}}|"
     "{{range .Mounts}}{{.Destination}}={{.RW}};{{end}}"
 )
+_INFRASTRUCTURE_PERMISSION_ENV_KEY = (
+    "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED"
+)
 _FEATURE_ENV_KEYS = (
-    "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
     "NANOBOT_SANDBOX_ENABLED",
     "NANOBOT_SANDBOX_EXEC_ENABLED",
     "NANOBOT_SANDBOX_GROUP_ENABLED",
@@ -366,8 +368,16 @@ class AtomicRuntimeDeployer:
         environment: dict[str, str] = {}
         for item in raw_values:
             key, separator, value = str(item).partition("=")
-            if separator and key in _FEATURE_ENV_KEYS:
+            if separator and (
+                key in _FEATURE_ENV_KEYS
+                or key == _INFRASTRUCTURE_PERMISSION_ENV_KEY
+            ):
                 environment[key] = value
+        if _INFRASTRUCTURE_PERMISSION_ENV_KEY in environment:
+            self._environment_bool(
+                environment[_INFRASTRUCTURE_PERMISSION_ENV_KEY],
+                key=_INFRASTRUCTURE_PERMISSION_ENV_KEY,
+            )
         enabled = sorted(
             key
             for key in _FEATURE_ENV_KEYS

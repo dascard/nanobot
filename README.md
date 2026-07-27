@@ -305,7 +305,7 @@ Sandbox 让模型在隔离容器里执行代码与操作 Workspace 文件，分�
 - 两类 Profile：`restricted`（一次性断网容器、Python 数据工具）与 `developer`（会话型 Lease、GitHub/PyPI/npm allowlist、完整开发工具链）；`trusted_developer` 为恒 `not_ready` 占位。
 - 可用 Profile 只能由 `SandboxAccessGrant` 决定，模型不能在参数中选择镜像、网络或任何 Docker 参数。
 - 永久红线：禁 Docker Socket、privileged、host network/PID、宿主根目录、任意 bind mount、跨 Workspace 与长期写凭据。
-- 所有新开关默认关闭且 fail-closed：`NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED`（env）与 `sandbox.enabled` / `sandbox.exec_enabled` / `sandbox.session_execution_allowed` / `sandbox.developer_network_allowed`（DB SystemSetting）。
+- 生产默认允许 Sandbox 基础设施接入：`NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED=true` 只允许 Web 进一步开启能力，root 仍可在维护或应急时显式设为 `false`；`sandbox.enabled` / `sandbox.exec_enabled` / `sandbox.session_execution_allowed` / `sandbox.developer_network_allowed` 等业务与执行开关继续默认关闭并 fail-closed。
 
 部署、灰度、回滚、备份与安全 / 威胁模型见 `docs/sandbox-operations.md`、`docs/sandbox-rollout-rollback.md`、`docs/sandbox-security-model.md`。真实隔离矩阵（AppArmor、宿主 project quota、六组特权 Docker 验收）需在部署宿主完成，未验收前生产保持 `BLOCKED`。
 

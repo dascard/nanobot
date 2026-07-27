@@ -9,7 +9,7 @@ services:
       NANOBOT_PROMPT_RUNTIME_DIR: /var/lib/nanobot/prompt-runtime/live/runtime
       NANOBOT_PROMPT_TEMPLATE_STATE_DIR: /var/lib/nanobot/prompt-runtime/state
       NANOBOT_PROMPT_BACKUP_DIR: /var/lib/nanobot/prompt-runtime/backups
-      NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED: "false"
+      NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED: ${NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED:-true}
       NANOBOT_SANDBOX_ENABLED: "false"
       NANOBOT_SANDBOX_EXEC_ENABLED: "false"
       NANOBOT_SANDBOX_GROUP_ENABLED: "false"
