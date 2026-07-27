@@ -993,6 +993,11 @@ def test_production_smoke_stage_requires_complete_structured_matrix():
     assert "--manifest" in smoke_body
     assert "--data-root" in smoke_body
     assert "--evidence-root" in smoke_body
+    assert (
+        'PATH="${smoke_dir}/.venv/bin:/usr/local/sbin:/usr/local/bin:'
+        '/usr/sbin:/usr/bin:/sbin:/bin"'
+        in smoke_body
+    )
     assert "summary.json" in source
     assert "grep -Eq '1 passed'" not in source
     assert "manifest=$(profile_manifest_sha256_from_stage)" in smoke_body

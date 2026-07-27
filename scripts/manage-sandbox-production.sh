@@ -2126,7 +2126,7 @@ smoke_command() {
   log "运行六组真实 Docker Sandbox 验收矩阵"
   env \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH="${smoke_dir}/.venv/bin:/usr/local/bin:/usr/bin:/bin" \
+    PATH="${smoke_dir}/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     XDG_CACHE_HOME="${EVIDENCE_CACHE_ROOT}" \
     "${smoke_dir}/scripts/sandbox-smoke-test.sh" \
       --manifest "${BUILT_PROFILE_MANIFEST}" \
