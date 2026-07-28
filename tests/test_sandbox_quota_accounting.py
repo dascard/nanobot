@@ -39,6 +39,10 @@ def test_exact_file_writes_and_run_reservation_do_not_rescan_directories(
         "_secure_workspace_directory",
         lambda *_args: None,
     )
+    monkeypatch.setattr(
+        "core.sandbox.paths.os.fchown",
+        lambda *_args: None,
+    )
     service.layout.ensure_roots()
     service.ensure_workspace(WORKSPACE_ID)
 
@@ -115,6 +119,10 @@ def test_cached_file_write_still_rejects_known_workspace_quota(tmp_path, monkeyp
     monkeypatch.setattr(
         service,
         "_secure_workspace_directory",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        "core.sandbox.paths.os.fchown",
         lambda *_args: None,
     )
     service.layout.ensure_roots()

@@ -656,7 +656,11 @@ class WorkspaceFileService:
 
     def filesystem(self, workspace_id: str) -> SafeWorkspaceFilesystem:
         workspace_id = validate_workspace_id(workspace_id)
-        return SafeWorkspaceFilesystem(self.layout.workspace_data_dir(workspace_id))
+        return SafeWorkspaceFilesystem(
+            self.layout.workspace_data_dir(workspace_id),
+            write_uid=self.config.workspace_uid,
+            write_gid=self.config.workspace_gid,
+        )
 
     def list_files(
         self,

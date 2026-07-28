@@ -252,6 +252,48 @@ def test_workspace_write_uses_exact_overwrite_delta_and_shared_mutation_lock(tmp
     assert busy.value.code.value == "sandbox_busy"
 
 
+def test_workspace_write_assigns_configured_owner_to_created_entries(
+    tmp_path,
+    monkeypatch,
+):
+    _token, runtime = _runtime(tmp_path)
+    config = replace(
+        runtime.config,
+        workspace_uid=12345,
+        workspace_gid=23456,
+    )
+    service = WorkspaceFileService(config)
+    observed: list[tuple[int, int, int]] = []
+
+    def record_fchown(descriptor: int, uid: int, gid: int) -> None:
+        observed.append((stat.S_IMODE(os.fstat(descriptor).st_mode), uid, gid))
+
+    monkeypatch.setattr(os, "fchown", record_fchown)
+    service.layout.ensure_roots()
+    service.ensure_workspace(WORKSPACE_ID)
+    observed.clear()
+
+    service.write_file(
+        WORKSPACE_ID,
+        path="sandbox-acceptance/result.txt",
+        content="由文件工具创建",
+        overwrite=False,
+        quota_bytes=1024,
+    )
+
+    workspace_root = service.layout.workspace_data_dir(WORKSPACE_ID)
+    assert observed == [
+        (0o700, 12345, 23456),
+        (0o600, 12345, 23456),
+    ]
+    assert stat.S_IMODE(
+        (workspace_root / "sandbox-acceptance").stat().st_mode
+    ) == 0o700
+    assert stat.S_IMODE(
+        (workspace_root / "sandbox-acceptance" / "result.txt").stat().st_mode
+    ) == 0o600
+
+
 def test_workspace_total_quota_accounts_for_active_run_reservations(tmp_path):
     _token, runtime = _runtime(tmp_path)
     config = replace(

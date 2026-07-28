@@ -230,12 +230,31 @@ def test_real_docker_security_matrix(tmp_path):
         assert ready["image_id"] == image_id
         assert ready["apparmor_profile"] == "nanobot-sandbox-restricted"
 
+        workspace_files.ensure_workspace(WORKSPACE_A)
+        workspace_files.write_file(
+            WORKSPACE_A,
+            path="tool-created/input.txt",
+            content="file-tool",
+            overwrite=False,
+            quota_bytes=64 * 1024 * 1024,
+        )
+        tool_created_root = (
+            workspace_files.layout.workspace_data_dir(WORKSPACE_A)
+            / "tool-created"
+        )
+        assert tool_created_root.stat().st_uid == uid
+        assert tool_created_root.stat().st_gid == gid
+        assert (tool_created_root / "input.txt").stat().st_uid == uid
+        assert (tool_created_root / "input.txt").stat().st_gid == gid
+
         baseline = _run(
             backend,
             """
 set -eu
 test "$(id -u)" = "10001"
 ! touch /etc/nanobot-sandbox-write-test 2>/dev/null
+test "$(cat /workspace/tool-created/input.txt)" = "file-tool"
+printf 'exec-persist' > /workspace/tool-created/exec-persist.txt
 printf 'persistent' > /workspace/persistent.txt
 test ! -e /var/run/docker.sock
 test ! -e /srv/nanobot
@@ -266,6 +285,11 @@ PY
 
         persisted = _run(backend, "cat /workspace/persistent.txt")
         assert persisted["data"]["stdout"] == "persistent"
+        tool_persisted = _run(
+            backend,
+            "cat /workspace/tool-created/exec-persist.txt",
+        )
+        assert tool_persisted["data"]["stdout"] == "exec-persist"
         isolated = _run(
             backend,
             "test ! -e /workspace/persistent.txt && echo OWNER_B_ISOLATED",

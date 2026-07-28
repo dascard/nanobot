@@ -142,24 +142,33 @@ def _directory_fd(
     components: tuple[str, ...],
     *,
     create: bool = False,
+    created_owner: tuple[int, int] | None = None,
 ) -> Iterator[int]:
     current_fd = _open_directory_path(root)
     try:
         for component in components:
+            created = False
             if create:
                 try:
                     os.mkdir(component, 0o700, dir_fd=current_fd)
+                    created = True
                 except FileExistsError:
                     pass
                 except OSError as exc:
                     raise _map_os_error(exc) from exc
+            next_fd: int | None = None
             try:
                 next_fd = os.open(
                     component,
                     os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
                     dir_fd=current_fd,
                 )
+                if created and created_owner is not None:
+                    os.fchown(next_fd, *created_owner)
+                    os.fchmod(next_fd, 0o700)
             except OSError as exc:
+                if next_fd is not None:
+                    os.close(next_fd)
                 raise _map_os_error(exc) from exc
             os.close(current_fd)
             current_fd = next_fd
@@ -245,7 +254,23 @@ class SandboxStorageLayout:
 class SafeWorkspaceFilesystem:
     """所有模型路径都通过 dir_fd 与 O_NOFOLLOW 访问。"""
 
-    def __init__(self, root: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        root: str | os.PathLike[str],
+        *,
+        write_uid: int | None = None,
+        write_gid: int | None = None,
+    ) -> None:
+        if (write_uid is None) != (write_gid is None):
+            raise ValueError("写入 UID/GID 必须同时提供")
+        if write_uid is None or write_gid is None:
+            self._write_owner: tuple[int, int] | None = None
+        else:
+            self._write_owner = (write_uid, write_gid)
+        if self._write_owner is not None and any(
+            value < 0 for value in self._write_owner
+        ):
+            raise ValueError("写入 UID/GID 不能为负数")
         self.root = Path(root)
 
     @contextmanager
@@ -256,7 +281,12 @@ class SafeWorkspaceFilesystem:
         create: bool = False,
     ) -> Iterator[tuple[int, str, tuple[str, ...]]]:
         components = validate_relative_path(relative_path)
-        with _directory_fd(self.root, components[:-1], create=create) as parent_fd:
+        with _directory_fd(
+            self.root,
+            components[:-1],
+            create=create,
+            created_owner=self._write_owner,
+        ) as parent_fd:
             yield parent_fd, components[-1], components
 
     @contextmanager
@@ -380,6 +410,9 @@ class SafeWorkspaceFilesystem:
                     while written < len(view):
                         written += os.write(temp_fd, view[written:])
                     os.fsync(temp_fd)
+                    if self._write_owner is not None:
+                        os.fchown(temp_fd, *self._write_owner)
+                        os.fchmod(temp_fd, 0o600)
                 finally:
                     os.close(temp_fd)
 
@@ -490,6 +523,8 @@ class SafeWorkspaceFilesystem:
                             stop=False,
                         )
                     os.fsync(temp_fd)
+                    if self._write_owner is not None:
+                        os.fchown(temp_fd, *self._write_owner)
                     os.fchmod(temp_fd, 0o400)
                 finally:
                     os.close(temp_fd)
