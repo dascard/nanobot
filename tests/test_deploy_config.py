@@ -456,6 +456,10 @@ def test_runtime_release_workflow_builds_sbom_and_manifest_after_both_gates():
 
     assert "workflow_run:" in workflow
     assert "通用质量门禁" in workflow
+    assert "gh run download" in workflow
+    assert "release-impact" in workflow
+    assert 'index("nanobot-runtime") != null' in workflow
+    assert "steps.impact.outputs.runtime_required == 'true'" in workflow
     assert "timing-gate-eval.yml/runs" in workflow
     assert '.head_sha == $sha' in workflow
     assert '.conclusion == "success"' in workflow
@@ -474,6 +478,19 @@ def test_runtime_release_workflow_builds_sbom_and_manifest_after_both_gates():
     assert 'sha256sum "${bundle}" >"${bundle}.sha256"' in workflow
     assert "sandbox-real-docker" not in workflow
     assert "nanobot-runtime:latest" not in workflow
+
+
+def test_quality_gate_publishes_release_impact_for_runtime_workflow():
+    workflow = Path(".github/workflows/quality-gate.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "release-impact:" in workflow
+    assert "fetch-depth: 0" in workflow
+    assert "scripts/build_release_impact.py" in workflow
+    assert "--base \"${base_sha}\"" in workflow
+    assert "actions/upload-artifact@v7" in workflow
+    assert "name: release-impact" in workflow
 
 
 def test_webui_production_dependencies_are_patched_and_router_stays_client_only():
@@ -876,6 +893,11 @@ def test_dockerignore_excludes_runtime_model_directories():
     assert "**/.git/" in ignored
     assert "*.egg-info/" in ignored
     assert "vendor/KohakuTerrarium/build/" in ignored
+    assert "deploy/" in ignored
+    assert "docker/" in ignored
+    assert "scripts/*" in ignored
+    assert "!scripts/manage_prompt_templates.py" in ignored
+    assert "!scripts/verify_prompt_runtime_release.py" in ignored
 
 
 def test_new_api_timeout_defaults_to_300_seconds():

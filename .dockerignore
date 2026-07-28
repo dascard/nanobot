@@ -29,6 +29,8 @@ tests/
 vendor/KohakuTerrarium/tests/
 vendor/KohakuTerrarium/build/
 docs/
+deploy/
+docker/
 design-system/
 cc2codex/
 patches/**
@@ -41,7 +43,6 @@ prompt-v2-*-snapshot.md
 # 运行数据、模型、凭据和生成产物不得进入构建上下文
 .env
 .env.*
-!.env.example
 data/
 models/
 sentinel/
@@ -59,3 +60,15 @@ runtime/
 coverage.xml
 htmlcov/
 evals/reports/
+
+# 宿主运维、构建与测试输入不进入 Runtime 镜像。Prompt Runtime 的镜像内
+# 验证入口按文件白名单保留。
+docker-compose*.yml
+package*.json
+requirements-sandbox*
+requirements-test*
+requirements.txt
+scripts/*
+!scripts/build_release_manifest.py
+!scripts/manage_prompt_templates.py
+!scripts/verify_prompt_runtime_release.py

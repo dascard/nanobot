@@ -26,7 +26,9 @@ UMask=0117
 
 RuntimeDirectory=nanobot-sandboxd
 RuntimeDirectoryMode=0750
-RuntimeDirectoryPreserve=restart
+# Server 以 bind mount 读取该目录。即使 Smoke 显式 stop/start sandboxd，也必须
+# 保留同一 inode，避免容器继续挂载已删除的旧目录。
+RuntimeDirectoryPreserve=yes
 ReadWritePaths=/srv/nanobot /run/nanobot-sandboxd
 ReadOnlyPaths=/opt/nanobot-server /etc/nanobot/sandboxd.token /etc/nanobot/sandboxd-admin.token /etc/nanobot/sandbox-execution-profiles.v1.json /var/run/docker.sock
 ProtectSystem=strict

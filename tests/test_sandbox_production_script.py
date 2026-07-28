@@ -578,6 +578,10 @@ def test_release_gate_accepts_only_master_or_explicit_candidate_ref():
 
 def test_control_plane_activates_new_release_only_after_preparation():
     source = SCRIPT.read_text(encoding="utf-8")
+    unit_body = source.split("install_sandboxd_systemd_units() {", 1)[1].split(
+        "\ninstall_apparmor_profile() {",
+        1,
+    )[0]
     python_body = source.split("install_sandboxd_python() {", 1)[1].split(
         "\ninstall_sandboxd_credentials_and_env() {",
         1,
@@ -589,7 +593,8 @@ def test_control_plane_activates_new_release_only_after_preparation():
 
     assert '"${RELEASE_DIR}/requirements-sandboxd.lock"' in python_body
     assert '"${SERVER_RELEASE_LINK}/requirements-sandboxd.lock"' not in python_body
-    assert '"${RELEASE_DIR}/deploy/systemd/nanobot-sandboxd.service"' in install_body
+    assert '"${REPO_ROOT}/deploy/systemd/nanobot-sandboxd.service"' in unit_body
+    assert "install_sandboxd_systemd_units" in install_body
     assert install_body.index("仍有活动 Sandbox 容器") < install_body.index(
         "activate_release_tree"
     )
@@ -998,11 +1003,16 @@ def test_control_plane_shares_one_runtime_manifest_and_defaults_hard_limits_off(
     assert "NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE=${RUNTIME_PROFILE_MANIFEST}" in (
         env_body
     )
-    assert "NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED=false" in env_body
+    assert 'local developer_network_allowed="false"' in env_body
+    assert "previous_developer_network_allowed" in env_body
+    assert (
+        "NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED="
+        "${developer_network_allowed}"
+    ) in env_body
     assert installed_manifest in unit
     assert runtime_manifest in unit
     assert "ExecStartPre=/usr/bin/install -m 0640" in unit
-    assert "RuntimeDirectoryPreserve=restart" in unit
+    assert "RuntimeDirectoryPreserve=yes" in unit
     assert (
         "NANOBOT_SANDBOX_SESSION_EXECUTION_ALLOWED false"
         in application_body
@@ -1056,13 +1066,64 @@ def test_production_smoke_stage_requires_complete_structured_matrix():
     assert "--evidence-root" in smoke_body
     assert "run_smoke_matrix_with_controller_quiesced" in smoke_body
     assert (
-        'PATH="${smoke_dir}/.venv/bin:/usr/local/sbin:/usr/local/bin:'
+        'PATH="${SMOKE_VENV}/bin:/usr/local/sbin:/usr/local/bin:'
         '/usr/sbin:/usr/bin:/sbin:/bin"'
         in smoke_body
     )
+    assert "prepare_smoke_python_environment" in smoke_body
+    assert "requirements-sandbox-smoke.lock" in source
     assert "summary.json" in source
     assert "grep -Eq '1 passed'" not in source
     assert "manifest=$(profile_manifest_sha256_from_stage)" in smoke_body
+
+
+def test_control_plane_fast_upgrade_is_one_resumable_root_command():
+    source = SCRIPT.read_text(encoding="utf-8")
+    body = source.split("upgrade_control_plane_command() (", 1)[1].split(
+        "\ndeploy_command() {",
+        1,
+    )[0]
+
+    assert "upgrade-control-plane" in source
+    assert "--reuse-built-image" in body
+    assert "--rerun-smoke" in body
+    assert "prepare_host_command prepare-host" in body
+    assert "smoke_command smoke" in body
+    assert "install_control_plane_command install-control-plane" in body
+    assert "upgrade-control-plane-${target_release}.json" in body
+    assert "upgrade-control-plane.lock" in body
+    assert "flock -n 9" in body
+    assert "restore_feature_state" in body
+    assert "RuntimeDirectory inode" in body
+    assert "RUNTIME_DEPLOY_EXECUTED=false" in body
+    assert "COORDINATED_BACKUP_EXECUTED=false" in body
+    assert "SANDBOX_CONTROL_UPGRADE_STATUS=ok" in body
+
+
+def test_control_plane_reuses_host_and_python_dependencies_by_hash():
+    source = SCRIPT.read_text(encoding="utf-8")
+    host_body = source.split("install_host_packages() {", 1)[1].split(
+        "\ninstall_sandboxd_systemd_units() {",
+        1,
+    )[0]
+    smoke_body = source.split(
+        "prepare_smoke_python_environment() {",
+        1,
+    )[1].split("\nrun_smoke_matrix_with_controller_quiesced() (", 1)[0]
+    sandboxd_body = source.split("install_sandboxd_python() {", 1)[1].split(
+        "\ninstall_sandboxd_credentials_and_env() {",
+        1,
+    )[0]
+
+    assert "dpkg-query" in host_body
+    assert 'if (( ${#missing_packages[@]} > 0 ))' in host_body
+    assert "宿主依赖已齐全，跳过 apt update/install" in host_body
+    assert "SMOKE_VENV_ROOT" in smoke_body
+    assert ".requirements.sha256" in smoke_body
+    assert "uv pip sync" in smoke_body
+    assert "SANDBOXD_REQUIREMENTS_MARKER" in sandboxd_body
+    assert "sandboxd 依赖未变化，跳过 Python 包安装" in sandboxd_body
+    assert "uv pip sync" in sandboxd_body
 
 
 def test_production_smoke_temporarily_stops_and_restores_active_controller(

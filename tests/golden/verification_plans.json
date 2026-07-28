@@ -17,11 +17,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "4b42fc8b405c94c1baeb44a7132319a0a457220097634e7b86dd619307f2ab11"
           }
         },
         "release_impact": {
@@ -31,11 +31,11 @@
           "descriptor_ids": [
             "documentation"
           ],
-          "sha256": "6be177c454dc58dcc5d096e98db06965cd46c01e524aec29f1be67f1597eba7a"
+          "sha256": "18365719a597d0ec10893b81e8e52c7ea27e2798192cc57ea5a7a0940ea0fe81"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "255f88e87b63ba3310a9233568fe8440627087b1d1417cc2a40f10876ab7e9f9",
+        "sha256": "404df31d1735b7d48e70c9019b5fe510a9215c1a209fb924e284848695ca0fe2",
         "suites": [
           {
             "allow_skip": false,
@@ -162,11 +162,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "4b42fc8b405c94c1baeb44a7132319a0a457220097634e7b86dd619307f2ab11"
           }
         },
         "release_impact": {
@@ -178,11 +178,11 @@
             "prompt_runtime",
             "runtime"
           ],
-          "sha256": "2c5a39ae65592876ad2385274c6be1a9719234519f0a810f83e8572eb279b893"
+          "sha256": "ca99221da53a0190a315577c233166f239f014b45bcdb336deb9b1eec2a957eb"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "0246f55224c9ece1e8466d8525a3787f575855f905fb4a576a6b51f7b72330cf",
+        "sha256": "69a5cb109015e52dd6416fb778548efb8496619bf98bb47b550494113d7452e5",
         "suites": [
           {
             "allow_skip": false,
@@ -226,7 +226,8 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "deployment"
+              "deployment",
+              "runtime_image"
             ],
             "cleanup": [
               "remove_temporary_dotenv"
@@ -487,7 +488,8 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "deployment"
+              "deployment",
+              "runtime_image"
             ],
             "cleanup": [
               "none_required"
@@ -646,11 +648,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "4b42fc8b405c94c1baeb44a7132319a0a457220097634e7b86dd619307f2ab11"
           }
         },
         "release_impact": {
@@ -662,11 +664,11 @@
             "news_resources",
             "runtime"
           ],
-          "sha256": "de5944fcdcfb3574ac73d657f86cbe10c4e3ba5e9ca55765a55f50e3ef62e517"
+          "sha256": "613bd51e294c1105691a75bb1a269372457de7b35eb7f18ff4a59a3c8a00b84e"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "7d46149f8a1d1d68787edd1e57ea0c4ec732675d7da4ca2b309744c31109c6c6",
+        "sha256": "72ff32ef7fba4e20fb74d9c9770782e18994504db679b5c1d31db62a0415dcc3",
         "suites": [
           {
             "allow_skip": false,
@@ -710,7 +712,8 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "deployment"
+              "deployment",
+              "runtime_image"
             ],
             "cleanup": [
               "remove_temporary_dotenv"
@@ -1009,7 +1012,8 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "deployment"
+              "deployment",
+              "runtime_image"
             ],
             "cleanup": [
               "none_required"
@@ -1169,11 +1173,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "4b42fc8b405c94c1baeb44a7132319a0a457220097634e7b86dd619307f2ab11"
           }
         },
         "release_impact": {
@@ -1185,11 +1189,11 @@
             "database_schema",
             "runtime"
           ],
-          "sha256": "89477563a6a57b2257322919df4b904b1a651d8491e4b370a8cac0100d386848"
+          "sha256": "4aaad121c24c6716192654fb3d2c84e5f404f7eec170c0ec217a98f5e2305f23"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "3d90c0f4300b68ac36a6772cec72193a6b0be02c96e855a6276693d80f14c95e",
+        "sha256": "fcbf05d0d683f757f6829de92c724c133eb82e4b72c763f0d1d5ebac9bfc31ae",
         "suites": [
           {
             "allow_skip": false,
@@ -1233,7 +1237,8 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "deployment"
+              "deployment",
+              "runtime_image"
             ],
             "cleanup": [
               "remove_temporary_dotenv"
@@ -1506,7 +1511,8 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "deployment"
+              "deployment",
+              "runtime_image"
             ],
             "cleanup": [
               "none_required"
@@ -1666,11 +1672,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "4b42fc8b405c94c1baeb44a7132319a0a457220097634e7b86dd619307f2ab11"
           }
         },
         "release_impact": {
@@ -1684,13 +1690,13 @@
             "runtime",
             "sandbox"
           ],
-          "sha256": "49c5d0c2cc626b31f39e762380557e1a42e536fd02b8197cba974b55a825f71d"
+          "sha256": "0218c13da8b7bffee6be6f5a1b603226c9d1ccf682f2e4f0ac983940b19c010a"
         },
         "required_credentials": [
           "docker_host_access"
         ],
         "schema_version": 1,
-        "sha256": "906598b4126158a8966d80395be5d5b54168286d76b39a10e524a3857c0664a6",
+        "sha256": "12723f660f522f24cd0f0ed69f00c9900d3081c34c41ca2f82852757095a8495",
         "suites": [
           {
             "allow_skip": false,
@@ -1733,7 +1739,8 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "deployment"
+              "deployment",
+              "runtime_image"
             ],
             "cleanup": [
               "remove_temporary_dotenv"
@@ -1849,7 +1856,8 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "deployment"
+              "deployment",
+              "runtime_image"
             ],
             "cleanup": [
               "none_required"
@@ -1968,11 +1976,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "4b42fc8b405c94c1baeb44a7132319a0a457220097634e7b86dd619307f2ab11"
           }
         },
         "release_impact": {
@@ -1983,11 +1991,11 @@
           "descriptor_ids": [
             "webui"
           ],
-          "sha256": "14b94643ed7cd34bc05f01c4e928f23edaff2b118cf696cf81df933cfff3d976"
+          "sha256": "fd69e8c3caf6e4c25b234a7bd0e71bbb37dd7e2fefdd3d1e32c0e5cb42b78469"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "67200d45ddfcf6b3f324795dbb75777d7b280f209de2886ad7c07313cec90f60",
+        "sha256": "70d6766282b74ccc600f6cd5a04c82b0adcf05610f04a683d78a99a0fd7e9afd",
         "suites": [
           {
             "allow_skip": false,
@@ -2114,8 +2122,8 @@
   "registries": {
     "build_profile": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160",
     "feature_lifecycle": "80f705122c37c97b9d92aa37dd34558db5c5fda8eed969a5ee73b882b794cc63",
-    "release_impact": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9",
-    "verification_suite": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+    "release_impact": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864",
+    "verification_suite": "4b42fc8b405c94c1baeb44a7132319a0a457220097634e7b86dd619307f2ab11"
   },
   "schema_version": 1
 }

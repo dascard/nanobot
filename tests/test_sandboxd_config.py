@@ -60,7 +60,7 @@ def test_systemd_unit_limits_surface_and_does_not_start_tcp_listener():
         "/etc/nanobot/sandbox-execution-profiles.v1.json "
         "/run/nanobot-sandboxd/profile-manifest.json"
     ) in unit
-    assert "RuntimeDirectoryPreserve=restart" in unit
+    assert "RuntimeDirectoryPreserve=yes" in unit
     assert "--host" not in unit
     assert "--port" not in unit
 

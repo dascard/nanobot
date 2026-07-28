@@ -36,10 +36,10 @@
         "real_docker_sandbox_required": false,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "352eaf0e698fa8f068d27bd4c816df94ff04a959476523b4cc26f44af195caeb",
+        "sha256": "88fb7e45dba25ad9acbfa1d2ac600335aa58c2417d12a237ce361c8471353f57",
         "unowned_production_paths": [],
         "verification_suites": [
           "architecture",
@@ -95,10 +95,10 @@
         "real_docker_sandbox_required": true,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "49c5d0c2cc626b31f39e762380557e1a42e536fd02b8197cba974b55a825f71d",
+        "sha256": "0218c13da8b7bffee6be6f5a1b603226c9d1ccf682f2e4f0ac983940b19c010a",
         "unowned_production_paths": [],
         "verification_suites": [
           "architecture",
@@ -146,10 +146,10 @@
         "real_docker_sandbox_required": false,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "14b94643ed7cd34bc05f01c4e928f23edaff2b118cf696cf81df933cfff3d976",
+        "sha256": "fd69e8c3caf6e4c25b234a7bd0e71bbb37dd7e2fefdd3d1e32c0e5cb42b78469",
         "unowned_production_paths": [],
         "verification_suites": [
           "frontend-lint-build"
@@ -196,10 +196,10 @@
         "real_docker_sandbox_required": false,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "7114393adfc7cd3c04f29f92ec832236a496ef2422bb9ae3c7e3ca3e61fd7cc5",
+        "sha256": "4e7f2cb11624e3974c70c664b2cfaa2037b7be05f10519c60fc628717030a4b2",
         "unowned_production_paths": [],
         "verification_suites": [
           "architecture",
@@ -230,10 +230,10 @@
         "real_docker_sandbox_required": false,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "6be177c454dc58dcc5d096e98db06965cd46c01e524aec29f1be67f1597eba7a",
+        "sha256": "18365719a597d0ec10893b81e8e52c7ea27e2798192cc57ea5a7a0940ea0fe81",
         "unowned_production_paths": [],
         "verification_suites": [],
         "web_build_required": false
@@ -267,10 +267,10 @@
         "real_docker_sandbox_required": false,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "2d7461a86ddb0ff25f785ed7055cd81e4d264f845f334d5e93f12bf7af4af746",
+        "sha256": "acb5ee081ff6bef477df0a8a6aef254ebc42eb4d744ae3bb3ddcd7ba14459ae4",
         "unowned_production_paths": [],
         "verification_suites": [
           "eval-gate"
@@ -305,10 +305,10 @@
         "real_docker_sandbox_required": false,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "c0852af96507ff1d49ac13b82a103727c6d0aad40107183d63670f5e93f1c033",
+        "sha256": "1e49270fc1d54f8ad218a2c0c85b102a313e4f697f8a7c67c65930e074018ca8",
         "unowned_production_paths": [],
         "verification_suites": [
           "sentinel-runtime-check"
@@ -344,10 +344,10 @@
         "real_docker_sandbox_required": false,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "d794366803963e9ed7c3d0831a6daeeb03e3168d769bb2db49222a0fa614cc78",
+        "sha256": "5e68ce45a65f6cc95ff6be838cfbb1fbe8f0fea21008a8d75af6d4ebe5a717d8",
         "unowned_production_paths": [],
         "verification_suites": [
           "backend-full",
@@ -384,10 +384,10 @@
         "real_docker_sandbox_required": false,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "a03e1993d7f2986c2086179e94cd2bc2e6e4c67a3ec72f1bc2ed55fcec5c5efb",
+        "sha256": "99591e0729c4bf3d5712c4aae7510e1754842a172b751c08464b202406100d62",
         "unowned_production_paths": [],
         "verification_suites": [
           "architecture"
@@ -422,8 +422,8 @@
           },
           {
             "descriptor_ids": [
-              "deployment",
-              "operations"
+              "operations",
+              "runtime_image"
             ],
             "path": "scripts/build_release_manifest.py"
           },
@@ -439,10 +439,10 @@
         "real_docker_sandbox_required": false,
         "registry": {
           "generation": 1,
-          "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+          "sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864"
         },
         "schema_version": 1,
-        "sha256": "607c74700af83bd84a756e16c0f1a4ffe2cc4c93c593a48f1f0e59577008a1fe",
+        "sha256": "d084610f010f360c6ed235b71626e00f997077a1aed346474e61cbb21283fb7c",
         "unowned_production_paths": [],
         "verification_suites": [
           "architecture",
@@ -454,6 +454,6 @@
       }
     }
   ],
-  "registry_sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9",
+  "registry_sha256": "d5fdb663624198b2f92ab2396a3db84ad4c7f43f8bebace857794bcccf718864",
   "schema_version": 1
 }

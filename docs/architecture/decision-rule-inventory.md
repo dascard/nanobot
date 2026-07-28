@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`6356de157be341435224cd684cb309f1c973c621`
-- 规则总数：6565
+- 源提交：`991d095dd5a093ddcc7df9b78428aa77b4c2065d`
+- 规则总数：6597
 - 扫描错误：0
 - 人工复核队列：691
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,19 +12,19 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 132 |
-| `configurable_policy` | 1147 |
+| `configurable_policy` | 1157 |
 | `data_consistency` | 429 |
 | `natural_language_semantic` | 32 |
 | `presentation` | 5 |
-| `protocol_syntax` | 3460 |
-| `security_invariant` | 1360 |
+| `protocol_syntax` | 3463 |
+| `security_invariant` | 1379 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
+| `scripts/manage-sandbox-production.sh` | 207 |
 | `core/schema_migrations.py` | 198 |
-| `scripts/manage-sandbox-production.sh` | 188 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
 | `core/proactive_research.py` | 82 |
@@ -225,6 +225,8 @@
 | `core/prompt_v2/template_resolution.py` | 10 |
 | `core/runtime/events.py` | 10 |
 | `scripts/build_semantic_task_baseline.py` | 10 |
+| `scripts/deploy-production-coordinated.sh` | 10 |
+| `scripts/deploy_release.py` | 10 |
 | `scripts/sandbox-smoke-summary.py` | 10 |
 | `scripts/sandbox-smoke-test.sh` | 10 |
 | `webui/src/features/models/ModelsPage.jsx` | 10 |
@@ -242,7 +244,6 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/official.py` | 9 |
 | `foundation/identity/normalization.py` | 9 |
 | `scripts/build-sandbox-image.sh` | 9 |
-| `scripts/deploy_release.py` | 9 |
 | `api/admin/group_memory_routes.py` | 8 |
 | `api/admin/trace_routes.py` | 8 |
 | `api/routes.py` | 8 |
@@ -366,6 +367,7 @@
 | `scripts/build_release_manifest.py` | 4 |
 | `scripts/build_verification_plan.py` | 4 |
 | `scripts/check-loopback-image-allocation.sh` | 4 |
+| `scripts/deploy-production.sh` | 4 |
 | `scripts/docker-build.sh` | 4 |
 | `scripts/manage_models.py` | 4 |
 | `scripts/prepare-runtime-directories.sh` | 4 |
@@ -445,7 +447,6 @@
 | `nanobot_kt/tool_registration_adapter.py` | 2 |
 | `nanobot_kt/tool_runtime.py` | 2 |
 | `scripts/build_release_impact.py` | 2 |
-| `scripts/deploy-production.sh` | 2 |
 | `scripts/rag_write_test_report.py` | 2 |
 | `server.py` | 2 |
 | `webui/src/features/manifestValidation.js` | 2 |

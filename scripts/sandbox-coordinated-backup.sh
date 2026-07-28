@@ -197,12 +197,17 @@ done < <(
     --format '{{.Names}}'
 )
 
-cd "${repo_root}"
-if ! running_services="$(docker compose ps --status running -q)"; then
-  die "无法确认 Docker Compose 固定服务状态"
-fi
-[[ -z "${running_services}" ]] \
-  || die "仍有 Nanobot Docker Compose 固定服务运行，拒绝生成非协调备份"
+for fixed_container in \
+    nanobot-server \
+    nanobot-session-summary-worker \
+    nanobot-outbound-delivery-worker \
+    nanobot-semantic-index-worker; do
+  if docker inspect "${fixed_container}" \
+      --format '{{if .State.Running}}running{{else}}stopped{{end}}' \
+      2>/dev/null | grep -Fxq running; then
+    die "固定服务 ${fixed_container} 仍在运行，拒绝生成非协调备份"
+  fi
+done
 
 measure_archive_bytes() {
   local totals
@@ -344,3 +349,4 @@ sync -f "${resolved_destination}"
 
 echo "Sandbox 协调备份完成：${final_dir}"
 echo "恢复前必须先校验 manifest.sha256，并按恢复手册演练。"
+echo "COORDINATED_BACKUP_DIR=${final_dir}"

@@ -176,31 +176,47 @@ export NANOBOT_PRODUCTION_ROOT='/home/dascard/bot/nanobot'
 export NANOBOT_RUNTIME_IMAGE='ghcr.io/<owner>/nanobot-runtime@sha256:<64位摘要>'
 export NANOBOT_RELEASE_MANIFEST="$PWD/data/release-evidence/<sha>/release.json"
 
+# 仅首次安装或目录合同变化时执行。
 sudo NANOBOT_PRODUCTION_ROOT="${NANOBOT_PRODUCTION_ROOT}" \
   NANOBOT_RUNTIME_UID=10001 NANOBOT_RUNTIME_GID=10001 \
   scripts/prepare-runtime-directories.sh
 sudo scripts/manage-prompt-runtime-production.sh prepare
 
-# audit → plan/resolve → 人工审查 → apply 后，绑定目标 digest 生成回执。
-sudo NANOBOT_RUNTIME_IMAGE="${NANOBOT_RUNTIME_IMAGE}" \
-  NANOBOT_RELEASE_MANIFEST="${NANOBOT_RELEASE_MANIFEST}" \
-  scripts/manage-prompt-runtime-production.sh verify-release
-
-export NANOBOT_PROMPT_AUDIT_RECEIPT='/var/lib/nanobot/prompt-runtime/receipts/<回执>.json'
-export NANOBOT_COORDINATED_BACKUP_DIR='/var/backups/nanobot-sandbox/<本维护窗口备份>'
+# 日常 Runtime 发布只进入 1 次 sudo。脚本先生成影响计划，再按需审计、备份和切换。
 sudo NANOBOT_PRODUCTION_ROOT="${NANOBOT_PRODUCTION_ROOT}" \
   NANOBOT_RUNTIME_IMAGE="${NANOBOT_RUNTIME_IMAGE}" \
   NANOBOT_RELEASE_MANIFEST="${NANOBOT_RELEASE_MANIFEST}" \
-  NANOBOT_PROMPT_AUDIT_RECEIPT="${NANOBOT_PROMPT_AUDIT_RECEIPT}" \
-  NANOBOT_COORDINATED_BACKUP_DIR="${NANOBOT_COORDINATED_BACKUP_DIR}" \
-  scripts/deploy-production.sh
+  scripts/deploy-production-coordinated.sh
 ```
+
+协调入口按 ReleaseManifest 与当前发布状态决定实际工作：目标已经运行时直接返回；只有
+`prompt_defaults` Hash 变化才生成 Prompt 审计回执；只有数据库 migration head 变化才
+创建协调备份；只有 Runtime 身份变化才切换四个固定服务。首次尝试生成的备份目录和业务
+前态会写入 `/var/lib/nanobot/release-state/`，同一目标失败后重复执行同一命令只续跑未完成
+阶段，不会再备份一次。如果 Prompt 审计发现本地模板漂移，先按输出执行
+`plan/resolve/apply`，随后重跑同一协调命令。
+
+只修改 Sandbox 控制面且镜像输入未变化时，不需要 Runtime 发布包，使用另一个单命令入口：
+
+```bash
+sudo scripts/manage-sandbox-production.sh upgrade-control-plane \
+  --release "$(git rev-parse HEAD)" \
+  --release-ref origin/master
+```
+
+该入口在同一个 root 进程内完成宿主准备、真实 Smoke、控制面安装和业务开关恢复，并按阶段
+回执续跑。Sandbox 镜像输入变化时它会明确拒绝快速通道，此时才执行完整镜像构建链路。
+
+每次提交的 Git SHA 仍然会变化，但这不再等于每次都构建 Runtime。质量门禁会发布
+Release Impact；提交不影响 `nanobot-runtime` 时，Runtime workflow 会跳过镜像构建、
+SBOM、推送和发布包。Runtime 构建上下文也排除了宿主部署脚本、Sandbox 镜像上下文与
+测试依赖，避免运维脚本变更使业务代码层缓存失效。
 
 生产覆盖文件 `docker-compose.prod.yml` 会移除本地 `build` 配置并强制校验 digest。
 它还会把 Prompt Runtime 挂载到仓库外 `/var/lib/nanobot/prompt-runtime/`，并用绝对
 路径挂载生产 data、models 与 sentinel，避免失败 Git 更新改变 live Prompt。部署入口
-先核对 Manifest、协调备份、Prompt 回执、Feature kill switch、活动 Sandbox 和
-pull-only 磁盘水位，再把四个固定服务作为不可拆分单元切换；任一 worker、readiness、
+先核对 Manifest、按影响要求提供的协调备份或 Prompt 回执、Feature kill switch、活动
+Sandbox 和 pull-only 磁盘水位，再把四个固定服务作为不可拆分单元切换；任一 worker、readiness、
 Runtime revision、Schema migration head 或非 Nanobot 容器快照验证失败时，会把四个
 服务全部恢复到前一镜像。`/var/lib/nanobot/release-state/` 保存 `current.json`、
 `pending.json`、`rollback.json` 和历史 ReleaseManifest，用于中断恢复；它不保存环境

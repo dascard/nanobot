@@ -7,7 +7,7 @@ Sandbox 由宿主 systemd 服务 sandboxd 通过 Docker Engine API 创建受控�
 生产控制面有三类彼此独立的状态：
 
 - 宿主基础设施许可：`sandbox.infrastructure_enable_allowed` 只允许由 root 管理的环境变量设置，生产默认开启，Web 不可修改；它只允许 Web 进一步开启能力，不直接授权 session 或启用工具，维护与应急时仍可显式关闭。
-- 业务开关：`sandbox.enabled` 与 `sandbox.exec_enabled`，由 Web「Sandbox 管理」页控制；`sandbox.group_enabled` 首期固定关闭。
+- 业务开关：`sandbox.enabled`、`sandbox.exec_enabled` 与 `sandbox.group_enabled`，由 Web「Sandbox 管理」页控制；宿主硬开关、会话授权与 Profile 门禁仍可独立拒绝执行。
 - 网络硬上限：Server 和 sandboxd 的 `NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED` 必须同时为 `true`，缺少任一侧都拒绝新的 Developer 网络执行。
 - 会话授权：`sandbox_access_grants` 是 11 个 Sandbox 工具的唯一授权事实源，通用 ToolOverride 和 `private_superuser` 均不能授权 Sandbox。
 - 执行策略：部署 Profile manifest 是 Server 与 sandboxd 共享的完整策略事实源。双方必须同时核对 `catalog_generation` 和完整 `policy_sha256`，不能只比较镜像摘要。
@@ -78,7 +78,8 @@ project quota 的唯一事实源是 `workspace_quota_bindings`。project ID 由�
 
 ## 3. 安装与部署顺序
 
-生产脚本只负责基础设施，不再接受 owner ID 或 project ID：
+以下完整链路只用于首次安装，或 Sandbox 镜像输入确实变化的版本。生产脚本只负责基础
+设施，不再接受 owner ID 或 project ID：
 
 ~~~bash
 sudo scripts/manage-sandbox-production.sh configure ...
@@ -98,11 +99,60 @@ sudo scripts/manage-sandbox-production.sh install-control-plane
 `image-built` 阶段凭据同时绑定三个镜像引用、三个 IMAGE ID 和部署 manifest SHA256。`--reuse-built-image` 只有在 Restricted、Developer、代理的全部构建输入、canonical manifest 和 manifest 渲染器均未漂移时才允许复用。
 
 `deploy` 与 `deploy-runtime` 已停用。Runtime 只能从独立发布树通过完整 OCI digest、
-SBOM、验证结果和 ReleaseManifest 交给 `scripts/deploy-production.sh`；Sandbox 管理脚本
+SBOM、验证结果和 ReleaseManifest 交给 `scripts/deploy-production-coordinated.sh`；Sandbox 管理脚本
 不会再调用 `docker-build.sh` 或切换 `nanobot-runtime:latest`。正式部署前后 Sandbox
 业务、session 执行和 Developer 网络开关仍应关闭；宿主基础设施许可生产默认开启，
 但不会自动启用工具或授予 session。provision-owner、enable-workspace、enable-assets、enable-exec 和
 disable-owner 是兼容拒绝入口，不会执行旧 ToolOverride 或 TSV 操作。
+
+### 3.1 日常快速部署
+
+日常发布先按变更影响选择 1 个正式入口，不再逐个执行 `update-release`、`prepare-host`、
+`smoke`、备份、Prompt 审计和 Runtime 部署。
+
+| 变更影响 | 正式入口 | 自动跳过的工作 |
+|---|---|---|
+| 仅 Sandbox 控制面，镜像输入未变 | `manage-sandbox-production.sh upgrade-control-plane` | Sandbox 镜像构建、Runtime、数据库迁移、Prompt、协调备份 |
+| Runtime 变更 | `deploy-production-coordinated.sh` | 未变化的 Prompt 审计、未变化的 migration 备份；同版本则全部跳过 |
+| Sandbox 镜像输入变化 | 本节完整链路 | 不复用旧 Sandbox 镜像，仍要求完整真实 Smoke |
+
+控制面快速升级命令：
+
+~~~bash
+sudo scripts/manage-sandbox-production.sh upgrade-control-plane \
+  --release "$(git rev-parse HEAD)" \
+  --release-ref origin/master
+~~~
+
+它在单个 sudo 进程内按回执执行 `update-release → prepare-host → smoke →
+install-control-plane`。宿主 apt 包已经齐全时不会运行 `apt update/install`；Smoke Python
+环境按 Python 版本与 `requirements-sandbox-smoke.lock` Hash 复用；sandboxd 依赖按
+`requirements-sandboxd.lock` Hash 复用。失败后重复执行同一命令，已通过的阶段不会重做。
+控制面安装前后的 Developer 网络硬开关保持原值。
+
+Runtime 协调部署命令：
+
+~~~bash
+sudo NANOBOT_PRODUCTION_ROOT="${NANOBOT_PRODUCTION_ROOT}" \
+  NANOBOT_RUNTIME_IMAGE="${NANOBOT_RUNTIME_IMAGE}" \
+  NANOBOT_RELEASE_MANIFEST="${NANOBOT_RELEASE_MANIFEST}" \
+  scripts/deploy-production-coordinated.sh
+~~~
+
+该入口先输出结构化部署计划。判断规则固定如下：
+
+- 目标 Runtime 与四个固定容器已经一致且健康：不关闭业务开关，不重复部署；
+- `prompt_defaults` Hash 未变化：不执行 Prompt 审计；
+- migration head 未变化：不执行协调备份；
+- 首次尝试已经生成目标版本备份：失败重试复用同一目录，拒绝创建第二份；
+- Runtime 已切换、只剩业务状态恢复：重跑只恢复维护前开关并清理续跑状态。
+
+协调入口只在确有 Runtime 切换时临时关闭 Sandbox 与群学习相关业务开关，并在退出 trap
+中恢复前态。它不会执行 Docker prune，也不会把 Token 或环境变量写入发布状态。
+
+质量门禁会把整个 push 的 Release Impact 作为 artifact 交给 Runtime workflow。影响报告
+不包含 `nanobot-runtime` 时，CI 跳过 Runtime 镜像、SBOM、GHCR 推送和发布包。Git SHA
+仍随提交变化，但宿主运维脚本或纯控制面变更不再因此产生无效 Runtime 发布。
 
 接受单盘故障风险时，配置必须显式写出同盘模式和风险确认；不能通过省略参数或调用普通 Compose 绕过：
 

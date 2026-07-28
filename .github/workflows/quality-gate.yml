@@ -13,6 +13,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-impact:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出影响分析所需源码
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: 生成本次推送的 Release Impact
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_EVENT_NAME}" in
+            push)
+              base_sha="${BEFORE_SHA}"
+              ;;
+            pull_request)
+              base_sha="${PR_BASE_SHA}"
+              ;;
+            *)
+              base_sha="$(git rev-parse HEAD^)"
+              ;;
+          esac
+          mkdir -p "${RUNNER_TEMP}/release-impact"
+          output="${RUNNER_TEMP}/release-impact/release-impact.json"
+          if [[ ! "${base_sha}" =~ ^[0-9a-f]{40}$ \
+              || "${base_sha}" == "0000000000000000000000000000000000000000" ]]; then
+            python scripts/build_release_impact.py \
+              --path Dockerfile \
+              --strict >"${output}"
+          else
+            python scripts/build_release_impact.py \
+              --base "${base_sha}" \
+              --head "${GITHUB_SHA}" \
+              --strict >"${output}"
+          fi
+          jq -e '.schema_version == 1 and (.artifacts|type) == "array"' \
+            "${output}" >/dev/null
+          cat "${output}"
+
+      - name: 上传 Release Impact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-impact
+          if-no-files-found: error
+          retention-days: 7
+          path: ${{ runner.temp }}/release-impact/release-impact.json
+
   backend:
     runs-on: ubuntu-latest
     env:

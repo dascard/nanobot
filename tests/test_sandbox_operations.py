@@ -98,11 +98,16 @@ def test_production_smoke_uses_only_hashed_minimal_dependencies():
         "\ninstall_release_tree() {",
         1,
     )[0]
+    smoke_environment = manager.split(
+        "prepare_smoke_python_environment() {",
+        1,
+    )[1].split("\nrun_smoke_matrix_with_controller_quiesced() (", 1)[0]
 
-    assert "requirements-sandbox-smoke.lock" in smoke_body
-    assert "/usr/local/bin/uv pip sync" in smoke_body
-    assert "--require-hashes" in smoke_body
-    assert "--only-binary :all:" in smoke_body
+    assert "prepare_smoke_python_environment" in smoke_body
+    assert "requirements-sandbox-smoke.lock" in smoke_environment
+    assert "/usr/local/bin/uv pip sync" in smoke_environment
+    assert "--require-hashes" in smoke_environment
+    assert "--only-binary :all:" in smoke_environment
     assert "PYTHONDONTWRITEBYTECODE=1" in smoke_body
     for forbidden in (
         "pip install",

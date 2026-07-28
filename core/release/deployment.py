@@ -802,6 +802,25 @@ class AtomicRuntimeDeployer:
             ("docker", "image", "rm", obsolete_reference)
         )
 
+    def target_is_current(self, target: ReleaseManifest) -> bool:
+        """快速确认目标已部署；不要求维护窗口或重复发布证据。"""
+
+        if self.state_store.pending_path.is_file():
+            return False
+        try:
+            current = self.state_store.current()
+        except DeploymentStateError:
+            return False
+        if not _same_runtime(
+            current.runtime_artifact,
+            target.runtime_artifact,
+        ):
+            return False
+        observation = self._observe()
+        self._assert_observation(observation, target.runtime_artifact)
+        self._check_ready()
+        return True
+
     def deploy(self, target: ReleaseManifest) -> DeploymentResult:
         """切换目标 Release；任一服务失败时恢复全部四个服务。"""
 

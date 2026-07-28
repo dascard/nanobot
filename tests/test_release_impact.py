@@ -253,6 +253,32 @@ def test_atomic_release_pipeline_requires_deployment_contract_checks():
     assert "compose-config" in report.verification_suites
 
 
+def test_host_deployment_scripts_do_not_rebuild_runtime_image():
+    from core.release import build_release_impact_report
+
+    report = build_release_impact_report([
+        "scripts/deploy-production.sh",
+        "scripts/deploy-production-coordinated.sh",
+        "scripts/deploy_release.py",
+    ])
+
+    assert "nanobot-runtime" not in report.artifacts
+    assert "deployment-contract" in report.verification_suites
+
+
+def test_runtime_image_inputs_still_require_runtime_artifact():
+    from core.release import build_release_impact_report
+
+    report = build_release_impact_report([
+        ".dockerignore",
+        "Dockerfile",
+        "requirements-prod.lock",
+        "scripts/verify_prompt_runtime_release.py",
+    ])
+
+    assert "nanobot-runtime" in report.artifacts
+
+
 def test_case_sensitive_local_agent_directories_are_not_production_paths():
     from core.release import build_release_impact_report
 
@@ -389,6 +415,7 @@ def test_release_impact_git_diff_is_sorted_and_deduplicated(
         observed["kwargs"] = kwargs
         return SimpleNamespace(
             stdout="webui/src/App.jsx\ncore/runtime.py\n"
+            "core/removed_runtime.py\n"
             "webui/src/App.jsx\n"
         )
 
@@ -399,13 +426,15 @@ def test_release_impact_git_diff_is_sorted_and_deduplicated(
         base="origin/master",
         head="HEAD",
     ) == [
+        "core/removed_runtime.py",
         "core/runtime.py",
         "webui/src/App.jsx",
     ]
-    assert observed["command"][1:4] == [
+    assert observed["command"][1:5] == [
         "diff",
         "--name-only",
-        "--diff-filter=ACMR",
+        "--no-renames",
+        "--diff-filter=ACMRD",
     ]
     assert observed["kwargs"]["cwd"] == tmp_path
 

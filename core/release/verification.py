@@ -377,7 +377,7 @@ _VERIFICATION_SUITES = (
     _suite(
         "compose-config",
         owner="operations.compose",
-        release_impacts=("deployment",),
+        release_impacts=("deployment", "runtime_image"),
         command=(
             "bash",
             "-lc",
@@ -427,7 +427,7 @@ _VERIFICATION_SUITES = (
     _suite(
         "deployment-contract",
         owner="operations.release",
-        release_impacts=("deployment",),
+        release_impacts=("deployment", "runtime_image"),
         command=(
             "python",
             "-m",

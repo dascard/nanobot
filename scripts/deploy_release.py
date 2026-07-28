@@ -7,6 +7,7 @@ import argparse
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import fcntl
+import json
 import math
 import os
 from pathlib import Path
@@ -70,10 +71,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--compose-env-file", type=Path, required=True)
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--sandbox-data-root", type=Path, required=True)
-    parser.add_argument("--backup-dir", type=Path, required=True)
+    parser.add_argument("--backup-dir", type=Path)
     parser.add_argument("--backup-risk-marker", required=True)
     parser.add_argument("--prompt-host-root", type=Path, required=True)
-    parser.add_argument("--prompt-audit-receipt", type=Path, required=True)
+    parser.add_argument("--prompt-audit-receipt", type=Path)
     parser.add_argument(
         "--evidence-max-age-seconds",
         type=int,
@@ -107,6 +108,11 @@ def _parser() -> argparse.ArgumentParser:
         "--command-timeout-seconds",
         type=int,
         default=600,
+    )
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="只输出部署、备份和 Prompt 审计需求，不执行切换",
     )
     return parser
 
@@ -187,24 +193,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         validate_release_source_identity(ROOT, runtime)
         validate_release_artifact_evidence(ROOT, runtime)
-        validate_pull_disk_gate(
-            system_min_free_bytes=args.system_min_free_bytes,
-            pull_reserve_bytes=args.pull_reserve_bytes,
-        )
-        validate_coordinated_backup(
-            backup_dir=args.backup_dir,
-            database_path=args.database,
-            data_root=args.sandbox_data_root,
-            expected_risk_marker=args.backup_risk_marker,
-            max_age_seconds=args.evidence_max_age_seconds,
-        )
-        validate_prompt_audit_receipt(
-            receipt_path=args.prompt_audit_receipt,
-            prompt_host_root=paths["prompt_host_root"],
-            artifact=runtime,
-            max_age_seconds=args.evidence_max_age_seconds,
-        )
-        validate_database_feature_kill_switches(args.database)
     except ProductionPreflightError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -224,12 +212,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("已有 Runtime 发布正在执行", file=sys.stderr)
             return 2
 
+        state_store = ReleaseStateStore(state_dir)
         deployer = AtomicRuntimeDeployer(
             runner=SubprocessCommandRunner(
                 root=ROOT,
                 timeout_seconds=args.command_timeout_seconds,
             ),
-            state_store=ReleaseStateStore(state_dir),
+            state_store=state_store,
             compose_env_file=paths["environment_file"],
             ready_url=args.ready_url,
             system_min_free_bytes=args.system_min_free_bytes,
@@ -245,6 +234,101 @@ def main(argv: Sequence[str] | None = None) -> int:
             now=lambda: datetime.now(timezone.utc).isoformat(),
         )
         try:
+            target_is_current = deployer.target_is_current(target)
+            current = None
+            if not state_store.pending_path.is_file():
+                try:
+                    current = state_store.current()
+                except DeploymentError:
+                    current = None
+            backup_required = (
+                not target_is_current
+                and (
+                    current is None
+                    or current.runtime_artifact.schema_migration_head
+                    != runtime.schema_migration_head
+                )
+            )
+            prompt_required = (
+                not target_is_current
+                and (
+                    current is None
+                    or current.runtime_artifact.input_hashes.get(
+                        "prompt_defaults"
+                    )
+                    != runtime.input_hashes.get("prompt_defaults")
+                )
+            )
+            if args.plan_only:
+                print(json.dumps(
+                    {
+                        "schema_version": 1,
+                        "runtime_deployment_required": (
+                            not target_is_current
+                        ),
+                        "coordinated_backup_required": backup_required,
+                        "prompt_audit_required": prompt_required,
+                        "target_release_id": target.release_id,
+                        "target_source_sha": (
+                            runtime.source.git_full_commit
+                        ),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ))
+                return 0
+            if target_is_current:
+                print("RUNTIME_DEPLOYMENT_REQUIRED=false")
+                print("COORDINATED_BACKUP_REQUIRED=false")
+                print("PROMPT_AUDIT_REQUIRED=false")
+                print(
+                    f"Runtime Release 已处于目标版本：{target.release_id}；"
+                    "四个固定服务身份与健康状态一致。"
+                )
+                return 0
+
+            try:
+                validate_pull_disk_gate(
+                    system_min_free_bytes=args.system_min_free_bytes,
+                    pull_reserve_bytes=args.pull_reserve_bytes,
+                )
+                if backup_required:
+                    if args.backup_dir is None:
+                        raise ProductionPreflightError(
+                            "目标 Runtime 改变数据库 migration head，必须提供协调备份"
+                        )
+                    validate_coordinated_backup(
+                        backup_dir=args.backup_dir,
+                        database_path=args.database,
+                        data_root=args.sandbox_data_root,
+                        expected_risk_marker=args.backup_risk_marker,
+                        max_age_seconds=args.evidence_max_age_seconds,
+                    )
+                if prompt_required:
+                    if args.prompt_audit_receipt is None:
+                        raise ProductionPreflightError(
+                            "目标 Runtime 改变 Prompt defaults，必须提供 Prompt 审计回执"
+                        )
+                    validate_prompt_audit_receipt(
+                        receipt_path=args.prompt_audit_receipt,
+                        prompt_host_root=paths["prompt_host_root"],
+                        artifact=runtime,
+                        max_age_seconds=args.evidence_max_age_seconds,
+                    )
+                validate_database_feature_kill_switches(args.database)
+            except ProductionPreflightError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            print("RUNTIME_DEPLOYMENT_REQUIRED=true")
+            print(
+                "COORDINATED_BACKUP_REQUIRED="
+                + str(backup_required).lower()
+            )
+            print(
+                "PROMPT_AUDIT_REQUIRED="
+                + str(prompt_required).lower()
+            )
             result = deployer.deploy(target)
         except AtomicDeploymentError as exc:
             print(str(exc), file=sys.stderr)

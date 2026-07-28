@@ -36,6 +36,12 @@ release_state_dir="${NANOBOT_RELEASE_STATE_DIR:-/var/lib/nanobot/release-state}"
 backup_dir="${NANOBOT_COORDINATED_BACKUP_DIR:-}"
 prompt_receipt="${NANOBOT_PROMPT_AUDIT_RECEIPT:-}"
 sandbox_data_root="${NANOBOT_SANDBOX_DATA_ROOT:-/srv/nanobot}"
+plan_only="${NANOBOT_DEPLOY_PLAN_ONLY:-false}"
+
+if [[ "${plan_only}" != "true" && "${plan_only}" != "false" ]]; then
+  echo "NANOBOT_DEPLOY_PLAN_ONLY 只允许 true 或 false。" >&2
+  exit 2
+fi
 
 if [[ "${release_state_dir}" != /var/lib/nanobot/release-state ]]; then
   echo "NANOBOT_RELEASE_STATE_DIR 只允许固定路径 /var/lib/nanobot/release-state。" >&2
@@ -57,30 +63,40 @@ for runtime_path in \
   fi
 done
 
-if [[ "${backup_dir}" != /* || ! -d "${backup_dir}" || -L "${backup_dir}" ]]; then
-  echo "生产部署要求 NANOBOT_COORDINATED_BACKUP_DIR 指向本维护窗口的协调备份。" >&2
-  exit 2
+deploy_args=(
+  --manifest "${release_manifest}"
+  --state-dir "${release_state_dir}"
+  --production-root "${production_root}"
+  --compose-env-file "${NANOBOT_PRODUCTION_ENV_FILE}"
+  --database "${NANOBOT_PRODUCTION_DATA_DIR}/nanobot.db"
+  --sandbox-data-root "${sandbox_data_root}"
+  --backup-risk-marker "${NANOBOT_BACKUP_RISK_MARKER:-single_disk_logical_rollback_only}"
+  --prompt-host-root "${NANOBOT_PROMPT_HOST_ROOT}"
+  --evidence-max-age-seconds "${NANOBOT_DEPLOY_EVIDENCE_MAX_AGE_SECONDS:-21600}"
+  --system-min-free-bytes "${NANOBOT_SYSTEM_MIN_FREE_BYTES:-64424509440}"
+  --pull-reserve-bytes "${NANOBOT_DEPLOY_PULL_RESERVE_BYTES:-5368709120}"
+  --ready-url "${NANOBOT_DEPLOY_READY_URL:-http://127.0.0.1:8000/api/v1/ready}"
+  --health-timeout-seconds "${NANOBOT_DEPLOY_HEALTH_TIMEOUT_SECONDS:-120}"
+  --health-interval-seconds "${NANOBOT_DEPLOY_HEALTH_INTERVAL_SECONDS:-2}"
+  --command-timeout-seconds "${NANOBOT_DEPLOY_COMMAND_TIMEOUT_SECONDS:-600}"
+)
+
+if [[ -n "${backup_dir}" ]]; then
+  if [[ "${backup_dir}" != /* || ! -d "${backup_dir}" || -L "${backup_dir}" ]]; then
+    echo "NANOBOT_COORDINATED_BACKUP_DIR 必须指向安全的绝对目录。" >&2
+    exit 2
+  fi
+  deploy_args+=(--backup-dir "${backup_dir}")
 fi
-if [[ "${prompt_receipt}" != /* || ! -f "${prompt_receipt}" || -L "${prompt_receipt}" ]]; then
-  echo "生产部署要求 NANOBOT_PROMPT_AUDIT_RECEIPT 指向目标 digest 的 Prompt 审计回执。" >&2
-  exit 2
+if [[ -n "${prompt_receipt}" ]]; then
+  if [[ "${prompt_receipt}" != /* || ! -f "${prompt_receipt}" || -L "${prompt_receipt}" ]]; then
+    echo "NANOBOT_PROMPT_AUDIT_RECEIPT 必须指向安全的绝对文件。" >&2
+    exit 2
+  fi
+  deploy_args+=(--prompt-audit-receipt "${prompt_receipt}")
+fi
+if [[ "${plan_only}" == "true" ]]; then
+  deploy_args+=(--plan-only)
 fi
 
-exec python scripts/deploy_release.py \
-  --manifest "${release_manifest}" \
-  --state-dir "${release_state_dir}" \
-  --production-root "${production_root}" \
-  --compose-env-file "${NANOBOT_PRODUCTION_ENV_FILE}" \
-  --database "${NANOBOT_PRODUCTION_DATA_DIR}/nanobot.db" \
-  --sandbox-data-root "${sandbox_data_root}" \
-  --backup-dir "${backup_dir}" \
-  --backup-risk-marker "${NANOBOT_BACKUP_RISK_MARKER:-single_disk_logical_rollback_only}" \
-  --prompt-host-root "${NANOBOT_PROMPT_HOST_ROOT}" \
-  --prompt-audit-receipt "${prompt_receipt}" \
-  --evidence-max-age-seconds "${NANOBOT_DEPLOY_EVIDENCE_MAX_AGE_SECONDS:-21600}" \
-  --system-min-free-bytes "${NANOBOT_SYSTEM_MIN_FREE_BYTES:-64424509440}" \
-  --pull-reserve-bytes "${NANOBOT_DEPLOY_PULL_RESERVE_BYTES:-5368709120}" \
-  --ready-url "${NANOBOT_DEPLOY_READY_URL:-http://127.0.0.1:8000/api/v1/ready}" \
-  --health-timeout-seconds "${NANOBOT_DEPLOY_HEALTH_TIMEOUT_SECONDS:-120}" \
-  --health-interval-seconds "${NANOBOT_DEPLOY_HEALTH_INTERVAL_SECONDS:-2}" \
-  --command-timeout-seconds "${NANOBOT_DEPLOY_COMMAND_TIMEOUT_SECONDS:-600}"
+exec python scripts/deploy_release.py "${deploy_args[@]}"

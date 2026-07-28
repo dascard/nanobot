@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import subprocess
 
@@ -27,6 +28,8 @@ def _release(
     image_id_marker: str | None = None,
     provenance: str = "built",
     created_at: str = "2026-07-23T12:00:00+00:00",
+    prompt_hash: str = "1" * 64,
+    schema_migration_head: str = "20260723_release_manifest",
 ):
     from core.release.artifacts import (
         ArtifactSource,
@@ -57,11 +60,11 @@ def _release(
                 kt_commit="f" * 40,
             ),
             input_hashes={
-                "prompt_defaults": "1" * 64,
+                "prompt_defaults": prompt_hash,
                 "python_lock": "2" * 64,
                 "web_lock": "3" * 64,
             },
-            schema_migration_head="20260723_release_manifest",
+            schema_migration_head=schema_migration_head,
             oci_image_reference=image_reference,
             oci_image_id=image_id,
             sbom_path="artifacts/runtime.spdx.json",
@@ -332,6 +335,47 @@ def test_idempotent_target_adopts_full_built_manifest_without_recreate(
         "compose" in command.args and "up" in command.args
         for command in runner.commands
     )
+
+
+def test_current_target_fast_path_skips_feature_and_release_mutations(
+    tmp_path: Path,
+):
+    from core.release.artifacts import dump_release_manifest
+
+    target = _release(marker="b")
+    runner = _FakeRunner(
+        previous=target,
+        target=target,
+        feature_environment=("NANOBOT_SANDBOX_ENABLED=true",),
+    )
+    deployer = _deployer(tmp_path, runner)
+    state = tmp_path / "release-state"
+    state.mkdir()
+    dump_release_manifest(state / "current.json", target)
+
+    assert deployer.target_is_current(target) is True
+    assert any(command.args[0] == "curl" for command in runner.commands)
+    assert not any("compose" in command.args for command in runner.commands)
+    assert not any(
+        command.args[:3] == ("docker", "inspect", "--format")
+        and command.args[3] == "{{json .Config.Env}}"
+        for command in runner.commands
+    )
+
+
+def test_current_target_fast_path_defers_when_pending_exists(tmp_path: Path):
+    from core.release.artifacts import dump_release_manifest
+
+    target = _release(marker="b")
+    runner = _FakeRunner(previous=target, target=target)
+    deployer = _deployer(tmp_path, runner)
+    state = tmp_path / "release-state"
+    state.mkdir()
+    dump_release_manifest(state / "current.json", target)
+    dump_release_manifest(state / "pending.json", target)
+
+    assert deployer.target_is_current(target) is False
+    assert runner.commands == []
 
 
 def test_containerd_index_id_switches_and_reconciles_without_recreate(
@@ -739,6 +783,23 @@ def test_deploy_cli_invokes_atomic_deployer_after_validation(
         str(manifest),
         "--state-dir",
         str(state_dir),
+        *(_required_cli_arguments(
+            tmp_path,
+            production_root=production_root,
+            include_evidence=False,
+        )),
+        "--health-timeout-seconds",
+        "1",
+        "--health-interval-seconds",
+        "1",
+    ]) == 2
+    assert observed == []
+
+    assert main([
+        "--manifest",
+        str(manifest),
+        "--state-dir",
+        str(state_dir),
         *(_required_cli_arguments(tmp_path, production_root=production_root)),
         "--health-timeout-seconds",
         "1",
@@ -746,6 +807,297 @@ def test_deploy_cli_invokes_atomic_deployer_after_validation(
         "1",
     ]) == 0
     assert observed == [target.release_id]
+
+
+def test_deploy_cli_current_target_skips_optional_evidence_and_kill_switch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from core.release.artifacts import dump_release_manifest
+    from core.release.deployment import AtomicRuntimeDeployer
+    from scripts.deploy_release import main
+    import core.release.production_preflight as preflight
+
+    target = _release(marker="b")
+    manifest = tmp_path / "release.json"
+    dump_release_manifest(manifest, target)
+    monkeypatch.setenv(
+        "NANOBOT_RUNTIME_IMAGE",
+        target.runtime_artifact.oci_image_reference,
+    )
+    production_root = tmp_path / "production"
+    production_root.mkdir()
+    for directory in ("data", "models", "sentinel"):
+        (production_root / directory).mkdir()
+    (production_root / ".env").write_text("\n", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr(
+        preflight,
+        "validate_production_paths",
+        lambda **_kwargs: {
+            "environment_file": production_root / ".env",
+            "data_dir": production_root / "data",
+            "models_dir": production_root / "models",
+            "sentinel_dir": production_root / "sentinel",
+            "prompt_host_root": tmp_path / "prompt",
+        },
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_release_source_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_release_artifact_evidence",
+        lambda *_args, **_kwargs: None,
+    )
+    for name in (
+        "validate_pull_disk_gate",
+        "validate_coordinated_backup",
+        "validate_prompt_audit_receipt",
+        "validate_database_feature_kill_switches",
+    ):
+        monkeypatch.setattr(
+            preflight,
+            name,
+            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
+                AssertionError(f"不应调用 {_name}")
+            ),
+        )
+    monkeypatch.setattr(
+        AtomicRuntimeDeployer,
+        "target_is_current",
+        lambda _self, _target: True,
+    )
+
+    arguments = [
+        "--manifest",
+        str(manifest),
+        "--state-dir",
+        str(state_dir),
+        *(_required_cli_arguments(
+            tmp_path,
+            production_root=production_root,
+            include_evidence=False,
+        )),
+    ]
+    assert main([*arguments, "--plan-only"]) == 0
+    plan = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert plan["runtime_deployment_required"] is False
+    assert plan["coordinated_backup_required"] is False
+    assert plan["prompt_audit_required"] is False
+
+    assert main(arguments) == 0
+
+
+def test_deploy_cli_unchanged_schema_and_prompt_skip_optional_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from core.release.artifacts import dump_release_manifest
+    from core.release.deployment import (
+        AtomicRuntimeDeployer,
+        DeploymentResult,
+    )
+    from scripts.deploy_release import main
+    import core.release.production_preflight as preflight
+
+    previous = _release(marker="a")
+    target = _release(marker="b")
+    manifest = tmp_path / "release.json"
+    dump_release_manifest(manifest, target)
+    monkeypatch.setenv(
+        "NANOBOT_RUNTIME_IMAGE",
+        target.runtime_artifact.oci_image_reference,
+    )
+    production_root = tmp_path / "production"
+    production_root.mkdir()
+    for directory in ("data", "models", "sentinel"):
+        (production_root / directory).mkdir()
+    (production_root / ".env").write_text("\n", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    dump_release_manifest(state_dir / "current.json", previous)
+    monkeypatch.setattr(
+        preflight,
+        "validate_production_paths",
+        lambda **_kwargs: {
+            "environment_file": production_root / ".env",
+            "data_dir": production_root / "data",
+            "models_dir": production_root / "models",
+            "sentinel_dir": production_root / "sentinel",
+            "prompt_host_root": tmp_path / "prompt",
+        },
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_release_source_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_release_artifact_evidence",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_pull_disk_gate",
+        lambda **_kwargs: 1,
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_database_feature_kill_switches",
+        lambda _path: None,
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_coordinated_backup",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("schema 未变化时不应验证备份")
+        ),
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_prompt_audit_receipt",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Prompt 未变化时不应验证回执")
+        ),
+    )
+    monkeypatch.setattr(
+        AtomicRuntimeDeployer,
+        "target_is_current",
+        lambda _self, _target: False,
+    )
+    monkeypatch.setattr(
+        AtomicRuntimeDeployer,
+        "deploy",
+        lambda _self, release: DeploymentResult(
+            release_id=release.release_id,
+            previous_release_id=previous.release_id,
+            changed=True,
+        ),
+    )
+
+    assert main([
+        "--manifest",
+        str(manifest),
+        "--state-dir",
+        str(state_dir),
+        *(_required_cli_arguments(
+            tmp_path,
+            production_root=production_root,
+            include_evidence=False,
+        )),
+    ]) == 0
+
+
+@pytest.mark.parametrize(
+    ("target", "expected_error"),
+    (
+        (
+            _release(
+                marker="b",
+                schema_migration_head="20260729_new_migration",
+            ),
+            "必须提供协调备份",
+        ),
+        (
+            _release(marker="c", prompt_hash="9" * 64),
+            "必须提供 Prompt 审计回执",
+        ),
+    ),
+)
+def test_deploy_cli_requires_only_evidence_for_changed_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    target,
+    expected_error: str,
+):
+    from core.release.artifacts import dump_release_manifest
+    from core.release.deployment import AtomicRuntimeDeployer
+    from scripts.deploy_release import main
+    import core.release.production_preflight as preflight
+
+    previous = _release(marker="a")
+    manifest = tmp_path / "release.json"
+    dump_release_manifest(manifest, target)
+    monkeypatch.setenv(
+        "NANOBOT_RUNTIME_IMAGE",
+        target.runtime_artifact.oci_image_reference,
+    )
+    production_root = tmp_path / "production"
+    production_root.mkdir()
+    for directory in ("data", "models", "sentinel"):
+        (production_root / directory).mkdir()
+    (production_root / ".env").write_text("\n", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    dump_release_manifest(state_dir / "current.json", previous)
+    monkeypatch.setattr(
+        preflight,
+        "validate_production_paths",
+        lambda **_kwargs: {
+            "environment_file": production_root / ".env",
+            "data_dir": production_root / "data",
+            "models_dir": production_root / "models",
+            "sentinel_dir": production_root / "sentinel",
+            "prompt_host_root": tmp_path / "prompt",
+        },
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_release_source_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_release_artifact_evidence",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_pull_disk_gate",
+        lambda **_kwargs: 1,
+    )
+    monkeypatch.setattr(
+        AtomicRuntimeDeployer,
+        "target_is_current",
+        lambda _self, _target: False,
+    )
+    monkeypatch.setattr(
+        AtomicRuntimeDeployer,
+        "deploy",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("缺少条件证据时不应进入部署")
+        ),
+    )
+    arguments = [
+        "--manifest",
+        str(manifest),
+        "--state-dir",
+        str(state_dir),
+        *(_required_cli_arguments(
+            tmp_path,
+            production_root=production_root,
+            include_evidence=False,
+        )),
+    ]
+
+    assert main([*arguments, "--plan-only"]) == 0
+    plan = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert plan["runtime_deployment_required"] is True
+    assert plan["coordinated_backup_required"] is (
+        "协调备份" in expected_error
+    )
+    assert plan["prompt_audit_required"] is (
+        "Prompt" in expected_error
+    )
+    assert main(arguments) == 2
+    assert expected_error in capsys.readouterr().err
 
 
 def test_subprocess_runner_merges_only_explicit_environment_overrides(
@@ -794,9 +1146,10 @@ def _required_cli_arguments(
     tmp_path: Path,
     *,
     production_root: Path | None = None,
+    include_evidence: bool = True,
 ) -> tuple[str, ...]:
     root = production_root or tmp_path / "production"
-    return (
+    base = (
         "--production-root",
         str(root),
         "--compose-env-file",
@@ -805,12 +1158,17 @@ def _required_cli_arguments(
         str(root / "data/nanobot.db"),
         "--sandbox-data-root",
         str(tmp_path / "sandbox-data"),
-        "--backup-dir",
-        str(tmp_path / "backup"),
         "--backup-risk-marker",
         "single_disk_logical_rollback_only",
         "--prompt-host-root",
         str(tmp_path / "prompt"),
+    )
+    if not include_evidence:
+        return base
+    return (
+        *base,
+        "--backup-dir",
+        str(tmp_path / "backup"),
         "--prompt-audit-receipt",
         str(tmp_path / "prompt/receipts/audit.json"),
     )

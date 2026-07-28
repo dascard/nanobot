@@ -23,9 +23,12 @@ readonly STATE_DIR="/var/lib/nanobot-sandbox-installer"
 readonly SERVER_RELEASE_LINK="/opt/nanobot-server"
 readonly SANDBOXD_ROOT="/opt/nanobot-sandboxd"
 readonly SANDBOXD_VENV="${SANDBOXD_ROOT}/venv"
+readonly SANDBOXD_REQUIREMENTS_MARKER="${SANDBOXD_ROOT}/requirements-sandboxd.sha256"
 readonly PYTHON_ROOT="/opt/nanobot-python"
 readonly UV_CACHE_DIR="/var/cache/nanobot-uv"
 readonly EVIDENCE_CACHE_ROOT="/var/cache/nanobot"
+readonly SMOKE_VENV_ROOT="${EVIDENCE_CACHE_ROOT}/sandbox-smoke-venvs"
+readonly PYTHON_VERSION="3.11.14"
 readonly DATA_ROOT="/srv/nanobot"
 readonly BUILT_PROFILE_MANIFEST="${STATE_DIR}/profile-manifest.json"
 readonly INSTALLED_PROFILE_MANIFEST="/etc/nanobot/sandbox-execution-profiles.v1.json"
@@ -66,11 +69,14 @@ readonly -a SANDBOX_CONTROL_PLANE_PATHS=(
   requirements-sandboxd.lock
   scripts/assign-sandbox-project-quota.sh
   scripts/build-sandbox-image.sh
+  scripts/manage-sandbox-production.sh
   scripts/render-sandbox-profile-manifest.py
   scripts/sandbox-smoke-test.sh
 )
 CURRENT_COMMAND="${1:-help}"
 ACTIVATED_FROM_RELEASE=""
+SMOKE_VENV=""
+PYTHON311=""
 
 on_error() {
   local exit_code="$1"
@@ -120,6 +126,7 @@ Nanobot Sandbox 生产管理脚本
   build-image           构建固定版本 Sandbox 镜像
   smoke                 运行不得跳过的真实 Docker 安全矩阵
   install-control-plane 安装 Python 3.11、sandboxd、Token、UDS 和 systemd 单元
+  upgrade-control-plane 单次 sudo 完成控制面快进升级；失败后原命令精确续跑
   deploy                已停用；正式 Runtime 只能由 ReleaseManifest 部署器发布
   deploy-runtime        已停用；正式 Runtime 只能由 ReleaseManifest 部署器发布
   provision-owner       已停用；请使用 Web「Sandbox 管理」页
@@ -172,6 +179,12 @@ promote-release 参数：
   不接受参数。仅在 Smoke 与 control-plane-ready 完成且相同提交已进入
   origin/master 后，将 Sandbox 控制面来源提升为 origin/master；Runtime
   ReleaseManifest 状态由正式部署器独立管理。
+
+upgrade-control-plane 参数：
+  --release <40 位提交>      必须等于干净 checkout 且已发布
+  [--release-ref <远端引用>] 默认 origin/master
+  仅用于 Sandbox 镜像输入未变化的控制面快进升级。自动复用镜像，按阶段
+  执行 prepare-host、真实 Smoke 和控制面安装，并在异常时恢复业务开关。
 
 Runtime 部署：
   本脚本不再构建或切换 nanobot-runtime:latest。取得完整 OCI digest、SBOM、
@@ -1492,9 +1505,9 @@ prepare_data_mount() {
 }
 
 install_host_packages() {
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y \
+  local package
+  local -a missing_packages=()
+  local -a required_packages=(
     apparmor \
     apparmor-utils \
     ca-certificates \
@@ -1505,6 +1518,21 @@ install_host_packages() {
     rsync \
     util-linux \
     xfsprogs
+  )
+
+  for package in "${required_packages[@]}"; do
+    if ! dpkg-query -W -f='${db:Status-Status}' "${package}" \
+        2>/dev/null | grep -Fxq 'installed'; then
+      missing_packages+=("${package}")
+    fi
+  done
+  if (( ${#missing_packages[@]} > 0 )); then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y "${missing_packages[@]}"
+  else
+    log "宿主依赖已齐全，跳过 apt update/install"
+  fi
 
   local uv_source=""
   local home
@@ -1517,6 +1545,24 @@ install_host_packages() {
     die "未找到已安装的 uv"
   fi
   install -m 0755 "${uv_source}" /usr/local/bin/uv
+}
+
+install_sandboxd_systemd_units() {
+  install -m 0644 \
+    "${REPO_ROOT}/deploy/systemd/nanobot-sandboxd.service" \
+    /etc/systemd/system/nanobot-sandboxd.service
+  install -m 0644 \
+    "${REPO_ROOT}/deploy/systemd/nanobot-sandbox-runtime-cleanup.service" \
+    /etc/systemd/system/nanobot-sandbox-runtime-cleanup.service
+  install -m 0644 \
+    "${REPO_ROOT}/deploy/systemd/nanobot-sandbox-runtime-cleanup.timer" \
+    /etc/systemd/system/nanobot-sandbox-runtime-cleanup.timer
+
+  systemd-analyze verify \
+    /etc/systemd/system/nanobot-sandboxd.service \
+    /etc/systemd/system/nanobot-sandbox-runtime-cleanup.service \
+    /etc/systemd/system/nanobot-sandbox-runtime-cleanup.timer
+  systemctl daemon-reload
 }
 
 install_apparmor_profile() {
@@ -1603,6 +1649,10 @@ prepare_host_command() {
     "${REPO_ROOT}/deploy/systemd/nanobot-sandboxd.tmpfiles.conf" \
     /etc/tmpfiles.d/nanobot-sandboxd.conf
   systemd-tmpfiles --create /etc/tmpfiles.d/nanobot-sandboxd.conf
+
+  # Smoke 会显式 stop/start sandboxd；先安装新单元，确保 RuntimeDirectory
+  # inode 在整个维护窗口保持稳定。
+  install_sandboxd_systemd_units
 
   log "安装并加载 AppArmor profile"
   install_apparmor_profile
@@ -2062,6 +2112,84 @@ validate_runtime_release_target() {
   fi
 }
 
+ensure_python311() {
+  install -d -m 0755 \
+    "${PYTHON_ROOT}" \
+    "${UV_CACHE_DIR}"
+  if ! PYTHON311="$(env \
+      UV_PYTHON_INSTALL_DIR="${PYTHON_ROOT}" \
+      UV_CACHE_DIR="${UV_CACHE_DIR}" \
+      /usr/local/bin/uv python find "${PYTHON_VERSION}" 2>/dev/null)"; then
+    env \
+      UV_PYTHON_INSTALL_DIR="${PYTHON_ROOT}" \
+      UV_CACHE_DIR="${UV_CACHE_DIR}" \
+      /usr/local/bin/uv python install --no-bin "${PYTHON_VERSION}"
+    PYTHON311="$(env \
+      UV_PYTHON_INSTALL_DIR="${PYTHON_ROOT}" \
+      UV_CACHE_DIR="${UV_CACHE_DIR}" \
+      /usr/local/bin/uv python find "${PYTHON_VERSION}")"
+  fi
+  [[ -x "${PYTHON311}" ]] \
+    || die "无法准备固定 Python ${PYTHON_VERSION}"
+}
+
+prepare_smoke_python_environment() {
+  local lock_sha256
+  local marker
+  local partial
+  local stale
+
+  lock_sha256="$(sha256sum \
+    "${REPO_ROOT}/requirements-sandbox-smoke.lock" | awk '{print $1}')"
+  install -d -m 0755 -o root -g root "${SMOKE_VENV_ROOT}"
+  SMOKE_VENV="${SMOKE_VENV_ROOT}/${lock_sha256}"
+  marker="${SMOKE_VENV}/.requirements.sha256"
+
+  if [[ -x "${SMOKE_VENV}/bin/python" \
+      && -f "${marker}" \
+      && ! -L "${marker}" \
+      && "$(cat "${marker}")" == "${lock_sha256}" ]] \
+      && "${SMOKE_VENV}/bin/python" -c \
+        'import docker, pytest, sys; assert docker.__version__ == "7.1.0"; assert pytest.__version__ == "9.1.1"; assert ".".join(map(str, sys.version_info[:3])) == sys.argv[1]' \
+        "${PYTHON_VERSION}" \
+        >/dev/null 2>&1; then
+    log "复用 Smoke Python 环境：requirements=${lock_sha256}"
+    return 0
+  fi
+
+  ensure_python311
+  if [[ -e "${SMOKE_VENV}" || -L "${SMOKE_VENV}" ]]; then
+    stale="${SMOKE_VENV}.invalid-$(date -u +%Y%m%dT%H%M%SZ)"
+    [[ ! -e "${stale}" && ! -L "${stale}" ]] \
+      || die "Smoke Python 失效环境归档目标已存在"
+    mv -- "${SMOKE_VENV}" "${stale}"
+  fi
+  partial="$(mktemp -d "${SMOKE_VENV_ROOT}/.partial.XXXXXX")"
+  /usr/local/bin/uv venv \
+    --no-project \
+    --python "${PYTHON311}" \
+    "${partial}"
+  env \
+    -u http_proxy -u https_proxy \
+    -u HTTP_PROXY -u HTTPS_PROXY \
+    -u all_proxy -u ALL_PROXY \
+    UV_CACHE_DIR="${UV_CACHE_DIR}" \
+    /usr/local/bin/uv pip sync \
+      --python "${partial}/bin/python" \
+      --require-hashes \
+      --only-binary :all: \
+      --strict \
+      "${REPO_ROOT}/requirements-sandbox-smoke.lock"
+  printf '%s\n' "${lock_sha256}" >"${partial}/.requirements.sha256"
+  chown -R root:root "${partial}"
+  chmod -R go-w "${partial}"
+  mv -- "${partial}" "${SMOKE_VENV}"
+  "${SMOKE_VENV}/bin/python" -c \
+    'import docker, pytest, sys; assert docker.__version__ == "7.1.0"; assert pytest.__version__ == "9.1.1"; assert ".".join(map(str, sys.version_info[:3])) == sys.argv[1]' \
+    "${PYTHON_VERSION}"
+  log "创建 Smoke Python 环境：requirements=${lock_sha256}"
+}
+
 run_smoke_matrix_with_controller_quiesced() (
   local sandboxd_was_active=false
   local active_sandboxes=""
@@ -2152,30 +2280,15 @@ smoke_command() {
   log "创建隔离 Smoke worktree"
   repo_git worktree add --detach "${smoke_dir}" "${RELEASE}"
 
-  log "安装最小化且哈希锁定的 Smoke Python 3.11 环境"
-  run_as_deploy /usr/local/bin/uv venv \
-    --no-project \
-    --python 3.11.14 \
-    "${smoke_dir}/.venv"
-  run_as_deploy env \
-    -u http_proxy -u https_proxy \
-    -u HTTP_PROXY -u HTTPS_PROXY \
-    -u all_proxy -u ALL_PROXY \
-    /usr/local/bin/uv pip sync \
-    --python "${smoke_dir}/.venv/bin/python" \
-    --require-hashes \
-    --only-binary :all: \
-    --strict \
-    "${smoke_dir}/requirements-sandbox-smoke.lock"
-  run_as_deploy "${smoke_dir}/.venv/bin/python" -c \
-    'import docker, pytest; assert docker.__version__ == "7.1.0"; assert pytest.__version__ == "9.1.1"'
+  log "准备按 requirements 哈希复用的 Smoke Python 3.11 环境"
+  prepare_smoke_python_environment
 
   install -d -m 0700 "${EVIDENCE_CACHE_ROOT}"
   log "运行六组真实 Docker Sandbox 验收矩阵"
   run_smoke_matrix_with_controller_quiesced \
     env \
       PYTHONDONTWRITEBYTECODE=1 \
-      PATH="${smoke_dir}/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      PATH="${SMOKE_VENV}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
       XDG_CACHE_HOME="${EVIDENCE_CACHE_ROOT}" \
       "${smoke_dir}/scripts/sandbox-smoke-test.sh" \
         --manifest "${BUILT_PROFILE_MANIFEST}" \
@@ -2285,44 +2398,73 @@ activate_release_tree() {
 }
 
 install_sandboxd_python() {
+  local lock_sha256
+  local marker_value=""
+  local stale_venv=""
+  local temporary_marker
+
   install -d -m 0755 \
     "${PYTHON_ROOT}" \
     "${SANDBOXD_ROOT}" \
     "${UV_CACHE_DIR}"
+  ensure_python311
+  lock_sha256="$(sha256sum \
+    "${RELEASE_DIR}/requirements-sandboxd.lock" | awk '{print $1}')"
+  if [[ -f "${SANDBOXD_REQUIREMENTS_MARKER}" \
+      && ! -L "${SANDBOXD_REQUIREMENTS_MARKER}" ]]; then
+    marker_value="$(cat "${SANDBOXD_REQUIREMENTS_MARKER}")"
+  fi
 
-  env \
-    UV_PYTHON_INSTALL_DIR="${PYTHON_ROOT}" \
-    UV_CACHE_DIR="${UV_CACHE_DIR}" \
-    /usr/local/bin/uv python install --no-bin 3.11.14
-
-  local python311
-  python311="$(env \
-    UV_PYTHON_INSTALL_DIR="${PYTHON_ROOT}" \
-    UV_CACHE_DIR="${UV_CACHE_DIR}" \
-    /usr/local/bin/uv python find 3.11.14)"
-
+  if [[ -x "${SANDBOXD_VENV}/bin/python" ]] \
+      && ! "${SANDBOXD_VENV}/bin/python" -c \
+        'import sys; assert ".".join(map(str, sys.version_info[:3])) == sys.argv[1]' \
+        "${PYTHON_VERSION}" >/dev/null 2>&1; then
+    stale_venv="${SANDBOXD_VENV}.invalid-$(date -u +%Y%m%dT%H%M%SZ)"
+    [[ ! -e "${stale_venv}" && ! -L "${stale_venv}" ]] \
+      || die "sandboxd 失效 Python 环境归档目标已存在"
+    mv -- "${SANDBOXD_VENV}" "${stale_venv}"
+    marker_value=""
+  fi
   if [[ ! -x "${SANDBOXD_VENV}/bin/python" ]]; then
     /usr/local/bin/uv venv \
       --no-project \
-      --python "${python311}" \
+      --python "${PYTHON311}" \
       --seed \
       "${SANDBOXD_VENV}"
   fi
-
-  env \
-    -u http_proxy -u https_proxy \
-    -u HTTP_PROXY -u HTTPS_PROXY \
-    -u all_proxy -u ALL_PROXY \
-    "${SANDBOXD_VENV}/bin/python" -m pip install \
-    --require-hashes \
-    -r "${RELEASE_DIR}/requirements-sandboxd.lock"
+  if [[ "${marker_value}" == "${lock_sha256}" ]] \
+      && "${SANDBOXD_VENV}/bin/python" -c \
+        'import docker, fastapi, uvicorn' >/dev/null 2>&1; then
+    log "sandboxd 依赖未变化，跳过 Python 包安装"
+  else
+    env \
+      -u http_proxy -u https_proxy \
+      -u HTTP_PROXY -u HTTPS_PROXY \
+      -u all_proxy -u ALL_PROXY \
+      UV_CACHE_DIR="${UV_CACHE_DIR}" \
+      /usr/local/bin/uv pip sync \
+        --python "${SANDBOXD_VENV}/bin/python" \
+        --require-hashes \
+        --only-binary :all: \
+        --strict \
+        "${RELEASE_DIR}/requirements-sandboxd.lock"
+    temporary_marker="$(mktemp \
+      "${SANDBOXD_ROOT}/.requirements-sandboxd.XXXXXX")"
+    printf '%s\n' "${lock_sha256}" >"${temporary_marker}"
+    chmod 0644 "${temporary_marker}"
+    chown root:root "${temporary_marker}"
+    mv -f -- "${temporary_marker}" "${SANDBOXD_REQUIREMENTS_MARKER}"
+  fi
   "${SANDBOXD_VENV}/bin/python" -c \
-    'import sys; assert sys.version_info[:2] == (3, 11)'
+    'import sys; assert ".".join(map(str, sys.version_info[:3])) == sys.argv[1]' \
+    "${PYTHON_VERSION}"
 }
 
 install_sandboxd_credentials_and_env() {
+  local developer_network_allowed="false"
   local image_id
   local io_device
+  local previous_developer_network_allowed=""
   image_id="$(image_id_from_stage)"
   if [[ "${STORAGE_MODE}" == "loopback" ]]; then
     # loop 编号可能在重启后变化；使用 backing file 所在的稳定宿主块设备。
@@ -2361,6 +2503,21 @@ install_sandboxd_credentials_and_env() {
   if [[ -e /etc/nanobot/sandboxd.env && -L /etc/nanobot/sandboxd.env ]]; then
     die "sandboxd 环境文件不得是符号链接"
   fi
+  if [[ -f /etc/nanobot/sandboxd.env ]]; then
+    previous_developer_network_allowed="$(sed -n \
+      's/^NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED=//p' \
+      /etc/nanobot/sandboxd.env | tail -n 1)"
+    case "${previous_developer_network_allowed}" in
+      true|false)
+        developer_network_allowed="${previous_developer_network_allowed}"
+        ;;
+      "")
+        ;;
+      *)
+        die "既有 sandboxd Developer 网络硬开关不是合法布尔值"
+        ;;
+    esac
+  fi
   cat >/etc/nanobot/sandboxd.env <<EOF
 NANOBOT_SANDBOX_DATA_ROOT=${DATA_ROOT}
 NANOBOT_SANDBOXD_SOCKET=/run/nanobot-sandboxd/sandboxd.sock
@@ -2371,7 +2528,7 @@ NANOBOT_SANDBOXD_ADMIN_CLIENT_TOKEN_FILE=/run/nanobot-sandboxd/admin-client.toke
 NANOBOT_SANDBOXD_QUOTA_HELPER=/opt/nanobot-server/scripts/assign-sandbox-project-quota.sh
 NANOBOT_SANDBOXD_DOCKER_SOCKET=unix:///var/run/docker.sock
 NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE=${RUNTIME_PROFILE_MANIFEST}
-NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED=false
+NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED=${developer_network_allowed}
 NANOBOT_SANDBOX_EGRESS_UPLINK_NETWORK=nanobot-sbx-egress-uplink-v1
 NANOBOT_SANDBOX_EGRESS_NETWORK_MTU=1450
 NANOBOT_SANDBOX_IMAGE=${SANDBOX_IMAGE}
@@ -2538,21 +2695,9 @@ install_control_plane_command() {
     /etc/tmpfiles.d/nanobot-sandboxd.conf
   systemd-tmpfiles --create /etc/tmpfiles.d/nanobot-sandboxd.conf
 
-  install -m 0644 \
-    "${RELEASE_DIR}/deploy/systemd/nanobot-sandboxd.service" \
-    /etc/systemd/system/nanobot-sandboxd.service
-  install -m 0644 \
-    "${RELEASE_DIR}/deploy/systemd/nanobot-sandbox-runtime-cleanup.service" \
-    /etc/systemd/system/nanobot-sandbox-runtime-cleanup.service
-  install -m 0644 \
-    "${RELEASE_DIR}/deploy/systemd/nanobot-sandbox-runtime-cleanup.timer" \
-    /etc/systemd/system/nanobot-sandbox-runtime-cleanup.timer
-
-  systemd-analyze verify \
-    /etc/systemd/system/nanobot-sandboxd.service \
-    /etc/systemd/system/nanobot-sandbox-runtime-cleanup.service \
-    /etc/systemd/system/nanobot-sandbox-runtime-cleanup.timer
-  systemctl daemon-reload
+  # REPO_ROOT 与 RELEASE_DIR 都由同一 RELEASE 生成；统一入口避免
+  # prepare-host 与安装阶段采用不同的 RuntimeDirectory 合同。
+  install_sandboxd_systemd_units
   systemctl disable --now nanobot-sandbox-runtime-cleanup.timer >/dev/null 2>&1 || true
   if docker ps \
     --filter 'label=com.nanobot.sandbox=true' \
@@ -2794,6 +2939,249 @@ except urllib.error.HTTPError as exc:
 print(json.dumps(result, ensure_ascii=False))
 PY
 }
+
+upgrade_control_plane_command() (
+  require_root
+  load_config
+
+  local target_release=""
+  local target_release_ref="${RELEASE_REF}"
+  local previous_release="${RELEASE}"
+  local prestate_file=""
+  local prestate_json=""
+  local status_json=""
+  local restore_required=false
+  local start_seconds="${SECONDS}"
+  local host_inode=""
+  local server_inode=""
+  local expected_host_marker=""
+  local smoke_worktree=""
+  local -a update_args=()
+
+  shift
+  while (( $# )); do
+    case "$1" in
+      --release)
+        [[ $# -ge 2 ]] || die "--release 缺少参数"
+        target_release="$2"
+        shift 2
+        ;;
+      --release-ref)
+        [[ $# -ge 2 ]] || die "--release-ref 缺少参数"
+        target_release_ref="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        die "upgrade-control-plane 未知参数：$1"
+        ;;
+    esac
+  done
+
+  [[ "${target_release}" =~ ^[0-9a-f]{40}$ ]] \
+    || die "upgrade-control-plane 必须提供 40 位小写 --release"
+  require_command flock
+  repo_git cat-file -e "${target_release}^{commit}" 2>/dev/null \
+    || die "本地仓库不存在目标 RELEASE=${target_release}"
+  [[ "$(repo_git rev-parse HEAD)" == "${target_release}" ]] \
+    || die "upgrade-control-plane 要求目标 RELEASE 等于当前 HEAD"
+  [[ -z "$(repo_git status --porcelain)" ]] \
+    || die "生产 checkout 不干净；请先完成审查、测试、提交和推送"
+  assert_release_published "${target_release}" "${target_release_ref}"
+  ensure_state_dir
+  exec 9>"${STATE_DIR}/upgrade-control-plane.lock"
+  flock -n 9 || die "已有 Sandbox 控制面升级正在执行"
+
+  if [[ "${previous_release}" != "${target_release}" ]]; then
+    repo_git merge-base --is-ancestor \
+      "${previous_release}" "${target_release}" \
+      || die "控制面快速升级只允许快进后代"
+    if repo_git diff --quiet \
+        "${previous_release}" "${target_release}" -- \
+        "${SANDBOX_CONTROL_PLANE_PATHS[@]}"; then
+      printf 'SANDBOX_CONTROL_PLANE_CHANGE_REQUIRED=false\n'
+      printf 'SANDBOX_CONTROL_UPGRADE_STATUS=not-required\n'
+      return 0
+    fi
+    if ! repo_git diff --quiet \
+        "${previous_release}" "${target_release}" -- \
+        scripts/build-sandbox-image.sh \
+        scripts/render-sandbox-profile-manifest.py \
+        config/sandbox-execution-profiles.v1.json \
+        docker/sandbox/python \
+        docker/sandbox/developer \
+        docker/sandbox/egress-proxy; then
+      die "Sandbox 镜像输入发生变化；快速控制面通道拒绝复用镜像，请走完整镜像构建链路"
+    fi
+
+    update_args=(
+      update-release
+      --release "${target_release}"
+      --release-ref "${target_release_ref}"
+      --reuse-built-image
+    )
+    if stage_exists smoke-passed; then
+      update_args+=(--rerun-smoke)
+    fi
+    if stage_exists runtime-deployed; then
+      update_args+=(--upgrade-deployed-release)
+    elif stage_exists control-plane-ready; then
+      update_args+=(--recover-failed-deploy)
+    fi
+    update_release_command "${update_args[@]}"
+    printf 'CONTROL_PLANE_RELEASE_UPDATE_EXECUTED=true\n'
+  else
+    printf 'CONTROL_PLANE_RELEASE_UPDATE_EXECUTED=false\n'
+  fi
+
+  # update-release 会修改 root-owned 配置；后续阶段重新加载目标事实。
+  load_config
+  [[ "${RELEASE}" == "${target_release}" ]] \
+    || die "Installer RELEASE 未收敛到目标提交"
+
+  prestate_file="${STATE_DIR}/upgrade-control-plane-${target_release}.json"
+
+  restore_feature_state() {
+    local body=""
+    [[ "${restore_required}" == "true" ]] || return 0
+    [[ -f "${prestate_file}" && ! -L "${prestate_file}" ]] || return 0
+    body="$(jq -c \
+      '. + {reason:"Sandbox 控制面升级结束，恢复维护前业务开关"}' \
+      "${prestate_file}")"
+    admin_api PUT /sandbox/features "${body}" >/dev/null 2>&1 || true
+  }
+
+  finish_upgrade() {
+    local exit_code="$?"
+    trap - EXIT
+    if (( exit_code != 0 )); then
+      restore_feature_state
+    fi
+    exit "${exit_code}"
+  }
+  trap finish_upgrade EXIT
+
+  # 管理端依赖 Server 只读挂载的 UDS 目录；不再用长轮询掩盖 inode 漂移。
+  host_inode="$(stat -Lc '%d:%i' /run/nanobot-sandboxd)"
+  server_inode="$(docker exec nanobot-server \
+    stat -Lc '%d:%i' /run/nanobot-sandboxd 2>/dev/null || true)"
+  [[ -n "${server_inode}" && "${server_inode}" == "${host_inode}" ]] \
+    || die "nanobot-server 挂载了旧 sandboxd RuntimeDirectory；请先恢复 bind mount"
+  docker exec nanobot-server sh -c '
+    test -r /run/nanobot-sandboxd/client.token &&
+    test -r /run/nanobot-sandboxd/admin-client.token &&
+    test -r /run/nanobot-sandboxd/profile-manifest.json &&
+    test -S /run/nanobot-sandboxd/sandboxd.sock
+  ' || die "sandboxd Token、manifest 或 UDS 缺失"
+
+  if [[ -f "${prestate_file}" && ! -L "${prestate_file}" ]]; then
+    [[ "$(stat -c '%u:%a' "${prestate_file}")" == "0:600" ]] \
+      || die "控制面升级业务前态文件权限无效"
+    prestate_json="$(jq -c . "${prestate_file}")"
+  else
+    status_json="$(admin_api GET /sandbox/status)"
+    prestate_json="$(jq -c \
+      '{enabled:.feature.enabled,exec_enabled:.feature.exec_enabled,group_enabled:.feature.group_enabled}' \
+      <<<"${status_json}")"
+    jq -e '
+      (.enabled|type)=="boolean" and
+      (.exec_enabled|type)=="boolean" and
+      (.group_enabled|type)=="boolean"
+    ' <<<"${prestate_json}" >/dev/null \
+      || die "无法读取 Sandbox 业务开关前态"
+    local temporary_prestate
+    temporary_prestate="$(mktemp "${STATE_DIR}/.upgrade-prestate.XXXXXX")"
+    printf '%s\n' "${prestate_json}" >"${temporary_prestate}"
+    chmod 0600 "${temporary_prestate}"
+    chown root:root "${temporary_prestate}"
+    mv -f -- "${temporary_prestate}" "${prestate_file}"
+  fi
+
+  restore_required=true
+  admin_api PUT /sandbox/features \
+    '{"enabled":false,"exec_enabled":false,"group_enabled":false,"reason":"Sandbox 控制面单命令升级维护窗口"}' \
+    >/dev/null
+  if docker ps \
+      --filter 'label=com.nanobot.sandbox=true' \
+      --filter 'label=com.nanobot.managed-by=sandboxd' \
+      --format '{{.Names}}' | grep -q .; then
+    die "仍有活动 Sandbox 容器，拒绝进入控制面维护阶段"
+  fi
+  printf 'SANDBOX_FEATURE_QUIESCENCE=ok\n'
+
+  expected_host_marker="release=${RELEASE}|storage=${STORAGE_MODE}|source=$(findmnt -n -o SOURCE "${DATA_ROOT}")"
+  if stage_exists host-prepared \
+      && [[ "$(read_stage host-prepared)" == "${expected_host_marker}" ]]; then
+    printf 'HOST_PREPARE_EXECUTED=false\n'
+  else
+    prepare_host_command prepare-host
+    printf 'HOST_PREPARE_EXECUTED=true\n'
+  fi
+
+  require_stage image-built
+  image_bundle_from_stage >/dev/null
+  printf 'SANDBOX_IMAGES_REBUILT=false\n'
+
+  if stage_exists smoke-passed; then
+    assert_smoke_current
+    printf 'SANDBOX_SMOKE_EXECUTED=false\n'
+  else
+    smoke_worktree="/var/tmp/nanobot-sandbox-security-${RELEASE:0:7}"
+    if repo_git worktree list --porcelain \
+        | grep -Fq "worktree ${smoke_worktree}"; then
+      smoke_command smoke --retry
+    else
+      smoke_command smoke
+    fi
+    printf 'SANDBOX_SMOKE_EXECUTED=true\n'
+  fi
+
+  if stage_exists control-plane-ready \
+      && [[ "$(readlink -f -- "${SERVER_RELEASE_LINK}")" == "${RELEASE_DIR}" ]]; then
+    assert_control_plane_current
+    printf 'CONTROL_PLANE_INSTALL_EXECUTED=false\n'
+  else
+    install_control_plane_command install-control-plane
+    printf 'CONTROL_PLANE_INSTALL_EXECUTED=true\n'
+  fi
+
+  host_inode="$(stat -Lc '%d:%i' /run/nanobot-sandboxd)"
+  server_inode="$(docker exec nanobot-server \
+    stat -Lc '%d:%i' /run/nanobot-sandboxd 2>/dev/null || true)"
+  [[ "${server_inode}" == "${host_inode}" ]] \
+    || die "控制面升级后 sandboxd RuntimeDirectory inode 发生漂移"
+
+  admin_api PUT /sandbox/features \
+    "$(jq -c \
+      '. + {reason:"Sandbox 控制面单命令升级完成"}' \
+      "${prestate_file}")" >/dev/null
+  restore_required=false
+  rm -f -- "${prestate_file}"
+
+  status_json="$(admin_api GET /sandbox/status)"
+  jq -e \
+    --argjson expected "${prestate_json}" '
+      .feature.enabled == $expected.enabled and
+      .feature.exec_enabled == $expected.exec_enabled and
+      .feature.group_enabled == $expected.group_enabled and
+      .controller.health.ok == true and
+      .controller.ready.ok == true and
+      .controller.ready.policy_matches_server == true and
+      .controller.ready.project_quota_ready == true
+    ' <<<"${status_json}" >/dev/null \
+    || die "控制面升级后的业务状态或 ready 合同无效"
+
+  printf 'CONTROL_PLANE_RELEASE=%s\n' "${RELEASE}"
+  printf 'RUNTIME_DEPLOY_EXECUTED=false\n'
+  printf 'DATABASE_MIGRATION_EXECUTED=false\n'
+  printf 'PROMPT_RUNTIME_TOUCHED=false\n'
+  printf 'COORDINATED_BACKUP_EXECUTED=false\n'
+  printf 'ELAPSED_SECONDS=%s\n' "$((SECONDS - start_seconds))"
+  printf 'SANDBOX_CONTROL_UPGRADE_STATUS=ok\n'
+)
 
 deploy_command() {
   die "deploy 已停用；Sandbox 管理脚本不再构建或切换 nanobot-runtime:latest，请使用 scripts/deploy-production.sh"
@@ -3045,6 +3433,9 @@ main() {
       ;;
     install-control-plane)
       install_control_plane_command "$@"
+      ;;
+    upgrade-control-plane)
+      upgrade_control_plane_command "$@"
       ;;
     deploy)
       deploy_command "$@"
