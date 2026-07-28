@@ -416,6 +416,68 @@ def test_reused_proxy_rejects_runtime_security_drift(tmp_path):
     )
 
 
+def test_lease_topology_waits_for_docker_endpoint_membership_convergence(
+    tmp_path,
+):
+    sleeper = Mock()
+    manager = NetworkPolicyManager(
+        _config(tmp_path, network_allowed=True),
+        docker_client=Mock(),
+        sleeper=sleeper,
+    )
+    profile = manager.config.profile("developer")
+    lease_id = "sbxlease_topology_convergence_test"
+    epoch = "sbxctl_" + "1" * 32
+    lease_network_name = manager._lease_network_name(lease_id)
+
+    sandbox = Mock()
+    sandbox.id = "sandbox-container-id"
+    sandbox.attrs = {
+        "HostConfig": {"NetworkMode": lease_network_name},
+        "NetworkSettings": {
+            "Networks": {lease_network_name: {}},
+        },
+    }
+    proxy = Mock()
+    proxy.id = "proxy-container-id"
+    lease_network = Mock()
+    lease_network.attrs = {
+        "Labels": {"com.nanobot.controller-epoch": epoch},
+        "Containers": {},
+    }
+    reload_count = 0
+
+    def reload_lease_network():
+        nonlocal reload_count
+        reload_count += 1
+        container_ids = {proxy.id}
+        if reload_count >= 3:
+            container_ids.add(sandbox.id)
+        lease_network.attrs["Containers"] = {
+            container_id: {}
+            for container_id in container_ids
+        }
+
+    lease_network.reload.side_effect = reload_lease_network
+    uplink = Mock()
+    manager._require_proxy_image = Mock(return_value=Mock())
+    manager._owned_network = Mock(side_effect=lambda name, **_kwargs: (
+        lease_network if name == lease_network_name else uplink
+    ))
+    manager._owned_proxy = Mock(return_value=proxy)
+    manager._proxy_topology_valid = Mock(return_value=True)
+
+    manager.require_lease_topology(
+        profile,
+        lease_id=lease_id,
+        controller_epoch=epoch,
+        sandbox_container=sandbox,
+    )
+
+    assert reload_count == 3
+    sleeper.assert_called_once_with(0.05)
+
+
 def test_server_network_hard_switch_cannot_be_overridden_by_database(
     db_session,
     monkeypatch,

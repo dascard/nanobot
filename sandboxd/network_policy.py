@@ -47,6 +47,8 @@ PROXY_SYSCTLS = {
     "net.ipv4.ip_forward": "0",
     "net.ipv6.conf.all.forwarding": "0",
 }
+LEASE_TOPOLOGY_CONVERGENCE_ATTEMPTS = 20
+LEASE_TOPOLOGY_CONVERGENCE_INTERVAL_SECONDS = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,10 +99,12 @@ class NetworkPolicyManager:
         *,
         docker_client: Any,
         clock: Any = time.time,
+        sleeper: Any = time.sleep,
     ) -> None:
         self.config = config.validated()
         self.client = docker_client
         self.clock = clock
+        self.sleeper = sleeper
 
     @staticmethod
     def _lease_network_name(lease_id: str) -> str:
@@ -764,11 +768,6 @@ class NetworkPolicyManager:
             lease_id,
             controller_epoch=controller_epoch,
         )
-        network_container_ids = (
-            self._network_container_ids(network)
-            if network is not None
-            else set()
-        )
         expected_container_ids = {
             self._container_id(sandbox_container),
             self._container_id(proxy) if proxy is not None else "",
@@ -778,9 +777,7 @@ class NetworkPolicyManager:
             or uplink is None
             or _labels(network).get(CONTROLLER_EPOCH_LABEL)
             != controller_epoch
-            or sandbox_networks != {self._lease_network_name(lease_id)}
             or "" in expected_container_ids
-            or network_container_ids != expected_container_ids
             or proxy is None
             or not self._proxy_topology_valid(
                 proxy,
@@ -792,6 +789,33 @@ class NetworkPolicyManager:
                 SandboxErrorCode.AUTHORIZATION_FAILED,
                 "Sandbox Lease 网络拓扑不满足隔离策略",
             )
+
+        expected_networks = {self._lease_network_name(lease_id)}
+        for attempt in range(LEASE_TOPOLOGY_CONVERGENCE_ATTEMPTS):
+            sandbox_networks = self._container_networks(
+                sandbox_container
+            )
+            network_container_ids = self._network_container_ids(network)
+            if (
+                sandbox_networks == expected_networks
+                and network_container_ids == expected_container_ids
+            ):
+                return
+            # 未知网络或未知端点属于真实漂移，不能用等待掩盖；只有 Docker
+            # 尚未登记齐全的预期端点允许短暂重读。
+            if (
+                sandbox_networks - expected_networks
+                or network_container_ids - expected_container_ids
+            ):
+                break
+            if attempt + 1 < LEASE_TOPOLOGY_CONVERGENCE_ATTEMPTS:
+                self.sleeper(
+                    LEASE_TOPOLOGY_CONVERGENCE_INTERVAL_SECONDS
+                )
+        raise SandboxServiceError(
+            SandboxErrorCode.AUTHORIZATION_FAILED,
+            "Sandbox Lease 网络拓扑不满足隔离策略",
+        )
 
     def cleanup(self, lease_id: str) -> bool:
         """只删除精确 Lease 的代理与内部网络，保留共享出口网络。"""
