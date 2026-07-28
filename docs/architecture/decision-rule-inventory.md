@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`4648e7bd77a3e8ddb44af912aab8e5ef74bb8799`
-- 规则总数：6564
+- 源提交：`6356de157be341435224cd684cb309f1c973c621`
+- 规则总数：6565
 - 扫描错误：0
 - 人工复核队列：691
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -17,7 +17,7 @@
 | `natural_language_semantic` | 32 |
 | `presentation` | 5 |
 | `protocol_syntax` | 3460 |
-| `security_invariant` | 1359 |
+| `security_invariant` | 1360 |
 
 ## 文件汇总
 
@@ -54,8 +54,8 @@
 | `nanobot_kt/bridge.py` | 43 |
 | `app/memory_digest/builder.py` | 42 |
 | `core/persona_preprocess.py` | 41 |
+| `sandboxd/network_policy.py` | 41 |
 | `clients/model_registry.py` | 40 |
-| `sandboxd/network_policy.py` | 40 |
 | `api/admin/chat_config_routes.py` | 39 |
 | `core/memory_cleanup.py` | 39 |
 | `core/tracing.py` | 39 |
