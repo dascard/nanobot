@@ -664,13 +664,14 @@ printf 'DEVELOPER_TOOLCHAIN_OK\n'
         assert result["exit_code"] == 0
         assert "1 passed" in str(result.get("stdout") or "")
         assert "DEVELOPER_TOOLCHAIN_OK" in str(result.get("stdout") or "")
-        assert (
+        venv_root = (
             harness.workspace_files.layout.runtime_root
             / harness.workspace_id
             / "venv-p16"
-            / "bin"
-            / "python"
-        ).is_file()
+        )
+        assert (venv_root / "pyvenv.cfg").is_file()
+        # venv 的 Python 指向容器内绝对路径，宿主检查不得跟随该链接。
+        assert os.path.lexists(venv_root / "bin" / "python")
 
 
 def test_real_docker_data_continuity_and_project_quota():
