@@ -2062,6 +2062,54 @@ validate_runtime_release_target() {
   fi
 }
 
+run_smoke_matrix_with_controller_quiesced() (
+  local sandboxd_was_active=false
+  local active_sandboxes=""
+
+  restore_sandboxd_after_smoke() {
+    local exit_code="$?"
+    trap - EXIT HUP INT TERM
+    if [[ "${sandboxd_was_active}" == "true" ]]; then
+      log "恢复 nanobot-sandboxd，结束 Smoke 临时控制器独占窗口"
+      if ! systemctl start nanobot-sandboxd.service; then
+        warn "Smoke 结束后无法恢复 nanobot-sandboxd.service"
+        exit 1
+      fi
+      if ! systemctl is-active --quiet nanobot-sandboxd.service; then
+        warn "Smoke 结束后 nanobot-sandboxd.service 未进入运行态"
+        exit 1
+      fi
+    fi
+    exit "${exit_code}"
+  }
+
+  trap restore_sandboxd_after_smoke EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  require_command docker
+  require_command systemctl
+  active_sandboxes="$(docker ps \
+    --filter 'label=com.nanobot.sandbox=true' \
+    --filter 'label=com.nanobot.managed-by=sandboxd' \
+    --format '{{.Names}}')" \
+    || die "无法确认活动 Sandbox 容器"
+  [[ -z "${active_sandboxes}" ]] \
+    || die "仍有活动 Sandbox 容器，拒绝暂停生产 sandboxd：${active_sandboxes}"
+
+  if systemctl is-active --quiet nanobot-sandboxd.service; then
+    sandboxd_was_active=true
+    log "暂停 nanobot-sandboxd，避免生产 Reconciler 回收 Smoke 临时资源"
+    systemctl stop nanobot-sandboxd.service
+    if systemctl is-active --quiet nanobot-sandboxd.service; then
+      die "nanobot-sandboxd.service 未能进入停止态"
+    fi
+  fi
+
+  "$@"
+)
+
 smoke_command() {
   require_root
   load_config
@@ -2124,14 +2172,15 @@ smoke_command() {
 
   install -d -m 0700 "${EVIDENCE_CACHE_ROOT}"
   log "运行六组真实 Docker Sandbox 验收矩阵"
-  env \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PATH="${smoke_dir}/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-    XDG_CACHE_HOME="${EVIDENCE_CACHE_ROOT}" \
-    "${smoke_dir}/scripts/sandbox-smoke-test.sh" \
-      --manifest "${BUILT_PROFILE_MANIFEST}" \
-      --data-root "${DATA_ROOT}" \
-      --evidence-root "${EVIDENCE_CACHE_ROOT}/nanobot-sandbox-smoke"
+  run_smoke_matrix_with_controller_quiesced \
+    env \
+      PYTHONDONTWRITEBYTECODE=1 \
+      PATH="${smoke_dir}/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      XDG_CACHE_HOME="${EVIDENCE_CACHE_ROOT}" \
+      "${smoke_dir}/scripts/sandbox-smoke-test.sh" \
+        --manifest "${BUILT_PROFILE_MANIFEST}" \
+        --data-root "${DATA_ROOT}" \
+        --evidence-root "${EVIDENCE_CACHE_ROOT}/nanobot-sandbox-smoke"
 
   evidence_dir="$(find "${EVIDENCE_CACHE_ROOT}/nanobot-sandbox-smoke" \
     -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \

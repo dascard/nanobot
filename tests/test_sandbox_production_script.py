@@ -9,6 +9,67 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "manage-sandbox-production.sh"
 
 
+def _run_smoke_controller_harness(
+    tmp_path: Path,
+    *,
+    service_active: bool,
+    command_exit: int,
+    active_sandbox: str = "",
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    source = SCRIPT.read_text(encoding="utf-8")
+    start = source.index("run_smoke_matrix_with_controller_quiesced() (")
+    end = source.index("\nsmoke_command() {", start)
+    quiesce_function = source[start:end]
+    events = tmp_path / "events"
+    harness = f"""
+set -Eeuo pipefail
+EVENTS={shlex.quote(str(events))}
+SERVICE_ACTIVE={"true" if service_active else "false"}
+ACTIVE_SANDBOX={shlex.quote(active_sandbox)}
+COMMAND_EXIT={command_exit}
+require_command() {{ :; }}
+log() {{ printf 'log:%s\n' "$*" >>"${{EVENTS}}"; }}
+warn() {{ printf 'warn:%s\n' "$*" >>"${{EVENTS}}"; }}
+die() {{ printf 'die:%s\n' "$*" >>"${{EVENTS}}"; exit 1; }}
+docker() {{
+  [[ "$1" == "ps" ]] || die "unexpected docker call: $*"
+  [[ -z "${{ACTIVE_SANDBOX}}" ]] || printf '%s\n' "${{ACTIVE_SANDBOX}}"
+}}
+systemctl() {{
+  case "$1" in
+    is-active)
+      [[ "${{SERVICE_ACTIVE}}" == "true" ]]
+      ;;
+    stop)
+      printf 'stop\n' >>"${{EVENTS}}"
+      SERVICE_ACTIVE=false
+      ;;
+    start)
+      printf 'start\n' >>"${{EVENTS}}"
+      SERVICE_ACTIVE=true
+      ;;
+    *)
+      die "unexpected systemctl call: $*"
+      ;;
+  esac
+}}
+smoke_matrix() {{
+  printf 'matrix\n' >>"${{EVENTS}}"
+  return "${{COMMAND_EXIT}}"
+}}
+{quiesce_function}
+run_smoke_matrix_with_controller_quiesced smoke_matrix
+"""
+    result = subprocess.run(
+        ["bash", "-c", harness],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, events
+
+
 def _run_update_release_harness(
     tmp_path: Path,
     *arguments: str,
@@ -993,6 +1054,7 @@ def test_production_smoke_stage_requires_complete_structured_matrix():
     assert "--manifest" in smoke_body
     assert "--data-root" in smoke_body
     assert "--evidence-root" in smoke_body
+    assert "run_smoke_matrix_with_controller_quiesced" in smoke_body
     assert (
         'PATH="${smoke_dir}/.venv/bin:/usr/local/sbin:/usr/local/bin:'
         '/usr/sbin:/usr/bin:/sbin:/bin"'
@@ -1001,3 +1063,38 @@ def test_production_smoke_stage_requires_complete_structured_matrix():
     assert "summary.json" in source
     assert "grep -Eq '1 passed'" not in source
     assert "manifest=$(profile_manifest_sha256_from_stage)" in smoke_body
+
+
+def test_production_smoke_temporarily_stops_and_restores_active_controller(
+    tmp_path,
+):
+    result, events = _run_smoke_controller_harness(
+        tmp_path,
+        service_active=True,
+        command_exit=7,
+    )
+
+    assert result.returncode == 7
+    assert events.read_text(encoding="utf-8").splitlines() == [
+        "log:暂停 nanobot-sandboxd，避免生产 Reconciler 回收 Smoke 临时资源",
+        "stop",
+        "matrix",
+        "log:恢复 nanobot-sandboxd，结束 Smoke 临时控制器独占窗口",
+        "start",
+    ]
+
+
+def test_production_smoke_refuses_to_stop_controller_with_active_sandbox(
+    tmp_path,
+):
+    result, events = _run_smoke_controller_harness(
+        tmp_path,
+        service_active=True,
+        command_exit=0,
+        active_sandbox="nanobot-sbx-lease-active",
+    )
+
+    assert result.returncode == 1
+    assert events.read_text(encoding="utf-8").splitlines() == [
+        "die:仍有活动 Sandbox 容器，拒绝暂停生产 sandboxd：nanobot-sbx-lease-active",
+    ]
