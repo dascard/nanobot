@@ -96,6 +96,7 @@ def _enqueue_access(
     *,
     request_id: str,
     session_id: str,
+    chat_type: str = "private",
     capability: str = "workspace",
     execution_profile: str = "restricted",
     quota_bytes: int = 64 * MIB,
@@ -104,7 +105,7 @@ def _enqueue_access(
     return SandboxAdminService(db).enqueue_access_change(
         request_id=request_id,
         platform="qq",
-        chat_type="private",
+        chat_type=chat_type,
         session_id=session_id,
         capability=capability,
         execution_profile=execution_profile,
@@ -113,6 +114,49 @@ def _enqueue_access(
         reason="测试授权",
         actor="admin-test",
     )
+
+
+def test_group_access_creates_group_owned_workspace(db_session):
+    group = _enqueue_access(
+        db_session,
+        request_id="group-owner-request-1",
+        session_id="group_7788",
+        chat_type="group",
+    )
+    db_session.commit()
+
+    grant = db_session.query(SandboxAccessGrant).one()
+    workspace = db_session.get(Workspace, group.operation.workspace_id)
+    assert grant.chat_stream_id == "qq:7788:group"
+    assert grant.chat_type == "group"
+    assert workspace.owner_type == "group"
+    assert workspace.owner_id == "7788"
+
+
+def test_private_and_group_with_same_external_id_use_distinct_workspaces(
+    db_session,
+):
+    private = _enqueue_access(
+        db_session,
+        request_id="private-shared-owner-request-1",
+        session_id="private_shared-id",
+    )
+    db_session.commit()
+    group = _enqueue_access(
+        db_session,
+        request_id="group-shared-owner-request-1",
+        session_id="group_shared-id",
+        chat_type="group",
+    )
+    db_session.commit()
+
+    assert private.operation.workspace_id != group.operation.workspace_id
+    workspaces = {
+        row.owner_type: row
+        for row in db_session.query(Workspace).all()
+    }
+    assert workspaces["user"].owner_id != "shared-id"
+    assert workspaces["group"].owner_id == "shared-id"
 
 
 def test_profile_selection_is_validated_and_part_of_idempotency(

@@ -122,7 +122,7 @@ export function SandboxPage() {
     else setLoading(true)
     const requests = [
       api.get('/sandbox/status'),
-      api.get('/sandbox/sessions', { params: { limit: 100 } }),
+      api.get('/sandbox/sessions', { params: { chat_type: 'all', limit: 100 } }),
       api.get('/sandbox/access-grants'),
       api.get('/sandbox/workspaces'),
       api.get('/sandbox/leases'),
@@ -202,8 +202,8 @@ export function SandboxPage() {
         meta={(
           <>
             <span>授权事实源：sandbox_access_grants</span>
-            <span>群聊 Sandbox：固定关闭</span>
-            <span>Workspace：默认按 session 隔离</span>
+            <span>群聊 Sandbox：{status?.feature?.group_enabled ? '已开启' : '已关闭'}</span>
+            <span>Workspace：私聊按会话、群聊按群隔离</span>
           </>
         )}
       />
@@ -308,10 +308,14 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
   const ready = controller.ready || {}
   const [enabledDraft, setEnabledDraft] = useState(null)
   const [execEnabledDraft, setExecEnabledDraft] = useState(null)
+  const [groupEnabledDraft, setGroupEnabledDraft] = useState(null)
   const [saving, setSaving] = useState(false)
   const enabled = enabledDraft ?? Boolean(feature.enabled)
   const execEnabled = enabled && (
     execEnabledDraft ?? Boolean(feature.exec_enabled)
+  )
+  const groupEnabled = enabled && (
+    groupEnabledDraft ?? Boolean(feature.group_enabled)
   )
 
   const saveFeatures = async () => {
@@ -321,12 +325,14 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
       await api.put('/sandbox/features', {
         enabled,
         exec_enabled: enabled && execEnabled,
+        group_enabled: enabled && groupEnabled,
         reason: 'Web Sandbox 管理页更新业务开关',
       })
       setNotice('Sandbox 业务开关已更新。')
       await onChanged()
       setEnabledDraft(null)
       setExecEnabledDraft(null)
+      setGroupEnabledDraft(null)
     } catch (saveError) {
       setError(formatApiError(saveError, 'Sandbox 业务开关更新失败'))
     } finally {
@@ -335,7 +341,7 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
   }
 
   const killSwitch = async () => {
-    if (!globalThis.confirm('确认无损关闭 Sandbox 总开关和 Exec 开关？Workspace 与 Asset 不会删除。')) return
+    if (!globalThis.confirm('确认无损关闭 Sandbox 总开关、Exec 与群聊开关？Workspace 与 Asset 不会删除。')) return
     setSaving(true)
     setError('')
     try {
@@ -345,6 +351,7 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
       })
       setEnabledDraft(false)
       setExecEnabledDraft(false)
+      setGroupEnabledDraft(false)
       setNotice(
         `Sandbox 已关闭并确认终止 ${response.data.terminated_lease_count || 0} 个 Lease、`
         + `${response.data.terminated_run_count || 0} 个 Run；失败 ${response.data.failed_count || 0} 个。`,
@@ -352,6 +359,7 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
       await onChanged()
       setEnabledDraft(null)
       setExecEnabledDraft(null)
+      setGroupEnabledDraft(null)
     } catch (killError) {
       setError(formatApiError(killError, 'Sandbox kill switch 调用失败'))
     } finally {
@@ -381,7 +389,7 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
       </div>
 
       <Card className="p-4">
-        <SectionHeader title="运行门禁" description="宿主硬上限是不可由 Web 修改的上界；群聊首期固定关闭。" />
+        <SectionHeader title="运行门禁" description="宿主硬上限是不可由 Web 修改的上界；群聊还必须逐群显式授权。" />
         <div className="grid gap-3 md:grid-cols-2">
           <label className="flex items-start gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs">
             <input
@@ -390,7 +398,10 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
               disabled={!infrastructureAllowed || saving}
               onChange={event => {
                 setEnabledDraft(event.target.checked)
-                if (!event.target.checked) setExecEnabledDraft(false)
+                if (!event.target.checked) {
+                  setExecEnabledDraft(false)
+                  setGroupEnabledDraft(false)
+                }
               }}
               className="mt-0.5"
             />
@@ -406,10 +417,16 @@ function OverviewTab({ status, grants, workspaces, operations, runs, onChanged, 
             />
             <span><strong className="block text-slate-200">Exec 独立开关</strong><span className="mt-1 block text-slate-500">仅控制 sandbox_exec；Workspace 与 Assets 可先行灰度。</span></span>
           </label>
-          <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs">
-            <strong className="block text-slate-200">群聊 Sandbox</strong>
-            <span className="mt-1 block text-slate-500">固定关闭，Web 不提供编辑入口。</span>
-          </div>
+          <label className="flex items-start gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs">
+            <input
+              type="checkbox"
+              checked={groupEnabled}
+              disabled={!infrastructureAllowed || !enabled || saving}
+              onChange={event => setGroupEnabledDraft(event.target.checked)}
+              className="mt-0.5"
+            />
+            <span><strong className="block text-slate-200">群聊 Sandbox</strong><span className="mt-1 block text-slate-500">只允许已显式授权的群；同群成员共享该群 Workspace。</span></span>
+          </label>
           <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs">
             <strong className="block text-slate-200">宿主硬上限</strong>
             <span className="mt-1 block"><StatusBadge value={infrastructureAllowed ? 'active' : 'disabled'} label={infrastructureAllowed ? '允许启用' : '禁止启用'} /></span>
@@ -493,7 +510,7 @@ function AccessTab({ sessions, grants, defaultQuotaBytes, onAccepted, setError, 
     const timer = globalThis.setTimeout(async () => {
       try {
         const response = await api.get('/sandbox/sessions', {
-          params: { search: normalizedSearch, limit: 100 },
+          params: { search: normalizedSearch, chat_type: 'all', limit: 100 },
         })
         if (!stopped) setSearchResults(response.data.items || [])
       } catch (searchError) {
@@ -562,7 +579,7 @@ function AccessTab({ sessions, grants, defaultQuotaBytes, onAccepted, setError, 
       const body = {
         request_id: requestId('sbx_access'),
         platform: selected.platform,
-        chat_type: 'private',
+        chat_type: selected.chat_type,
         session_id: selected.session_id,
         capability,
         execution_profile: executionProfile,
@@ -584,7 +601,7 @@ function AccessTab({ sessions, grants, defaultQuotaBytes, onAccepted, setError, 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(18rem,0.9fr)_minmax(24rem,1.4fr)]">
       <Card className="p-4">
-        <SectionHeader title="选择真实会话" description="只能选择服务端实际见过的私聊 session；手填未知 ID 不会创建授权。" />
+        <SectionHeader title="选择真实会话" description="只能选择服务端实际见过的私聊或群聊 session；群聊仍需逐群显式授权。" />
         <Field id="sandbox-session-search" label="搜索昵称、user_id、session_id 或 canonical ID">
           <input
             id="sandbox-session-search"
@@ -609,18 +626,26 @@ function AccessTab({ sessions, grants, defaultQuotaBytes, onAccepted, setError, 
                 className={`block w-full rounded-lg border p-3 text-left transition-colors ${active ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-700'}`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <span className="min-w-0 truncate text-xs font-medium text-slate-200">{session.label || session.session_id}</span>
+                  <span className="min-w-0 truncate text-xs font-medium text-slate-200">
+                    {session.label || session.session_id}
+                    <Badge
+                      tone={session.chat_type === 'group' ? 'blue' : 'slate'}
+                      className="ml-2"
+                    >
+                      {session.chat_type === 'group' ? '群聊' : '私聊'}
+                    </Badge>
+                  </span>
                   <StatusBadge value={itemGrant?.capability || 'off'} label={CAPABILITY_OPTIONS.find(item => item.value === itemGrant?.capability)?.label || '关闭'} />
                 </div>
                 <div className="mt-1 break-all font-mono text-[11px] text-slate-500">{session.chat_stream_id}</div>
                 <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-slate-600">
-                  <span>user_id（仅显示）：{session.actor_user_id || '-'}</span>
+                  <span>{session.chat_type === 'group' ? '最近发送者' : 'user_id'}（仅显示）：{session.actor_user_id || '-'}</span>
                   <span>最近：{formatDate(session.recent_at)}</span>
                 </div>
               </button>
             )
           })}
-          {results.length === 0 && <EmptyState>没有匹配的真实私聊 session</EmptyState>}
+          {results.length === 0 && <EmptyState>没有匹配的真实会话</EmptyState>}
         </div>
       </Card>
 
@@ -634,7 +659,9 @@ function AccessTab({ sessions, grants, defaultQuotaBytes, onAccepted, setError, 
               <div className="text-[11px] text-slate-500">唯一授权键</div>
               <code className="mt-1 block break-all text-xs text-emerald-300">{selected.chat_stream_id}</code>
               <div className="mt-2 text-[11px] text-slate-500">
-                显示用户：{selected.actor_user_id || '-'}；该字段不会写入授权条件。
+                {selected.chat_type === 'group'
+                  ? '该授权绑定整个群；群内成员共享同一个 Workspace，最近发送者不参与授权。'
+                  : `显示用户：${selected.actor_user_id || '-'}；该字段不会写入授权条件。`}
               </div>
             </div>
 

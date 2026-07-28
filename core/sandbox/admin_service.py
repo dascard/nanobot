@@ -440,11 +440,6 @@ class SandboxAdminService:
                 "invalid_session_identity",
                 "Sandbox 会话身份无法规范化",
             ) from exc
-        if identity.chat_type != "private":
-            raise SandboxAdminRequestError(
-                "group_sandbox_not_supported",
-                "首期只允许管理私聊 Sandbox 会话",
-            )
         try:
             desired = SandboxCapability.parse(capability)
         except ValueError as exc:
@@ -565,8 +560,14 @@ class SandboxAdminService:
                 workspace = Workspace(
                     id=str(uuid4()),
                     platform=identity.platform,
-                    owner_type="user",
-                    owner_id=str(grant.id),
+                    owner_type=(
+                        "group" if identity.chat_type == "group" else "user"
+                    ),
+                    owner_id=(
+                        identity.external_session_id
+                        if identity.chat_type == "group"
+                        else str(grant.id)
+                    ),
                     name="default",
                     status="active",
                     quota_bytes=normalized_quota,

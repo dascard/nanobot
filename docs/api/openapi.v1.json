@@ -6622,8 +6622,11 @@
             "type": "string"
           },
           "chat_type": {
-            "const": "private",
             "default": "private",
+            "enum": [
+              "private",
+              "group"
+            ],
             "title": "Chat Type",
             "type": "string"
           },
@@ -6706,6 +6709,17 @@
           "exec_enabled": {
             "title": "Exec Enabled",
             "type": "boolean"
+          },
+          "group_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Enabled"
           },
           "reason": {
             "default": "",
@@ -21310,7 +21324,7 @@
     },
     "/api/v1/admin/sandbox/sessions": {
       "get": {
-        "description": "列出真实出现过的私聊 session，不把 user_id 当作授权主体。",
+        "description": "列出真实出现过的会话，不把消息发送者当作授权主体。",
         "operationId": "get_api_v1_admin_sandbox_sessions",
         "parameters": [
           {
@@ -21321,6 +21335,21 @@
               "default": "",
               "maxLength": 255,
               "title": "Search",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "chat_type",
+            "required": false,
+            "schema": {
+              "default": "private",
+              "enum": [
+                "private",
+                "group",
+                "all"
+              ],
+              "title": "Chat Type",
               "type": "string"
             }
           },

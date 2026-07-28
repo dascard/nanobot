@@ -192,7 +192,7 @@ def test_admin_sandbox_status_reports_safe_health_usage_and_runs(
         "enabled": True,
         "exec_enabled": True,
         "group_enabled": False,
-        "group_enabled_editable": False,
+        "group_enabled_editable": True,
     }
     assert payload["controller"]["health"]["ok"] is True
     assert payload["controller"]["ready"]["disk_used_percent"] == 21.5
@@ -292,7 +292,11 @@ def test_admin_sandbox_kill_switch_terminates_runs_and_preserves_data(
     assert response.json() == {
         "ok": True,
         "replayed": False,
-        "feature": {"enabled": False, "exec_enabled": False},
+        "feature": {
+            "enabled": False,
+            "exec_enabled": False,
+            "group_enabled": False,
+        },
         "terminated_count": 1,
         "failed_count": 0,
         "terminated_lease_count": 0,
@@ -303,6 +307,7 @@ def test_admin_sandbox_kill_switch_terminates_runs_and_preserves_data(
     }
     assert db_session.get(SystemSetting, "sandbox.enabled").value == "false"
     assert db_session.get(SystemSetting, "sandbox.exec_enabled").value == "false"
+    assert db_session.get(SystemSetting, "sandbox.group_enabled").value == "false"
     assert db_session.query(Workspace).count() == 1
     assert db_session.query(Asset).count() == 1
     assert db_session.query(WorkspaceAsset).count() == 1
@@ -371,7 +376,12 @@ def test_admin_sandbox_feature_enable_respects_host_hard_ceiling(
     settings.invalidate()
     blocked = client.put(
         "/api/v1/admin/sandbox/features",
-        json={"enabled": True, "exec_enabled": False, "reason": "尝试启用"},
+        json={
+            "enabled": True,
+            "exec_enabled": False,
+            "group_enabled": True,
+            "reason": "尝试启用",
+        },
     )
     assert blocked.status_code == 409
 
@@ -382,7 +392,12 @@ def test_admin_sandbox_feature_enable_respects_host_hard_ceiling(
     settings.invalidate()
     accepted = client.put(
         "/api/v1/admin/sandbox/features",
-        json={"enabled": True, "exec_enabled": False, "reason": "灰度启用"},
+        json={
+            "enabled": True,
+            "exec_enabled": False,
+            "group_enabled": True,
+            "reason": "灰度启用",
+        },
     )
     assert accepted.status_code == 200
     assert accepted.json()["feature"] == {
@@ -391,8 +406,31 @@ def test_admin_sandbox_feature_enable_respects_host_hard_ceiling(
         "developer_network_allowed": False,
         "enabled": True,
         "exec_enabled": False,
-        "group_enabled": False,
+        "group_enabled": True,
     }
+    assert db_session.get(SystemSetting, "sandbox.group_enabled").value == "true"
+
+    compatible = client.put(
+        "/api/v1/admin/sandbox/features",
+        json={
+            "enabled": True,
+            "exec_enabled": False,
+            "reason": "旧客户端保存",
+        },
+    )
+    assert compatible.status_code == 200
+    assert compatible.json()["feature"]["group_enabled"] is True
+
+    disabled = client.put(
+        "/api/v1/admin/sandbox/features",
+        json={
+            "enabled": False,
+            "exec_enabled": False,
+            "reason": "关闭总开关",
+        },
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["feature"]["group_enabled"] is False
     assert db_session.get(SystemSetting, "sandbox.group_enabled").value == "false"
     settings.invalidate()
 
@@ -471,6 +509,63 @@ def test_admin_sandbox_lists_only_real_private_sessions_and_enqueues_one_request
     assert operation.json()["operation"]["expected_quota_generation"] == 1
 
 
+def test_admin_sandbox_lists_and_enqueues_explicit_group_grant(
+    db_session,
+    monkeypatch,
+):
+    _settings(db_session)
+    db_session.add(ChatLog(
+        user_id="group_7788",
+        session_id="group_7788",
+        sender_name="群成员甲",
+        session_name="测试群聊",
+        role="ambient",
+        content="群聊消息",
+        meta_json=(
+            '{"client_meta":{"platform":"qq","chat_type":"group"},'
+            '"sender":{"id":"user-group-a"}}'
+        ),
+    ))
+    db_session.commit()
+    client = _client(db_session, monkeypatch, [])
+
+    sessions = client.get(
+        "/api/v1/admin/sandbox/sessions",
+        params={"chat_type": "all"},
+    )
+
+    assert sessions.status_code == 200
+    assert len(sessions.json()["items"]) == 1
+    item = sessions.json()["items"][0]
+    assert item["chat_stream_id"] == "qq:7788:group"
+    assert item["platform"] == "qq"
+    assert item["chat_type"] == "group"
+    assert item["session_id"] == "7788"
+    assert item["actor_user_id"] == "user-group-a"
+    assert item["label"] == "测试群聊"
+
+    created = client.post(
+        "/api/v1/admin/sandbox/access-grants",
+        json={
+            "request_id": "group-access-request-0001",
+            "platform": "qq",
+            "chat_type": "group",
+            "session_id": "group_7788",
+            "capability": "workspace",
+            "quota_bytes": 64 * 1024 * 1024,
+            "reason": "显式授权测试群",
+        },
+    )
+
+    assert created.status_code == 202
+    grant = db_session.query(SandboxAccessGrant).one()
+    workspace = db_session.get(Workspace, grant.workspace_id)
+    assert grant.chat_stream_id == "qq:7788:group"
+    assert grant.chat_type == "group"
+    assert workspace.owner_type == "group"
+    assert workspace.owner_id == "7788"
+
+
 def test_admin_sandbox_rejects_trusted_profile_selection(
     db_session,
     monkeypatch,
@@ -491,6 +586,41 @@ def test_admin_sandbox_rejects_trusted_profile_selection(
     )
 
     assert response.status_code == 422
+    assert db_session.query(SandboxAccessGrant).count() == 0
+    assert db_session.query(SandboxAdminOperation).count() == 0
+
+
+def test_admin_sandbox_rejects_invalid_or_mismatched_group_identity(
+    db_session,
+    monkeypatch,
+):
+    _settings(db_session)
+    db_session.commit()
+    client = _client(db_session, monkeypatch, [])
+    base = {
+        "request_id": "invalid-group-request-1",
+        "platform": "qq",
+        "session_id": "group_7788",
+        "capability": "workspace",
+        "quota_bytes": 64 * 1024 * 1024,
+    }
+
+    invalid_type = client.post(
+        "/api/v1/admin/sandbox/access-grants",
+        json={**base, "chat_type": "channel"},
+    )
+    mismatched_prefix = client.post(
+        "/api/v1/admin/sandbox/access-grants",
+        json={
+            **base,
+            "request_id": "invalid-group-request-2",
+            "chat_type": "group",
+            "session_id": "private_7788",
+        },
+    )
+
+    assert invalid_type.status_code == 422
+    assert mismatched_prefix.status_code == 400
     assert db_session.query(SandboxAccessGrant).count() == 0
     assert db_session.query(SandboxAdminOperation).count() == 0
 

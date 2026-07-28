@@ -67,6 +67,7 @@ class SandboxFeatureRequest(BaseModel):
 
     enabled: bool
     exec_enabled: bool
+    group_enabled: bool | None = None
     reason: str = Field(default="", max_length=255)
 
 
@@ -75,7 +76,7 @@ class SandboxAccessRequest(BaseModel):
 
     request_id: str = Field(min_length=8, max_length=64, pattern=r"^[!-~]+$")
     platform: str = Field(default="qq", min_length=1, max_length=32)
-    chat_type: Literal["private"] = "private"
+    chat_type: Literal["private", "group"] = "private"
     session_id: str = Field(min_length=1, max_length=255)
     capability: Literal["off", "workspace", "assets", "exec"]
     execution_profile: Literal["restricted", "developer"] = "restricted"
@@ -671,8 +672,11 @@ def sandbox_status(
                 db,
                 "sandbox.exec_enabled",
             )),
-            "group_enabled": False,
-            "group_enabled_editable": False,
+            "group_enabled": bool(resolve_sandbox_setting(
+                db,
+                "sandbox.group_enabled",
+            )),
+            "group_enabled_editable": True,
         },
         "controller": _controller_status(db),
         "usage": _usage_summary(db),
@@ -720,22 +724,38 @@ def update_sandbox_features(
         "sandbox.infrastructure_enable_allowed",
         False,
     )
-    if (body.enabled or body.exec_enabled) and not infrastructure_allowed:
+    previous = {
+        "enabled": bool(resolve_sandbox_setting(db, "sandbox.enabled")),
+        "exec_enabled": bool(resolve_sandbox_setting(db, "sandbox.exec_enabled")),
+        "group_enabled": bool(resolve_sandbox_setting(
+            db,
+            "sandbox.group_enabled",
+        )),
+    }
+    requested_group_enabled = (
+        previous["group_enabled"]
+        if body.group_enabled is None
+        else bool(body.group_enabled)
+    )
+    if body.exec_enabled and not body.enabled:
+        raise HTTPException(400, "启用 Exec 时必须同时启用 Sandbox 总开关")
+    if body.group_enabled is True and not body.enabled:
+        raise HTTPException(400, "启用群聊时必须同时启用 Sandbox 总开关")
+    target_group_enabled = bool(requested_group_enabled and body.enabled)
+    if (
+        body.enabled
+        or body.exec_enabled
+        or target_group_enabled
+    ) and not infrastructure_allowed:
         raise HTTPException(
             409,
             "宿主基础设施硬上限未允许，Web 不能启用 Sandbox",
         )
-    if body.exec_enabled and not body.enabled:
-        raise HTTPException(400, "启用 Exec 时必须同时启用 Sandbox 总开关")
-    previous = {
-        "enabled": bool(resolve_sandbox_setting(db, "sandbox.enabled")),
-        "exec_enabled": bool(resolve_sandbox_setting(db, "sandbox.exec_enabled")),
-    }
     try:
         values = {
             "sandbox.enabled": bool(body.enabled),
             "sandbox.exec_enabled": bool(body.exec_enabled and body.enabled),
-            "sandbox.group_enabled": False,
+            "sandbox.group_enabled": target_group_enabled,
         }
         for key, value in values.items():
             row = db.get(SystemSetting, key)
@@ -775,7 +795,7 @@ def update_sandbox_features(
             ),
             "enabled": values["sandbox.enabled"],
             "exec_enabled": values["sandbox.exec_enabled"],
-            "group_enabled": False,
+            "group_enabled": values["sandbox.group_enabled"],
         },
     }
 
@@ -783,11 +803,12 @@ def update_sandbox_features(
 @router.get("/sessions")
 def list_sandbox_sessions(
     search: str = Query(default="", max_length=255),
+    chat_type: Literal["private", "group", "all"] = Query(default="private"),
     limit: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    """列出真实出现过的私聊 session，不把 user_id 当作授权主体。"""
+    """列出真实出现过的会话，不把消息发送者当作授权主体。"""
 
     search_text = str(search or "").strip().lower()
     candidates: dict[str, dict[str, object]] = {}
@@ -797,11 +818,12 @@ def list_sandbox_sessions(
         session_id: object,
         user_id: object,
         sender_name: object,
+        session_name: object,
         created_at,
         meta_json: object,
     ) -> None:
         raw_session = str(session_id or "").strip()
-        if not raw_session or raw_session.startswith("group_"):
+        if not raw_session:
             return
         try:
             meta = json.loads(str(meta_json or "{}"))
@@ -809,51 +831,90 @@ def list_sandbox_sessions(
             meta = {}
         if not isinstance(meta, dict):
             meta = {}
-        meta_chat_type = str(meta.get("chat_type") or "").strip().lower()
-        if (
-            meta_chat_type == "group"
-            or raw_session.startswith("group_")
-            or raw_session.endswith(":group")
-        ):
+        client_meta = meta.get("client_meta")
+        if not isinstance(client_meta, dict):
+            client_meta = {}
+        meta_chat_type = str(
+            meta.get("chat_type") or client_meta.get("chat_type") or ""
+        ).strip().lower()
+        if meta_chat_type and meta_chat_type not in {"private", "group"}:
             return
-        platform = str(meta.get("platform") or "qq").strip().lower()
+        inferred_chat_type = (
+            "group"
+            if (
+                meta_chat_type == "group"
+                or raw_session.startswith("group_")
+                or raw_session.endswith(":group")
+            )
+            else "private"
+        )
+        if chat_type != "all" and inferred_chat_type != chat_type:
+            return
+        platform = str(
+            meta.get("platform") or client_meta.get("platform") or "qq"
+        ).strip().lower()
         try:
             identity = canonical_sandbox_identity(
                 platform=platform,
-                chat_type="private",
+                chat_type=inferred_chat_type,
                 session_id=raw_session,
             )
         except Exception:
             return
-        actor_user_id = str(user_id or "").strip()
-        name = str(sender_name or "").strip()
+        sender_meta = meta.get("sender")
+        if not isinstance(sender_meta, dict):
+            sender_meta = {}
+        actor_source = (
+            sender_meta.get("id")
+            if identity.chat_type == "group"
+            else user_id
+        )
+        actor_user_id = str(actor_source or "").strip()
+        sender_label = str(sender_name or "").strip()
+        group_label = str(session_name or "").strip()
+        label = (
+            group_label
+            if identity.chat_type == "group"
+            else sender_label
+        )
         haystack = (
             f"{identity.chat_stream_id} {identity.external_session_id} "
-            f"{actor_user_id} {name}"
+            f"{actor_user_id} {sender_label} {group_label}"
         ).lower()
         if search_text and search_text not in haystack:
             return
         old = candidates.get(identity.chat_stream_id)
-        if old is not None and old.get("_created_at") is not None and (
-            created_at is None or old["_created_at"] >= created_at
-        ):
+        if old is None:
+            candidates[identity.chat_stream_id] = {
+                "chat_stream_id": identity.chat_stream_id,
+                "platform": identity.platform,
+                "chat_type": identity.chat_type,
+                "session_id": identity.external_session_id,
+                "actor_user_id": actor_user_id,
+                "label": label or identity.external_session_id,
+                "recent_at": _iso(created_at),
+                "_created_at": created_at,
+            }
             return
-        candidates[identity.chat_stream_id] = {
-            "chat_stream_id": identity.chat_stream_id,
-            "platform": identity.platform,
-            "chat_type": identity.chat_type,
-            "session_id": identity.external_session_id,
-            "actor_user_id": actor_user_id,
-            "label": name or identity.external_session_id,
-            "recent_at": _iso(created_at),
-            "_created_at": created_at,
-        }
+        if label and (
+            identity.chat_type == "group"
+            or str(old.get("label") or "") == identity.external_session_id
+        ):
+            old["label"] = label
+        if actor_user_id:
+            old["actor_user_id"] = actor_user_id
+        if old.get("_created_at") is None or (
+            created_at is not None and created_at > old["_created_at"]
+        ):
+            old["recent_at"] = _iso(created_at)
+            old["_created_at"] = created_at
 
     for row in db.query(ChatLog).order_by(ChatLog.id.desc()).limit(5000).all():
         add(
             session_id=row.session_id,
             user_id=row.user_id,
             sender_name=row.sender_name,
+            session_name=row.session_name,
             created_at=row.created_at,
             meta_json=row.meta_json,
         )
@@ -867,10 +928,13 @@ def list_sandbox_sessions(
             session_id=row.session_id,
             user_id=row.user_id,
             sender_name="",
+            session_name="",
             created_at=row.created_at,
             meta_json=row.meta_json,
         )
     for grant in db.query(SandboxAccessGrant).all():
+        if chat_type != "all" and grant.chat_type != chat_type:
+            continue
         if grant.chat_stream_id not in candidates:
             candidates[grant.chat_stream_id] = {
                 "chat_stream_id": grant.chat_stream_id,
@@ -1565,6 +1629,10 @@ def sandbox_kill_switch(
             db,
             "sandbox.exec_enabled",
         )),
+        "group_enabled": bool(resolve_sandbox_setting(
+            db,
+            "sandbox.group_enabled",
+        )),
     }
     try:
         operation, replayed = _prepare_sync_operation(
@@ -1597,7 +1665,11 @@ def sandbox_kill_switch(
             return {
                 "ok": True,
                 "replayed": True,
-                "feature": {"enabled": False, "exec_enabled": False},
+                "feature": {
+                    "enabled": False,
+                    "exec_enabled": False,
+                    "group_enabled": False,
+                },
                 "terminated_count": lease_count + run_count,
                 "failed_count": 0,
                 "terminated_lease_count": lease_count,
@@ -1606,7 +1678,11 @@ def sandbox_kill_switch(
                 "failed_run_count": 0,
                 "data_preserved": True,
             }
-        for key in ("sandbox.enabled", "sandbox.exec_enabled"):
+        for key in (
+            "sandbox.enabled",
+            "sandbox.exec_enabled",
+            "sandbox.group_enabled",
+        ):
             row = db.get(SystemSetting, key)
             if row is None:
                 row = SystemSetting(
@@ -1854,7 +1930,11 @@ def sandbox_kill_switch(
     payload = {
         "ok": True,
         "replayed": False,
-        "feature": {"enabled": False, "exec_enabled": False},
+        "feature": {
+            "enabled": False,
+            "exec_enabled": False,
+            "group_enabled": False,
+        },
         **detail,
         "data_preserved": True,
     }
@@ -1871,6 +1951,7 @@ def sandbox_kill_switch(
                 "feature": {
                     "enabled": False,
                     "exec_enabled": False,
+                    "group_enabled": False,
                 },
                 "data_preserved": True,
             },

@@ -33,6 +33,7 @@ const statusData = {
     enabled: true,
     exec_enabled: true,
     group_enabled: false,
+    group_enabled_editable: true,
   },
   controller: {
     health: { ok: true, service: 'sandboxd' },
@@ -100,6 +101,16 @@ const session = {
   recent_at: '2026-07-25T08:00:00',
 }
 
+const groupSession = {
+  chat_stream_id: 'qq:7788:group',
+  platform: 'qq',
+  chat_type: 'group',
+  session_id: '7788',
+  actor_user_id: 'group-member-ui',
+  label: '前端测试群聊',
+  recent_at: '2026-07-25T08:02:00',
+}
+
 const lease = {
   lease_id: 'sbxlease_webui_test',
   session_summary: 'qq:private:0123456789ab',
@@ -155,10 +166,10 @@ function response(data) {
   return Promise.resolve({ data })
 }
 
-function configureApi({ leases = [lease] } = {}) {
+function configureApi({ leases = [lease], sessions = [session] } = {}) {
   api.get.mockImplementation(path => {
     if (path === '/sandbox/status') return response(statusData)
-    if (path === '/sandbox/sessions') return response({ items: [session] })
+    if (path === '/sandbox/sessions') return response({ items: sessions })
     if (path === '/sandbox/access-grants') return response({ items: [] })
     if (path === '/sandbox/workspaces') return response({ items: [] })
     if (path === '/sandbox/leases') return response({ items: leases })
@@ -289,8 +300,48 @@ describe('Sandbox 管理页', () => {
         '/sandbox/access-grants',
         expect.objectContaining({
           capability: 'exec',
+          chat_type: 'private',
           execution_profile: 'developer',
           quota_bytes: 64 * 1024 * 1024,
+        }),
+      )
+    })
+  })
+
+  it('可从管理页开启群聊业务开关', async () => {
+    await renderPage()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /群聊 Sandbox/ }))
+    fireEvent.click(screen.getByRole('button', { name: '保存业务开关' }))
+
+    await waitFor(() => {
+      expect(api.put).toHaveBeenCalledWith('/sandbox/features', {
+        enabled: true,
+        exec_enabled: true,
+        group_enabled: true,
+        reason: 'Web Sandbox 管理页更新业务开关',
+      })
+    })
+  })
+
+  it('群聊授权提交群 canonical 身份并提示共享 Workspace', async () => {
+    configureApi({ sessions: [groupSession] })
+    await renderPage()
+    fireEvent.click(screen.getByRole('tab', { name: '访问授权' }))
+    fireEvent.click(await screen.findByRole('button', { name: /前端测试群聊/ }))
+
+    expect(screen.getByText(/群内成员共享同一个 Workspace/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: /^Workspace/ }))
+    fireEvent.click(screen.getByRole('button', { name: '保存授权与配额' }))
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith(
+        '/sandbox/access-grants',
+        expect.objectContaining({
+          platform: 'qq',
+          chat_type: 'group',
+          session_id: '7788',
+          capability: 'workspace',
         }),
       )
     })

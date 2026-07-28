@@ -106,7 +106,11 @@ def test_kill_switch_terminates_leases_and_oneshot_runs_then_settles_ledger(
     assert first.json() == {
         "ok": True,
         "replayed": False,
-        "feature": {"enabled": False, "exec_enabled": False},
+        "feature": {
+            "enabled": False,
+            "exec_enabled": False,
+            "group_enabled": False,
+        },
         "terminated_count": 3,
         "failed_count": 0,
         "terminated_lease_count": 1,
@@ -122,6 +126,10 @@ def test_kill_switch_terminates_leases_and_oneshot_runs_then_settles_ledger(
     assert db_session.get(SystemSetting, "sandbox.enabled").value == "false"
     assert (
         db_session.get(SystemSetting, "sandbox.exec_enabled").value
+        == "false"
+    )
+    assert (
+        db_session.get(SystemSetting, "sandbox.group_enabled").value
         == "false"
     )
     db_session.expire_all()
@@ -162,6 +170,10 @@ def test_kill_switch_failure_keeps_switches_off_and_does_not_fake_settlement(
     assert db_session.get(SystemSetting, "sandbox.enabled").value == "false"
     assert (
         db_session.get(SystemSetting, "sandbox.exec_enabled").value
+        == "false"
+    )
+    assert (
+        db_session.get(SystemSetting, "sandbox.group_enabled").value
         == "false"
     )
     db_session.expire_all()

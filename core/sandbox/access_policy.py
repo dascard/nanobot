@@ -217,12 +217,14 @@ class SandboxAccessPolicy:
                 "无法确认 canonical Sandbox 会话身份",
                 required,
             )
-        # 首期群聊保持硬关闭；数据库或 Web 设置不能提前绕过该边界。
-        if identity.chat_type != "private":
+        if (
+            identity.chat_type == "group"
+            and not _database_bool(self.db, "sandbox.group_enabled")
+        ):
             return SandboxAccessDecision(
                 False,
                 "sandbox_not_enabled",
-                "群聊 Workspace 当前未启用",
+                "群聊 Sandbox 业务开关未启用",
                 required,
                 identity=identity,
             )

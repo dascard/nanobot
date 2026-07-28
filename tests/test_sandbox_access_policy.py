@@ -11,6 +11,7 @@ from core.database import (
 )
 from core.sandbox.access_contracts import SandboxCapability
 from core.sandbox.access_policy import SandboxAccessPolicy
+from core.runtime_tool_service import resolve_effective_tools
 from core.settings_service import settings
 
 
@@ -85,6 +86,59 @@ def _grant_session(
             workspace_id=workspace_id,
             capability_level=capability,
             status="active" if capability != "off" else "disabled",
+            version=1,
+        ),
+    ])
+    db.commit()
+    return workspace_id
+
+
+def _grant_group_session(
+    db,
+    *,
+    group_id: str,
+    capability: str = "workspace",
+    project_id: int = 10000,
+):
+    workspace_id = str(uuid4())
+    grant_id = str(uuid4())
+    db.add(Workspace(
+        id=workspace_id,
+        platform="qq",
+        owner_type="group",
+        owner_id=group_id,
+        name="default",
+        status="active",
+        quota_bytes=32 * MIB,
+        used_bytes=0,
+    ))
+    db.flush()
+    db.add_all([
+        WorkspaceQuotaBinding(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            desired_quota_bytes=32 * MIB,
+            applied_quota_bytes=32 * MIB,
+            status="applied",
+            generation=1,
+        ),
+        WorkspaceRuntimeQuotaBinding(
+            workspace_id=workspace_id,
+            project_id=project_id + 1,
+            desired_quota_bytes=512 * MIB,
+            applied_quota_bytes=512 * MIB,
+            status="applied",
+            generation=1,
+        ),
+        SandboxAccessGrant(
+            id=grant_id,
+            chat_stream_id=f"qq:{group_id}:group",
+            platform="qq",
+            chat_type="group",
+            external_session_id=group_id,
+            workspace_id=workspace_id,
+            capability_level=capability,
+            status="active",
             version=1,
         ),
     ])
@@ -208,48 +262,14 @@ def test_unconfirmed_or_mismatched_project_quota_denies_all_tools(
     assert decision.code == "authorization_failed"
 
 
-def test_group_session_remains_hard_disabled_even_with_database_grant(
+def test_group_session_is_denied_when_group_feature_is_disabled(
     db_session,
     infrastructure_allowed,
 ):
     _set_bool(db_session, "sandbox.enabled", True)
     _set_bool(db_session, "sandbox.exec_enabled", True)
-    _set_bool(db_session, "sandbox.group_enabled", True)
-    workspace_id = str(uuid4())
-    grant_id = str(uuid4())
-    db_session.add(Workspace(
-        id=workspace_id,
-        platform="qq",
-        owner_type="group",
-        owner_id="10086",
-        name="default",
-        status="active",
-        quota_bytes=32 * MIB,
-        used_bytes=0,
-    ))
-    db_session.flush()
-    db_session.add_all([
-        WorkspaceQuotaBinding(
-            workspace_id=workspace_id,
-            project_id=10000,
-            desired_quota_bytes=32 * MIB,
-            applied_quota_bytes=32 * MIB,
-            status="applied",
-            generation=1,
-        ),
-        SandboxAccessGrant(
-            id=grant_id,
-            chat_stream_id="qq:10086:group",
-            platform="qq",
-            chat_type="group",
-            external_session_id="10086",
-            workspace_id=workspace_id,
-            capability_level="exec",
-            status="active",
-            version=1,
-        ),
-    ])
-    db_session.commit()
+    _set_bool(db_session, "sandbox.group_enabled", False)
+    _grant_group_session(db_session, group_id="10086", capability="exec")
 
     decision = SandboxAccessPolicy(db_session).evaluate(
         "workspace_read",
@@ -260,6 +280,124 @@ def test_group_session_remains_hard_disabled_even_with_database_grant(
 
     assert decision.allowed is False
     assert decision.code == "sandbox_not_enabled"
+
+
+def test_group_session_requires_feature_and_explicit_group_grant(
+    db_session,
+    infrastructure_allowed,
+):
+    _set_bool(db_session, "sandbox.enabled", True)
+    _set_bool(db_session, "sandbox.exec_enabled", False)
+    _set_bool(db_session, "sandbox.group_enabled", True)
+    workspace_id = _grant_group_session(db_session, group_id="10086")
+
+    allowed = SandboxAccessPolicy(db_session).evaluate(
+        "workspace_read",
+        platform="qq",
+        chat_type="group",
+        session_id="group_10086",
+    )
+    ungranted = SandboxAccessPolicy(db_session).evaluate(
+        "workspace_read",
+        platform="qq",
+        chat_type="group",
+        session_id="group_10010",
+    )
+
+    assert allowed.allowed is True
+    assert allowed.workspace_id == workspace_id
+    assert ungranted.allowed is False
+    assert ungranted.code == "authorization_failed"
+
+
+def test_group_grant_cannot_bridge_another_group_or_private_session(
+    db_session,
+    infrastructure_allowed,
+):
+    _set_bool(db_session, "sandbox.enabled", True)
+    _set_bool(db_session, "sandbox.exec_enabled", False)
+    _set_bool(db_session, "sandbox.group_enabled", True)
+    _grant_group_session(db_session, group_id="shared-id")
+
+    group_a = SandboxAccessPolicy(db_session).evaluate(
+        "workspace_list",
+        platform="qq",
+        chat_type="group",
+        session_id="group_shared-id",
+    )
+    group_b = SandboxAccessPolicy(db_session).evaluate(
+        "workspace_list",
+        platform="qq",
+        chat_type="group",
+        session_id="group_other",
+    )
+    private = SandboxAccessPolicy(db_session).evaluate(
+        "workspace_list",
+        platform="qq",
+        chat_type="private",
+        session_id="private_shared-id",
+    )
+
+    assert group_a.allowed is True
+    assert group_b.allowed is False
+    assert private.allowed is False
+    assert group_b.code == private.code == "authorization_failed"
+
+
+def test_private_grant_cannot_bridge_group_with_same_external_id(
+    db_session,
+    infrastructure_allowed,
+):
+    _set_bool(db_session, "sandbox.enabled", True)
+    _set_bool(db_session, "sandbox.exec_enabled", False)
+    _set_bool(db_session, "sandbox.group_enabled", True)
+    _grant_session(db_session, session_id="shared-id")
+
+    private = SandboxAccessPolicy(db_session).evaluate(
+        "workspace_read",
+        platform="qq",
+        chat_type="private",
+        session_id="private_shared-id",
+    )
+    group = SandboxAccessPolicy(db_session).evaluate(
+        "workspace_read",
+        platform="qq",
+        chat_type="group",
+        session_id="group_shared-id",
+    )
+
+    assert private.allowed is True
+    assert group.allowed is False
+    assert group.code == "authorization_failed"
+
+
+def test_group_grant_is_projected_into_runtime_tool_plan(
+    db_session,
+    infrastructure_allowed,
+):
+    _set_bool(db_session, "sandbox.enabled", True)
+    _set_bool(db_session, "sandbox.exec_enabled", True)
+    _set_bool(db_session, "sandbox.group_enabled", True)
+    _grant_group_session(
+        db_session,
+        group_id="tool-plan-group",
+        capability="exec",
+    )
+
+    enabled, disabled = resolve_effective_tools(
+        chat_type="group",
+        group_id="tool-plan-group",
+        user_id="group-member",
+        platform="qq",
+        session_id="group_tool-plan-group",
+        runtime_preset="full",
+        db=db_session,
+    )
+
+    assert enabled["workspace_read"] is True
+    assert enabled["sandbox_exec"] is True
+    assert "workspace_read" not in disabled
+    assert "sandbox_exec" not in disabled
 
 
 def test_host_hard_ceiling_precedes_database_feature_flags(db_session):
