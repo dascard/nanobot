@@ -95693,18 +95693,18 @@
       ],
       "detector": "python.string_control_flow",
       "disposition": "preserve",
-      "excerpt": "identity.chat_type != \"private\"",
+      "excerpt": "identity.chat_type not in {\"private\", \"group\"}",
       "input_boundary": "Sandbox 内部请求、策略配置或宿主运行状态",
       "language": "python",
       "line": 158,
       "model_call": false,
-      "normalized_fingerprint": "ec003b919b15b0af1ef71739db9dbe50fd120fc97c3dac837cbceae6a2123ec0",
+      "normalized_fingerprint": "25b4c1ed571bfade61b9a77cc1db6cd5182cdabd409d8e5a3328db80c174366a",
       "owner": "sandbox",
       "path": "core/sandbox/lease_service.py",
       "plan_stage": "阶段 4",
       "reason": "命中安全边界词，默认视为需保留的确定性安全规则。",
       "review_status": "auto_classified",
-      "rule_id": "decision.fdda713aaaaad83fce84"
+      "rule_id": "decision.db9d9825e42e8a942325"
     },
     {
       "category": "security_invariant",
@@ -168149,7 +168149,7 @@
     "server.py"
   ],
   "schema_version": 1,
-  "source_revision": "d7dc96fdcaa50d6a5e59cc1d4822aebfe9321288",
+  "source_revision": "4648e7bd77a3e8ddb44af912aab8e5ef74bb8799",
   "summary": {
     "by_category": {
       "compatibility": 132,
