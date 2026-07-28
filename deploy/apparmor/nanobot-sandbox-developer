@@ -27,6 +27,9 @@ profile nanobot-sandbox-developer flags=(attach_disconnected,mediate_deleted) {
   /usr/local/bin/** ixr,
   /usr/local/lib/** mr,
   /lib/** mr,
+  # Git 的 HTTPS 传输由只读镜像中的 exec-path helper 完成；使用继承
+  # 模式执行，确保 helper 继续受当前 Developer Profile 约束。
+  /usr/lib/git-core/** ixr,
   /usr/lib/** mr,
 
   /etc/** r,

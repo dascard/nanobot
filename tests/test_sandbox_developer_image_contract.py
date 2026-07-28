@@ -135,6 +135,7 @@ def test_restricted_and_developer_apparmor_network_contracts_are_separate():
     assert "network inet6 stream," in developer
     assert "deny network," not in developer
     assert "/usr/share/nodejs/** rix," in developer
+    assert "/usr/lib/git-core/** ixr," in developer
     for profile in (restricted, developer):
         assert "deny capability," in profile
         assert "deny mount," in profile

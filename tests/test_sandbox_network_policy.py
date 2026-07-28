@@ -684,7 +684,10 @@ def test_real_docker_developer_egress_and_rejection_matrix(tmp_path):
             },
             read_only=True,
             cap_drop=["ALL"],
-            security_opt=["no-new-privileges"],
+            security_opt=[
+                "no-new-privileges",
+                "apparmor=nanobot-sandbox-developer",
+            ],
             privileged=False,
             init=True,
             pids_limit=256,
@@ -703,6 +706,9 @@ def test_real_docker_developer_egress_and_rejection_matrix(tmp_path):
         containers.append(sandbox)
         sandbox.start()
         sandbox.reload()
+        assert sandbox.attrs["AppArmorProfile"] == (
+            "nanobot-sandbox-developer"
+        )
         manager.require_lease_topology(
             profile,
             lease_id=lease_a,
