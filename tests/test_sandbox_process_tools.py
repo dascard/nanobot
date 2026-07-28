@@ -197,12 +197,22 @@ def _setup(
     tmp_path,
     *,
     suffix: str,
+    chat_type: str = "private",
 ):
     workspace_id, grant, old_lease = _prepare_developer_workspace(
         db_session,
         suffix=suffix,
     )
     old_lease.status = "stopped"
+    if chat_type == "group":
+        workspace = db_session.get(Workspace, workspace_id)
+        workspace.owner_type = "group"
+        workspace.owner_id = grant.external_session_id
+        grant.chat_type = "group"
+        grant.chat_stream_id = (
+            f"{grant.platform}:{grant.external_session_id}:group"
+        )
+        old_lease.chat_stream_id = grant.chat_stream_id
     runtime_binding = db_session.get(
         WorkspaceRuntimeQuotaBinding,
         workspace_id,
@@ -222,10 +232,15 @@ def _setup(
     maintenance.status = "ready"
     maintenance.generation = workspace_binding.generation
     maintenance.applied_quota_generation = workspace_binding.generation
-    db_session.add_all([
+    feature_settings = [
         SystemSetting(key="sandbox.enabled", value="true"),
         SystemSetting(key="sandbox.exec_enabled", value="true"),
-    ])
+    ]
+    if chat_type == "group":
+        feature_settings.append(
+            SystemSetting(key="sandbox.group_enabled", value="true")
+        )
+    db_session.add_all(feature_settings)
     db_session.commit()
     monkeypatch.setenv(
         "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
@@ -261,6 +276,40 @@ def _setup(
         run_session_factory=_factory(db_session),
     )
     return workspace_id, grant, access, backend, service
+
+
+def test_group_developer_grant_can_start_lease_process(
+    db_session,
+    monkeypatch,
+    request,
+    tmp_path,
+):
+    workspace_id, grant, access, _backend, service = _setup(
+        db_session,
+        monkeypatch,
+        request,
+        tmp_path,
+        suffix="group-developer-process",
+        chat_type="group",
+    )
+
+    started = service.start(
+        access,
+        {
+            "command": "git clone https://github.com/example/project.git",
+            "cwd": "repos",
+            "yield_time_ms": 10,
+            "timeout_seconds": 120,
+        },
+    )
+
+    run = db_session.get(SandboxRun, started["data"]["process_id"])
+    lease = db_session.get(SandboxLease, run.lease_id)
+    assert started["data"]["execution_status"] == "running"
+    assert run.workspace_id == workspace_id
+    assert run.profile_id == "developer"
+    assert lease.chat_stream_id == grant.chat_stream_id
+    assert lease.chat_stream_id.endswith(":group")
 
 
 def test_process_start_and_poll_finish_run_without_model_poll_zombie(

@@ -155,7 +155,7 @@ class SandboxLeaseService:
             or identity is None
             or not access.grant_id
             or not access.workspace_id
-            or identity.chat_type != "private"
+            or identity.chat_type not in {"private", "group"}
         ):
             raise SandboxServiceError(
                 SandboxErrorCode.AUTHORIZATION_FAILED,
