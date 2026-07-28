@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`f62402f617bef3d9857d85237dec147ebf44e226`
-- 规则总数：6549
+- 源提交：`d7dc96fdcaa50d6a5e59cc1d4822aebfe9321288`
+- 规则总数：6564
 - 扫描错误：0
 - 人工复核队列：691
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -16,22 +16,22 @@
 | `data_consistency` | 429 |
 | `natural_language_semantic` | 32 |
 | `presentation` | 5 |
-| `protocol_syntax` | 3458 |
-| `security_invariant` | 1346 |
+| `protocol_syntax` | 3460 |
+| `security_invariant` | 1359 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
 | `core/schema_migrations.py` | 198 |
-| `scripts/manage-sandbox-production.sh` | 187 |
+| `scripts/manage-sandbox-production.sh` | 188 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
 | `core/proactive_research.py` | 82 |
 | `core/llm_request_linter.py` | 75 |
+| `api/admin/sandbox_routes.py` | 71 |
 | `core/semantic/backfill.py` | 68 |
 | `sandboxd/app.py` | 68 |
-| `api/admin/sandbox_routes.py` | 65 |
 | `core/outbound/delivery_claims.py` | 65 |
 | `core/outbound_delivery_schema.py` | 64 |
 | `core/sandbox/lease_reconciler.py` | 63 |
@@ -72,6 +72,7 @@
 | `core/group_runtime/runtime.py` | 34 |
 | `core/group_runtime/scoring.py` | 34 |
 | `core/sandbox/admin_operations.py` | 34 |
+| `webui/src/features/sandbox/SandboxPage.test.jsx` | 33 |
 | `app/session_memory/llm_contract.py` | 32 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/adapters.py` | 32 |
 | `core/outbound/generation.py` | 31 |
@@ -87,13 +88,12 @@
 | `core/sandbox/profile_catalog.py` | 28 |
 | `sandboxd/filesystem.py` | 28 |
 | `core/proactive/generation.py` | 27 |
+| `core/sandbox/admin_service.py` | 27 |
 | `core/sticker_memory.py` | 27 |
 | `nanobot_kt/image_pipeline.py` | 27 |
-| `webui/src/features/sandbox/SandboxPage.test.jsx` | 27 |
 | `api/admin/rag_routes.py` | 26 |
 | `app/group_ingress/helpers.py` | 26 |
 | `core/prompt_v2/template_registry.py` | 26 |
-| `core/sandbox/admin_service.py` | 26 |
 | `sandboxd/environment_manager.py` | 26 |
 | `webui/src/api/generated/adminClient.ts` | 26 |
 | `api/admin/runtime_routes.py` | 25 |
@@ -170,6 +170,7 @@
 | `core/group_learning/rules.py` | 14 |
 | `core/outbound/control.py` | 14 |
 | `core/sandbox/asset_store.py` | 14 |
+| `core/sandbox/paths.py` | 14 |
 | `core/sandbox/run_ledger.py` | 14 |
 | `core/semantic/retriever.py` | 14 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/enrich.py` | 14 |
@@ -179,7 +180,6 @@
 | `core/group_runtime/state.py` | 13 |
 | `core/prompt_v2/template_baseline.py` | 13 |
 | `core/prompt_v2/tool_templates.py` | 13 |
-| `core/sandbox/paths.py` | 13 |
 | `core/task_runtime/runtime.py` | 13 |
 | `core/telemetry/contracts.py` | 13 |
 | `core/text_style.py` | 13 |
