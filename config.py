@@ -20,6 +20,50 @@ NANOBOT_API_TOKEN = os.environ.get("NANOBOT_API_TOKEN", "")
 # NANOBOT_ADMIN_TOKEN：WebUI /api/v1/admin/* 管理接口认证（缺失时管理接口返回 503）
 # 配置模块不得生成或回写密钥；Token 必须由部署环境的单一来源显式提供。
 NANOBOT_ADMIN_TOKEN = os.environ.get("NANOBOT_ADMIN_TOKEN", "")
+
+# ── Agent Link v1 WebSocket ──
+# 未单独配置时复用普通 API Token，避免同一 Nanobot 部署维护两份必需凭证。
+NANOBOT_AGENT_LINK_TOKEN = (
+    os.environ.get("NANOBOT_AGENT_LINK_TOKEN", "").strip()
+    or NANOBOT_API_TOKEN.strip()
+)
+NANOBOT_AGENT_LINK_MAX_FRAME_BYTES = int(
+    os.environ.get("NANOBOT_AGENT_LINK_MAX_FRAME_BYTES", str(16 * 1024 * 1024))
+)
+NANOBOT_AGENT_LINK_HANDSHAKE_TIMEOUT_SECONDS = float(
+    os.environ.get("NANOBOT_AGENT_LINK_HANDSHAKE_TIMEOUT_SECONDS", "15")
+)
+NANOBOT_AGENT_LINK_SEND_TIMEOUT_SECONDS = float(
+    os.environ.get("NANOBOT_AGENT_LINK_SEND_TIMEOUT_SECONDS", "10")
+)
+NANOBOT_AGENT_LINK_CHAT_TIMEOUT_SECONDS = float(
+    os.environ.get("NANOBOT_AGENT_LINK_CHAT_TIMEOUT_SECONDS", "300")
+)
+NANOBOT_AGENT_LINK_TOOL_TIMEOUT_SECONDS = float(
+    os.environ.get("NANOBOT_AGENT_LINK_TOOL_TIMEOUT_SECONDS", "120")
+)
+NANOBOT_AGENT_LINK_MAX_ACTIVE_CHATS = int(
+    os.environ.get("NANOBOT_AGENT_LINK_MAX_ACTIVE_CHATS", "4")
+)
+NANOBOT_AGENT_LINK_MAX_PENDING_TOOLS = int(
+    os.environ.get("NANOBOT_AGENT_LINK_MAX_PENDING_TOOLS", "16")
+)
+NANOBOT_AGENT_LINK_MAX_TOOLS = int(
+    os.environ.get("NANOBOT_AGENT_LINK_MAX_TOOLS", "128")
+)
+NANOBOT_AGENT_LINK_MAX_TERMINAL_CHATS = int(
+    os.environ.get("NANOBOT_AGENT_LINK_MAX_TERMINAL_CHATS", "256")
+)
+NANOBOT_AGENT_LINK_OUTGOING_QUEUE_SIZE = int(
+    os.environ.get("NANOBOT_AGENT_LINK_OUTGOING_QUEUE_SIZE", "256")
+)
+NANOBOT_AGENT_LINK_MAX_INLINE_ATTACHMENT_BYTES = int(
+    os.environ.get(
+        "NANOBOT_AGENT_LINK_MAX_INLINE_ATTACHMENT_BYTES",
+        str(5 * 1024 * 1024),
+    )
+)
+
 # ── 超级用户列表 ──
 def _parse_id_set(raw: str) -> set[str]:
     return {

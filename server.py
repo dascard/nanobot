@@ -9,6 +9,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.admin.endpoint_registry import ADMIN_ENDPOINT_CONTRACT_REGISTRY
 from api.admin_routes import router as admin_router
+from api.agent_link_routes import router as agent_link_router
 from api.endpoint_contracts import (
     install_openapi_contracts,
     stable_operation_id,
@@ -41,6 +42,7 @@ app.add_middleware(TelemetryHttpMiddleware)
 
 app.include_router(api_router)
 app.include_router(admin_router)
+app.include_router(agent_link_router)
 install_openapi_contracts(
     app,
     ADMIN_ENDPOINT_CONTRACT_REGISTRY.registry_snapshot,

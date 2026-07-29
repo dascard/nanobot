@@ -188,6 +188,74 @@ class ToolPlan:
         )
 
 
+_ADDITIONAL_TOOL_SCHEMAS: ContextVar[
+    tuple[dict[str, Any], ...]
+] = ContextVar(
+    "nanobot_additional_tool_schemas",
+    default=(),
+)
+
+
+def get_additional_tool_schemas() -> tuple[dict[str, Any], ...]:
+    """返回当前请求由外部 Adapter 注入的附加工具 Schema。"""
+
+    return tuple(
+        copy.deepcopy(schema)
+        for schema in _ADDITIONAL_TOOL_SCHEMAS.get()
+    )
+
+
+@contextmanager
+def additional_tool_schemas_scope(
+    schemas: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> Iterator[None]:
+    """仅在当前异步上下文内公布附加工具，防止跨会话污染。"""
+
+    normalized = tuple(normalize_wire_tool_schema(schema) for schema in schemas)
+    token = _ADDITIONAL_TOOL_SCHEMAS.set(normalized)
+    try:
+        yield
+    finally:
+        _ADDITIONAL_TOOL_SCHEMAS.reset(token)
+
+
+def extend_tool_plan(
+    plan: ToolPlan,
+    tool_schemas: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    chat_type: str,
+    platform: str,
+    session_id: str,
+    db: Any = None,
+) -> ToolPlan:
+    """将可信 Adapter 提供的动态工具并入当前请求级计划。"""
+
+    normalized = tuple(normalize_wire_tool_schema(schema) for schema in tool_schemas)
+    if not normalized:
+        return plan
+    names = {_tool_name(schema) for schema in normalized}
+    names.discard("")
+    collision = sorted(names & set(plan.enabled))
+    if collision:
+        raise ValueError(
+            "附加工具与已注册工具重名：" + ", ".join(collision)
+        )
+    enabled = dict(plan.enabled)
+    enabled.update({name: True for name in names})
+    disabled = dict(plan.disabled)
+    for name in names:
+        disabled.pop(name, None)
+    return ToolPlan.from_effective_tools(
+        enabled=enabled,
+        disabled=disabled,
+        chat_type=chat_type,
+        tool_schemas=[*plan.sent_tool_schemas, *normalized],
+        platform=platform,
+        session_id=session_id,
+        db=db,
+    )
+
+
 def build_tool_plan(
     *,
     chat_type: str = "group",
@@ -216,9 +284,17 @@ def build_tool_plan(
             continue
         enabled[name] = False
         disabled[name] = str(raw_reason or "来源上下文禁用").strip()
-    return ToolPlan.from_effective_tools(
+    plan = ToolPlan.from_effective_tools(
         enabled=enabled,
         disabled=disabled,
+        chat_type=chat_type,
+        platform=platform,
+        session_id=session_id,
+        db=db,
+    )
+    return extend_tool_plan(
+        plan,
+        get_additional_tool_schemas(),
         chat_type=chat_type,
         platform=platform,
         session_id=session_id,

@@ -5,6 +5,8 @@ Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配�
 ## 主要能力
 
 - KT Agent 回复链路：基于 `vendor/KohakuTerrarium` 和 `creatures/nanobot` 配置运行。
+- Agent Link v1：MeaPet 等桌面端可主动建立一条双向 WebSocket，让 Nanobot
+  在 Agent Loop 中直接看到并调用前端动态工具。
 - 模型路由：支持 new-api / OpenAI 兼容网关、主模型、快模型、回复模型和本地 Qwen 分类 / 视觉模型。
 - TimingGate：对群聊消息做 `continue` / `wait` / `no_reply` 判定，支持延迟 timer 和 parse_error 观测。
 - 群聊上下文：保留消息、引用、@、指向性、冷却和 generation 信息，减少 bot 打断用户之间定向对话。
@@ -93,6 +95,7 @@ NEW_API_KEY=<your-new-api-key>
 NEW_API_TIMEOUT=180
 
 NANOBOT_API_TOKEN=<random-api-token>
+NANOBOT_AGENT_LINK_TOKEN=<agent-link-token-or-empty-to-reuse-api-token>
 NANOBOT_ADMIN_TOKEN=<random-admin-token>
 NANOBOT_SUPER_USER_IDS=<comma-separated-user-ids>
 NANOBOT_AGENT_STEP_MODEL=<fixed-model-id-for-synergy-agent-step>
@@ -335,9 +338,12 @@ Admin DB Browser 只面向管理员调试使用：
 普通 API 前缀为 `/api/v1`，管理 API 前缀为 `/api/v1/admin`。
 
 消息入口字段约定见 [`docs/message-field-standard.md`](docs/message-field-standard.md)。
+Agent Link 的固定信封、握手、动态工具、幂等和离线字段约定见
+[`docs/agent-link-v1.md`](docs/agent-link-v1.md)。
 
 | 端点 | 说明 |
 | --- | --- |
+| `WS /agent-link` | Agent Link v1 双向聊天与前端动态工具连接 |
 | `POST /api/v1/chat` | 私聊 / Web 聊天入口 |
 | `POST /api/v1/group/message` | 群聊统一入口 |
 | `POST /api/v1/group_timing/timer` | 延迟回复 timer 回调 |

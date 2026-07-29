@@ -2010,7 +2010,6 @@ class NanobotBridge(MessageContractBridgeMixin):
                     applied_messages,
                     prompt_build.prompt_sha256[:12],
                 )
-
             logger.debug(
                 f"[NanobotBridge] Agent initialized: {self._agent is not None}"
             )
@@ -2018,11 +2017,13 @@ class NanobotBridge(MessageContractBridgeMixin):
             logger.debug(
                 f"[NanobotBridge] Agent output_module attr: {getattr(self._agent, '_output_module', 'NOT SET')}"
             )
-
             event_payload = await self._prepare_event_payload(
                 prompt_event_content=prompt_build.event_content,
                 files=meta.get("files"),
                 tool_schemas=prompt_input.tool_schemas,
+            )
+            event_payload.required_capabilities.update(
+                dict(meta.get("required_capabilities") or {})
             )
             image_parts = event_payload.image_parts
             event_content = event_payload.event_content

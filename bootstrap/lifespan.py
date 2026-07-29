@@ -60,13 +60,20 @@ async def init_bridge() -> Any:
 async def shutdown_bridge() -> None:
     from nanobot_kt.bridge import shutdown_bridge as _shutdown_bridge
 
-    await _shutdown_bridge()
+    from core.agent_link.runtime import shutdown_agent_link_runtime
+
+    try:
+        await shutdown_agent_link_runtime()
+    finally:
+        await _shutdown_bridge()
 
 
 def bind_agent_runtime(bridge: object) -> None:
     """把 KT Adapter 绑定到框架无关 Gateway Port。"""
 
+    from core.agent_link.runtime import get_agent_link_runtime
     from core.agent_runtime.gateway import bind_agent_runtime as _bind
+    from nanobot_kt.agent_link_adapter import KtAgentLinkChatAdapter
     from nanobot_kt.bridge import NanobotBridge
     from nanobot_kt.research_runtime import create_research_runtime
 
@@ -74,6 +81,9 @@ def bind_agent_runtime(bridge: object) -> None:
         gateway_provider=lambda: bridge,
         isolated_gateway_factory=NanobotBridge,
         research_runtime_factory=create_research_runtime,
+    )
+    get_agent_link_runtime().bind_chat_port(
+        KtAgentLinkChatAdapter(bridge)
     )
 
 
