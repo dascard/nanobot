@@ -10,7 +10,9 @@ Sandbox 唯一授权键是 canonical chat_stream_id：
 platform:encoded_external_session_id:chat_type
 ~~~
 
-`user_id`、`private_superuser` 和通用 ToolOverride 均不能授予 Sandbox 能力。11 个 Sandbox 工具已经退出通用工具配置链；旧 Sandbox ToolOverride 会由幂等数据迁移删除。
+`user_id`、`private_superuser` 和通用 ToolOverride 均不能授予 Sandbox 能力。10 个模型可见 Sandbox 工具已经退出通用工具配置链；旧
+`workspace_list`、`workspace_apply_patch` 只保留退役兼容标识，不进入 ToolPlan。
+旧 Sandbox ToolOverride 会由幂等数据迁移删除。
 
 同一人的不同 session 默认使用不同 Workspace。首期不自动合并；未来共享或合并必须通过显式绑定、冲突检查和独立审计实现。
 
@@ -45,7 +47,8 @@ platform:encoded_external_session_id:chat_type
 4. 核对 `infrastructure_enable_allowed=true`；如维护期间曾显式关闭，只能在上述门禁通过后由 root 恢复，业务开关仍保持关闭。
 5. 在 Web 中选择一个真实私聊 canonical session，授予 Workspace 能力并设置配额。
 6. 等待 set_access operation 为 succeeded，quota 为 applied，desired 与 applied 一致。
-7. 只打开 sandbox.enabled，验证 workspace_list/read/search/write、容量和 Trace。
+7. 只打开 sandbox.enabled，验证 workspace_read/search/write/edit、容量和 Trace；
+   确认旧 workspace_list/apply_patch 不进入模型 ToolPlan。
 8. 把同一 session 升级为 Assets；等待 operation 成功后验证上传、授权、Range 下载和 session 绑定 Token。
 9. 选择 `restricted` Profile，把同一 session 升级为 Exec；确认后再单独打开 `sandbox.exec_enabled` 与 session 执行硬开关，验证 `network=none`、一次性容器、超时、OOM、输出限制和回收。
 10. 选择一个独立的灰度 session 使用 `developer` Profile；先保持两侧网络硬开关关闭，验证 Developer Lease 在无网络状态下失败关闭。

@@ -56,8 +56,16 @@ from core.schedule_spec import (
     spec_from_fields,
 )
 from core.scheduled_task_outbound import (
-    enqueue_scheduled_task_occurrence,
     recover_expired_scheduled_task_occurrences,
+)
+from core.scheduled_workflow import (
+    DEFAULT_WORKFLOW_CONCURRENCY,
+    ScheduledWorkflowWorkerResult,
+    enqueue_scheduled_task_execution,
+    run_scheduled_task_workflow_worker,
+)
+from core.scheduled_workflow_runtime import (
+    create_scheduled_workflow_callbacks,
 )
 from core.settings_service import settings
 from core.time_utils import db_now_naive
@@ -115,8 +123,17 @@ def _next_run_delay_seconds(now: datetime, run_hour: int) -> int:
 def _build_scheduled_task_query(task: ScheduledTask, now: datetime | None = None) -> str:
     now = now or db_now_naive()
     time_label = now.strftime("%Y-%m-%d %H:%M:%S")
-    prompt = sanitize_prompt_text(task.prompt_template or "", max_chars=2000).strip()
-    task_name = sanitize_prompt_text(task.name or "未命名任务", max_chars=120)
+    from core.scheduled_task_contract import (
+        validate_scheduled_task_definition,
+    )
+
+    task_name_raw, prompt_raw = validate_scheduled_task_definition(
+        name=task.name,
+        prompt_template=task.prompt_template,
+    )
+    # 长度只在定义边界统一拒绝；执行时不得再静默裁剪任务语义。
+    prompt = sanitize_prompt_text(prompt_raw).strip()
+    task_name = sanitize_prompt_text(task_name_raw)
     target_type = sanitize_prompt_text(task.target_type or "", max_chars=40)
     target_id = sanitize_prompt_text(task.target_id or "", max_chars=80)
     return (
@@ -137,17 +154,49 @@ def _build_scheduled_task_query(task: ScheduledTask, now: datetime | None = None
 
 
 def _scheduled_task_session_id(task: ScheduledTask) -> str:
-    if (task.target_type or "").strip() == "group":
-        return _normalize_group_session_id(task.target_id or "")
-    return f"scheduled_task_{task.id or 'unknown'}"
+    from core.scheduled_task_contract import (
+        scheduled_task_owner_from_persisted,
+    )
+
+    owner = scheduled_task_owner_from_persisted(
+        chat_stream_id=task.owner_chat_stream_id,
+        platform=task.owner_platform,
+        chat_type=task.owner_chat_type,
+        session_id=task.owner_session_id,
+        created_by_actor_id=task.created_by_actor_id,
+    )
+    return owner.session_id
 
 
 def _scheduled_task_metadata(task: ScheduledTask) -> dict:
-    is_group = (task.target_type or "").strip() == "group"
+    from core.scheduled_task_contract import (
+        scheduled_task_owner_from_persisted,
+    )
+
+    owner = scheduled_task_owner_from_persisted(
+        chat_stream_id=task.owner_chat_stream_id,
+        platform=task.owner_platform,
+        chat_type=task.owner_chat_type,
+        session_id=task.owner_session_id,
+        created_by_actor_id=task.created_by_actor_id,
+    )
+    is_group = owner.chat_type == "group"
+    actor_user_id = (
+        owner.created_by_actor_id
+        or (owner.external_session_id if not is_group else "")
+    )
     return {
         "raw_query": task.prompt_template or "",
         "session_name": f"定时任务:{task.name or task.id}",
         "is_group": is_group,
+        "chat_type": owner.chat_type,
+        "platform": owner.platform,
+        "group_id": owner.external_session_id if is_group else "",
+        "user_id": actor_user_id,
+        "scheduled_task_owner_chat_stream_id": owner.chat_stream_id,
+        "scheduled_task_definition_version": int(
+            task.definition_version or 1
+        ),
         # 防递归:定时任务会话内不得再创建/修改定时任务
         "disabled_tool_names": ["schedule_task"],
     }
@@ -1403,20 +1452,27 @@ async def push_envelope_to_qq_outcome_with_session(
 # ── 定时任务调度 ──
 
 
-async def _generate_task_message(task: ScheduledTask) -> str | None:
+async def _generate_task_message(
+    task: ScheduledTask,
+    *,
+    trace_id: str = "",
+) -> str | None:
     """通过隔离 Agent Gateway 执行定时任务，让模型拥有真实工具调用能力。"""
     from core.agent_runtime.gateway import create_isolated_agent_gateway
 
     bridge = create_isolated_agent_gateway()
     try:
         await bridge.start()
+        metadata = _scheduled_task_metadata(task)
+        if trace_id:
+            metadata["trace_id"] = trace_id
         response = await asyncio.wait_for(
             bridge.handle_message(
                 _build_scheduled_task_query(task),
-                user_id=f"scheduled_task:{task.id or 'unknown'}",
+                user_id=str(metadata.get("user_id") or ""),
                 session_id=_scheduled_task_session_id(task),
                 sender_name="定时任务",
-                metadata=_scheduled_task_metadata(task),
+                metadata=metadata,
             ),
             timeout=600,
         )
@@ -1474,30 +1530,12 @@ def _advance_task_after_slot(
 
 
 async def run_scheduled_tasks(at: datetime | None = None) -> int:
-    """检查到期任务并交给持久化出站 producer。
+    """只发现到期 trigger、冻结 execution 并推进 ``next_fire_at``。
 
-    到期判定基于预计算的 ``next_fire_at``(UTC naive);迟到超过
-    自适应宽限(周期一半,钳制 [2min, 2h])时 cron/interval 快进、
-    once 过期禁用。``at`` 允许循环补扫错过的上海墙钟分钟槽。
+    本函数不调用模型、不执行工具、不等待投递；执行由独立 workflow worker
+    完成。数据库中的 ``next_fire_at`` 是恢复事实源，不再依赖内存分钟槽。
     """
-    executed = 0
-    try:
-        recovered = await recover_expired_scheduled_task_occurrences(
-            session_factory=SessionLocal,
-            generator=_generate_task_message,
-        )
-        executed += sum(
-            1
-            for result in recovered
-            if not result.deduplicated
-            and result.status in {"queued", "delivered"}
-        )
-    except Exception as exc:
-        logger.error(
-            "Scheduled task recovery scan failed error_type=%s",
-            type(exc).__name__,
-        )
-
+    created = 0
     local_now = at or db_now_naive()
     now_utc = _local_naive_to_utc(local_now)
     discovery_db = SessionLocal()
@@ -1506,7 +1544,12 @@ async def run_scheduled_tasks(at: datetime | None = None) -> int:
             int(row[0])
             for row in (
                 discovery_db.query(ScheduledTask.id)
-                .filter(ScheduledTask.enabled == 1)
+                .filter(
+                    ScheduledTask.enabled == 1,
+                    ScheduledTask.owner_migration_required == 0,
+                    ScheduledTask.owner_chat_stream_id != "",
+                )
+                .order_by(ScheduledTask.id.asc())
                 .all()
             )
         ]
@@ -1546,45 +1589,54 @@ async def run_scheduled_tasks(at: datetime | None = None) -> int:
                     continue
                 task.next_fire_at = initialized
                 db.commit()
-            slot = task.next_fire_at
-            if slot > now_utc:
-                continue
-            late_seconds = (now_utc - slot).total_seconds()
-            if late_seconds > grace_seconds(spec, base_utc=slot):
-                _advance_task_after_slot(task, spec, slot=now_utc)
-                db.commit()
-                logger.warning(
-                    "Scheduled task missed beyond grace task_id=%s "
-                    "late_seconds=%s",
-                    task_id,
-                    int(late_seconds),
-                )
-                continue
-            logger.info("Running scheduled task task_id=%s", task_id)
-            result = await enqueue_scheduled_task_occurrence(
-                db,
-                task_id=task_id,
-                trigger_type="cron",
-                scheduled_for=slot,
-                generator=_generate_task_message,
-                session_factory=SessionLocal,
-                now=now_utc,
-            )
-            if (
-                not result.deduplicated
-                and result.status in {"queued", "delivered"}
+            # 一次扫描可消费多个仍在宽限期内的数据库槽，恢复不再依赖
+            # ``scheduled_task_loop`` 保存的最近 10 个内存分钟。
+            consumed = 0
+            while (
+                task.enabled
+                and task.next_fire_at is not None
+                and task.next_fire_at <= now_utc
+                and consumed < 100
             ):
-                executed += 1
-            logger.info(
-                "Scheduled task producer result task_id=%s run_id=%s status=%s "
-                "deduplicated=%s",
-                task_id,
-                result.run_id,
-                result.status,
-                result.deduplicated,
-            )
-            _advance_task_after_slot(task, spec, slot=slot)
-            db.commit()
+                slot = task.next_fire_at
+                late_seconds = (now_utc - slot).total_seconds()
+                if late_seconds > grace_seconds(spec, base_utc=slot):
+                    _advance_task_after_slot(task, spec, slot=now_utc)
+                    db.commit()
+                    logger.warning(
+                        "Scheduled task missed beyond grace task_id=%s "
+                        "late_seconds=%s",
+                        task_id,
+                        int(late_seconds),
+                    )
+                    break
+                result = enqueue_scheduled_task_execution(
+                    db,
+                    task_id=task_id,
+                    trigger_type="scheduled",
+                    scheduled_for=slot,
+                    now=now_utc,
+                )
+                _advance_task_after_slot(task, spec, slot=slot)
+                db.commit()
+                consumed += 1
+                if not result.deduplicated:
+                    created += 1
+                logger.info(
+                    "Scheduled task execution queued task_id=%s "
+                    "execution_id=%s status=%s deduplicated=%s",
+                    task_id,
+                    result.execution_id,
+                    result.status,
+                    result.deduplicated,
+                )
+            if consumed >= 100 and task.next_fire_at is not None:
+                logger.warning(
+                    "Scheduled task 单次扫描达到 100 个 occurrence 上限 "
+                    "task_id=%s next_fire_at=%s",
+                    task_id,
+                    task.next_fire_at,
+                )
         except Exception as exc:
             db.rollback()
             logger.error(
@@ -1594,53 +1646,117 @@ async def run_scheduled_tasks(at: datetime | None = None) -> int:
             )
         finally:
             db.close()
-    return executed
+    return created
 
 
-_SCHEDULED_CATCHUP_MAX_SLOTS = 10
+def _scheduled_workflow_concurrency() -> int:
+    try:
+        value = int(
+            os.environ.get(
+                "NANOBOT_SCHEDULED_WORKFLOW_CONCURRENCY",
+                str(DEFAULT_WORKFLOW_CONCURRENCY),
+            )
+        )
+    except (TypeError, ValueError):
+        return DEFAULT_WORKFLOW_CONCURRENCY
+    return max(1, min(32, value))
+
+
+async def run_scheduled_task_workflows_once():
+    """有界并发执行一批已冻结 execution。
+
+    delivery worker 早于 Agent Runtime 启动；Adapter 尚未由组合根绑定时只
+    返回空批次，不领取 execution，避免在运行时未就绪阶段制造失败尝试。
+    """
+
+    callbacks = create_scheduled_workflow_callbacks()
+    if callbacks is None:
+        return ScheduledWorkflowWorkerResult(
+            claimed=0,
+            succeeded=0,
+            waiting=0,
+            failed=0,
+            blocked=0,
+            ambiguous=0,
+        )
+    return await run_scheduled_task_workflow_worker(
+        session_factory=SessionLocal,
+        callbacks=callbacks,
+        max_concurrency=_scheduled_workflow_concurrency(),
+    )
+
+
+async def _scheduled_task_workflow_loop(
+    stop_event: threading.Event,
+    *,
+    idle_poll_seconds: float = 1.0,
+) -> None:
+    """独立 worker 循环；慢任务不占用 trigger 扫描循环。"""
+
+    legacy_recovery_due = True
+    while not stop_event.is_set():
+        worked = False
+        try:
+            if legacy_recovery_due:
+                recovered = await recover_expired_scheduled_task_occurrences(
+                    session_factory=SessionLocal,
+                    generator=_generate_task_message,
+                )
+                worked = bool(recovered)
+                legacy_recovery_due = False
+            result = await run_scheduled_task_workflows_once()
+            worked = worked or result.claimed > 0
+        except Exception as exc:
+            logger.error(
+                "Scheduled workflow worker failed error_type=%s",
+                type(exc).__name__,
+            )
+        if worked:
+            continue
+        remaining = max(0.1, float(idle_poll_seconds))
+        while remaining > 0 and not stop_event.is_set():
+            step = min(0.5, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
 
 
 async def scheduled_task_loop(stop_event: threading.Event, *, poll_interval_seconds: float = 60.0) -> None:
-    """异步主循环：逐分钟槽检查定时任务，tick 超时也补扫错过的槽。"""
+    """异步入口：数据库 trigger 扫描与 workflow worker 并行运行。"""
     logger.info("Scheduled task runner started")
-    last_slot: datetime | None = None
-    while not stop_event.is_set():
-        try:
-            now_slot = db_now_naive().replace(second=0, microsecond=0)
-            # 枚举 (last_slot, now_slot] 之间的每个分钟槽逐一匹配:上一次
-            # tick 若超过 60s,中间的分钟槽不会被静默跳过。
-            slots: list[datetime] = []
-            if last_slot is None or now_slot <= last_slot:
-                slots = [now_slot]
-            else:
-                cursor = last_slot + timedelta(minutes=1)
-                while cursor <= now_slot:
-                    slots.append(cursor)
-                    cursor += timedelta(minutes=1)
-                if len(slots) > _SCHEDULED_CATCHUP_MAX_SLOTS:
-                    dropped = len(slots) - _SCHEDULED_CATCHUP_MAX_SLOTS
-                    logger.warning(
-                        "Scheduled task catch-up 超出窗口,放弃最早 %d 个分钟槽",
-                        dropped,
-                    )
-                    slots = slots[-_SCHEDULED_CATCHUP_MAX_SLOTS:]
-            for slot in slots:
-                await run_scheduled_tasks(at=slot)
-            last_slot = now_slot
-        except Exception as e:
-            logger.error(f"Scheduled task tick failed: {e}")
+    worker_task = asyncio.create_task(
+        _scheduled_task_workflow_loop(stop_event)
+    )
+    try:
+        while not stop_event.is_set():
+            try:
+                await run_scheduled_tasks(at=db_now_naive())
+            except Exception as exc:
+                logger.error(
+                    "Scheduled task trigger scan failed error_type=%s",
+                    type(exc).__name__,
+                )
 
-        # 对齐下一分钟墙钟边界,避免固定 60s 睡眠随处理耗时漂移。
-        now = db_now_naive()
-        next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
-        remaining = max(1.0, min(
-            float(poll_interval_seconds),
-            (next_minute - now).total_seconds(),
-        ))
-        while remaining > 0 and not stop_event.is_set():
-            step = min(1.0, remaining)
-            await asyncio.sleep(step)
-            remaining -= step
+            # 对齐下一分钟墙钟边界；DB next_fire_at 负责补扫和恢复。
+            now = db_now_naive()
+            next_minute = (now + timedelta(minutes=1)).replace(
+                second=0,
+                microsecond=0,
+            )
+            remaining = max(
+                1.0,
+                min(
+                    float(poll_interval_seconds),
+                    (next_minute - now).total_seconds(),
+                ),
+            )
+            while remaining > 0 and not stop_event.is_set():
+                step = min(1.0, remaining)
+                await asyncio.sleep(step)
+                remaining -= step
+    finally:
+        if not worker_task.done():
+            worker_task.cancel()
+        await asyncio.gather(worker_task, return_exceptions=True)
     logger.info("Scheduled task runner stopped")
 
 

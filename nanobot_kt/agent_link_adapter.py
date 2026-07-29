@@ -63,13 +63,17 @@ class KtAgentLinkChatAdapter:
                 definition.wire_schema()
                 for definition in request.tools
             )
+            client_id = request.client.platform_id
             metadata = {
-                "platform": "meapet",
+                "platform": client_id,
+                "policy_profile": request.policy_profile,
                 "chat_type": "private",
                 "is_group": False,
                 "message_id": request.request_id,
                 "raw_query": request.user_text,
-                "history_header": "MeaPet 提供的最近对话，仅用于理解上下文。",
+                "history_header": (
+                    f"{client_id} 客户端提供的最近对话，仅用于理解上下文。"
+                ),
                 "history_messages": list(request.history),
                 "files": list(request.files),
                 "required_capabilities": {
@@ -84,7 +88,7 @@ class KtAgentLinkChatAdapter:
                     request.content,
                     user_id=request.key.bridge_user_id,
                     session_id=request.key.bridge_session_id,
-                    sender_name="MeaPet 用户",
+                    sender_name=f"{client_id} 用户",
                     metadata=metadata,
                     stream=False,
                 )

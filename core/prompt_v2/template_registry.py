@@ -72,6 +72,7 @@ _LEGACY_ALIASES = MappingProxyType({
     "workspace_read": "tools/workspace_read/usage",
     "workspace_search": "tools/workspace_search/usage",
     "workspace_write": "tools/workspace_write/usage",
+    "workspace_edit": "tools/workspace_edit/usage",
     "workspace_apply_patch": "tools/workspace_apply_patch/usage",
     "asset_import": "tools/asset_import/usage",
     "asset_publish": "tools/asset_publish/usage",

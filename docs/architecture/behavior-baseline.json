@@ -1,7 +1,7 @@
 {
   "approved_changes": [
     {
-      "after_sha256": "43cc3f24cf08b449b17c7df6c7af6d227b1b8726993acb2be6efdf9a3642b70e",
+      "after_sha256": "ef46d9916a8c5cdaa3fff525dafdc982f2cb34e377a226bc55eb8d3554540004",
       "before_sha256": "5f369375cd179c523d77fc5728228fa1f6d70ef5d68b40f8dc55935213a4dbed",
       "id": "stage1_admin_structured_views",
       "reason": "删除 Admin 任意 SQL 产品入口，改为代码所有的结构化 Table View Registry；Sandbox、URL、CQ 和 Prompt 安全基线保持不变。",
@@ -73,7 +73,7 @@
       "stage": "阶段 7B"
     },
     {
-      "after_sha256": "ad7654ce6f5713e1777504aab536027e99209d16c99597dfc8491e6706485c84",
+      "after_sha256": "35910bc87b6f2c5a757a3b5a43ce6b5c2ea5f658f584b4d48434e79d46ad6192",
       "before_sha256": "d6127b3f19ff082bdbb3163a384f394ca5b748fa524ecab0b176aa26e8fb54d5",
       "id": "stage7c_group_analysis_prompt",
       "reason": "为 group_analysis 增加 Registry 驱动的可选 aspects，同步显式工具兼容默认和定时学习默认；同时把经来源审核且无冲突的正式群体记忆作为不可信背景接入 canonical Prompt Contribution，未选择方面不创建模型分支或报告区块。",
@@ -105,7 +105,7 @@
       "stage": "阶段 7B"
     },
     {
-      "after_sha256": "f2c0d0a361e2ea0cdf14e4c73a1e720dbf05e5acdf970c6984f24932dc774569",
+      "after_sha256": "f61aace6097431a2ae3525365a5345484a148ac9391de565cbf301968b9c0bc2",
       "before_sha256": "a2e5de1a65d2804950629d03cec6062ccf3594f53a5ed152c0a886e0f8e77c68",
       "id": "stage8_group_learning_rule_controls",
       "reason": "登记 Web 群学习工作台使用的受管规则启停配置；默认值为空且标记为危险设置，不创建白名单、不启用学习或 Prompt 注入。",
@@ -113,7 +113,7 @@
       "stage": "阶段 8"
     }
   ],
-  "baseline_git_commit": "ea080472db64cde5c29ba7a503ea47944c969639",
+  "baseline_git_commit": "1d34f3c33aaee780c2b2ee1fc427e3d7a50c9c5d",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -123,7 +123,7 @@
     "environment": "清除代理；不访问网络；不读取生产数据库；只读取版本化 Prompt 文件"
   },
   "runtime_versions": {
-    "generated_with_python": "3.12.3",
+    "generated_with_python": "3.12.7",
     "kt_commit": "6c2c5f1d059ac7f99379b0cddeea21da8e9b55c0",
     "prompt_runtime_schema": "v2",
     "python_constraint": ">=3.11"
@@ -156,21 +156,21 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "ad7654ce6f5713e1777504aab536027e99209d16c99597dfc8491e6706485c84"
+      "sha256": "35910bc87b6f2c5a757a3b5a43ce6b5c2ea5f658f584b4d48434e79d46ad6192"
     },
     {
       "classification": "preserve",
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "f2c0d0a361e2ea0cdf14e4c73a1e720dbf05e5acdf970c6984f24932dc774569"
+      "sha256": "f61aace6097431a2ae3525365a5345484a148ac9391de565cbf301968b9c0bc2"
     },
     {
       "classification": "security_invariant",
       "id": "security_invariants",
       "note": "Sandbox 路径、Admin 结构化视图、URL、CQ 和 Prompt 权威边界不得削弱。",
       "path": "tests/golden/architecture_behavior/security_invariants.json",
-      "sha256": "43cc3f24cf08b449b17c7df6c7af6d227b1b8726993acb2be6efdf9a3642b70e"
+      "sha256": "ef46d9916a8c5cdaa3fff525dafdc982f2cb34e377a226bc55eb8d3554540004"
     }
   ]
 }

@@ -95,7 +95,7 @@ NEW_API_KEY=<your-new-api-key>
 NEW_API_TIMEOUT=180
 
 NANOBOT_API_TOKEN=<random-api-token>
-NANOBOT_AGENT_LINK_TOKEN=<agent-link-token-or-empty-to-reuse-api-token>
+NANOBOT_AGENT_LINK_TOKEN=<independent-agent-link-token>
 NANOBOT_ADMIN_TOKEN=<random-admin-token>
 NANOBOT_SUPER_USER_IDS=<comma-separated-user-ids>
 NANOBOT_AGENT_STEP_MODEL=<fixed-model-id-for-synergy-agent-step>
@@ -108,6 +108,11 @@ LOG_LEVEL=INFO
 `NANOBOT_SUPER_USER_IDS` 是超级用户权限和主动外呼目标的唯一配置来源，支持英文
 或中文逗号分隔。不要把真实 ID 写入源码、受版本控制的配置或 Admin 数据库设置；
 需要停用时将变量设为空。修改后必须重启所有读取 `.env` 的服务。
+
+生产环境必须显式配置独立的 `NANOBOT_AGENT_LINK_TOKEN`。兼容期内留空仍会
+回退复用 `NANOBOT_API_TOKEN`，但启动日志和 Admin Runtime Overview 会标记
+`source=api_token_fallback`；该回退会扩大两个接口共享凭据的授权面，不应作为
+长期生产配置。
 
 可选本地 Qwen / 分类器：
 

@@ -62,6 +62,7 @@ class PromptPlan:
     warnings: list[str]
     debug: dict[str, Any]
     platform: str = "qq"
+    policy_profile: str = "qq"
     flow_sections: list[PromptFlowSection] = field(default_factory=list)
     message_token_estimate: int = 0
     tool_schema_token_estimate: int = 0
@@ -115,6 +116,7 @@ class PromptPlan:
 class PromptCompileRequest:
     chat_type: str = "private"
     platform: str = "qq"
+    policy_profile: str = ""
     prompt_key: str = ""
     session_id: str = ""
     user_id: str = ""
@@ -152,8 +154,20 @@ class PromptCompileRequest:
 
     @property
     def normalized_platform(self) -> str:
-        value = str(self.platform or "").strip().lower()
-        return value or "qq"
+        from core.prompt_v2.policy_profiles import normalize_platform_id
+
+        return normalize_platform_id(self.platform)
+
+    @property
+    def normalized_policy_profile(self) -> str:
+        from core.prompt_v2.policy_profiles import (
+            resolve_prompt_policy_profile,
+        )
+
+        return resolve_prompt_policy_profile(
+            self.normalized_platform,
+            self.policy_profile,
+        )
 
     @property
     def normalized_prompt_key(self) -> str:

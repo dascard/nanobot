@@ -11,6 +11,8 @@ class SandboxErrorCode(str, Enum):
     SANDBOX_NOT_ENABLED = "sandbox_not_enabled"
     AUTHORIZATION_FAILED = "authorization_failed"
     INVALID_PATH = "invalid_path"
+    INVALID_PATTERN = "invalid_pattern"
+    EDIT_CONFLICT = "edit_conflict"
     UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
     WORKSPACE_QUOTA_EXCEEDED = "workspace_quota_exceeded"
     RUNTIME_QUOTA_EXCEEDED = "runtime_quota_exceeded"

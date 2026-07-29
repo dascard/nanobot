@@ -35,6 +35,25 @@ def _invalid_arguments() -> SandboxServiceError:
 
 
 def _validate_value(value: Any, schema: Mapping[str, Any]) -> None:
+    alternatives = schema.get("oneOf")
+    if isinstance(alternatives, list):
+        matches = 0
+        for alternative in alternatives:
+            if not isinstance(alternative, Mapping):
+                raise _invalid_arguments()
+            try:
+                _validate_value(value, alternative)
+            except SandboxServiceError:
+                continue
+            matches += 1
+        if matches != 1:
+            raise _invalid_arguments()
+        return
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and value not in enum_values:
+        raise _invalid_arguments()
+
     value_type = schema.get("type")
     if value_type == "string":
         if not isinstance(value, str) or "\x00" in value:
@@ -56,6 +75,44 @@ def _validate_value(value: Any, schema: Mapping[str, Any]) -> None:
     elif value_type == "boolean":
         if not isinstance(value, bool):
             raise _invalid_arguments()
+    elif value_type == "array":
+        if not isinstance(value, list):
+            raise _invalid_arguments()
+        if len(value) < int(schema.get("minItems", 0)):
+            raise _invalid_arguments()
+        if schema.get("maxItems") is not None and len(value) > int(
+            schema["maxItems"],
+        ):
+            raise _invalid_arguments()
+        item_schema = schema.get("items")
+        if not isinstance(item_schema, Mapping):
+            raise _invalid_arguments()
+        for item in value:
+            _validate_value(item, item_schema)
+    elif value_type == "object":
+        if not isinstance(value, Mapping):
+            raise _invalid_arguments()
+        properties = schema.get("properties")
+        if not isinstance(properties, Mapping):
+            raise _invalid_arguments()
+        normalized_keys = {str(key) for key in value}
+        if schema.get("additionalProperties") is False and (
+            normalized_keys - set(properties)
+        ):
+            raise _invalid_arguments()
+        for required in schema.get("required") or []:
+            if required not in normalized_keys:
+                raise _invalid_arguments()
+        for raw_name, item in value.items():
+            name = str(raw_name)
+            item_schema = properties.get(name)
+            if not isinstance(item_schema, Mapping):
+                if schema.get("additionalProperties") is False:
+                    raise _invalid_arguments()
+                continue
+            _validate_value(item, item_schema)
+    else:
+        raise _invalid_arguments()
 
 
 def _validate_arguments(args: Any, schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -111,15 +168,18 @@ class SandboxToolBase(BaseTool):
 
     @staticmethod
     def _trusted_runtime_context(context: Any) -> dict[str, Any]:
-        session = getattr(context, "session", None) if context is not None else None
-        extra = getattr(session, "extra", None) if session is not None else None
-        runtime = extra.get("nanobot_runtime_context") if isinstance(extra, dict) else None
-        if not isinstance(runtime, Mapping):
+        _ = context
+        from core.agent_runtime.request_scope import (
+            require_current_runtime_context,
+        )
+
+        try:
+            return require_current_runtime_context()
+        except RuntimeError as exc:
             raise SandboxServiceError(
                 SandboxErrorCode.AUTHORIZATION_FAILED,
                 "无法从受信请求上下文确认 Sandbox 身份",
-            )
-        return {str(key): value for key, value in runtime.items()}
+            ) from exc
 
     def _invoke_sync(
         self,
@@ -162,9 +222,18 @@ class SandboxToolBase(BaseTool):
                 hint="稍后重试；主聊天功能不受影响",
                 stop=False,
             ).to_result()
+        failed = result.get("status") == "error"
+        error = result.get("error")
+        error_code = (
+            str(error.get("code") or "sandbox_error")
+            if isinstance(error, Mapping)
+            else "sandbox_error"
+        )
+        summary = str(result.get("summary") or "Sandbox 工具执行失败")
         return ToolResult(
             output=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-            exit_code=0,
+            exit_code=1 if failed else 0,
+            error=f"{error_code}: {summary}" if failed else None,
             metadata={"structured_content": result},
         )
 
@@ -227,7 +296,17 @@ class WorkspaceWriteTool(SandboxToolBase):
         return "workspace_write"
 
 
+class WorkspaceEditTool(SandboxToolBase):
+    is_concurrency_safe = False
+
+    @property
+    def tool_name(self) -> str:
+        return "workspace_edit"
+
+
 class WorkspaceApplyPatchTool(SandboxToolBase):
+    """内部兼容别名；不与 workspace_edit 同时注册给模型。"""
+
     is_concurrency_safe = False
 
     @property
@@ -260,6 +339,7 @@ __all__ = [
     "SandboxToolBase",
     "SandboxWriteStdinTool",
     "WorkspaceApplyPatchTool",
+    "WorkspaceEditTool",
     "WorkspaceListTool",
     "WorkspaceReadTool",
     "WorkspaceSearchTool",

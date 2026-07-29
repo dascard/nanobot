@@ -1120,7 +1120,11 @@ SETTING_DEFS: dict[str, SettingDef] = {
     "max_tool_rounds": SettingDef(
         key="max_tool_rounds", env_name="MAX_TOOL_ROUNDS",
         default=5, value_type="int",
-        category="model", description="单次最大工具轮数", min_value=1, max_value=20,
+        category="model",
+        description="旧版 legacy adapter 的单次工具轮次上限；不作用于 KT 主链路",
+        min_value=1,
+        max_value=20,
+        owner_module="core.legacy_adapter",
     ),
     "router.cost_weight": SettingDef(
         key="router.cost_weight", env_name="ROUTER_COST_WEIGHT",

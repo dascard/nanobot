@@ -7,7 +7,7 @@ import json
 import logging
 from dataclasses import dataclass
 from hmac import compare_digest
-from typing import Any, Mapping
+from typing import Mapping
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -25,9 +25,15 @@ from core.agent_link.protocol import (
     make_agent_link_frame,
 )
 from core.agent_link.runtime import (
+    AgentLinkClientIdentity,
     AgentLinkPeer,
     AgentLinkSessionKey,
     get_agent_link_runtime,
+)
+from core.prompt_v2.policy_profiles import (
+    DEFAULT_EXTERNAL_POLICY_PROFILE,
+    PromptPolicyError,
+    resolve_prompt_policy_profile,
 )
 
 
@@ -190,6 +196,50 @@ def _safe_device_id(frame: AgentLinkFrame) -> str:
     return device_id
 
 
+def _client_identity(frame: AgentLinkFrame) -> AgentLinkClientIdentity:
+    return AgentLinkClientIdentity.parse(frame.payload.get("client"))
+
+
+async def _preflight_prompt_policy(
+    identity: AgentLinkClientIdentity,
+) -> str:
+    """在 ready 前确认服务端分配的 Prompt 策略存在可执行分支。"""
+
+    try:
+        policy_profile = resolve_prompt_policy_profile(
+            identity.platform_id,
+            DEFAULT_EXTERNAL_POLICY_PROFILE,
+        )
+        from core.prompt_v2.compiler import compile_prompt_plan
+        from core.prompt_v2.schema import PromptCompileRequest
+
+        await compile_prompt_plan(
+            PromptCompileRequest(
+                chat_type="private",
+                platform=identity.platform_id,
+                policy_profile=policy_profile,
+                session_id="agent_link_preflight",
+                user_id="agent_link_preflight",
+                sender_name=identity.name,
+                user_input="Agent Link 连接预检",
+            ),
+            strict_audit=True,
+        )
+        return policy_profile
+    except (PromptPolicyError, OSError, ValueError, RuntimeError) as exc:
+        logger.error(
+            "Agent Link Prompt 策略预检失败",
+            extra={
+                "platform_id": identity.platform_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise AgentLinkProtocolError(
+            "PROMPT_POLICY_UNAVAILABLE",
+            "Nanobot 当前没有可用的外部私聊 Prompt 策略。",
+        ) from exc
+
+
 def _validate_client_capabilities(frame: AgentLinkFrame) -> None:
     capabilities = frame.payload.get("capabilities")
     capabilities = capabilities if isinstance(capabilities, Mapping) else {}
@@ -254,7 +304,11 @@ async def _send_control_error(
     category = (
         "authentication"
         if error.code in {"INVALID_TOKEN", "TOKEN_NOT_CONFIGURED"}
-        else "protocol"
+        else (
+            "configuration"
+            if error.code == "PROMPT_POLICY_UNAVAILABLE"
+            else "protocol"
+        )
     )
     try:
         await channel.send_frame(
@@ -276,7 +330,7 @@ async def _send_control_error(
 
 @router.websocket("/agent-link")
 async def agent_link_websocket(websocket: WebSocket) -> None:
-    """接收 MeaPet 主动建立的 Agent Link v1 双向长连接。"""
+    """接收第三方客户端主动建立的 Agent Link v1 双向长连接。"""
 
     await websocket.accept()
     channel = _WebSocketChannel(websocket)
@@ -306,6 +360,8 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
             )
         _authenticate_hello(hello)
         _validate_client_capabilities(hello)
+        client_identity = _client_identity(hello)
+        policy_profile = await _preflight_prompt_policy(client_identity)
         device_id = _safe_device_id(hello)
         peer = AgentLinkPeer(
             key=AgentLinkSessionKey(
@@ -314,6 +370,8 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
             ),
             send_frame=channel.send_frame,
             close_transport=channel.close,
+            client=client_identity,
+            policy_profile=policy_profile,
         )
         await runtime.attach(peer)
         await peer.send(
@@ -324,6 +382,11 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
                     "authenticated": True,
                     "agent_name": NANOBOT_CHARACTER_NAME or "Nanobot",
                     "server_version": "1.0.0",
+                    "client_context": {
+                        "platform_id": client_identity.platform_id,
+                        "policy_profile": policy_profile,
+                        "chat_type": "private",
+                    },
                     "capabilities": {
                         "chat": {
                             "submit": True,
@@ -364,11 +427,12 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
             error=error,
         )
     except AgentLinkProtocolError as exc:
-        close_code = (
-            1008
-            if exc.code in {"INVALID_TOKEN", "TOKEN_NOT_CONFIGURED"}
-            else 1002
-        )
+        if exc.code in {"INVALID_TOKEN", "TOKEN_NOT_CONFIGURED"}:
+            close_code = 1008
+        elif exc.code == "PROMPT_POLICY_UNAVAILABLE":
+            close_code = 1011
+        else:
+            close_code = 1002
         close_reason = exc.safe_message
         await _send_control_error(
             channel,

@@ -10,8 +10,7 @@ import asyncio
 import hashlib
 import inspect
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from uuid import uuid4
 from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional
@@ -27,8 +26,19 @@ from nanobot_kt.request_scope import BridgeRequestScope
 from nanobot_kt.image_pipeline import prepare_image_parts
 from nanobot_kt.reply_contract import RichTerminalOutput
 from nanobot_kt.message_adapter import MessageContractBridgeMixin
+from nanobot_kt.bridge_state import (
+    BridgeEventPayload,
+    BridgeRuntimeToolState as BridgeRuntimeToolState,
+    BridgeTraceFinalizer,
+    ModelLoopResult,
+    PromptRuntimeAssemblyContext,
+    ReplyResolution,
+)
+from nanobot_kt.direct_tool_execution import (
+    DirectToolExecutionResult,
+    execute_registered_tool,
+)
 from nanobot_kt.model_attempts import (
-    AttemptOutcome,
     classify_attempt_outcome,
     merge_model_candidates,
 )
@@ -170,186 +180,6 @@ async def _call_tracker_method(tracker: Any, method_name: str, model_id: str) ->
         await result
 
 
-@dataclass(frozen=True)
-class PromptRuntimeAssemblyContext:
-    prompt_engine: str
-    prompt_mode: str
-    prompt_key: str
-    chat_type: str
-    runtime_chat_type: str
-    session_id: str
-    user_id: str
-    group_id: str
-    sender_name: str
-    query: str
-    persona_text: str
-    history_header: str
-    history_messages: list[dict[str, Any]]
-    runtime_tool_prompt: str
-    effort_constraint: str
-    trace_id: str
-    run_id: str
-    is_group: bool
-    meta: dict[str, Any]
-    tool_plan: Any
-    session_guidance: str = field(default="", repr=False)
-    session_guidance_chat_stream_id: str = ""
-    session_guidance_resolution_status: str = "not_requested"
-    is_super_user: bool = False
-    platform: str = "qq"
-
-
-@dataclass
-class BridgeRuntimeToolState:
-    persona_text: str
-    history_messages: Any
-    history_header: str
-    is_group: bool
-    effort_constraint: str
-    runtime_preset: str
-    chat_type: str
-    runtime_chat_type: str
-    group_id: str
-    user_id: str
-    platform: str
-    tool_plan: Any
-    runtime_tool_prompt: str
-    effective_tools: list[str]
-    final_tools_token: Any
-    tool_plan_token: Any
-
-
-@dataclass
-class BridgeEventPayload:
-    event_content: Any
-    image_parts: list[Any]
-    required_capabilities: dict[str, bool]
-
-
-@dataclass
-class ModelLoopResult:
-    response: str
-    result: Any
-    target_model: str
-    terminal_output: RichTerminalOutput | None
-    selected_candidate: dict[str, Any] | None
-    attempts: int
-    health_status: AttemptOutcome
-
-
-@dataclass
-class ReplyResolution:
-    response: str
-    agent_result: str
-    no_reply: bool
-    no_tool_call: bool
-    output_preview: str
-    finish_status: str
-    error: str = ""
-
-
-@dataclass
-class BridgeTraceFinalizer:
-    bridge: Any
-    run_id: str
-    trace_tokens: Any
-    run_meta: dict[str, Any]
-    started_at: float
-    now: Any
-    correlation_tokens: Any = None
-    final_tools_token: Any = None
-    tool_plan_token: Any = None
-    closed: bool = False
-
-    def set_tool_tokens(
-        self,
-        *,
-        final_tools_token: Any = None,
-        tool_plan_token: Any = None,
-    ) -> None:
-        if final_tools_token is not None:
-            self.final_tools_token = final_tools_token
-        if tool_plan_token is not None:
-            self.tool_plan_token = tool_plan_token
-
-    def finish(
-        self,
-        status: str,
-        *,
-        output_preview: str = "",
-        error: str = "",
-        model: str = "",
-    ) -> None:
-        if self.closed:
-            return
-        self.closed = True
-
-        def run_step(label: str, callback: Callable[[], None]) -> None:
-            try:
-                callback()
-            except Exception as exc:
-                logger.warning(
-                    "Bridge trace cleanup step %s failed: %s", label, exc, exc_info=True
-                )
-
-        run_step("restore_saved_tools", self.bridge._restore_saved_tools)
-
-        def finish_run() -> None:
-            from core.tracing import RunTracer
-
-            RunTracer.finish_run(
-                self.run_id,
-                status=status,
-                output_preview=output_preview,
-                error=error,
-                latency_ms=int((self.now() - self.started_at) * 1000),
-                model=model,
-                meta=self.run_meta,
-            )
-
-        run_step("finish_run", finish_run)
-        if self.tool_plan_token is not None:
-            tool_plan_token = self.tool_plan_token
-            self.tool_plan_token = None
-
-            def reset_tool_plan() -> None:
-                from core.tool_plan import reset_current_tool_plan
-
-                reset_current_tool_plan(tool_plan_token)
-
-            run_step("reset_tool_plan", reset_tool_plan)
-        if self.final_tools_token is not None:
-            final_tools_token = self.final_tools_token
-            self.final_tools_token = None
-
-            def reset_final_tools() -> None:
-                from core.final_tools import reset_current_final_tools
-
-                reset_current_final_tools(final_tools_token)
-
-            run_step("reset_final_tools", reset_final_tools)
-        if self.correlation_tokens is not None:
-            correlation_tokens = self.correlation_tokens
-            self.correlation_tokens = None
-
-            def reset_correlation() -> None:
-                from core.tracing_context import reset_runtime_correlation
-
-                reset_runtime_correlation(correlation_tokens)
-
-            run_step("reset_correlation", reset_correlation)
-        if self.trace_tokens is not None:
-            trace_tokens = self.trace_tokens
-            self.trace_tokens = None
-
-            def reset_trace() -> None:
-                from core.tracing_context import reset_trace_context
-
-                reset_trace_context(trace_tokens)
-
-            run_step("reset_trace", reset_trace)
-
-
 class NanobotBridge(MessageContractBridgeMixin):
     """
     Wraps a KT Agent for use as a request/response handler.
@@ -373,6 +203,7 @@ class NanobotBridge(MessageContractBridgeMixin):
         self._active_route_plan: ReplyRoutePlan | None = None
         self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session 分锁
         self._last_prompt_render_meta: dict[str, Any] = {}
+        self._kt_session_key = f"nanobot-bridge-{uuid4().hex}"
 
     def _build_runtime(self, *, initially_started: bool) -> AgentRuntimePort:
         if self._agent is None:
@@ -421,6 +252,15 @@ class NanobotBridge(MessageContractBridgeMixin):
         config.system_prompt = ""
 
     async def start(self) -> None:
+        """启动 Bridge；任一步失败都清理已创建的 KT Session。"""
+
+        try:
+            await self._start()
+        except BaseException:
+            await self._cleanup_failed_start()
+            raise
+
+    async def _start(self) -> None:
         """Initialize the KT agent from creature config."""
         logger.info(f"Loading KT agent from {self.creature_path}")
         config = load_agent_config(self.creature_path)
@@ -432,6 +272,9 @@ class NanobotBridge(MessageContractBridgeMixin):
         from core.tool_schema_preview import validate_registered_tool_schemas
 
         validate_registered_tool_schemas()
+        # KT 默认按 config.name 复用进程级 Session；每个 Bridge 必须拥有独立
+        # Session，避免共享 Agent 与隔离定时任务互相覆盖 channels/scratchpad。
+        config.session_key = self._kt_session_key
         self._disable_config_prompt(config)
         config.include_tools_in_prompt = False
         config.include_hints_in_prompt = False
@@ -492,6 +335,49 @@ class NanobotBridge(MessageContractBridgeMixin):
             f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}"
         )
 
+    async def _cleanup_failed_start(self) -> None:
+        """启动失败时尽力释放局部 Runtime，并保留原始异常。"""
+
+        memory_runtime = getattr(self, "_memory_runtime", None)
+        runtime = getattr(self, "_runtime", None)
+        try:
+            if memory_runtime is not None and memory_runtime.initialized:
+                await memory_runtime.shutdown()
+        except BaseException as exc:
+            logger.warning(
+                "Bridge 启动失败后清理 Memory Runtime 失败 error_type=%s",
+                type(exc).__name__,
+            )
+        try:
+            if (
+                runtime is not None
+                and runtime.state is not RuntimeLifecycleState.STOPPED
+            ):
+                await runtime.stop()
+        except BaseException as exc:
+            logger.warning(
+                "Bridge 启动失败后清理 Agent Runtime 失败 error_type=%s",
+                type(exc).__name__,
+            )
+        self._output.set_interrupt_callback(None)
+        self._remove_kt_session()
+
+    def _remove_kt_session(self) -> Exception | None:
+        """移除当前 Bridge 独占的 KT 进程级 Session。"""
+
+        try:
+            from kohakuterrarium.core.session import remove_session
+
+            remove_session(self._kt_session_key)
+            return None
+        except Exception as exc:
+            logger.warning(
+                "KT Session 清理失败 session_key=%s error_type=%s",
+                self._kt_session_key,
+                type(exc).__name__,
+            )
+            return exc
+
     def _strip_framework_prompt_from_conversation(self) -> None:
         """清理 KT 聚合器自动追加的 framework prompt 段落。"""
         try:
@@ -543,9 +429,40 @@ class NanobotBridge(MessageContractBridgeMixin):
                 first_error = exc
         finally:
             self._output.set_interrupt_callback(None)
+            session_error = self._remove_kt_session()
+            if first_error is None and session_error is not None:
+                first_error = session_error
         logger.info("KT Agent stopped")
         if first_error is not None:
             raise first_error
+
+    async def execute_registered_tool(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        *,
+        user_id: str,
+        session_id: str,
+        metadata: dict[str, Any] | None = None,
+        idempotency_key: str = "",
+        trace_id: str = "",
+        timeout_seconds: float = 600.0,
+        additional_tool_schemas: tuple[dict[str, Any], ...] = (),
+    ) -> DirectToolExecutionResult:
+        """委托独立执行器，Bridge 仅保留兼容调用面。"""
+
+        return await execute_registered_tool(
+            self,
+            tool_name,
+            args,
+            user_id=user_id,
+            session_id=session_id,
+            metadata=metadata,
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
+            timeout_seconds=timeout_seconds,
+            additional_tool_schemas=additional_tool_schemas,
+        )
 
     PERSONA_MARKER = "<persona_reference"
     RUNTIME_MARKER = "<runtime_context>"
@@ -719,7 +636,7 @@ class NanobotBridge(MessageContractBridgeMixin):
             prompt_key=prompt_key,
             chat_type=context.chat_type,
             runtime_chat_type=context.runtime_chat_type,
-            platform=context.platform,
+            platform=context.platform, policy_profile=str(meta.get("policy_profile") or ""),
             session_id=context.session_id,
             user_id=context.user_id,
             group_id=context.group_id,
@@ -924,9 +841,37 @@ class NanobotBridge(MessageContractBridgeMixin):
 
         self._output.clear()
         self._clear_controller_event_state()
+        from core.final_tools import final_tools_scope
         from core.llm_trace_context import llm_trace_scope
+        from core.tool_execution_policy import (
+            FINAL_ACTION_TOOLS,
+            final_action_only_scope,
+        )
+        from core.tool_plan import (
+            get_current_tool_plan,
+            restrict_tool_plan,
+            tool_plan_scope,
+        )
 
-        with llm_trace_scope(trace_id=trace_id, run_id=run_id, source=llm_source):
+        current_plan = get_current_tool_plan()
+        if current_plan is None:
+            raise RuntimeError("最终回复阶段缺少请求级 ToolPlan")
+        final_action_plan = restrict_tool_plan(
+            current_plan,
+            FINAL_ACTION_TOOLS,
+            disabled_reason="最终回复阶段只允许 reply/no_reply",
+        )
+        retry_source = f"{llm_source}.reply_contract_retry"
+        with (
+            tool_plan_scope(final_action_plan),
+            final_tools_scope(final_action_plan),
+            final_action_only_scope(),
+            llm_trace_scope(
+                trace_id=trace_id,
+                run_id=run_id,
+                source=retry_source,
+            ),
+        ):
             turn = await self._require_runtime().execute_turn(
                 AgentTurnRequest(
                     context=runtime_context,
@@ -1514,7 +1459,6 @@ class NanobotBridge(MessageContractBridgeMixin):
         )
         response_text = response.strip() if isinstance(response, str) else ""
         raw_output = buffer_text or response_text
-
         reply_text = self._extract_reply_from_tool_output(session_id)
         if self.is_no_reply_session(session_id):
             reason = str(
@@ -1756,6 +1700,17 @@ class NanobotBridge(MessageContractBridgeMixin):
                 now=_time.time,
             )
             request_scope.bind_trace_finalizer(trace_finalizer)
+            from core.tool_execution_policy import (
+                ToolExecutionState,
+                set_current_tool_execution_state,
+            )
+
+            tool_execution_token = set_current_tool_execution_state(
+                ToolExecutionState(
+                    request_id=str(meta.get("message_id") or run_handle.run_id)
+                )
+            )
+            trace_finalizer.set_tool_execution_token(tool_execution_token)
 
             self._prepare_output_for_request(
                 stream_queue=stream_queue,
@@ -1792,7 +1747,12 @@ class NanobotBridge(MessageContractBridgeMixin):
             runtime_chat_type = (
                 "private_superuser" if (not is_group and is_super_user) else chat_type
             )
-            user_id = str(meta.get("user_id", session_id or "")).strip()
+            user_id = str(
+                meta.get("user_id")
+                or user_id
+                or ("" if is_group else session_id)
+                or ""
+            ).strip()
 
             from core.final_tools import set_current_final_tools
             from core.tool_plan import build_tool_plan, set_current_tool_plan

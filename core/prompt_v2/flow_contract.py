@@ -13,9 +13,15 @@ LIVE_PROMPT_BRANCHES: tuple[tuple[str, str], ...] = (
     ("web", "group"),
     ("web", "private"),
     ("internal", "private"),
+    ("external_private", "private"),
 )
 LIVE_PROMPT_BRANCH_SET = frozenset(LIVE_PROMPT_BRANCHES)
-RUNTIME_PLATFORMS = frozenset(platform for platform, _chat_type in LIVE_PROMPT_BRANCHES)
+# Flow v2 的 JSON 字段仍命名为 platforms 以保持兼容，但这里的枚举值已经是
+# 服务端 Prompt 策略档位，不是可自动注册的平台身份。
+PROMPT_POLICY_PROFILES = frozenset(
+    profile for profile, _chat_type in LIVE_PROMPT_BRANCHES
+)
+RUNTIME_PLATFORMS = PROMPT_POLICY_PROFILES
 
 
 def is_live_prompt_branch(platform: str, chat_type: str) -> bool:

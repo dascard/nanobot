@@ -881,6 +881,7 @@ def fail_outbound_generation(
     claim_token: str,
     error_type: str,
     error_summary: Any,
+    model_trace_id: str = "",
     now: datetime | None = None,
 ) -> bool:
     normalized_owner = _text(owner, name="owner", max_length=128)
@@ -891,6 +892,7 @@ def fail_outbound_generation(
         max_length=64,
     )
     normalized_summary = _summary(error_summary)
+    trace_id = str(model_trace_id or "")[:128]
     run_probe = db.get(OutboundRun, int(run_id))
     if run_probe is None:
         raise OutboundFencingError("generation claim 已失效")
@@ -937,6 +939,7 @@ def fail_outbound_generation(
             {
                 OutboundGenerationAttempt.status: "failed",
                 OutboundGenerationAttempt.completed_at: current,
+                OutboundGenerationAttempt.model_trace_id: trace_id,
                 OutboundGenerationAttempt.error_type: normalized_error_type,
                 OutboundGenerationAttempt.error_summary: normalized_summary,
             },

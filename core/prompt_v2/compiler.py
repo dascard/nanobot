@@ -137,22 +137,15 @@ async def compile_prompt_plan(
     from core.prompt_v2.template_registry import runtime_template_dir
     from core.runtime.event_bus import emit_runtime_event
 
-    request_view = request if isinstance(request, PromptCompileRequest) else None
-    platform = (
-        request_view.normalized_platform
-        if request_view is not None
-        else str(request.get("platform") or "qq").strip().lower() or "qq"
+    request_view = (
+        request
+        if isinstance(request, PromptCompileRequest)
+        else PromptCompileRequest(**request)
     )
-    chat_type = (
-        request_view.normalized_chat_type
-        if request_view is not None
-        else str(request.get("chat_type") or "private").strip().lower() or "private"
-    )
-    prompt_key = (
-        request_view.normalized_prompt_key
-        if request_view is not None
-        else str(request.get("prompt_key") or "").strip()
-    )
+    platform = request_view.normalized_platform
+    policy_profile = request_view.normalized_policy_profile
+    chat_type = request_view.normalized_chat_type
+    prompt_key = request_view.normalized_prompt_key
     started = time.perf_counter()
     emit_runtime_event(
         "prompt.compile",
@@ -160,6 +153,7 @@ async def compile_prompt_plan(
         attributes={
             "prompt_key": prompt_key,
             "platform": platform,
+            "policy_profile": policy_profile,
             "chat_type": chat_type,
         },
     )
@@ -177,6 +171,7 @@ async def compile_prompt_plan(
             attributes={
                 "prompt_key": prompt_key,
                 "platform": platform,
+                "policy_profile": policy_profile,
                 "chat_type": chat_type,
                 "latency_ms": (time.perf_counter() - started) * 1000,
                 "error_type": type(exc).__name__,
@@ -189,6 +184,7 @@ async def compile_prompt_plan(
         attributes={
             "prompt_key": prompt_key,
             "platform": platform,
+            "policy_profile": policy_profile,
             "chat_type": chat_type,
             "message_count": len(plan.messages),
             "section_count": len(plan.flow_sections),
@@ -210,6 +206,7 @@ async def _compile_prompt_plan_locked(
 
     chat_type = request.normalized_chat_type
     platform = request.normalized_platform
+    policy_profile = request.normalized_policy_profile
     prompt_key = request.normalized_prompt_key
 
     template_values = build_template_values(request)
@@ -244,13 +241,13 @@ async def _compile_prompt_plan_locked(
     selected_nodes = ordered_nodes_for_chat(
         flow_state.flow,
         chat_type,
-        platform=platform,
+        platform=policy_profile,
     )
     contribution_resolution = resolve_prompt_contributions(
         flow_state.flow,
         selected_nodes,
         chat_type=chat_type,
-        platform=platform,
+        platform=policy_profile,
     )
     selected_nodes_by_id = {
         str(node.get("id") or "").strip(): node
@@ -626,6 +623,7 @@ async def _compile_prompt_plan_locked(
         "flow_entry_node_id": str(ordered_nodes[0].get("id") or "") if ordered_nodes else "",
         "flow_node_ids": [str(node.get("id") or "") for node in ordered_nodes],
         "platform": platform,
+        "policy_profile": policy_profile,
         "history_message_count": len(history_messages),
         "has_group_context": bool(group_context),
         "tool_schema_count": len(request.tool_schemas or []),
@@ -670,6 +668,7 @@ async def _compile_prompt_plan_locked(
         warnings=warnings,
         debug=jsonable(debug),
         platform=platform,
+        policy_profile=policy_profile,
         flow_sections=flow_sections,
         message_token_estimate=metrics.message_token_estimate,
         tool_schema_token_estimate=metrics.tool_schema_token_estimate,
@@ -691,6 +690,7 @@ async def _compile_prompt_plan_locked(
         warnings=list(plan.warnings) + audit.issues,
         debug=plan.debug,
         platform=plan.platform,
+        policy_profile=plan.policy_profile,
         flow_sections=plan.flow_sections,
         message_token_estimate=plan.message_token_estimate,
         tool_schema_token_estimate=plan.tool_schema_token_estimate,

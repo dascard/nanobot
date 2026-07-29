@@ -215,7 +215,10 @@ def _tool_feature_descriptors() -> tuple[FeatureLifecycleDescriptor, ...]:
         )
     ]
     for tool in list_tool_descriptors():
-        if tool.name in SANDBOX_TOOL_NAMES:
+        if (
+            tool.name in SANDBOX_TOOL_NAMES
+            and tool.availability_policy != "force_disabled"
+        ):
             continue
         if tool.availability_policy == "force_disabled":
             state = FeatureLifecycleState.RETIRED

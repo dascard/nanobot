@@ -363,6 +363,29 @@ class SafeWorkspaceFilesystem:
         with self.open_regular_file(relative_path) as (_file_fd, size_bytes):
             return size_bytes
 
+    def unlink_regular_file(self, relative_path: str) -> None:
+        """通过 dir_fd 删除普通文件，不跟随符号链接。"""
+
+        with self._parent_fd(relative_path) as (
+            parent_fd,
+            name,
+            _components,
+        ):
+            try:
+                metadata = os.stat(
+                    name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise _invalid_path()
+                os.unlink(name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except SandboxServiceError:
+                raise
+            except OSError as exc:
+                raise _map_os_error(exc) from exc
+
     def write_bytes(
         self,
         relative_path: str,

@@ -254,7 +254,7 @@ def _require_session_guidance_baseline(flow: dict[str, Any]) -> None:
 def migrate_internal_private_flow_v2(
     flow: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
-    """把当前 v1 Flow 显式升级为支持 internal/private 的 v2。"""
+    """把 v1 Flow 升级为支持内部与外部私聊策略的 v2。"""
 
     migrated = copy.deepcopy(flow)
     _validate_base_flow(migrated)
@@ -264,7 +264,9 @@ def migrate_internal_private_flow_v2(
     if version == FLOW_SCHEMA_VERSION:
         _validate_core_edge_conditions(
             edge,
-            expected_platforms=frozenset({"web", "internal"}),
+            expected_platforms=frozenset(
+                {"web", "internal", "external_private"}
+            ),
         )
         _validate_migrated_flow(migrated)
         return migrated, False
@@ -277,7 +279,7 @@ def migrate_internal_private_flow_v2(
     )
     _require_session_guidance_baseline(migrated)
     migrated["version"] = FLOW_SCHEMA_VERSION
-    edge["platforms"] = ["web", "internal"]
+    edge["platforms"] = ["web", "internal", "external_private"]
     _validate_migrated_flow(migrated)
     return migrated, True
 

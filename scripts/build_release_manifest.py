@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -149,6 +150,7 @@ def _resolve_source(args: argparse.Namespace, root: Path):
 def _parse_input_hashes(
     root: Path,
     values: Sequence[str],
+    explicit_values: Sequence[str] = (),
 ) -> dict[str, str]:
     hashes: dict[str, str] = {}
     for value in values:
@@ -162,6 +164,21 @@ def _parse_input_hashes(
                 f"重复构建输入名称：{name}"
             )
         hashes[name] = hash_repository_path(root, path)
+    for value in explicit_values:
+        name, separator, digest = value.partition("=")
+        if (
+            not separator
+            or not name
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise ManifestBuildError(
+                "--input-sha 必须使用 name=<64位小写SHA-256>"
+            )
+        if name in hashes:
+            raise ManifestBuildError(
+                f"重复构建输入名称：{name}"
+            )
+        hashes[name] = digest
     return hashes
 
 
@@ -193,7 +210,11 @@ def _artifact_command(args: argparse.Namespace) -> int:
         profile_id=args.profile,
         provenance="built",
         source=source,
-        input_hashes=_parse_input_hashes(root, args.input),
+        input_hashes=_parse_input_hashes(
+            root,
+            args.input,
+            args.input_sha,
+        ),
         schema_migration_head=schema_head or "",
         oci_image_reference=args.image_reference or "",
         oci_image_id=args.image_id or "",
@@ -297,6 +318,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     artifact.add_argument("--kt-commit")
     artifact.add_argument("--input", action="append", default=[])
+    artifact.add_argument("--input-sha", action="append", default=[])
     artifact.add_argument("--schema-migration-head")
     artifact.add_argument("--image-reference")
     artifact.add_argument("--image-id")

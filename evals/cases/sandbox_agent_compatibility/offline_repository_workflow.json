@@ -2,7 +2,7 @@
   "schema_version": 1,
   "case_id": "offline_repository_workflow",
   "title": "离线仓库修改与测试",
-  "task": "读取已就绪仓库，使用 rg 定位代码，通过 workspace_apply_patch 修改文件，在 /runtime 创建 venv，运行定向测试和全量测试，最后执行 git diff --check。",
+  "task": "读取已就绪仓库，使用 workspace_search 或 rg 定位代码，通过 workspace_edit 修改文件，在 /runtime 创建 venv，运行定向测试和全量测试，最后执行 git diff --check。",
   "required_checkpoints": [
     "repository_inspected",
     "patch_applied",

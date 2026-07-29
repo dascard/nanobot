@@ -126,7 +126,9 @@ def test_restricted_prompt_uses_actual_oneshot_profile_capabilities(
     assert "sandbox_poll" not in plan.sent_tool_names
     assert "sandbox_write_stdin" not in plan.sent_tool_names
     assert "sandbox_terminate" not in plan.sent_tool_names
-    assert "workspace_apply_patch" in plan.sent_tool_names
+    assert "workspace_edit" in plan.sent_tool_names
+    assert "workspace_apply_patch" not in plan.sent_tool_names
+    assert "workspace_list" not in plan.sent_tool_names
 
 
 def test_developer_prompt_explains_lease_shell_storage_and_termination(
@@ -175,5 +177,5 @@ def test_developer_prompt_explains_lease_shell_storage_and_termination(
         "sandbox_poll",
         "sandbox_write_stdin",
         "sandbox_terminate",
-        "workspace_apply_patch",
+        "workspace_edit",
     } <= plan.sent_tool_names

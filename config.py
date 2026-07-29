@@ -4,6 +4,8 @@ Nanobot 集中配置模块。
 """
 
 import os
+import logging
+from collections.abc import Mapping
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -22,11 +24,66 @@ NANOBOT_API_TOKEN = os.environ.get("NANOBOT_API_TOKEN", "")
 NANOBOT_ADMIN_TOKEN = os.environ.get("NANOBOT_ADMIN_TOKEN", "")
 
 # ── Agent Link v1 WebSocket ──
-# 未单独配置时复用普通 API Token，避免同一 Nanobot 部署维护两份必需凭证。
+# 兼容期仍允许回退普通 API Token；生产应显式使用独立凭据，避免两个接口共享
+# 授权面和轮换周期。
 NANOBOT_AGENT_LINK_TOKEN = (
     os.environ.get("NANOBOT_AGENT_LINK_TOKEN", "").strip()
     or NANOBOT_API_TOKEN.strip()
 )
+_AGENT_LINK_FALLBACK_WARNING_EMITTED = False
+
+
+def agent_link_token_diagnostic(
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """只说明 Agent Link 凭据是否配置及来源，绝不返回凭据内容。"""
+
+    source = os.environ if environ is None else environ
+    explicit = bool(
+        str(source.get("NANOBOT_AGENT_LINK_TOKEN") or "").strip()
+    )
+    api_fallback = bool(
+        str(source.get("NANOBOT_API_TOKEN") or "").strip()
+    )
+    if explicit:
+        return {
+            "configured": True,
+            "source": "agent_link_token",
+            "fallback": False,
+        }
+    if api_fallback:
+        return {
+            "configured": True,
+            "source": "api_token_fallback",
+            "fallback": True,
+        }
+    return {
+        "configured": False,
+        "source": "unconfigured",
+        "fallback": False,
+    }
+
+
+def log_agent_link_token_configuration(logger: logging.Logger) -> None:
+    """启动期记录一次安全来源；兼容回退每进程最多告警一次。"""
+
+    global _AGENT_LINK_FALLBACK_WARNING_EMITTED
+    diagnostic = agent_link_token_diagnostic()
+    if diagnostic["fallback"]:
+        if _AGENT_LINK_FALLBACK_WARNING_EMITTED:
+            return
+        _AGENT_LINK_FALLBACK_WARNING_EMITTED = True
+        logger.warning(
+            "Agent Link 正在复用 NANOBOT_API_TOKEN；"
+            "生产应显式配置独立 NANOBOT_AGENT_LINK_TOKEN "
+            "source=api_token_fallback"
+        )
+        return
+    logger.info(
+        "Agent Link 凭据状态 configured=%s source=%s fallback=false",
+        diagnostic["configured"],
+        diagnostic["source"],
+    )
 NANOBOT_AGENT_LINK_MAX_FRAME_BYTES = int(
     os.environ.get("NANOBOT_AGENT_LINK_MAX_FRAME_BYTES", str(16 * 1024 * 1024))
 )

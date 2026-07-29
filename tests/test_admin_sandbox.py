@@ -194,6 +194,19 @@ def test_admin_sandbox_status_reports_safe_health_usage_and_runs(
         "group_enabled": False,
         "group_enabled_editable": True,
     }
+    enabled_config = payload["configuration"]["sandbox.enabled"]
+    assert enabled_config["database_override"] == {
+        "configured": True,
+        "value": True,
+        "source_allowed": True,
+    }
+    assert enabled_config["effective"]["value"] is True
+    assert enabled_config["effective"]["source"] == "database"
+    infrastructure = payload["configuration"][
+        "sandbox.infrastructure_enable_allowed"
+    ]
+    assert infrastructure["hard_ceiling"] is True
+    assert infrastructure["database_override"]["source_allowed"] is False
     assert payload["controller"]["health"]["ok"] is True
     assert payload["controller"]["ready"]["disk_used_percent"] == 21.5
     assert payload["usage"] == {
@@ -219,6 +232,50 @@ def test_admin_sandbox_status_reports_safe_health_usage_and_runs(
     assert "/srv/nanobot" not in serialized
     assert "不得返回" not in serialized
     assert backends[0].closed is True
+
+
+def test_admin_sandbox_status_can_explain_session_gate(
+    db_session,
+    monkeypatch,
+):
+    _settings(db_session)
+    _business_rows(db_session)
+    client = _client(db_session, monkeypatch, [])
+
+    response = client.get(
+        "/api/v1/admin/sandbox/status",
+        params={
+            "platform": "qq",
+            "chat_type": "private",
+            "session_id": "private_missing",
+            "tool_name": "workspace_read",
+        },
+    )
+
+    assert response.status_code == 200
+    diagnostic = response.json()["session_access"]
+    assert diagnostic["required_capability"] == "workspace"
+    assert diagnostic["final"] == {
+        "allowed": False,
+        "reason_code": "sandbox_not_enabled",
+        "reason": "Sandbox 基础设施硬上限未允许",
+        "granted_capability": "off",
+        "execution_profile": "restricted",
+        "workspace_configured": False,
+    }
+    gates = {item["id"]: item for item in diagnostic["gates"]}
+    assert gates["infrastructure_ceiling"]["passed"] is False
+    assert gates["infrastructure_ceiling"]["hard_ceiling"] is True
+    assert gates["sandbox_enabled"]["passed"] is True
+    assert gates["session_grant"]["reason_code"] == (
+        "sandbox_grant_insufficient"
+    )
+
+    partial = client.get(
+        "/api/v1/admin/sandbox/status",
+        params={"platform": "qq"},
+    )
+    assert partial.status_code == 422
 
 
 def test_admin_sandbox_run_list_and_cancel_are_sanitized_and_audited(

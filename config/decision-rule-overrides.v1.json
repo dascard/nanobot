@@ -20,8 +20,8 @@
       "match": {
         "category": "compatibility"
       },
-      "expected_count": 137,
-      "expected_rule_ids_sha256": "20ff3a565be456ed2cbe34e1cd087ed65a8da52748e000a70d9ed63b4c4a1e49",
+      "expected_count": 138,
+      "expected_rule_ids_sha256": "d3ee45c7b8a915ccb1c8643982af19c1e58195cfd558860527fe045e0be63940",
       "override": {
         "category": "compatibility",
         "disposition": "compatibility_migration",

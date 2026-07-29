@@ -174,6 +174,72 @@ def test_process_and_patch_trace_sanitizers_keep_only_audit_metadata():
     ) == 64
 
 
+def test_workspace_edit_trace_omits_exact_text_and_diff_bodies():
+    from core.tracing import sanitize_tool_trace_args, sanitize_tool_trace_result
+
+    old_secret = "OLD_EDIT_SECRET"
+    new_secret = "NEW_EDIT_SECRET"
+    diff_secret = "DIFF_EDIT_SECRET"
+    args = sanitize_tool_trace_args(
+        "workspace_edit",
+        {
+            "cwd": "project",
+            "operations": [
+                {
+                    "path": "src/a.py",
+                    "old": old_secret,
+                    "new": new_secret,
+                    "replace_all": False,
+                },
+                {
+                    "diff": (
+                        "diff --git a/b.py b/b.py\n"
+                        "--- a/b.py\n"
+                        "+++ b/b.py\n"
+                        "@@ -1 +1 @@\n"
+                        "-old\n"
+                        f"+{diff_secret}\n"
+                    ),
+                },
+            ],
+        },
+    )
+    result = sanitize_tool_trace_result(
+        "workspace_edit",
+        {
+            "status": "success",
+            "summary": "编辑完成",
+            "artifacts": [],
+            "data": {
+                "protocol_version": 2,
+                "file_count": 1,
+                "recovery_status": "not_needed",
+                "files": [{
+                    "path": "project/src/a.py",
+                    "size_bytes": 12,
+                    "replacement_count": 1,
+                    "old_sha256": "a" * 64,
+                    "new_sha256": "b" * 64,
+                }],
+            },
+        },
+    )
+    serialized = json.dumps(
+        {"args": args, "result": result},
+        ensure_ascii=False,
+    )
+
+    assert old_secret not in serialized
+    assert new_secret not in serialized
+    assert diff_secret not in serialized
+    assert args["cwd"] == "project"
+    assert args["operations"][0]["path"] == "src/a.py"
+    assert args["operations"][0]["old_omitted"] is True
+    assert args["operations"][1]["diff_omitted"] is True
+    assert len(args["operations"][1]["diff_sha256"]) == 64
+    assert result["data"]["files"][0]["path"] == "project/src/a.py"
+
+
 def test_asset_publish_trace_omits_short_lived_transport_token():
     from core.tracing import sanitize_tool_trace_result
 
@@ -274,3 +340,79 @@ def test_executor_trace_context_exposes_current_tool_call_only_during_execution(
     assert len(observed) == 1
     assert observed[0].startswith("tool_")
     assert get_tool_trace_context() == ""
+
+
+def test_executor_marks_structured_business_error_as_failed(
+    db_session,
+    monkeypatch,
+):
+    from core.database import ToolCall
+    from core.tool_tracing import install_executor_tracing
+    from core.tracing_context import (
+        reset_trace_context,
+        set_trace_context,
+    )
+
+    payload = {
+        "status": "error",
+        "summary": "当前会话没有显式 Sandbox 授权",
+        "next_actions": [],
+        "artifacts": [],
+        "error": {
+            "code": "authorization_failed",
+            "retryable": False,
+            "hint": "",
+            "stop": True,
+        },
+    }
+    events = []
+    monkeypatch.setattr(
+        "core.runtime.event_bus.emit_runtime_event",
+        lambda name, phase, **kwargs: events.append((name, phase, kwargs)),
+    )
+
+    class Executor:
+        async def _run_tool(self, _job_id, _tool, _args, _is_direct=False):
+            return SimpleNamespace(
+                output=json.dumps(payload, ensure_ascii=False),
+                error="",
+                exit_code=0,
+                metadata={"structured_content": payload},
+            )
+
+    executor = Executor()
+    tool = SimpleNamespace(tool_name="sandbox_exec")
+    install_executor_tracing(executor)
+    trace_tokens = set_trace_context("trace-structured", "run-structured")
+    try:
+        result = run_async(
+            executor._run_tool(
+                "job-structured",
+                tool,
+                {"command": "pwd"},
+                True,
+            )
+        )
+    finally:
+        reset_trace_context(trace_tokens)
+
+    assert result.exit_code == 0
+    row = (
+        db_session.query(ToolCall)
+        .filter_by(trace_id="trace-structured", run_id="run-structured")
+        .one()
+    )
+    assert row.status == "error"
+    assert "error_omitted" in row.error
+    failed = [
+        kwargs["attributes"]
+        for name, phase, kwargs in events
+        if name == "tool.execute" and phase == "failed"
+    ]
+    assert len(failed) == 1
+    assert failed[0]["tool_name"] == "sandbox_exec"
+    assert failed[0]["failure_code"] == "authorization_failed"
+    assert failed[0]["error_type"] == "structured_tool_error"
+    assert failed[0]["retryable"] is False
+    assert failed[0]["stop"] is True
+    assert failed[0]["result_truncated"] is False

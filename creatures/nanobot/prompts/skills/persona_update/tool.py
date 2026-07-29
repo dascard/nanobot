@@ -42,19 +42,13 @@ class PersonaUpdateTool(BaseTool):
         }
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
-        context = kwargs.get("context")
-        session = getattr(context, "session", None) if context is not None else None
-        session_extra = getattr(session, "extra", {}) if session is not None else {}
-        runtime_context = (
-            session_extra.get("nanobot_runtime_context", {})
-            if isinstance(session_extra, dict)
-            else {}
-        )
-        user_id = (
-            str(runtime_context.get("user_id", "")).strip()
-            if isinstance(runtime_context, dict)
-            else ""
-        )
+        _ = kwargs
+        from core.agent_runtime.request_scope import get_current_runtime_context
+
+        runtime_context = get_current_runtime_context()
+        user_id = str(
+            runtime_context.get("user_id", "") if runtime_context is not None else ""
+        ).strip()
 
         if not user_id:
             return ToolResult(error="Persona update authorization failed")

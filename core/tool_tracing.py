@@ -72,6 +72,10 @@ def finish_tool_trace(
     status: str = "success",
     result: Any = None,
     error: str = "",
+    failure_code: str = "",
+    error_type: str = "",
+    retryable: bool | None = None,
+    stop: bool | None = None,
 ) -> None:
     if not tool_call_id:
         return
@@ -95,21 +99,34 @@ def finish_tool_trace(
     result_bytes, result_sha256 = _payload_fingerprint(result)
     from core.runtime.event_bus import emit_runtime_event
 
+    attributes: dict[str, object] = {
+        "tool_name": tool_name,
+        "args_bytes": args_bytes,
+        "args_sha256": args_sha256,
+        "result_bytes": result_bytes,
+        "result_sha256": result_sha256,
+        "result_truncated": False,
+        "latency_ms": (time.time() - started) * 1000,
+        "failure_code": (
+            str(failure_code or "tool_error")
+            if status != "success"
+            else ""
+        ),
+        "error_type": (
+            str(error_type or "tool_error")
+            if status != "success"
+            else ""
+        ),
+    }
+    if retryable is not None:
+        attributes["retryable"] = retryable
+    if stop is not None:
+        attributes["stop"] = stop
     emit_runtime_event(
         "tool.execute",
         "succeeded" if status == "success" else "failed",
         context=_tool_event_context(tool_call_id),
-        attributes={
-            "tool_name": tool_name,
-            "args_bytes": args_bytes,
-            "args_sha256": args_sha256,
-            "result_bytes": result_bytes,
-            "result_sha256": result_sha256,
-            "result_truncated": False,
-            "latency_ms": (time.time() - started) * 1000,
-            "failure_code": "tool_error" if status != "success" else "",
-            "error_type": "tool_error" if error else "",
-        },
+        attributes=attributes,
     )
 
 
@@ -138,17 +155,49 @@ def install_executor_tracing(executor: Any) -> None:
             raise
         else:
             if tool_call_id:
+                from core.tool_execution_policy import extract_tool_failure
+
+                structured_failure = extract_tool_failure(result)
                 status = "success"
                 error = getattr(result, "error", "") or ""
                 exit_code = getattr(result, "exit_code", 0)
-                if error or exit_code not in (0, None):
+                if (
+                    error
+                    or exit_code not in (0, None)
+                    or structured_failure is not None
+                ):
                     status = "error"
+                if structured_failure is not None and not error:
+                    error = (
+                        f"{structured_failure.code}: "
+                        f"{structured_failure.summary}"
+                    )
                 finish_tool_trace(
                     tool_call_id,
                     started,
                     status=status,
                     result=getattr(result, "output", ""),
                     error=error,
+                    failure_code=(
+                        structured_failure.code
+                        if structured_failure is not None
+                        else ""
+                    ),
+                    error_type=(
+                        "structured_tool_error"
+                        if structured_failure is not None
+                        else ""
+                    ),
+                    retryable=(
+                        structured_failure.retryable
+                        if structured_failure is not None
+                        else None
+                    ),
+                    stop=(
+                        structured_failure.stop
+                        if structured_failure is not None
+                        else None
+                    ),
                 )
             return result
         finally:

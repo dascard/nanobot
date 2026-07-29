@@ -28,6 +28,10 @@ def _seed_scheduled_outbox_control(db_session) -> None:
 
 def _seed_manual_task(db_session):
     from core.database import ScheduledTask
+    from core.scheduled_task_contract import (
+        apply_scheduled_task_owner,
+        scheduled_task_owner_from_target,
+    )
 
     task = ScheduledTask(
         name="测试任务",
@@ -36,6 +40,14 @@ def _seed_manual_task(db_session):
         target_id="u1",
         prompt_template="提醒我喝水",
         enabled=True,
+    )
+    apply_scheduled_task_owner(
+        task,
+        scheduled_task_owner_from_target(
+            target_type="private",
+            target_id="u1",
+            created_by_actor_id="u1",
+        ),
     )
     db_session.add(task)
     db_session.commit()
@@ -65,7 +77,10 @@ def test_manual_run_returns_queued_without_direct_http(
     db_session,
     monkeypatch,
 ):
-    from core.database import OutboundDeliveryOutbox
+    from core.database import (
+        OutboundDeliveryOutbox,
+        ScheduledTaskExecution,
+    )
 
     _seed_scheduled_outbox_control(db_session)
     task = _seed_manual_task(db_session)
@@ -87,13 +102,15 @@ def test_manual_run_returns_queued_without_direct_http(
 
     assert response.status_code == 202
     data = response.json()
-    assert data["status"] == "queued"
-    assert data["run_id"] > 0
-    assert data["outbox_id"] > 0
+    assert data["status"] == "pending"
+    assert data["execution_id"] > 0
     assert data["deduplicated"] is False
+    assert "run_id" not in data
+    assert "outbox_id" not in data
     assert "content" not in data
     assert "target" not in data
-    assert db_session.query(OutboundDeliveryOutbox).count() == 1
+    assert db_session.query(ScheduledTaskExecution).count() == 1
+    assert db_session.query(OutboundDeliveryOutbox).count() == 0
 
 
 def test_task_update_cancels_pending_delivery_atomically(

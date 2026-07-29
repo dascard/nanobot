@@ -55,6 +55,11 @@ def _seed_control(db, *, mode: str = "outbox_active") -> None:
 
 
 def _seed_task(db, *, target_id: str = "opaque-user") -> ScheduledTask:
+    from core.scheduled_task_contract import (
+        apply_scheduled_task_owner,
+        scheduled_task_owner_from_target,
+    )
+
     task = ScheduledTask(
         name="AI 日报",
         cron_expr="0 12 * * *",
@@ -64,9 +69,36 @@ def _seed_task(db, *, target_id: str = "opaque-user") -> ScheduledTask:
         enabled=1,
         delivery_status="idle",
     )
+    apply_scheduled_task_owner(
+        task,
+        scheduled_task_owner_from_target(
+            target_type="private",
+            target_id=target_id,
+            created_by_actor_id=target_id,
+        ),
+    )
     db.add(task)
     db.flush()
     return task
+
+
+def _retarget_task(task: ScheduledTask, target_id: str) -> None:
+    from core.scheduled_task_contract import (
+        apply_scheduled_task_owner,
+        scheduled_task_owner_from_target,
+    )
+
+    task.target_type = "private"
+    task.target_id = target_id
+    apply_scheduled_task_owner(
+        task,
+        scheduled_task_owner_from_target(
+            target_type="private",
+            target_id=target_id,
+            created_by_actor_id=target_id,
+        ),
+    )
+    task.definition_version = int(task.definition_version or 0) + 1
 
 
 def _destination(target_id: str) -> dict[str, str]:
@@ -513,6 +545,53 @@ def test_legacy_worker_rejects_stale_live_writer_snapshot_without_sending(
     assert result is None
     assert transport_calls == []
     assert outbox.status == "pending"
+
+
+def test_default_generator_persists_agent_trace_id(
+    db_session,
+    monkeypatch,
+):
+    from core import daily_digest
+    from core.scheduled_task_outbound import (
+        ScheduledTaskProducerConfig,
+        enqueue_scheduled_task_occurrence,
+    )
+
+    _seed_control(db_session)
+    task = _seed_task(db_session, target_id="trace-owner")
+    db_session.commit()
+    seen = {}
+
+    async def fake_generate(_snapshot, *, trace_id=""):
+        seen["trace_id"] = trace_id
+        return "带 Trace 的正文"
+
+    monkeypatch.setattr(
+        daily_digest,
+        "_generate_task_message",
+        fake_generate,
+    )
+
+    result = run_async(
+        enqueue_scheduled_task_occurrence(
+            db_session,
+            task_id=task.id,
+            trigger_type="manual",
+            manual_idempotency_key="trace-link",
+            config=ScheduledTaskProducerConfig.for_tests(
+                endpoint_config_revision=CONFIG_REVISION,
+            ),
+            now=NOW,
+        )
+    )
+
+    attempt = (
+        db_session.query(OutboundGenerationAttempt)
+        .filter_by(run_id=result.run_id)
+        .one()
+    )
+    assert seen["trace_id"]
+    assert attempt.model_trace_id == seen["trace_id"]
     assert db_session.query(OutboundDeliveryAttempt).count() == 0
 
 
@@ -634,7 +713,7 @@ def test_same_cron_slot_generates_once_and_keeps_first_snapshot(db_session):
             generator=generator,
             now=NOW,
         ))
-    task.target_id = "edited-target"
+    _retarget_task(task, "edited-target")
     task.prompt_template = "同一槽内修改后的模板"
     db_session.commit()
     second_result = run_async(enqueue_scheduled_task_occurrence(
@@ -771,7 +850,7 @@ def test_new_occurrence_reads_task_after_shared_source_lock(
     def update_wins_before_producer_read(db, *, source_type, now=None):
         assert source_type == SOURCE_TYPE
         live = db.get(ScheduledTask, task.id)
-        live.target_id = "new-target"
+        _retarget_task(live, "new-target")
         live.prompt_template = "新任务定义"
         db.flush()
         db.expire_all()
@@ -1865,7 +1944,7 @@ def test_expired_generation_is_recovered_from_frozen_run_snapshot(db_session):
         )
 
     crashed_run = db_session.query(OutboundRun).one()
-    task.target_id = "edited-after-crash"
+    _retarget_task(task, "edited-after-crash")
     task.prompt_template = "崩溃后被外部修改的定义"
     db_session.commit()
     recovered_snapshots = []

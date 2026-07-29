@@ -163,6 +163,9 @@ class HttpSandboxdBackend:
     def write_file(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/files/write", payload=payload)
 
+    def edit_files(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/v1/files/edit", payload=payload)
+
     def apply_patch(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._request(
             "POST",

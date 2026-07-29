@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from core.group_learning.aspects import (
     GROUP_ANALYSIS_ASPECT_REGISTRY,
 )
+from core.scheduled_task_contract import scheduled_task_program_schema
 from core.tool_contracts.ai_daily import ai_daily_parameters_schema
 from core.tool_registration import (
     TOOL_REGISTRATION_REGISTRY,
@@ -243,7 +244,7 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "'30m'=30分钟后触发一次; 'every 2h'=每2小时循环; "
             "'0 9 * * *'=cron(分 时 日 月 周); "
             "'2026-08-01T15:00'=指定时刻触发一次。"
-            "创建任务时如果用户没有明确目标会话，可使用当前 runtime_context 对应的私聊或群聊。"
+            "普通 Agent 只能管理和投递到当前 runtime_context 对应的私聊或群聊。"
         ),
         "parameters": {
             "type": "object",
@@ -265,9 +266,14 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     ),
                 },
                 "cron_expr": {"type": "string", "description": "旧参数，等价于 schedule 的 cron 写法（Asia/Shanghai 时区，分 时 日 月 周）"},
-                "target_type": {"type": "string", "description": "推送类型: private 或 group；创建时留空则尝试使用当前会话类型", "enum": ["private", "group"]},
-                "target_id": {"type": "string", "description": "QQ号或群号；创建时留空则尝试使用当前 runtime_context 的 user_id/group_id"},
-                "prompt_template": {"type": "string", "description": "LLM 生成推送内容的提示模板，不是直接发送的固定文本"},
+                "target_type": {"type": "string", "description": "兼容参数；必须与当前会话类型一致，不能跨会话投递", "enum": ["private", "group"]},
+                "target_id": {"type": "string", "description": "兼容参数；必须与当前会话目标一致，不能指定其他 QQ 或群"},
+                "prompt_template": {
+                    "type": "string",
+                    "maxLength": 16000,
+                    "description": "兼容写法：自动转换为 model→emit 程序；使用 program 时可省略",
+                },
+                "program": scheduled_task_program_schema(),
                 "idempotency_key": {
                     "type": "string",
                     "minLength": 1,
@@ -483,30 +489,40 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         },
     },
     "workspace_read": {
-        "description": "有界读取当前持久 Workspace 中的文本文件；二进制文件只返回元数据。",
+        "description": "按行有界读取当前持久 Workspace 中的 UTF-8 文本并返回稳定行号。",
         "parameters": {
             "type": "object",
             "additionalProperties": False,
             "properties": {
                 "path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Workspace 相对文件路径。"},
-                "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "按字节计的起始偏移。"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 262144, "default": 65536, "description": "本次最多读取的字节数。"},
+                "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "从 0 开始的行偏移。"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200, "description": "本次读取的最大行数。"},
+                "cwd": {"type": "string", "maxLength": 4096, "default": "", "description": "可选 Workspace 相对工作目录；path 相对该目录解析。"},
             },
             "required": ["path"],
         },
     },
     "workspace_search": {
-        "description": "在当前持久 Workspace 中执行有界字面量搜索，不接受任意正则。",
+        "description": "在当前持久 Workspace 中执行有界正则内容搜索、文件查找或目录树浏览。",
         "parameters": {
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "query": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "要查找的字面量文本。"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["content", "files", "tree"],
+                    "description": "content=正则 grep，files=文件名 glob，tree=目录树。",
+                },
+                "pattern": {"type": "string", "maxLength": 1024, "description": "content 模式为正则；files 模式为文件名 glob；tree 可省略。"},
                 "path": {"type": "string", "maxLength": 4096, "description": "可选 Workspace 相对目录。"},
                 "glob": {"type": "string", "maxLength": 512, "description": "可选的简单文件名 glob。"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                "ignore_case": {"type": "boolean", "default": False, "description": "content 模式是否忽略大小写。"},
+                "max_depth": {"type": "integer", "minimum": 0, "maximum": 100, "description": "可选目录递归深度。"},
+                "cursor": {"type": "string", "maxLength": 2048, "description": "达到扫描预算时返回的续扫游标。"},
+                "cwd": {"type": "string", "maxLength": 4096, "default": "", "description": "可选 Workspace 相对工作目录。"},
             },
-            "required": ["query"],
+            "required": ["mode"],
         },
     },
     "workspace_write": {
@@ -518,8 +534,48 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Workspace 相对文件路径。"},
                 "content": {"type": "string", "maxLength": 262144, "description": "UTF-8 小文本内容。"},
                 "overwrite": {"type": "boolean", "default": False, "description": "文件已存在时是否允许原子覆盖。"},
+                "cwd": {"type": "string", "maxLength": 4096, "default": "", "description": "可选 Workspace 相对工作目录。"},
             },
             "required": ["path", "content", "overwrite"],
+        },
+    },
+    "workspace_edit": {
+        "description": "对当前持久 Workspace 原子执行精确替换或多文件 unified diff。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "operations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                                    "old": {"type": "string", "minLength": 1, "maxLength": 262144},
+                                    "new": {"type": "string", "maxLength": 262144},
+                                    "replace_all": {"type": "boolean", "default": False},
+                                },
+                                "required": ["path", "old", "new"],
+                            },
+                            {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "diff": {"type": "string", "minLength": 1, "maxLength": 262144},
+                                },
+                                "required": ["diff"],
+                            },
+                        ],
+                    },
+                },
+                "cwd": {"type": "string", "maxLength": 4096, "default": "", "description": "可选 Workspace 相对工作目录。"},
+            },
+            "required": ["operations"],
         },
     },
     "workspace_apply_patch": {
