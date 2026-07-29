@@ -136,6 +136,8 @@ def test_sqlalchemy_sink_persists_safe_event_and_full_correlation(db_session):
             "failure_code": "schema_invalid",
             "input_sha256": "a" * 64,
             "output_bytes": 21,
+            "prompt_cache_hit_tokens": 13,
+            "prompt_cache_miss_tokens": 7,
             "content": "不得写入数据库的正文",
         },
     )
@@ -167,6 +169,8 @@ def test_sqlalchemy_sink_persists_safe_event_and_full_correlation(db_session):
     assert row.dropped_attribute_count == 1
     stored = json.loads(row.attributes_json)
     assert stored["input_sha256"] == "a" * 64
+    assert stored["prompt_cache_hit_tokens"] == 13
+    assert stored["prompt_cache_miss_tokens"] == 7
     assert "不得写入" not in row.attributes_json
     assert event.provenance.registry_sha256 == row.registry_sha256
 
@@ -178,6 +182,19 @@ def test_sqlalchemy_sink_persists_safe_event_and_full_correlation(db_session):
         .count()
         == 1
     )
+
+
+def test_telemetry_persistence_only_allows_integer_token_counts():
+    from core.telemetry.persistence import _safe_attributes
+
+    safe, dropped = _safe_attributes({
+        "prompt_cache_hit_tokens": 13,
+        "prompt_cache_miss_tokens": "不得写入",
+        "api_token": "secret",
+    })
+
+    assert safe == {"prompt_cache_hit_tokens": 13}
+    assert dropped == 2
 
 
 def test_job_telemetry_projects_lease_retry_and_typed_failure():

@@ -26,6 +26,15 @@ _SENSITIVE_KEY_PARTS = (
     "token",
 )
 
+_SAFE_TOKEN_COUNT_KEYS = frozenset({
+    "input_token_estimate",
+    "input_tokens",
+    "output_tokens",
+    "prompt_cache_hit_tokens",
+    "prompt_cache_miss_tokens",
+    "total_tokens",
+})
+
 
 def _utc_naive(value: datetime) -> datetime:
     if value.tzinfo is None:
@@ -43,7 +52,17 @@ def _safe_attributes(
         if (
             not key
             or len(key) > 64
-            or any(part in key.lower() for part in _SENSITIVE_KEY_PARTS)
+            or (
+                key not in _SAFE_TOKEN_COUNT_KEYS
+                and any(
+                    part in key.lower()
+                    for part in _SENSITIVE_KEY_PARTS
+                )
+            )
+            or (
+                key in _SAFE_TOKEN_COUNT_KEYS
+                and (type(value) is not int or value < 0)
+            )
             or type(value) not in {bool, int, float, str}
         ):
             dropped += 1

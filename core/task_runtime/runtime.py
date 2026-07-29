@@ -146,6 +146,8 @@ def _usage_metrics(usage: Mapping[str, Any]) -> dict[str, int]:
     input_tokens = first("prompt_tokens", "input_tokens")
     output_tokens = first("completion_tokens", "output_tokens")
     total_tokens = first("total_tokens")
+    prompt_cache_hit_tokens = first("prompt_cache_hit_tokens")
+    prompt_cache_miss_tokens = first("prompt_cache_miss_tokens")
     if total_tokens is None and (
         input_tokens is not None and output_tokens is not None
     ):
@@ -156,6 +158,8 @@ def _usage_metrics(usage: Mapping[str, Any]) -> dict[str, int]:
             ("input_tokens", input_tokens),
             ("output_tokens", output_tokens),
             ("total_tokens", total_tokens),
+            ("prompt_cache_hit_tokens", prompt_cache_hit_tokens),
+            ("prompt_cache_miss_tokens", prompt_cache_miss_tokens),
         )
         if value is not None
     }

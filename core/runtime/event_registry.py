@@ -95,6 +95,8 @@ def build_runtime_event_registry() -> RuntimeEventRegistry:
                 _field("input_chars", "count"),
                 _field("input_token_estimate", "count"),
                 _field("input_tokens", "count"),
+                _field("prompt_cache_hit_tokens", "count"),
+                _field("prompt_cache_miss_tokens", "count"),
                 _field("output_sha256", "digest"),
                 _field("output_bytes", "count"),
                 _field("output_tokens", "count"),

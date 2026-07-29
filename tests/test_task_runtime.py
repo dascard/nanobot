@@ -63,7 +63,12 @@ def _completion_for(route_key: str, content: str):
         route_key=route_key,
         provider="local_llama",
         model="qwen-test",
-        usage={"prompt_tokens": 12, "completion_tokens": 8},
+        usage={
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "prompt_cache_hit_tokens": 9,
+            "prompt_cache_miss_tokens": 3,
+        },
     )
 
 
@@ -223,6 +228,8 @@ def test_task_runtime_returns_parsed_value_and_safe_provenance():
     assert attributes["input_tokens"] > 0
     assert attributes["output_tokens"] == 8
     assert attributes["total_tokens"] == 20
+    assert attributes["prompt_cache_hit_tokens"] == 9
+    assert attributes["prompt_cache_miss_tokens"] == 3
     serialized = repr(events)
     assert "帮我看看这段代码" not in serialized
 
