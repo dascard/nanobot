@@ -1,4 +1,5 @@
 -r requirements.txt
+-r requirements-sandboxd.in
 
 # ── Tests ──
 pytest>=7.0.0

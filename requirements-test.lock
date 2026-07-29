@@ -97,7 +97,9 @@ distro==1.9.0
     #   openai
     # from https://pypi.org/simple
 docker==7.1.0
-    # via -r requirements-test.txt
+    # via
+    #   -r requirements-sandboxd.in
+    #   -r requirements-test.txt
     # from https://pypi.org/simple
 docstring-parser==0.18.0
     # via anthropic
@@ -113,6 +115,7 @@ fake-useragent==2.2.0
     # from https://pypi.org/simple
 fastapi==0.139.2
     # via
+    #   -r requirements-sandboxd.in
     #   -r requirements.txt
     #   kohakuterrarium
     # from https://pypi.org/simple
@@ -317,6 +320,9 @@ packaging==26.2
 pandas==3.0.3
     # via -r requirements.txt
     # from https://pypi.org/simple
+pathspec==0.12.1
+    # via -r requirements-sandboxd.in
+    # from https://pypi.org/simple
 pillow==12.3.0
     # via
     #   -r requirements.txt
@@ -349,6 +355,7 @@ pycparser==3.0
     # from https://pypi.org/simple
 pydantic==2.13.4
     # via
+    #   -r requirements-sandboxd.in
     #   -r requirements.txt
     #   anthropic
     #   fastapi
@@ -397,6 +404,7 @@ pytest-xdist==3.8.0
     # from https://pypi.org/simple
 python-dateutil==2.9.0.post0
     # via
+    #   croniter
     #   dateparser
     #   htmldate
     #   pandas
@@ -434,6 +442,7 @@ referencing==0.37.0
     # from https://pypi.org/simple
 regex==2026.7.19
     # via
+    #   -r requirements-sandboxd.in
     #   dateparser
     #   transformers
     # from https://pypi.org/simple
@@ -536,7 +545,7 @@ tokenizers==0.22.2
     #   model2vec
     #   transformers
     # from https://pypi.org/simple
-torch==2.13.0+cpu
+torch==2.13.0
     # via
     #   -r requirements.txt
     #   sentence-transformers
@@ -608,6 +617,7 @@ urllib3==2.7.0
     # from https://pypi.org/simple
 uvicorn==0.51.0
     # via
+    #   -r requirements-sandboxd.in
     #   -r requirements.txt
     #   kohakuterrarium
     #   mcp
