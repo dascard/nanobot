@@ -28,6 +28,11 @@ from core.agent_link.protocol import (
     AgentLinkProtocolError,
     make_agent_link_frame,
 )
+from core.prompt_v2.policy_profiles import (
+    DEFAULT_EXTERNAL_POLICY_PROFILE,
+    PromptPolicyError,
+    normalize_platform_id,
+)
 
 
 logger = logging.getLogger("nanobot.agent_link")
@@ -39,6 +44,72 @@ _ALLOWED_IMAGE_MEDIA_TYPES = frozenset(
 
 SendFrame = Callable[[Mapping[str, object]], Awaitable[None]]
 CloseTransport = Callable[[int, str], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentLinkClientIdentity:
+    """握手声明的客户端类型；device.id 另行标识具体实例。"""
+
+    platform_id: str
+    name: str
+    version: str
+
+    @classmethod
+    def parse(cls, raw: object) -> "AgentLinkClientIdentity":
+        if not isinstance(raw, Mapping):
+            raise AgentLinkProtocolError(
+                "INVALID_HANDSHAKE",
+                "control.hello 缺少 client 对象",
+            )
+        raw_platform_id = raw.get("id")
+        if (
+            not isinstance(raw_platform_id, str)
+            or raw_platform_id != raw_platform_id.strip().lower()
+        ):
+            raise AgentLinkProtocolError(
+                "INVALID_CLIENT_ID",
+                "control.hello client.id 必须匹配 "
+                "^[a-z][a-z0-9_-]{0,31}$",
+            )
+        try:
+            platform_id = normalize_platform_id(
+                raw_platform_id,
+                default="",
+            )
+        except PromptPolicyError as exc:
+            raise AgentLinkProtocolError(
+                "INVALID_CLIENT_ID",
+                "control.hello client.id 必须匹配 "
+                "^[a-z][a-z0-9_-]{0,31}$",
+            ) from exc
+        name = str(raw.get("name") or "").strip()
+        version = str(raw.get("version") or "").strip()
+        if not name or len(name) > 128 or any(
+            char in name for char in "\r\n\x00"
+        ):
+            raise AgentLinkProtocolError(
+                "INVALID_HANDSHAKE",
+                "control.hello 缺少有效 client.name",
+            )
+        if not version or len(version) > 64 or any(
+            char in version for char in "\r\n\x00"
+        ):
+            raise AgentLinkProtocolError(
+                "INVALID_HANDSHAKE",
+                "control.hello 缺少有效 client.version",
+            )
+        return cls(
+            platform_id=platform_id,
+            name=name,
+            version=version,
+        )
+
+
+_DEFAULT_CLIENT_IDENTITY = AgentLinkClientIdentity(
+    platform_id="agent_link",
+    name="Agent Link 客户端",
+    version="unknown",
+)
 
 
 class AgentLinkToolFailure(RuntimeError):
@@ -189,6 +260,8 @@ class AgentLinkChatRequest:
     frontend_context: dict[str, Any]
     files: tuple[str, ...]
     tools: tuple[AgentLinkToolDefinition, ...]
+    client: AgentLinkClientIdentity = _DEFAULT_CLIENT_IDENTITY
+    policy_profile: str = DEFAULT_EXTERNAL_POLICY_PROFILE
 
 
 class AgentLinkToolCaller(Protocol):
@@ -221,6 +294,8 @@ class AgentLinkPeer:
     key: AgentLinkSessionKey
     send_frame: SendFrame = field(repr=False)
     close_transport: CloseTransport = field(repr=False)
+    client: AgentLinkClientIdentity = _DEFAULT_CLIENT_IDENTITY
+    policy_profile: str = DEFAULT_EXTERNAL_POLICY_PROFILE
     online: bool = True
     snapshot_revision: int | None = None
     _tools: dict[str, AgentLinkToolDefinition] = field(
@@ -414,6 +489,8 @@ def ensure_meapet_response_format(answer: str) -> str:
     """保留有效的 MeaPet 输出；普通 Nanobot 回复则包装成单段协议。"""
 
     text = str(answer or "").strip()
+    if not text:
+        raise ValueError("Agent 返回了空结果")
     required_markers = (
         "<MEAPET_SEGMENT",
         "</MEAPET_SEGMENT",
@@ -425,10 +502,10 @@ def ensure_meapet_response_format(answer: str) -> str:
     )
     if text and all(marker in text for marker in required_markers):
         return text
-    display = _safe_protocol_display(text or "暂时无法生成回复。")
+    display = _safe_protocol_display(text)
     metadata = json.dumps(
         {
-            "voice_text": text or "暂时无法生成回复。",
+            "voice_text": text,
             "voice_language": "zh-CN",
             "mood": "neutral",
             "tts_style": "",
@@ -514,6 +591,7 @@ class AgentLinkRuntime:
 
     def __init__(self) -> None:
         self._connections: dict[AgentLinkSessionKey, AgentLinkPeer] = {}
+        self._registered_clients: dict[str, AgentLinkClientIdentity] = {}
         self._chat_states: OrderedDict[
             tuple[AgentLinkSessionKey, str],
             _ChatState,
@@ -536,6 +614,19 @@ class AgentLinkRuntime:
                 raise RuntimeError("Agent Link Runtime 已关闭")
             old = self._connections.get(peer.key)
             self._connections[peer.key] = peer
+            self._registered_clients[peer.client.platform_id] = peer.client
+            if (
+                old is not None
+                and old.client.platform_id != peer.client.platform_id
+                and not any(
+                    item.client.platform_id == old.client.platform_id
+                    for item in self._connections.values()
+                )
+            ):
+                self._registered_clients.pop(
+                    old.client.platform_id,
+                    None,
+                )
         if old is not None and old is not peer:
             old.mark_offline()
             try:
@@ -548,6 +639,33 @@ class AgentLinkRuntime:
         async with self._lock:
             if self._connections.get(peer.key) is peer:
                 self._connections.pop(peer.key, None)
+            remaining = next(
+                (
+                    item
+                    for item in self._connections.values()
+                    if item.client.platform_id == peer.client.platform_id
+                ),
+                None,
+            )
+            if remaining is None:
+                self._registered_clients.pop(
+                    peer.client.platform_id,
+                    None,
+                )
+            else:
+                self._registered_clients[
+                    peer.client.platform_id
+                ] = remaining.client
+
+    async def registered_client(
+        self,
+        platform_id: str,
+    ) -> AgentLinkClientIdentity | None:
+        """查询当前连接自动注册的客户端身份。"""
+
+        normalized = normalize_platform_id(platform_id)
+        async with self._lock:
+            return self._registered_clients.get(normalized)
 
     async def current_peer(
         self,
@@ -558,6 +676,36 @@ class AgentLinkRuntime:
             if peer is None or not peer.online:
                 return None
             return peer
+
+    async def current_peer_for_bridge_session_id(
+        self,
+        bridge_session_id: str,
+        *,
+        platform_id: str = "",
+    ) -> AgentLinkPeer | None:
+        """用持久化的 bridge session 身份恢复当前在线前端连接。
+
+        定时任务只保存不可逆的 bridge session ID，不持久化设备原始标识。
+        """
+
+        normalized_session_id = str(bridge_session_id or "").strip()
+        normalized_platform = str(platform_id or "").strip().lower()
+        if not normalized_session_id:
+            return None
+        async with self._lock:
+            matches = [
+                peer
+                for key, peer in self._connections.items()
+                if peer.online
+                and key.bridge_session_id == normalized_session_id
+                and (
+                    not normalized_platform
+                    or peer.client.platform_id == normalized_platform
+                )
+            ]
+            if len(matches) != 1:
+                return None
+            return matches[0]
 
     async def call_tool(
         self,
@@ -828,6 +976,8 @@ class AgentLinkRuntime:
                 ),
                 files=tuple(files),
                 tools=definitions,
+                client=peer.client,
+                policy_profile=peer.policy_profile,
             )
             answer = await asyncio.wait_for(
                 chat_port.run_chat(request, self),
@@ -836,15 +986,26 @@ class AgentLinkRuntime:
                     float(NANOBOT_AGENT_LINK_CHAT_TIMEOUT_SECONDS),
                 ),
             )
-            terminal = make_agent_link_frame(
-                "chat.final",
-                {
-                    "text": ensure_meapet_response_format(str(answer or "")),
-                    "replace": True,
-                },
-                session_id=state.key.session_id,
-                reply_to=state.request_id,
-            )
+            answer_text = str(answer or "").strip()
+            if not answer_text:
+                terminal = self._chat_error_frame(
+                    state.key.session_id,
+                    state.request_id,
+                    category="backend_unavailable",
+                    code="EMPTY_AGENT_RESULT",
+                    safe_message="Agent 未生成可发送的回复。",
+                    retryable=True,
+                )
+            else:
+                terminal = make_agent_link_frame(
+                    "chat.final",
+                    {
+                        "text": ensure_meapet_response_format(answer_text),
+                        "replace": True,
+                    },
+                    session_id=state.key.session_id,
+                    reply_to=state.request_id,
+                )
         except asyncio.CancelledError:
             terminal = make_agent_link_frame(
                 "chat.cancelled",
@@ -988,6 +1149,7 @@ class AgentLinkRuntime:
             self._closed = True
             peers = tuple(self._connections.values())
             self._connections.clear()
+            self._registered_clients.clear()
             tasks = tuple(
                 state.task
                 for state in self._chat_states.values()

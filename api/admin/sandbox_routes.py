@@ -42,6 +42,10 @@ from core.sandbox.admin_service import (
 )
 from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError
 from core.sandbox.execution_profiles import load_execution_profile_registry
+from core.sandbox.diagnostics import (
+    sandbox_feature_diagnostics,
+    sandbox_session_access_diagnostic,
+)
 from core.sandbox.tool_service import resolve_sandbox_setting
 from core.settings_service import settings
 from core.time_utils import db_now_naive
@@ -650,10 +654,50 @@ def _settle_active_runs(
 
 @router.get("/status")
 def sandbox_status(
+    platform: str | None = Query(default=None, min_length=1, max_length=32),
+    chat_type: Literal["private", "group"] | None = Query(default=None),
+    session_id: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=255,
+    ),
+    tool_name: str = Query(
+        default="workspace_read",
+        min_length=1,
+        max_length=64,
+    ),
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    return {
+    session_requested = any(
+        value is not None
+        for value in (platform, chat_type, session_id)
+    )
+    if session_requested and (
+        platform is None
+        or chat_type is None
+        or session_id is None
+    ):
+        raise HTTPException(
+            422,
+            "会话诊断必须同时提供 platform、chat_type 和 session_id",
+        )
+    try:
+        session_diagnostic = (
+            sandbox_session_access_diagnostic(
+                db,
+                tool_name=tool_name,
+                platform=platform,
+                chat_type=chat_type,
+                session_id=session_id,
+            )
+            if session_requested
+            else None
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    payload = {
         "feature": {
             "infrastructure_enable_allowed": settings.get_bool(
                 "sandbox.infrastructure_enable_allowed",
@@ -678,6 +722,7 @@ def sandbox_status(
             )),
             "group_enabled_editable": True,
         },
+        "configuration": sandbox_feature_diagnostics(db),
         "controller": _controller_status(db),
         "usage": _usage_summary(db),
         "limits": {
@@ -711,6 +756,9 @@ def sandbox_status(
         ),
         "recent_failures": _recent_runs(db, statuses=("failed",), limit=20),
     }
+    if session_diagnostic is not None:
+        payload["session_access"] = session_diagnostic
+    return payload
 
 
 @router.put("/features")

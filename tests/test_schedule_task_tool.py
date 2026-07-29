@@ -1,6 +1,24 @@
 from tests.async_helpers import run_async
-from types import SimpleNamespace
 from datetime import datetime, timedelta
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _trusted_schedule_task_runtime_context():
+    from core.agent_runtime.request_scope import runtime_context_scope
+
+    with runtime_context_scope(
+        {
+            "platform": "qq",
+            "chat_type": "group",
+            "is_group": True,
+            "session_id": "group_10001",
+            "group_id": "10001",
+            "user_id": "u1",
+        }
+    ):
+        yield
 
 
 def _seed_scheduled_outbox_control(db_session) -> None:
@@ -22,6 +40,10 @@ def _seed_scheduled_outbox_control(db_session) -> None:
 
 def _seed_task(db_session):
     from core.database import ScheduledTask
+    from core.scheduled_task_contract import (
+        apply_scheduled_task_owner,
+        scheduled_task_owner_from_target,
+    )
 
     task = ScheduledTask(
         name="即时推送",
@@ -31,6 +53,14 @@ def _seed_task(db_session):
         prompt_template="生成今日简报",
         enabled=True,
         delivery_status="idle",
+    )
+    apply_scheduled_task_owner(
+        task,
+        scheduled_task_owner_from_target(
+            target_type="group",
+            target_id="10001",
+            created_by_actor_id="u1",
+        ),
     )
     db_session.add(task)
     db_session.commit()
@@ -63,7 +93,11 @@ def test_schedule_task_run_requires_explicit_idempotency_key(
 
 def test_schedule_task_run_queues_and_reports_not_delivered(monkeypatch, db_session):
     from core import daily_digest
-    from core.database import OutboundDeliveryOutbox, ScheduledTask
+    from core.database import (
+        OutboundDeliveryOutbox,
+        ScheduledTask,
+        ScheduledTaskExecution,
+    )
     from creatures.nanobot.prompts.skills.schedule_task import tool as schedule_tool_module
     from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
 
@@ -108,9 +142,12 @@ def test_schedule_task_run_queues_and_reports_not_delivered(monkeypatch, db_sess
     assert result.success
     assert "已入队" in result.output
     assert "已执行并推送" not in result.output
-    assert db_session.query(OutboundDeliveryOutbox).count() == 1
+    assert db_session.query(ScheduledTaskExecution).count() == 1
+    assert db_session.query(OutboundDeliveryOutbox).count() == 0
     db_session.expire_all()
-    assert db_session.get(ScheduledTask, task_id).last_run_at is not None
+    execution = db_session.query(ScheduledTaskExecution).one()
+    assert execution.status == "pending"
+    assert db_session.get(ScheduledTask, task_id).last_run_at is None
     assert db_session.get(ScheduledTask, task_id).last_success_at is None
 
 
@@ -188,26 +225,29 @@ def test_schedule_task_create_uses_runtime_context_target(monkeypatch):
             pass
 
     monkeypatch.setattr(database, "SessionLocal", lambda: FakeDB())
-    context = SimpleNamespace(session=SimpleNamespace(extra={
-        "nanobot_runtime_context": {
+    from core.agent_runtime.request_scope import runtime_context_scope
+
+    with runtime_context_scope(
+        {
             "chat_type": "group",
             "is_group": True,
             "group_id": "10001",
             "user_id": "u1",
         }
-    }))
-
-    tool = ScheduleTaskTool()
-    result = run_async(tool.execute({
-        "action": "create",
-        "name": "早报",
-        "cron_expr": "0 9 * * *",
-        "prompt_template": "生成今日简报",
-    }, context=context))
+    ):
+        tool = ScheduleTaskTool()
+        result = run_async(tool.execute({
+            "action": "create",
+            "name": "早报",
+            "cron_expr": "0 9 * * *",
+            "prompt_template": "生成今日简报",
+        }))
 
     assert result.success
     assert added[0].target_type == "group"
     assert added[0].target_id == "10001"
+    assert added[0].owner_chat_stream_id == "qq:10001:group"
+    assert added[0].created_by_actor_id == "u1"
 
 
 def test_schedule_task_create_one_shot_via_schedule(monkeypatch):
@@ -233,8 +273,8 @@ def test_schedule_task_create_one_shot_via_schedule(monkeypatch):
         "action": "create",
         "name": "半小时后提醒",
         "schedule": "30m",
-        "target_type": "private",
-        "target_id": "0000000000",
+        "target_type": "group",
+        "target_id": "10001",
         "prompt_template": "提醒喝水",
     }))
 
@@ -265,10 +305,127 @@ def test_schedule_task_create_rejects_invalid_schedule(monkeypatch):
         "action": "create",
         "name": "坏任务",
         "schedule": "明天九点",
-        "target_type": "private",
-        "target_id": "0000000000",
+        "target_type": "group",
+        "target_id": "10001",
         "prompt_template": "提醒",
     }))
 
     assert not result.success
     assert "schedule 无效" in str(result.error)
+
+
+def test_schedule_task_cannot_list_or_mutate_another_owner(db_session):
+    from core.database import ScheduledTask
+    from core.scheduled_task_contract import (
+        apply_scheduled_task_owner,
+        scheduled_task_owner_from_target,
+    )
+    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+        ScheduleTaskTool,
+    )
+
+    own_task = _seed_task(db_session)
+    other_task = ScheduledTask(
+        name="OTHER_OWNER_MARKER",
+        cron_expr="0 10 * * *",
+        target_type="group",
+        target_id="20002",
+        prompt_template="其他群任务",
+        enabled=True,
+    )
+    apply_scheduled_task_owner(
+        other_task,
+        scheduled_task_owner_from_target(
+            target_type="group",
+            target_id="20002",
+            created_by_actor_id="u2",
+        ),
+    )
+    db_session.add(other_task)
+    db_session.commit()
+
+    listed = run_async(
+        ScheduleTaskTool().execute({"action": "list"})
+    )
+    mutated = run_async(
+        ScheduleTaskTool().execute(
+            {"action": "toggle", "task_id": other_task.id}
+        )
+    )
+
+    assert listed.success
+    assert str(own_task.name) in listed.output
+    assert "OTHER_OWNER_MARKER" not in listed.output
+    assert not mutated.success
+    assert "不存在" in str(mutated.error)
+    db_session.expire_all()
+    assert bool(db_session.get(ScheduledTask, other_task.id).enabled)
+
+
+def test_schedule_task_create_rejects_cross_owner_target(monkeypatch):
+    from core import database
+    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+        ScheduleTaskTool,
+    )
+
+    class FakeDB:
+        def add(self, _obj):
+            raise AssertionError("跨 owner 任务不得落库")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: FakeDB())
+
+    result = run_async(
+        ScheduleTaskTool().execute(
+            {
+                "action": "create",
+                "name": "越权任务",
+                "schedule": "30m",
+                "target_type": "group",
+                "target_id": "20002",
+                "prompt_template": "不应创建",
+            }
+        )
+    )
+
+    assert not result.success
+    assert "其他会话" in str(result.error)
+
+
+def test_schedule_task_rejects_oversized_prompt_before_database(
+    monkeypatch,
+):
+    from core import database
+    from core.scheduled_task_contract import (
+        MAX_SCHEDULED_TASK_PROMPT_CHARS,
+    )
+    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+        ScheduleTaskTool,
+    )
+
+    class FakeDB:
+        def add(self, _obj):
+            raise AssertionError("超限任务不得落库")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: FakeDB())
+
+    result = run_async(
+        ScheduleTaskTool().execute(
+            {
+                "action": "create",
+                "name": "超限任务",
+                "schedule": "30m",
+                "prompt_template": (
+                    "长" * (MAX_SCHEDULED_TASK_PROMPT_CHARS + 1)
+                ),
+            }
+        )
+    )
+
+    assert not result.success
+    assert "16000" in str(result.error)

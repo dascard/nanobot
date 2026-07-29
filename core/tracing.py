@@ -143,7 +143,8 @@ def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
         return {"args_omitted": True, "args_type": type(args).__name__}
     unknown_count = len(set(str(key) for key in args) - {
         "command", "cwd", "timeout_seconds", "path", "cursor", "limit",
-        "offset", "query", "glob", "content", "overwrite", "source_ref",
+        "offset", "query", "mode", "pattern", "glob", "ignore_case",
+        "max_depth", "content", "overwrite", "operations", "source_ref",
         "logical_name", "media_type", "yield_time_ms", "process_id", "chars",
         "patch",
     })
@@ -184,9 +185,60 @@ def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
         return {
             **result,
             "path": _safe_sandbox_path(args.get("path")),
+            "cwd": _safe_sandbox_path(args.get("cwd"), allow_empty=True),
             "overwrite": bool(args.get("overwrite", False)),
             "content_omitted": True,
             **{f"content_{key}": value for key, value in _text_audit(content).items()},
+        }
+    if name == "workspace_edit":
+        operations = (
+            args.get("operations")
+            if isinstance(args.get("operations"), list)
+            else []
+        )
+        safe_operations: list[dict[str, Any]] = []
+        for operation in operations[:50]:
+            if not isinstance(operation, Mapping):
+                safe_operations.append({
+                    "operation_omitted": True,
+                    "operation_type": type(operation).__name__,
+                })
+                continue
+            if "diff" in operation:
+                diff = str(operation.get("diff") or "")
+                safe_operations.append({
+                    "kind": "diff",
+                    "diff_omitted": True,
+                    "diff_lines": diff.count("\n") + (1 if diff else 0),
+                    **{
+                        f"diff_{key}": value
+                        for key, value in _text_audit(diff).items()
+                    },
+                })
+                continue
+            old = str(operation.get("old") or "")
+            new = str(operation.get("new") or "")
+            safe_operations.append({
+                "kind": "exact",
+                "path": _safe_sandbox_path(operation.get("path")),
+                "replace_all": operation.get("replace_all") is True,
+                "old_omitted": True,
+                "new_omitted": True,
+                **{
+                    f"old_{key}": value
+                    for key, value in _text_audit(old).items()
+                },
+                **{
+                    f"new_{key}": value
+                    for key, value in _text_audit(new).items()
+                },
+            })
+        return {
+            **result,
+            "cwd": _safe_sandbox_path(args.get("cwd"), allow_empty=True),
+            "operations": safe_operations,
+            "operation_count": len(operations),
+            "operations_truncated": len(operations) > len(safe_operations),
         }
     if name == "workspace_apply_patch":
         patch = str(args.get("patch") or "")
@@ -201,21 +253,34 @@ def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
             },
         }
     if name == "workspace_search":
-        query = str(args.get("query") or "")
+        pattern = str(args.get("pattern") or args.get("query") or "")
         return {
             **result,
+            "mode": str(args.get("mode") or "content")[:16],
             "path": _safe_sandbox_path(args.get("path"), allow_empty=True),
+            "cwd": _safe_sandbox_path(args.get("cwd"), allow_empty=True),
             "glob_omitted": bool(args.get("glob")),
             **{f"glob_{key}": value for key, value in _text_audit(args.get("glob")).items()},
-            "query_omitted": True,
-            **{f"query_{key}": value for key, value in _text_audit(query).items()},
+            "pattern_omitted": True,
+            **{
+                f"pattern_{key}": value
+                for key, value in _text_audit(pattern).items()
+            },
+            "ignore_case": args.get("ignore_case") is True,
+            "max_depth": args.get("max_depth"),
             "limit": args.get("limit"),
+            "cursor": str(args.get("cursor") or "")[:2048],
         }
     if name in {"workspace_list", "workspace_read", "asset_publish"}:
         result["path"] = _safe_sandbox_path(
             args.get("path"),
             allow_empty=name == "workspace_list",
         )
+        if name in {"workspace_list", "workspace_read"}:
+            result["cwd"] = _safe_sandbox_path(
+                args.get("cwd"),
+                allow_empty=True,
+            )
         for key in ("cursor", "limit", "offset", "media_type"):
             if args.get(key) is not None:
                 result[key] = args.get(key)
@@ -304,7 +369,21 @@ def _sandbox_result_data(tool_name: str, data: Any) -> dict[str, Any]:
     if tool_name == "workspace_read":
         safe = {
             key: data.get(key)
-            for key in ("offset", "returned_bytes", "size_bytes", "eof", "binary")
+            for key in (
+                "protocol_version",
+                "start_offset",
+                "offset",
+                "returned_lines",
+                "next_offset",
+                "total_lines",
+                "returned_bytes",
+                "size_bytes",
+                "eof",
+                "binary",
+                "line_truncated",
+                "output_truncated",
+                "truncation_reason",
+            )
             if key in data
         }
         safe["path"] = _safe_sandbox_path(data.get("path"))
@@ -335,7 +414,12 @@ def _sandbox_result_data(tool_name: str, data: Any) -> dict[str, Any]:
             "matched_text_bytes": text_audit["bytes"],
             "matched_text_sha256": text_audit["sha256"],
             "scanned_files": data.get("scanned_files"),
+            "scanned_bytes": data.get("scanned_bytes"),
+            "skipped_binary_files": data.get("skipped_binary_files"),
+            "skipped_ignored_files": data.get("skipped_ignored_files"),
             "truncated": data.get("truncated"),
+            "truncation_reason": data.get("truncation_reason"),
+            "next_cursor_present": bool(data.get("next_cursor")),
         }
     if tool_name == "workspace_list":
         entries = data.get("entries") if isinstance(data.get("entries"), list) else []
@@ -352,6 +436,36 @@ def _sandbox_result_data(tool_name: str, data: Any) -> dict[str, Any]:
             ],
             "next_cursor": data.get("next_cursor"),
             "total_visible": data.get("total_visible"),
+        }
+    if tool_name == "workspace_edit":
+        files = data.get("files") if isinstance(data.get("files"), list) else []
+        return {
+            "protocol_version": data.get("protocol_version"),
+            "file_count": data.get("file_count"),
+            "recovery_status": str(data.get("recovery_status") or "")[:32],
+            "files": [
+                {
+                    "path": _safe_sandbox_path(item.get("path")),
+                    **{
+                        key: item.get(key)
+                        for key in (
+                            "size_bytes",
+                            "previous_size_bytes",
+                            "used_bytes",
+                            "usage_delta_bytes",
+                            "replacement_count",
+                            "hunks_applied",
+                            "added_lines",
+                            "removed_lines",
+                            "old_sha256",
+                            "new_sha256",
+                        )
+                        if key in item
+                    },
+                }
+                for item in files[:50]
+                if isinstance(item, Mapping)
+            ],
         }
     if tool_name in {"workspace_write", "workspace_apply_patch"}:
         return {

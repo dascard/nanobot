@@ -2025,7 +2025,7 @@
       "default": 5,
       "env_name": "MAX_TOOL_ROUNDS",
       "key": "max_tool_rounds",
-      "owner_module": "core.model",
+      "owner_module": "core.legacy_adapter",
       "restart_required": false,
       "safety_class": "ordinary",
       "source_precedence": [
@@ -9505,7 +9505,7 @@
       "trace_policy": "standard"
     },
     {
-      "availability_policy": "configurable",
+      "availability_policy": "force_disabled",
       "category": "file",
       "domain": "tool.file",
       "execution_policy": "foreground_only",
@@ -9514,9 +9514,7 @@
       "name": "workspace_apply_patch",
       "owner_module": "core.sandbox",
       "private_default": false,
-      "prompt_template_keys": [
-        "tools/workspace_apply_patch/usage"
-      ],
+      "prompt_template_keys": [],
       "risk_level": "medium",
       "trace_policy": "metadata_only"
     },
@@ -9527,12 +9525,26 @@
       "execution_policy": "foreground_only",
       "framework_owned": false,
       "group_default": false,
-      "name": "workspace_list",
+      "name": "workspace_edit",
       "owner_module": "core.sandbox",
       "private_default": false,
       "prompt_template_keys": [
-        "tools/workspace_list/usage"
+        "tools/workspace_edit/usage"
       ],
+      "risk_level": "medium",
+      "trace_policy": "metadata_only"
+    },
+    {
+      "availability_policy": "force_disabled",
+      "category": "file",
+      "domain": "tool.file",
+      "execution_policy": "foreground_only",
+      "framework_owned": false,
+      "group_default": false,
+      "name": "workspace_list",
+      "owner_module": "core.sandbox",
+      "private_default": false,
+      "prompt_template_keys": [],
       "risk_level": "low",
       "trace_policy": "metadata_only"
     },

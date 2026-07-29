@@ -284,7 +284,16 @@ def _audit_core_contracts(
     audit_messages: bool,
     issues: list[str],
 ) -> None:
-    platform = str(getattr(plan, "platform", "qq") or "qq").strip().lower() or "qq"
+    platform = (
+        str(
+            getattr(plan, "policy_profile", "")
+            or getattr(plan, "platform", "qq")
+            or "qq"
+        )
+        .strip()
+        .lower()
+        or "qq"
+    )
     chat_type = str(getattr(plan, "chat_type", "private") or "private").strip().lower()
     required = required_contracts(platform, chat_type)
 

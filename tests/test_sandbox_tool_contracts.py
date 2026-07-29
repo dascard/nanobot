@@ -25,7 +25,7 @@ NEW_TOOL_NAMES = {
     "sandbox_poll",
     "sandbox_write_stdin",
     "sandbox_terminate",
-    "workspace_apply_patch",
+    "workspace_edit",
 }
 
 
@@ -67,7 +67,7 @@ def test_new_sandbox_tools_are_registered_atomically_with_strict_wire_schemas():
     assert NEW_TOOL_NAMES <= set(SANDBOX_TOOL_NAMES)
     assert set(SANDBOX_TOOL_NAMES) <= set(STATIC_TOOL_SCHEMAS)
     assert (
-        TOOL_REQUIRED_CAPABILITY["workspace_apply_patch"]
+        TOOL_REQUIRED_CAPABILITY["workspace_edit"]
         is SandboxCapability.WORKSPACE
     )
     for name in {
@@ -123,6 +123,7 @@ def test_new_sandbox_tool_concurrency_and_background_contracts():
         SandboxTerminateTool,
         SandboxWriteStdinTool,
         WorkspaceApplyPatchTool,
+        WorkspaceEditTool,
     )
 
     assert SandboxExecTool.is_concurrency_safe is False
@@ -130,12 +131,14 @@ def test_new_sandbox_tool_concurrency_and_background_contracts():
     assert SandboxWriteStdinTool.is_concurrency_safe is False
     assert SandboxTerminateTool.is_concurrency_safe is False
     assert WorkspaceApplyPatchTool.is_concurrency_safe is False
+    assert WorkspaceEditTool.is_concurrency_safe is False
     for tool_type in (
         SandboxExecTool,
         SandboxPollTool,
         SandboxTerminateTool,
         SandboxWriteStdinTool,
         WorkspaceApplyPatchTool,
+        WorkspaceEditTool,
     ):
         assert tool_type.supports_background is False
 
@@ -406,6 +409,54 @@ def test_http_backend_uses_fixed_workspace_patch_endpoint(tmp_path):
     assert '"workspace_id"' in observed["body"]
 
 
+def test_http_backend_uses_fixed_workspace_edit_endpoint(tmp_path):
+    token_file = tmp_path / "client.token"
+    token_file.write_text("t" * 64, encoding="ascii")
+    token_file.chmod(0o640)
+    observed = {}
+
+    def handler(request):
+        observed.update({
+            "method": request.method,
+            "path": request.url.path,
+            "authorization": request.headers.get("Authorization"),
+            "body": request.read().decode(),
+        })
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "summary": "ok",
+                "next_actions": [],
+                "artifacts": [],
+                "data": {"files": []},
+            },
+        )
+
+    backend = HttpSandboxdBackend(
+        socket_path="/unused.sock",
+        token_file=str(token_file),
+        client=httpx.Client(
+            transport=httpx.MockTransport(handler),
+            base_url="http://sandboxd",
+        ),
+    )
+    backend.edit_files({
+        "workspace_id": WORKSPACE_ID,
+        "operations": [{
+            "path": "a.txt",
+            "old": "a",
+            "new": "b",
+        }],
+        "quota_bytes": 1024 * 1024,
+    })
+
+    assert observed["method"] == "POST"
+    assert observed["path"] == "/v1/files/edit"
+    assert observed["authorization"] == f"Bearer {'t' * 64}"
+    assert '"operations"' in observed["body"]
+
+
 def test_sandboxd_workspace_patch_endpoint_applies_and_returns_safe_metadata(
     tmp_path,
 ):
@@ -445,3 +496,60 @@ def test_sandboxd_workspace_patch_endpoint_applies_and_returns_safe_metadata(
         "workspace://current/hello.txt"
     )
     assert str(tmp_path) not in response.text
+
+
+def test_sandboxd_workspace_edit_endpoint_applies_and_rejects_extra_fields(
+    tmp_path,
+):
+    token, runtime = _runtime(tmp_path)
+    runtime.workspace_files.layout.ensure_roots()
+    runtime.workspace_files.ensure_workspace(WORKSPACE_ID)
+    runtime.workspace_files.write_file(
+        WORKSPACE_ID,
+        path="project/hello.txt",
+        content="hello\nworld\n",
+        overwrite=False,
+        quota_bytes=1024 * 1024,
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(create_app(runtime)) as client:
+        response = client.post(
+            "/v1/files/edit",
+            headers=headers,
+            json={
+                "workspace_id": WORKSPACE_ID,
+                "cwd": "project",
+                "operations": [{
+                    "path": "hello.txt",
+                    "old": "world",
+                    "new": "sandbox",
+                }],
+                "quota_bytes": 1024 * 1024,
+            },
+        )
+        rejected = client.post(
+            "/v1/files/edit",
+            headers=headers,
+            json={
+                "workspace_id": WORKSPACE_ID,
+                "operations": [{
+                    "path": "project/hello.txt",
+                    "old": "sandbox",
+                    "new": "unsafe",
+                    "host_path": "/etc/passwd",
+                }],
+                "quota_bytes": 1024 * 1024,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["files"][0]["path"] == "project/hello.txt"
+    assert body["data"]["files"][0]["replacement_count"] == 1
+    assert body["artifacts"][0]["ref"] == (
+        "workspace://current/project/hello.txt"
+    )
+    assert str(tmp_path) not in response.text
+    assert rejected.status_code == 400
+    assert rejected.json()["error"]["code"] == "authorization_failed"

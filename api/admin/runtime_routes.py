@@ -157,6 +157,8 @@ def _runtime_snapshot() -> dict:
 
 @router.get("/overview")
 def overview(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    from config import agent_link_token_diagnostic
+
     now = db_now_naive()
     since = now - timedelta(hours=1)
     group_filter = ChatLog.session_id.like("group_%")
@@ -247,6 +249,9 @@ def overview(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
             "fast": settings.get("model.fast", ""),
             "smart": settings.get("model.smart", ""),
             "timing_gate": "Qwen TimingGate",
+        },
+        "credentials": {
+            "agent_link": agent_link_token_diagnostic(),
         },
         "counters": counters,
         "timing": _timing_stats(timing_events),

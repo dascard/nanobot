@@ -15,6 +15,7 @@ from core.database import (
     OutboundDeliveryOutbox,
     OutboundGenerationAttempt,
     ScheduledTask,
+    ScheduledTaskExecution,
 )
 
 
@@ -25,6 +26,28 @@ def _local_time(year: int, month: int, day: int, hour: int, minute: int, second:
 
 def _local_now() -> datetime:
     return datetime.now()  # noqa: DTZ005
+
+
+def _owned_scheduled_task(**kwargs) -> ScheduledTask:
+    from core.scheduled_task_contract import (
+        apply_scheduled_task_owner,
+        scheduled_task_owner_from_target,
+    )
+
+    task = ScheduledTask(**kwargs)
+    target_type = str(kwargs.get("target_type") or "private")
+    target_id = str(kwargs.get("target_id") or "")
+    apply_scheduled_task_owner(
+        task,
+        scheduled_task_owner_from_target(
+            target_type=target_type,
+            target_id=target_id,
+            created_by_actor_id=(
+                target_id if target_type == "private" else "group-creator"
+            ),
+        ),
+    )
+    return task
 
 
 def _successful_digest_summarizer(text: str, *, evidence_log_id: int = 1):
@@ -289,7 +312,7 @@ def test_qq_push_timeout_covers_html_rendering_window():
 
 
 def test_build_scheduled_task_query_requires_tools_for_fresh_info():
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         id=7,
         name="AI日报",
         target_type="private",
@@ -308,7 +331,7 @@ def test_build_scheduled_task_query_requires_tools_for_fresh_info():
 
 
 def test_build_scheduled_task_query_sanitizes_task_template_boundaries():
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         id=8,
         name="AI日报",
         target_type="private",
@@ -323,6 +346,25 @@ def test_build_scheduled_task_query_sanitizes_task_template_boundaries():
     assert "[SYSTEM]" not in query
     assert "(SYSTEM_TAG)" in query
     assert "生成日报" in query
+
+
+def test_build_scheduled_task_query_does_not_silently_truncate_long_prompt():
+    prompt = "前" * 2500 + "TAIL_MARKER"
+    task = _owned_scheduled_task(
+        id=81,
+        name="长任务",
+        target_type="private",
+        target_id="0000000000",
+        prompt_template=prompt,
+    )
+
+    query = daily_digest._build_scheduled_task_query(
+        task,
+        _local_time(2026, 5, 2, 8, 0, 0),
+    )
+
+    assert "TAIL_MARKER" in query
+    assert "[截断:" not in query
 
 
 def test_generate_task_message_uses_kt_agent(monkeypatch):
@@ -347,7 +389,7 @@ def test_generate_task_message_uses_kt_agent(monkeypatch):
         "core.agent_runtime.gateway.create_isolated_agent_gateway",
         FakeBridge,
     )
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         id=7,
         name="AI日报",
         target_type="private",
@@ -360,10 +402,14 @@ def test_generate_task_message_uses_kt_agent(monkeypatch):
     assert result.startswith("<article")
     assert calls["started"] is True
     assert calls["stopped"] is True
-    assert calls["user_id"] == "scheduled_task:7"
-    assert calls["session_id"] == "scheduled_task_7"
+    assert calls["user_id"] == "0000000000"
+    assert calls["session_id"] == "0000000000"
     assert calls["sender_name"] == "定时任务"
     assert calls["metadata"]["raw_query"] == "给我今天的AI日报"
+    assert (
+        calls["metadata"]["scheduled_task_owner_chat_stream_id"]
+        == "qq:0000000000:private"
+    )
     assert "必须先调用 ai_daily" in calls["query"]
     assert "news_search" not in calls["query"]
 
@@ -387,7 +433,7 @@ def test_generate_task_message_uses_group_session_for_group_target(monkeypatch):
         "core.agent_runtime.gateway.create_isolated_agent_gateway",
         FakeBridge,
     )
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         id=8,
         name="群日报",
         target_type="group",
@@ -400,6 +446,7 @@ def test_generate_task_message_uses_group_session_for_group_target(monkeypatch):
     assert result == "ok"
     assert calls["session_id"] == "group_984760873"
     assert calls["metadata"]["is_group"] is True
+    assert calls["metadata"]["group_id"] == "984760873"
 
 
 @pytest.mark.parametrize(
@@ -429,7 +476,7 @@ def test_generate_task_message_reraises_after_cleanup_with_safe_log(
         FakeBridge,
     )
     caplog.set_level(logging.ERROR, logger="nanobot.daily_digest")
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         id=9,
         name="task-name-secret",
         target_type="private",
@@ -466,13 +513,13 @@ def _seed_scheduled_task_outbox_control(db_session, now: datetime) -> None:
     db_session.commit()
 
 
-def test_run_scheduled_tasks_generation_failure_records_attempt_without_outbox(
+def test_run_scheduled_tasks_only_queues_execution_without_generation(
     db_session,
     monkeypatch,
 ):
     now = _local_time(2026, 7, 15, 12, 0, 20)
     _seed_scheduled_task_outbox_control(db_session, now)
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         name="生成失败",
         cron_expr="* * * * *",
         target_type="private",
@@ -503,13 +550,15 @@ def test_run_scheduled_tasks_generation_failure_records_attempt_without_outbox(
 
     db_session.expire_all()
     task = db_session.get(ScheduledTask, task_id)
-    assert executed == 0
-    assert calls == {"generate": 1}
-    assert task.last_attempt_at is not None
-    assert task.last_run_at == task.last_attempt_at
+    assert executed == 1
+    assert calls == {"generate": 0}
+    assert task.last_attempt_at is None
+    assert task.last_run_at is None
     assert task.last_success_at is None
-    assert task.delivery_status == "failed"
-    assert db_session.query(OutboundGenerationAttempt).count() == 1
+    assert task.delivery_status == "idle"
+    execution = db_session.query(ScheduledTaskExecution).one()
+    assert execution.status == "pending"
+    assert db_session.query(OutboundGenerationAttempt).count() == 0
     assert db_session.query(OutboundDeliveryOutbox).count() == 0
 
 
@@ -519,7 +568,7 @@ def test_run_scheduled_tasks_success_only_queues_without_direct_http(
 ):
     now = _local_time(2026, 7, 15, 12, 0, 20)
     _seed_scheduled_task_outbox_control(db_session, now)
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         name="成功生成",
         cron_expr="* * * * *",
         target_type="private",
@@ -552,16 +601,17 @@ def test_run_scheduled_tasks_success_only_queues_without_direct_http(
 
     db_session.expire_all()
     task = db_session.get(ScheduledTask, task_id)
-    outbox = db_session.query(OutboundDeliveryOutbox).one()
+    execution = db_session.query(ScheduledTaskExecution).one()
     assert executed == 1
     assert repeated == 0
-    assert calls == {"generate": 1}
-    assert outbox.status == "pending"
-    assert task.delivery_status == "queued"
+    assert calls == {"generate": 0}
+    assert execution.status == "pending"
+    assert db_session.query(OutboundDeliveryOutbox).count() == 0
+    assert task.delivery_status == "idle"
     assert task.last_success_at is None
 
 
-def test_run_scheduled_tasks_recovers_expired_generation_from_old_slot(
+def test_legacy_generation_recovery_runs_in_worker_recovery_path(
     db_session,
     monkeypatch,
 ):
@@ -578,7 +628,7 @@ def test_run_scheduled_tasks_recovers_expired_generation_from_old_slot(
     control = db_session.query(OutboundDeliveryControl).one()
     control.effective_from = datetime(2026, 7, 15, 3, 59, 0)
     db_session.commit()
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         name="恢复旧槽",
         cron_expr="0 0 1 1 *",
         target_type="private",
@@ -619,13 +669,15 @@ def test_run_scheduled_tasks_recovers_expired_generation_from_old_slot(
         generated.append(snapshot.task_id)
         return "恢复后的正文"
 
-    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
-    monkeypatch.setattr(daily_digest, "db_now_naive", lambda: local_now)
-    monkeypatch.setattr(daily_digest, "_generate_task_message", recovered_generate)
+    recovered = run_async(
+        daily_digest.recover_expired_scheduled_task_occurrences(
+            session_factory=lambda: db_session,
+            generator=recovered_generate,
+            now=datetime(2026, 7, 15, 4, 5, 0),
+        )
+    )
 
-    executed = run_async(daily_digest.run_scheduled_tasks())
-
-    assert executed == 1
+    assert len(recovered) == 1
     assert generated == [task_id]
     assert db_session.query(OutboundDeliveryOutbox).count() == 1
 
@@ -900,7 +952,7 @@ def _seed_schedule_task(db_session, *, schedule: str, now, next_fire_at=None):
     )
     spec = parse_schedule(schedule, now_utc=now_utc)
     kind, spec_json, cron_expr = schedule_fields(spec)
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         name=f"schedule-{kind}",
         cron_expr=cron_expr,
         schedule_kind=kind,
@@ -942,11 +994,12 @@ def test_run_scheduled_tasks_once_task_fires_then_completes(
     task = db_session.get(ScheduledTask, task_id)
     assert executed == 1
     assert repeated == 0
-    assert calls == {"generate": 1}
+    assert calls == {"generate": 0}
     # once 触发后视为完成:禁用且不再有下一次
     assert not bool(task.enabled)
     assert task.next_fire_at is None
-    assert db_session.query(OutboundDeliveryOutbox).count() == 1
+    assert db_session.query(ScheduledTaskExecution).count() == 1
+    assert db_session.query(OutboundDeliveryOutbox).count() == 0
 
 
 def test_run_scheduled_tasks_once_task_missed_beyond_grace_disabled(
@@ -959,7 +1012,7 @@ def test_run_scheduled_tasks_once_task_missed_beyond_grace_disabled(
     _seed_scheduled_task_outbox_control(db_session, now)
     # 原定时刻已超过宽限窗口(模拟停机错过):直接构造 spec
     missed_at = "2026-07-15T09:00:00+08:00"
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         name="错过的一次性任务",
         cron_expr="",
         schedule_kind="once",
@@ -1061,11 +1114,12 @@ def test_run_scheduled_tasks_interval_task_advances_next_fire(
     assert executed == 1
     assert bool(task.enabled)
     assert task.next_fire_at == datetime(2026, 7, 15, 4, 30, 0)
-    assert db_session.query(OutboundDeliveryOutbox).count() == 1
+    assert db_session.query(ScheduledTaskExecution).count() == 1
+    assert db_session.query(OutboundDeliveryOutbox).count() == 0
 
 
 def test_scheduled_task_metadata_disables_schedule_task_tool():
-    task = ScheduledTask(
+    task = _owned_scheduled_task(
         name="递归防护",
         cron_expr="0 9 * * *",
         target_type="private",

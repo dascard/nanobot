@@ -1,6 +1,7 @@
 # Nanobot Agent Configuration — KohakuTerrarium Format
 name: nanobot
 version: "1.0"
+max_iterations: 12               # 请求级防死循环兜底，不是工具调用次数上限
 
 controller:
   provider: openai
@@ -14,7 +15,6 @@ controller:
   include_hints_in_prompt: false # 不注入 KT 默认工具说明；reply/no_reply 契约由项目 prompt 控制
   max_messages: 50               # auto-compaction threshold
   ephemeral: false              # 桥接层已手动清理 conversation，KT 不需再清（会删掉 reply 工具输出）
-  max_iterations: 12             # 硬兜底——正常靠 prompt 自控，此值仅防死循环
 
 # ── Memory ──
 memory:
@@ -90,10 +90,6 @@ tools:
     type: package
     module: nanobot_kt.tools.sandbox
     class: SandboxTerminateTool
-  - name: workspace_list
-    type: package
-    module: nanobot_kt.tools.sandbox
-    class: WorkspaceListTool
   - name: workspace_read
     type: package
     module: nanobot_kt.tools.sandbox
@@ -106,10 +102,10 @@ tools:
     type: package
     module: nanobot_kt.tools.sandbox
     class: WorkspaceWriteTool
-  - name: workspace_apply_patch
+  - name: workspace_edit
     type: package
     module: nanobot_kt.tools.sandbox
-    class: WorkspaceApplyPatchTool
+    class: WorkspaceEditTool
   - name: asset_import
     type: package
     module: nanobot_kt.tools.sandbox

@@ -15,6 +15,7 @@ services:
         GIT_FULL_COMMIT: ${GIT_FULL_COMMIT:-}
         GIT_COMMIT_DATE: ${GIT_COMMIT_DATE:-}
         GIT_DIRTY: ${GIT_DIRTY:-null}
+        BUILD_CONTEXT_SHA256: ${BUILD_CONTEXT_SHA256:-}
     container_name: nanobot-server
     user: "${NANOBOT_RUNTIME_UID:-10001}:${NANOBOT_RUNTIME_GID:-10001}"
     ports:

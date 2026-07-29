@@ -92,6 +92,15 @@ class ScheduledTaskNotFoundError(ScheduledTaskOutboundError):
     """目标定时任务不存在。"""
 
 
+class ScheduledTaskGenerationError(ScheduledTaskOutboundError):
+    """保留失败类型与已分配 Agent Trace，不暴露异常正文。"""
+
+    def __init__(self, cause: Exception, *, model_trace_id: str = ""):
+        super().__init__("定时任务正文生成失败")
+        self.cause = cause
+        self.model_trace_id = str(model_trace_id or "")[:128]
+
+
 @dataclass(frozen=True, slots=True)
 class ScheduledOccurrence:
     occurrence_key: str
@@ -104,9 +113,20 @@ class ScheduledTaskSnapshot:
     task_id: int
     name: str
     cron_expr: str
+    schedule_kind: str
+    schedule_spec: str
+    timezone: str
     target_type: str
     target_id: str
     prompt_template: str
+    program: dict[str, Any]
+    program_sha256: str
+    owner_chat_stream_id: str
+    owner_platform: str
+    owner_chat_type: str
+    owner_session_id: str
+    created_by_actor_id: str
+    definition_version: int
     enabled: bool
 
     @property
@@ -115,20 +135,45 @@ class ScheduledTaskSnapshot:
         return self.task_id
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        if self.schema_version == 1:
+            return {
+                "schema_version": 1,
+                "task_id": self.task_id,
+                "name": self.name,
+                "cron_expr": self.cron_expr,
+                "target_type": self.target_type,
+                "target_id": self.target_id,
+                "prompt_template": self.prompt_template,
+                "enabled": self.enabled,
+            }
+        base = {
             "schema_version": self.schema_version,
             "task_id": self.task_id,
             "name": self.name,
             "cron_expr": self.cron_expr,
+            "schedule_kind": self.schedule_kind,
+            "schedule_spec": self.schedule_spec,
+            "timezone": self.timezone,
             "target_type": self.target_type,
             "target_id": self.target_id,
             "prompt_template": self.prompt_template,
+            "owner_chat_stream_id": self.owner_chat_stream_id,
+            "owner_platform": self.owner_platform,
+            "owner_chat_type": self.owner_chat_type,
+            "owner_session_id": self.owner_session_id,
+            "created_by_actor_id": self.created_by_actor_id,
+            "definition_version": self.definition_version,
             "enabled": self.enabled,
         }
+        if self.schema_version >= 3:
+            base["program"] = self.program
+            base["program_sha256"] = self.program_sha256
+        return base
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ScheduledTaskSnapshot":
-        if int(value.get("schema_version") or 0) != 1:
+        schema_version = int(value.get("schema_version") or 0)
+        if schema_version not in {1, 2, 3}:
             raise ScheduledTaskOutboundError("定时任务冻结快照版本不受支持")
         task_id = value.get("task_id")
         if type(task_id) is not int or task_id <= 0:
@@ -137,14 +182,118 @@ class ScheduledTaskSnapshot:
         target_id = str(value.get("target_id") or "").strip()
         if target_type not in {"private", "group"} or not target_id:
             raise ScheduledTaskOutboundError("定时任务冻结目标无效")
+        from core.scheduled_task_contract import (
+            SCHEDULED_TASK_TIMEZONE,
+            ScheduledTaskContractError,
+            ensure_task_target_matches_owner,
+            normalize_scheduled_task_definition,
+            scheduled_task_owner_from_persisted,
+            scheduled_task_owner_from_target,
+        )
+
+        try:
+            (
+                name,
+                prompt_template,
+                program,
+                _program_json,
+                program_sha256,
+            ) = normalize_scheduled_task_definition(
+                name=value.get("name"),
+                prompt_template=value.get("prompt_template"),
+                program=(
+                    value.get("program")
+                    if schema_version >= 3
+                    else None
+                ),
+            )
+            if schema_version >= 3:
+                expected_program_sha256 = str(
+                    value.get("program_sha256") or ""
+                ).strip().lower()
+                if expected_program_sha256 != program_sha256:
+                    raise ScheduledTaskContractError(
+                        "定时任务 program 完整性校验失败"
+                    )
+            if schema_version == 1:
+                owner = scheduled_task_owner_from_target(
+                    target_type=target_type,
+                    target_id=target_id,
+                    platform="qq",
+                    created_by_actor_id=(
+                        target_id if target_type == "private" else ""
+                    ),
+                )
+                schedule_kind = KIND_CRON
+                schedule_spec = ""
+                timezone_name = SCHEDULED_TASK_TIMEZONE
+                definition_version = 1
+            else:
+                owner = scheduled_task_owner_from_persisted(
+                    chat_stream_id=value.get("owner_chat_stream_id"),
+                    platform=value.get("owner_platform"),
+                    chat_type=value.get("owner_chat_type"),
+                    session_id=value.get("owner_session_id"),
+                    created_by_actor_id=value.get(
+                        "created_by_actor_id"
+                    ),
+                )
+                ensure_task_target_matches_owner(
+                    owner,
+                    target_type=target_type,
+                    target_id=target_id,
+                )
+                schedule_kind = str(
+                    value.get("schedule_kind") or ""
+                ).strip()
+                schedule_spec = str(
+                    value.get("schedule_spec") or ""
+                )
+                timezone_name = str(
+                    value.get("timezone") or ""
+                ).strip()
+                if timezone_name != SCHEDULED_TASK_TIMEZONE:
+                    raise ScheduledTaskContractError(
+                        "定时任务冻结时区无效"
+                    )
+                if spec_from_fields(
+                    schedule_kind,
+                    schedule_spec,
+                    value.get("cron_expr"),
+                ) is None:
+                    raise ScheduledTaskContractError(
+                        "定时任务冻结 trigger 无法解析"
+                    )
+                definition_version = int(
+                    value.get("definition_version") or 0
+                )
+                if definition_version < 1:
+                    raise ScheduledTaskContractError(
+                        "定时任务 definition_version 无效"
+                    )
+        except (ScheduledTaskContractError, TypeError, ValueError) as exc:
+            raise ScheduledTaskOutboundError(
+                f"定时任务冻结定义无效: {exc}"
+            ) from exc
         return cls(
-            schema_version=1,
+            schema_version=schema_version,
             task_id=task_id,
-            name=str(value.get("name") or "").strip(),
+            name=name,
             cron_expr=str(value.get("cron_expr") or "").strip(),
+            schedule_kind=schedule_kind,
+            schedule_spec=schedule_spec,
+            timezone=timezone_name,
             target_type=target_type,
             target_id=target_id,
-            prompt_template=str(value.get("prompt_template") or ""),
+            prompt_template=prompt_template,
+            program=program,
+            program_sha256=program_sha256,
+            owner_chat_stream_id=owner.chat_stream_id,
+            owner_platform=owner.platform,
+            owner_chat_type=owner.chat_type,
+            owner_session_id=owner.session_id,
+            created_by_actor_id=owner.created_by_actor_id,
+            definition_version=definition_version,
             enabled=bool(value.get("enabled")),
         )
 
@@ -240,9 +389,22 @@ class ScheduledTaskEnqueueResult:
     generation_attempted: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ScheduledTaskGeneratedContent:
+    """任务生成正文及其 Agent Trace 关联。"""
+
+    content: str | None
+    model_trace_id: str = ""
+
+
 TaskGenerator = Callable[
     [ScheduledTaskSnapshot],
-    str | None | Awaitable[str | None],
+    (
+        str
+        | None
+        | ScheduledTaskGeneratedContent
+        | Awaitable[str | None | ScheduledTaskGeneratedContent]
+    ),
 ]
 
 
@@ -361,14 +523,61 @@ def scheduled_task_destination_fingerprint(snapshot: ScheduledTaskSnapshot) -> s
 def _snapshot_task(task: ScheduledTask) -> ScheduledTaskSnapshot:
     if task.id is None:
         raise ScheduledTaskOutboundError("定时任务尚未持久化")
+    if bool(getattr(task, "owner_migration_required", 1)):
+        raise ScheduledTaskOutboundError("定时任务 owner 尚未安全迁移")
+    raw_program_text = str(getattr(task, "program_json", "") or "")
+    raw_program_sha256 = str(
+        getattr(task, "program_sha256", "") or ""
+    )
+    if not raw_program_text:
+        # 只兼容尚未经过迁移的有效 legacy 对象（主要是滚动发布窗口和
+        # in-memory 测试）；生产迁移会持久化同一份 canonical program。
+        from core.scheduled_task_contract import (
+            ScheduledTaskContractError,
+            normalize_scheduled_task_definition,
+        )
+
+        try:
+            (
+                _name,
+                _prompt,
+                raw_program,
+                _program_json,
+                raw_program_sha256,
+            ) = normalize_scheduled_task_definition(
+                name=task.name,
+                prompt_template=task.prompt_template,
+            )
+        except ScheduledTaskContractError as exc:
+            raise ScheduledTaskOutboundError(
+                "定时任务 program 无法安全迁移"
+            ) from exc
+    else:
+        try:
+            raw_program = json.loads(raw_program_text)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ScheduledTaskOutboundError(
+                "定时任务 program 无法解析"
+            ) from exc
     return ScheduledTaskSnapshot.from_mapping({
-        "schema_version": 1,
+        "schema_version": 3,
         "task_id": int(task.id),
         "name": task.name,
         "cron_expr": task.cron_expr,
+        "schedule_kind": task.schedule_kind,
+        "schedule_spec": task.schedule_spec,
+        "timezone": "Asia/Shanghai",
         "target_type": task.target_type,
         "target_id": task.target_id,
         "prompt_template": task.prompt_template,
+        "program": raw_program,
+        "program_sha256": raw_program_sha256,
+        "owner_chat_stream_id": task.owner_chat_stream_id,
+        "owner_platform": task.owner_platform,
+        "owner_chat_type": task.owner_chat_type,
+        "owner_session_id": task.owner_session_id,
+        "created_by_actor_id": task.created_by_actor_id,
+        "definition_version": task.definition_version,
         "enabled": bool(task.enabled),
     })
 
@@ -832,19 +1041,45 @@ async def drain_due_legacy_scheduled_task_outboxes(
 async def _generate(
     generator: TaskGenerator | None,
     snapshot: ScheduledTaskSnapshot,
-) -> str | None:
+) -> ScheduledTaskGeneratedContent:
     resolved = generator
+    generated_trace_id = ""
     if resolved is None:
         from core.daily_digest import _generate_task_message
+        from core.tracing import new_trace_id
 
         resolved = _generate_task_message
-    result = resolved(snapshot)
-    if inspect.isawaitable(result):
-        result = await result
-    if result is None:
-        return None
-    normalized = str(result)
-    return normalized if normalized.strip() else None
+        generated_trace_id = new_trace_id()
+    try:
+        parameters = inspect.signature(resolved).parameters
+        if generated_trace_id and "trace_id" in parameters:
+            result = resolved(snapshot, trace_id=generated_trace_id)
+        else:
+            result = resolved(snapshot)
+        if inspect.isawaitable(result):
+            result = await result
+    except Exception as exc:
+        raise ScheduledTaskGenerationError(
+            exc,
+            model_trace_id=generated_trace_id,
+        ) from exc
+    if isinstance(result, ScheduledTaskGeneratedContent):
+        normalized = (
+            str(result.content)
+            if result.content is not None
+            else ""
+        )
+        return ScheduledTaskGeneratedContent(
+            content=normalized if normalized.strip() else None,
+            model_trace_id=str(
+                result.model_trace_id or generated_trace_id
+            )[:128],
+        )
+    normalized = str(result) if result is not None else ""
+    return ScheduledTaskGeneratedContent(
+        content=normalized if normalized.strip() else None,
+        model_trace_id=generated_trace_id[:128],
+    )
 
 
 async def enqueue_scheduled_task_occurrence(
@@ -862,6 +1097,9 @@ async def enqueue_scheduled_task_occurrence(
     now: datetime | None = None,
     clock: Callable[[], datetime] | None = None,
     _recovery_run_id: int | None = None,
+    expected_owner_chat_stream_id: str | None = None,
+    _frozen_snapshot: ScheduledTaskSnapshot | None = None,
+    _frozen_occurrence: ScheduledOccurrence | None = None,
 ) -> ScheduledTaskEnqueueResult:
     """领取一次定时任务 occurrence，生成正文并提交不可变 outbox。"""
 
@@ -876,41 +1114,78 @@ async def enqueue_scheduled_task_occurrence(
         return _utc_naive(clock_source())
 
     current = current_time()
+    if _recovery_run_id is not None and (
+        _frozen_snapshot is not None or _frozen_occurrence is not None
+    ):
+        raise ValueError("恢复 run 与冻结 execution 输入不能同时提供")
+    if (_frozen_snapshot is None) != (_frozen_occurrence is None):
+        raise ValueError("冻结 snapshot 与 occurrence 必须同时提供")
+
     if _recovery_run_id is None:
         lock_outbound_source_control(
             db,
             source_type=SOURCE_TYPE,
             now=current,
         )
-        task = db.get(ScheduledTask, int(task_id))
-        if task is None:
-            raise ScheduledTaskNotFoundError("定时任务不存在")
-        snapshot = _snapshot_task(task)
-        if trigger_type == "cron" and not snapshot.enabled:
-            raise ScheduledTaskOutboundError("已禁用任务不能由 cron 执行")
-        schedule = spec_from_fields(
-            getattr(task, "schedule_kind", None),
-            getattr(task, "schedule_spec", None),
-            task.cron_expr,
-        )
-        occurrence = _occurrence(
-            task_id=snapshot.task_id,
-            trigger_type=trigger_type,
-            scheduled_for=scheduled_for,
-            manual_idempotency_key=manual_idempotency_key,
-            now=current,
-            schedule_kind=(schedule or {}).get("kind", KIND_CRON),
-        )
-        if trigger_type == "cron":
-            if schedule is None:
-                raise ScheduledTaskOutboundError(
-                    "定时任务 schedule 无法解析"
-                )
-            _validate_schedule_slot(
-                schedule,
-                slot=occurrence.scheduled_for,
-                now=current,
+        if _frozen_snapshot is not None:
+            # 重新解析一遍不可变 wire 快照，不能信任调用方传入的可变 dict。
+            snapshot = ScheduledTaskSnapshot.from_mapping(
+                _frozen_snapshot.to_dict()
             )
+            occurrence = ScheduledOccurrence(
+                occurrence_key=str(_frozen_occurrence.occurrence_key),
+                scheduled_for=_utc_naive(_frozen_occurrence.scheduled_for),
+            )
+            if snapshot.task_id != int(task_id):
+                raise ScheduledTaskOutboundError(
+                    "冻结 execution 的 task_id 不一致"
+                )
+            if trigger_type not in {"cron", "manual"}:
+                raise ScheduledTaskOutboundError(
+                    "冻结 execution 的触发类型无效"
+                )
+        else:
+            task = db.get(ScheduledTask, int(task_id))
+            if task is None:
+                raise ScheduledTaskNotFoundError("定时任务不存在")
+            expected_owner = str(
+                expected_owner_chat_stream_id or ""
+            ).strip()
+            if (
+                expected_owner
+                and str(task.owner_chat_stream_id or "").strip()
+                != expected_owner
+            ):
+                # 对普通 Agent 隐藏跨 owner 任务是否存在。
+                raise ScheduledTaskNotFoundError("定时任务不存在")
+            snapshot = _snapshot_task(task)
+            if trigger_type == "cron" and not snapshot.enabled:
+                raise ScheduledTaskOutboundError(
+                    "已禁用任务不能由 cron 执行"
+                )
+            schedule = spec_from_fields(
+                getattr(task, "schedule_kind", None),
+                getattr(task, "schedule_spec", None),
+                task.cron_expr,
+            )
+            occurrence = _occurrence(
+                task_id=snapshot.task_id,
+                trigger_type=trigger_type,
+                scheduled_for=scheduled_for,
+                manual_idempotency_key=manual_idempotency_key,
+                now=current,
+                schedule_kind=(schedule or {}).get("kind", KIND_CRON),
+            )
+            if trigger_type == "cron":
+                if schedule is None:
+                    raise ScheduledTaskOutboundError(
+                        "定时任务 schedule 无法解析"
+                    )
+                _validate_schedule_slot(
+                    schedule,
+                    slot=occurrence.scheduled_for,
+                    now=current,
+                )
         destination_snapshot = {
             "target_type": snapshot.target_type,
             "target_id": snapshot.target_id,
@@ -1024,12 +1299,22 @@ async def enqueue_scheduled_task_occurrence(
         )
 
     try:
-        content = await _generate(generator, frozen)
+        generated = await _generate(generator, frozen)
     except Exception as exc:
+        failure_cause = (
+            exc.cause
+            if isinstance(exc, ScheduledTaskGenerationError)
+            else exc
+        )
+        model_trace_id = (
+            exc.model_trace_id
+            if isinstance(exc, ScheduledTaskGenerationError)
+            else ""
+        )
         completed_at = current_time()
         failure_type = (
             "generation_timeout"
-            if isinstance(exc, TimeoutError)
+            if isinstance(failure_cause, TimeoutError)
             else "generation_error"
         )
         try:
@@ -1040,7 +1325,11 @@ async def enqueue_scheduled_task_occurrence(
                 owner=claim.owner,
                 claim_token=claim.claim_token,
                 error_type=failure_type,
-                error_summary=f"正文生成失败: {type(exc).__name__}",
+                error_summary=(
+                    "正文生成失败: "
+                    f"{type(failure_cause).__name__}"
+                ),
+                model_trace_id=model_trace_id,
                 now=completed_at,
             )
             db.commit()
@@ -1055,6 +1344,8 @@ async def enqueue_scheduled_task_occurrence(
             deduplicated=False,
             generation_attempted=True,
         )
+    content = generated.content
+    model_trace_id = generated.model_trace_id
     if content is None:
         completed_at = current_time()
         try:
@@ -1066,6 +1357,7 @@ async def enqueue_scheduled_task_occurrence(
                 claim_token=claim.claim_token,
                 error_type="empty_generation",
                 error_summary="模型没有生成可投递内容",
+                model_trace_id=model_trace_id,
                 now=completed_at,
             )
             db.commit()
@@ -1138,6 +1430,7 @@ async def enqueue_scheduled_task_occurrence(
             ),
             endpoint_config_revision=resolved_config.endpoint_config_revision,
             payload_contract_fingerprint=PAYLOAD_CONTRACT,
+            model_trace_id=model_trace_id,
             now=completed_at,
         )
         db.commit()
@@ -1164,6 +1457,52 @@ async def enqueue_scheduled_task_occurrence(
         worker_config=legacy_worker_config,
         fixed_now=completed_at if now is not None else None,
         clock=clock,
+    )
+
+
+async def enqueue_frozen_scheduled_task_content(
+    db: Session,
+    *,
+    snapshot: ScheduledTaskSnapshot,
+    occurrence: ScheduledOccurrence,
+    content: str,
+    model_trace_id: str = "",
+    config: ScheduledTaskProducerConfig | None = None,
+    session_factory: Callable[[], Session] | None = None,
+    legacy_transport: OutboundTransport | None = None,
+    legacy_worker_config: OutboundWorkerConfig | None = None,
+    now: datetime | None = None,
+    clock: Callable[[], datetime] | None = None,
+    trigger_type: str = "cron",
+) -> ScheduledTaskEnqueueResult:
+    """把 workflow 已生成的内容按冻结任务事实提交到现有 outbox。"""
+
+    normalized_content = str(content or "")
+    if not normalized_content.strip():
+        raise ValueError("冻结任务投递内容不能为空")
+    generated = ScheduledTaskGeneratedContent(
+        content=normalized_content,
+        model_trace_id=str(model_trace_id or "")[:128],
+    )
+    return await enqueue_scheduled_task_occurrence(
+        db,
+        task_id=snapshot.task_id,
+        trigger_type=trigger_type,
+        scheduled_for=occurrence.scheduled_for,
+        manual_idempotency_key=(
+            occurrence.occurrence_key
+            if trigger_type == "manual"
+            else None
+        ),
+        config=config,
+        generator=lambda _snapshot: generated,
+        session_factory=session_factory,
+        legacy_transport=legacy_transport,
+        legacy_worker_config=legacy_worker_config,
+        now=now,
+        clock=clock,
+        _frozen_snapshot=snapshot,
+        _frozen_occurrence=occurrence,
     )
 
 

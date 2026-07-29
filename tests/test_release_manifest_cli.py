@@ -69,6 +69,8 @@ def test_manifest_cli_builds_artifact_release_and_validates_target(
         "prompt_defaults=prompts.v2.default",
         "--input",
         "web_lock=webui/package-lock.json",
+        "--input-sha",
+        "build_context=" + "e" * 64,
         "--schema-migration-head",
         "20260723_release_manifest",
         "--image-reference",
@@ -95,6 +97,7 @@ def test_manifest_cli_builds_artifact_release_and_validates_target(
     assert artifact.input_hashes["python_lock"] == hashlib.sha256(
         evidence["python_lock"].read_bytes()
     ).hexdigest()
+    assert artifact.input_hashes["build_context"] == "e" * 64
     assert artifact.sbom_path == "artifacts/runtime.spdx.json"
     assert artifact.sbom_sha256 == hashlib.sha256(
         evidence["sbom"].read_bytes()

@@ -74,7 +74,12 @@ from core.db.models.session_memory import (
     RollingSessionSummary,
     SessionSummaryJob,
 )
-from core.db.models.scheduling import ScheduledTask
+from core.db.models.scheduling import (
+    ScheduledTask,
+    ScheduledTaskExecution,
+    ScheduledTaskOwnerLease,
+    ScheduledTaskStepAttempt,
+)
 from core.db.models.semantic import (
     RagDebugRun,
     SemanticIndexItem,
@@ -161,6 +166,9 @@ __all__ = [
     "RollingSessionSummary",
     "SessionSummaryJob",
     "ScheduledTask",
+    "ScheduledTaskExecution",
+    "ScheduledTaskOwnerLease",
+    "ScheduledTaskStepAttempt",
     "SandboxAccessGrant",
     "SandboxAdminOperation",
     "SandboxControllerState",

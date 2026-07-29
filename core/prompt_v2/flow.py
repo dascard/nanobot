@@ -9,8 +9,8 @@ from core.prompt_v2.flow_contract import (
     FLOW_SCHEMA_VERSION,
     LIVE_PROMPT_BRANCHES,
     LIVE_PROMPT_BRANCH_SET,
+    PROMPT_POLICY_PROFILES,
     RUNTIME_NODE_KEYS,
-    RUNTIME_PLATFORMS,
     reserved_contract_by_node_id,
     reserved_contract_by_runtime_key,
     reserved_contract_by_template_key,
@@ -55,7 +55,7 @@ DEFAULT_FLOW: dict[str, Any] = {
     "edges": [
         {"from": "base_contract", "to": "qq_common_policy", "platforms": ["qq"]},
         {"from": "base_contract", "to": "group_policy", "chat_types": ["group"], "platforms": ["web"]},
-        {"from": "base_contract", "to": "private_policy", "chat_types": ["private"], "platforms": ["web", "internal"]},
+        {"from": "base_contract", "to": "private_policy", "chat_types": ["private"], "platforms": ["web", "internal", "external_private"]},
         {"from": "qq_common_policy", "to": "group_policy", "chat_types": ["group"], "platforms": ["qq"]},
         {"from": "qq_common_policy", "to": "private_policy", "chat_types": ["private"], "platforms": ["qq"]},
         {"from": "group_policy", "to": "qq_group_policy", "chat_types": ["group"], "platforms": ["qq"]},
@@ -101,7 +101,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _normalize_platform(platform: str) -> str:
     normalized = str(platform or "").strip().lower() or "qq"
-    if normalized not in RUNTIME_PLATFORMS:
+    if normalized not in PROMPT_POLICY_PROFILES:
         raise PromptFlowError(f"platform 不支持: {normalized}")
     return normalized
 
@@ -148,7 +148,7 @@ def _normalize_platforms(item: dict[str, Any], *, label: str) -> list[str]:
     if isinstance(raw, str):
         raw = [raw]
     values = [str(value).strip().lower() for value in raw if str(value).strip()]
-    invalid = sorted(set(values) - RUNTIME_PLATFORMS)
+    invalid = sorted(set(values) - PROMPT_POLICY_PROFILES)
     if invalid:
         raise PromptFlowError(f"{label}.platforms 不支持: {', '.join(invalid)}")
     return sorted(set(values), key=values.index)
@@ -368,6 +368,7 @@ def validate_runtime_contract(flow: dict[str, Any]) -> None:
             SimpleNamespace(
                 chat_type=chat_type,
                 platform=platform,
+                policy_profile=platform,
                 flow_sections=flow_sections,
             ),
             audit_messages=False,

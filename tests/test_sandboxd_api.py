@@ -207,7 +207,10 @@ def test_sandboxd_requires_bearer_and_supports_safe_file_round_trip(tmp_path):
             },
         )
         assert read.status_code == 200
-        assert read.json()["data"]["content"] == "安全文本"
+        assert read.json()["data"]["content"] == "     1\t安全文本"
+        assert read.json()["data"]["returned_lines"] == 1
+        assert read.json()["data"]["next_offset"] == 1
+        assert read.json()["data"]["eof"] is True
         assert str(tmp_path) not in str(read.json())
 
 

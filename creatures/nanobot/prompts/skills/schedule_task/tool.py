@@ -1,12 +1,11 @@
-"""
-Schedule Task tool — manage cron-based push tasks from within KT conversation.
-"""
+"""在当前会话 owner 边界内管理定时推送任务。"""
 
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from core.scheduled_task_contract import scheduled_task_program_schema
 
 logger = logging.getLogger("nanobot.tool.schedule_task")
 
@@ -39,6 +38,15 @@ def _schedule_display_for_row(task: Any) -> str:
     return f"schedule={schedule_display(spec)}"
 
 
+def _owned_task_query(db: Any, model: Any, owner_chat_stream_id: str) -> Any:
+    """普通 Agent 工具的所有任务查询都固定在当前 owner。"""
+
+    return db.query(model).filter(
+        model.owner_chat_stream_id == owner_chat_stream_id,
+        model.owner_migration_required == 0,
+    )
+
+
 class ScheduleTaskTool(BaseTool):
     """Manage timed push notification tasks for QQ."""
 
@@ -63,7 +71,7 @@ class ScheduleTaskTool(BaseTool):
             "'30m'=30分钟后触发一次; 'every 2h'=每2小时循环; "
             "'0 9 * * *'=cron(分 时 日 月 周); "
             "'2026-08-01T15:00'=指定时刻触发一次。"
-            "创建任务时如果用户没有明确目标会话，可使用当前 runtime_context 对应的私聊或群聊。"
+            "普通 Agent 只能管理和投递到当前 runtime_context 对应的私聊或群聊。"
         )
 
     @property
@@ -96,17 +104,19 @@ class ScheduleTaskTool(BaseTool):
                 },
                 "target_type": {
                     "type": "string",
-                    "description": "推送类型: private 或 group；创建时留空则尝试使用当前会话类型",
+                    "description": "兼容参数；必须与当前会话类型一致，不能跨会话投递",
                     "enum": ["private", "group"],
                 },
                 "target_id": {
                     "type": "string",
-                    "description": "QQ号或群号；创建时留空则尝试使用当前 runtime_context 的 user_id/group_id",
+                    "description": "兼容参数；必须与当前会话目标一致，不能指定其他 QQ 或群",
                 },
                 "prompt_template": {
                     "type": "string",
-                    "description": "LLM 生成推送内容的提示模板，不是直接发送的固定文本",
+                    "maxLength": 16000,
+                    "description": "兼容写法：自动转换为 model→emit 程序；使用 program 时可省略",
                 },
+                "program": scheduled_task_program_schema(),
                 "idempotency_key": {
                     "type": "string",
                     "minLength": 1,
@@ -119,15 +129,36 @@ class ScheduleTaskTool(BaseTool):
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         from core.database import SessionLocal, ScheduledTask
+        from core.agent_runtime.request_scope import (
+            require_current_runtime_context,
+        )
+        from core.scheduled_task_contract import (
+            ScheduledTaskContractError,
+            apply_scheduled_task_owner,
+            ensure_task_target_matches_owner,
+            scheduled_task_owner_from_runtime_context,
+            apply_scheduled_task_program,
+            normalize_scheduled_task_definition,
+        )
 
         action = str(args.get("action", "create")).strip()
         task_id = args.get("task_id")
 
         try:
+            try:
+                owner = scheduled_task_owner_from_runtime_context(
+                    require_current_runtime_context()
+                )
+            except (RuntimeError, ScheduledTaskContractError) as exc:
+                return ToolResult(error=f"无法确认定时任务 owner: {exc}")
             db = SessionLocal()
             try:
                 if action == "list":
-                    tasks = db.query(ScheduledTask).all()
+                    tasks = _owned_task_query(
+                        db,
+                        ScheduledTask,
+                        owner.chat_stream_id,
+                    ).all()
                     if not tasks:
                         return ToolResult(output="暂无定时任务", exit_code=0)
                     lines = []
@@ -160,49 +191,41 @@ class ScheduleTaskTool(BaseTool):
                         return ToolResult(error="run 需要显式幂等键")
                     from core.scheduled_task_outbound import (
                         ScheduledTaskNotFoundError,
-                        enqueue_scheduled_task_occurrence,
+                    )
+                    from core.scheduled_workflow import (
+                        enqueue_scheduled_task_execution,
                     )
                     try:
-                        result = await enqueue_scheduled_task_occurrence(
+                        result = enqueue_scheduled_task_execution(
                             db,
                             task_id=int(task_id),
                             trigger_type="manual",
                             manual_idempotency_key=idempotency_key,
-                            session_factory=SessionLocal,
+                            expected_owner_chat_stream_id=(
+                                owner.chat_stream_id
+                            ),
                         )
                     except ScheduledTaskNotFoundError:
                         return ToolResult(error=f"任务 {task_id} 不存在")
-                    if result.status in {"queued", "pending"}:
-                        return ToolResult(
-                            output=(
-                                f"任务已入队 run_id={result.run_id} "
-                                f"outbox_id={result.outbox_id}"
-                            ),
-                            exit_code=0,
-                        )
-                    if result.status == "delivered":
-                        return ToolResult(
-                            output=f"任务已确认投递 run_id={result.run_id}",
-                            exit_code=0,
-                        )
-                    if result.status in {"retry_wait", "delivering"}:
-                        return ToolResult(
-                            output=(
-                                f"相同请求已存在 当前状态={result.status} "
-                                f"run_id={result.run_id}"
-                            ),
-                            exit_code=0,
-                        )
-                    if result.status == "ambiguous":
-                        return ToolResult(error="投递结果不确定 需要人工核验")
-                    if result.status == "blocked":
-                        return ToolResult(error="投递通道当前已阻断")
-                    return ToolResult(error="任务生成或入队失败")
+                    db.commit()
+                    return ToolResult(
+                        output=(
+                            "任务执行已入队 "
+                            f"execution_id={result.execution_id} "
+                            f"status={result.status} "
+                            f"deduplicated={str(result.deduplicated).lower()}"
+                        ),
+                        exit_code=0,
+                    )
 
                 if action == "delete":
                     if not task_id:
                         return ToolResult(error="delete 需要 task_id")
-                    t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+                    t = _owned_task_query(
+                        db,
+                        ScheduledTask,
+                        owner.chat_stream_id,
+                    ).filter(ScheduledTask.id == task_id).first()
                     if not t:
                         return ToolResult(error=f"任务 {task_id} 不存在")
                     from core.scheduled_task_outbound import (
@@ -226,7 +249,11 @@ class ScheduleTaskTool(BaseTool):
                 if action == "toggle":
                     if not task_id:
                         return ToolResult(error="toggle 需要 task_id")
-                    t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+                    t = _owned_task_query(
+                        db,
+                        ScheduledTask,
+                        owner.chat_stream_id,
+                    ).filter(ScheduledTask.id == task_id).first()
                     if not t:
                         return ToolResult(error=f"任务 {task_id} 不存在")
                     from core.scheduled_task_outbound import (
@@ -246,6 +273,8 @@ class ScheduleTaskTool(BaseTool):
                     if t.enabled:
                         # 重新启用时清空预计算槽,由调度器按当前时间重排
                         t.next_fire_at = None
+                    t.definition_version = int(t.definition_version or 0) + 1
+                    t.updated_at = _utc_now_naive()
                     db.commit()
                     s = "启用" if t.enabled else "禁用"
                     return ToolResult(output=f"任务 {task_id} ({t.name}) 已{s}", exit_code=0)
@@ -253,9 +282,60 @@ class ScheduleTaskTool(BaseTool):
                 if action == "update":
                     if not task_id:
                         return ToolResult(error="update 需要 task_id")
-                    t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+                    t = _owned_task_query(
+                        db,
+                        ScheduledTask,
+                        owner.chat_stream_id,
+                    ).filter(ScheduledTask.id == task_id).first()
                     if not t:
                         return ToolResult(error=f"任务 {task_id} 不存在")
+                    try:
+                        ensure_task_target_matches_owner(
+                            owner,
+                            target_type=args.get("target_type"),
+                            target_id=args.get("target_id"),
+                        )
+                        proposed_name = (
+                            args.get("name")
+                            if args.get("name") is not None
+                            else t.name
+                        )
+                        proposed_prompt = (
+                            args.get("prompt_template")
+                            if args.get("prompt_template") is not None
+                            else t.prompt_template
+                        )
+                        if args.get("program") is not None:
+                            proposed_program = args.get("program")
+                        elif args.get("prompt_template") is not None:
+                            # 显式修改旧 prompt 等价于显式重建 model→emit。
+                            proposed_program = None
+                        else:
+                            import json
+
+                            existing_program_json = str(
+                                t.program_json or ""
+                            )
+                            proposed_program = (
+                                json.loads(existing_program_json)
+                                if existing_program_json
+                                else None
+                            )
+                        (
+                            normalized_name,
+                            normalized_prompt,
+                            normalized_program,
+                            _program_json,
+                            _program_sha256,
+                        ) = normalize_scheduled_task_definition(
+                            name=proposed_name,
+                            prompt_template=proposed_prompt,
+                            program=proposed_program,
+                        )
+                    except ScheduledTaskContractError as exc:
+                        return ToolResult(error=str(exc))
+                    except (TypeError, ValueError):
+                        return ToolResult(error="现有任务 program 无法解析")
                     from core.scheduled_task_outbound import (
                         cancel_scheduled_task_deliveries,
                     )
@@ -269,10 +349,14 @@ class ScheduleTaskTool(BaseTool):
                     if cancellation.unsafe:
                         db.rollback()
                         return ToolResult(error="任务仍有投递中或结果不确定记录")
-                    for f in ("name", "target_type", "target_id", "prompt_template"):
-                        v = args.get(f)
-                        if v is not None and str(v).strip():
-                            setattr(t, f, str(v).strip())
+                    apply_scheduled_task_program(
+                        t,
+                        name=normalized_name,
+                        prompt_template=normalized_prompt,
+                        program=normalized_program,
+                    )
+                    t.target_type = owner.target_type
+                    t.target_id = owner.target_id
                     schedule_text = str(
                         args.get("schedule") or args.get("cron_expr") or ""
                     ).strip()
@@ -295,38 +379,37 @@ class ScheduleTaskTool(BaseTool):
                         t.schedule_spec = fields.schedule_spec
                         t.cron_expr = fields.cron_expr
                         t.next_fire_at = fields.next_fire_at
+                    t.definition_version = int(t.definition_version or 0) + 1
+                    t.updated_at = _utc_now_naive()
                     db.commit()
                     return ToolResult(output=f"任务 {task_id} ({t.name}) 已更新", exit_code=0)
 
                 # create
-                name = str(args.get("name", "")).strip()
+                try:
+                    ensure_task_target_matches_owner(
+                        owner,
+                        target_type=args.get("target_type"),
+                        target_id=args.get("target_id"),
+                    )
+                    (
+                        name,
+                        prompt,
+                        normalized_program,
+                        _program_json,
+                        _program_sha256,
+                    ) = normalize_scheduled_task_definition(
+                        name=args.get("name"),
+                        prompt_template=args.get("prompt_template"),
+                        program=args.get("program"),
+                    )
+                except ScheduledTaskContractError as exc:
+                    return ToolResult(error=str(exc))
                 schedule_text = str(
                     args.get("schedule") or args.get("cron_expr") or ""
                 ).strip()
-                metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
-                context = kwargs.get("context")
-                session = getattr(context, "session", None) if context is not None else None
-                session_extra = getattr(session, "extra", {}) if session is not None else {}
-                runtime_meta = {}
-                if isinstance(session_extra, dict):
-                    runtime_meta = session_extra.get("nanobot_runtime_context") or {}
-                if isinstance(runtime_meta, dict):
-                    metadata = {**runtime_meta, **metadata}
-                meta_is_group = bool(metadata.get("is_group") or metadata.get("chat_type") == "group")
-                default_ttype = "group" if meta_is_group else "private"
-                default_tid = str(
-                    metadata.get("group_id") if meta_is_group else metadata.get("user_id")
-                    or ""
-                ).strip()
-                ttype = str(args.get("target_type") or default_ttype).strip()
-                tid = str(args.get("target_id", "")).strip()
-                if not tid:
-                    tid = default_tid
-                prompt = str(args.get("prompt_template", "")).strip()
-                if not all([name, schedule_text, tid, prompt]):
+                if not schedule_text:
                     return ToolResult(
-                        error="create 需要 name, schedule(或 cron_expr), "
-                        "target_id, prompt_template"
+                        error="create 需要 schedule(或 cron_expr)"
                     )
                 from core.schedule_spec import (
                     ScheduleSpecError,
@@ -342,15 +425,22 @@ class ScheduleTaskTool(BaseTool):
                 except ScheduleSpecError as spec_exc:
                     return ToolResult(error=f"schedule 无效: {spec_exc}")
                 t = ScheduledTask(
-                    name=name,
                     cron_expr=fields.cron_expr,
                     schedule_kind=fields.schedule_kind,
                     schedule_spec=fields.schedule_spec,
                     next_fire_at=fields.next_fire_at,
-                    target_type=ttype,
-                    target_id=tid,
-                    prompt_template=prompt,
+                    target_type=owner.target_type,
+                    target_id=owner.target_id,
+                    definition_version=1,
+                    updated_at=_utc_now_naive(),
                 )
+                apply_scheduled_task_program(
+                    t,
+                    name=name,
+                    prompt_template=prompt,
+                    program=normalized_program,
+                )
+                apply_scheduled_task_owner(t, owner)
                 db.add(t)
                 db.commit()
                 logger.info(

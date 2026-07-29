@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +18,7 @@ from core.agent_link.protocol import (
 )
 from core.agent_link.runtime import (
     AgentLinkChatRequest,
+    AgentLinkClientIdentity,
     AgentLinkPeer,
     AgentLinkRuntime,
     AgentLinkSessionKey,
@@ -23,11 +26,19 @@ from core.agent_link.runtime import (
 )
 
 
-def _hello(*, token: str = "secret") -> dict:
+def _hello(
+    *,
+    token: str = "secret",
+    client_id: str = "meapet",
+) -> dict:
     return make_agent_link_frame(
         "control.hello",
         {
-            "client": {"name": "MeaPet", "version": "1.0.0"},
+            "client": {
+                "id": client_id,
+                "name": "MeaPet",
+                "version": "1.0.0",
+            },
             "device": {"id": "device-test"},
             "auth": {"scheme": "bearer", "token": token},
             "resume": {"session_id": "session-test"},
@@ -139,6 +150,89 @@ def test_agent_link_rejects_invalid_token(
     assert "wrong" not in str(response)
 
 
+@pytest.mark.parametrize(
+    "client_id",
+    ["MeaPet", " meapet", "MeaPet!"],
+)
+def test_agent_link_rejects_invalid_client_id(
+    monkeypatch: pytest.MonkeyPatch,
+    client_id: str,
+) -> None:
+    runtime = AgentLinkRuntime()
+    app = _test_app(monkeypatch, runtime=runtime)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/agent-link") as websocket:
+            websocket.send_json(_hello(client_id=client_id))
+            response = websocket.receive_json()
+
+    assert response["type"] == "control.error"
+    assert response["payload"]["category"] == "protocol"
+    assert response["payload"]["code"] == "INVALID_CLIENT_ID"
+
+
+def test_agent_link_client_cannot_select_internal_prompt_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AgentLinkRuntime()
+    app = _test_app(monkeypatch, runtime=runtime)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/agent-link") as websocket:
+            websocket.send_json(_hello(client_id="internal"))
+            response = websocket.receive_json()
+
+    assert response["type"] == "control.ready"
+    assert response["payload"]["client_context"] == {
+        "platform_id": "internal",
+        "policy_profile": "external_private",
+        "chat_type": "private",
+    }
+
+
+def test_agent_link_preflight_rejects_missing_external_prompt_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow = json.loads(
+        Path("prompts.v2.default/chat/flow.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    private_edge = next(
+        edge
+        for edge in flow["edges"]
+        if (edge.get("from"), edge.get("to"))
+        == ("base_contract", "private_policy")
+    )
+    private_edge["platforms"].remove("external_private")
+    runtime_flow = tmp_path / "chat" / "flow.json"
+    runtime_flow.parent.mkdir(parents=True)
+    runtime_flow.write_text(
+        json.dumps(flow, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "core.prompt_v2.flow.runtime_flow_path",
+        lambda: runtime_flow,
+    )
+    runtime = AgentLinkRuntime()
+    app = _test_app(monkeypatch, runtime=runtime)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/agent-link") as websocket:
+            websocket.send_json(_hello())
+            response = websocket.receive_json()
+
+    assert response["type"] == "control.error"
+    assert response["payload"] == {
+        "category": "configuration",
+        "code": "PROMPT_POLICY_UNAVAILABLE",
+        "safe_message": "Nanobot 当前没有可用的外部私聊 Prompt 策略。",
+        "retryable": False,
+    }
+
+
 def test_agent_link_chat_calls_frontend_tool_and_replays_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -172,6 +266,11 @@ def test_agent_link_chat_calls_frontend_tool_and_replays_terminal(
             assert ready["reply_to"] == "hello-test"
             assert ready["payload"]["capabilities"]["tools"]["dynamic"] is True
             assert ready["payload"]["capabilities"]["chat"]["streaming"] is False
+            assert ready["payload"]["client_context"] == {
+                "platform_id": "meapet",
+                "policy_profile": "external_private",
+                "chat_type": "private",
+            }
 
             websocket.send_json(_tool_snapshot())
             websocket.send_json(_chat_submit())
@@ -222,7 +321,39 @@ def test_agent_link_chat_calls_frontend_tool_and_replays_terminal(
     assert captured["executions"] == 1
     request = captured["request"]
     assert isinstance(request, AgentLinkChatRequest)
+    assert request.client.platform_id == "meapet"
+    assert request.policy_profile == "external_private"
     assert request.tools[0].wire_schema()["function"]["name"] == "meapet.echo"
+
+
+def test_agent_link_empty_agent_result_returns_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AgentLinkRuntime()
+    app = _test_app(monkeypatch, runtime=runtime)
+
+    class _ChatPort:
+        async def run_chat(self, _request, _tool_caller):
+            return ""
+
+    runtime.bind_chat_port(_ChatPort())
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/agent-link") as websocket:
+            websocket.send_json(_hello())
+            assert websocket.receive_json()["type"] == "control.ready"
+            websocket.send_json(_tool_snapshot())
+            websocket.send_json(_chat_submit("turn-empty"))
+            frames = [websocket.receive_json(), websocket.receive_json()]
+
+    error = next(frame for frame in frames if frame["type"] == "chat.error")
+    assert error["reply_to"] == "turn-empty"
+    assert error["payload"] == {
+        "category": "backend_unavailable",
+        "code": "EMPTY_AGENT_RESULT",
+        "safe_message": "Agent 未生成可发送的回复。",
+        "retryable": True,
+    }
 
 
 def test_agent_link_chat_cancel_propagates_to_bridge(
@@ -282,6 +413,36 @@ async def test_agent_link_tool_returns_offline_without_queueing() -> None:
     assert result.success is False
     assert result.metadata["code"] == "OFFLINE"
     assert '"code":"OFFLINE"' in str(result.error)
+
+
+@pytest.mark.asyncio
+async def test_agent_link_connection_auto_registers_client_identity() -> None:
+    runtime = AgentLinkRuntime()
+    identity = AgentLinkClientIdentity(
+        platform_id="custom_desktop",
+        name="自定义桌面端",
+        version="2.3.0",
+    )
+
+    async def send_frame(_frame) -> None:
+        return None
+
+    async def close_transport(_code: int, _reason: str) -> None:
+        return None
+
+    peer = AgentLinkPeer(
+        key=AgentLinkSessionKey("device-test", "session-test"),
+        send_frame=send_frame,
+        close_transport=close_transport,
+        client=identity,
+    )
+
+    await runtime.attach(peer)
+    assert await runtime.registered_client("custom_desktop") == identity
+
+    await runtime.detach(peer)
+    assert await runtime.registered_client("custom_desktop") is None
+    await runtime.shutdown()
 
 
 @pytest.mark.asyncio
@@ -351,7 +512,6 @@ async def test_agent_link_dynamic_tool_enters_registry_and_tool_plan() -> None:
     )
     from nanobot_kt.agent_link_adapter import KtAgentLinkChatAdapter
 
-    runtime = AgentLinkRuntime()
     key = AgentLinkSessionKey("device-test", "session-test")
     definition = AgentLinkToolDefinition(
         name="meapet.echo",
@@ -373,14 +533,29 @@ async def test_agent_link_dynamic_tool_enters_registry_and_tool_plan() -> None:
             )
 
         async def handle_message(self, query, **kwargs):
+            from core.prompt_v2.compiler import compile_prompt_plan
+            from core.prompt_v2.schema import PromptCompileRequest
+
             captured["query"] = query
             captured["kwargs"] = kwargs
+            metadata = kwargs["metadata"]
             captured["plan"] = build_tool_plan(
                 chat_type="private",
-                platform="meapet",
+                platform=metadata["platform"],
                 session_id=key.bridge_session_id,
                 runtime_preset="full",
                 db=None,
+            )
+            captured["prompt_plan"] = await compile_prompt_plan(
+                PromptCompileRequest(
+                    chat_type="private",
+                    platform=metadata["platform"],
+                    policy_profile=metadata["policy_profile"],
+                    session_id=key.bridge_session_id,
+                    user_id=key.bridge_user_id,
+                    sender_name=kwargs["sender_name"],
+                    user_input=query,
+                )
             )
             tool = registry.get_tool("meapet.echo")
             result = await tool.execute({"value": "ok"})
@@ -413,6 +588,12 @@ async def test_agent_link_dynamic_tool_enters_registry_and_tool_plan() -> None:
         frontend_context={},
         files=(),
         tools=(definition,),
+        client=AgentLinkClientIdentity(
+            platform_id="meapet",
+            name="MeaPet",
+            version="1.0.0",
+        ),
+        policy_profile="external_private",
     )
     answer = await KtAgentLinkChatAdapter(_Pool()).run_chat(
         request,
@@ -427,6 +608,22 @@ async def test_agent_link_dynamic_tool_enters_registry_and_tool_plan() -> None:
     assert captured["tool_call"] == ("meapet.echo", {"value": "ok"})
     assert captured["tool_result"].success is True
     assert captured["released_key"] == key.bridge_session_id
+    prompt_plan = captured["prompt_plan"]
+    assert prompt_plan.platform == "meapet"
+    assert prompt_plan.policy_profile == "external_private"
+    assert prompt_plan.debug["flow_node_ids"][:2] == [
+        "base_contract",
+        "private_policy",
+    ]
+    assert captured["kwargs"]["metadata"]["platform"] == "meapet"
+    assert captured["kwargs"]["sender_name"] == "meapet 用户"
+    assert captured["kwargs"]["metadata"]["history_header"].startswith(
+        "meapet 客户端"
+    )
+    assert (
+        captured["kwargs"]["metadata"]["policy_profile"]
+        == "external_private"
+    )
 
     base_schema = {
         "type": "function",

@@ -4,12 +4,12 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/docker-build.sh [docker compose build args...]
-  scripts/docker-build.sh --build-only [docker compose build args...]
+  scripts/docker-build.sh [--production] [--build-only] [docker compose build args...]
 
 默认行为：构建镜像后原子重建四个固定 Runtime 服务，并等待全部健康，确保它们使用
 同一镜像。只想构建镜像时传 --build-only。部署并通过健康检查后，脚本仅保留当前镜像
-和最近一个已验证回滚镜像；不会执行任何全局 prune。
+和最近一个已验证回滚镜像；不会执行任何全局 prune。--production 要求 Git 和实际
+Docker 构建上下文均无未跟踪输入。
 EOF
 }
 
@@ -18,26 +18,42 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
 MODE="deploy"
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  usage
-  exit 0
-fi
-if [[ "${1:-}" == "--build-only" ]]; then
-  MODE="build-only"
-  shift
-fi
+PRODUCTION_BUILD=false
+while [[ $# -gt 0 ]]; do
+  case "${1}" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --build-only)
+      MODE="build-only"
+      shift
+      ;;
+    --production)
+      PRODUCTION_BUILD=true
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 export GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 export GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 export GIT_FULL_COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 export GIT_COMMIT_DATE="$(git log -1 --format=%ci --date=iso-strict 2>/dev/null || true)"
+export GIT_KT_COMMIT="$(
+  git -C vendor/KohakuTerrarium rev-parse HEAD 2>/dev/null || true
+)"
+built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 build_tmp_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/nanobot-build"
 mkdir -p "${build_tmp_dir}"
 status_file="$(mktemp "${build_tmp_dir}/git-status.XXXXXX")"
 trap 'rm -f "${status_file}"' EXIT
 
-if git status --porcelain --untracked-files=no >"${status_file}" 2>/dev/null; then
+if git status --porcelain --untracked-files=normal >"${status_file}" 2>/dev/null; then
   if [ -s "${status_file}" ]; then
     export GIT_DIRTY=true
   else
@@ -46,6 +62,31 @@ if git status --porcelain --untracked-files=no >"${status_file}" 2>/dev/null; th
 else
   export GIT_DIRTY=null
 fi
+
+build_evidence_dir="${NANOBOT_BUILD_EVIDENCE_DIR:-${build_tmp_dir}/evidence/${GIT_FULL_COMMIT:-unknown}}"
+mkdir -p "${build_evidence_dir}"
+build_context_manifest="${build_evidence_dir}/build-context.json"
+export BUILD_CONTEXT_SHA256="$(
+  python scripts/build_context_manifest.py \
+    --root "${REPO_ROOT}" \
+    --dockerignore "${REPO_ROOT}/.dockerignore" \
+    --include-git-identity \
+    --output "${build_context_manifest}" \
+    --print-sha
+)"
+context_untracked_count="$(
+  python -c \
+    'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8")).get("untracked_context_files", [])))' \
+    "${build_context_manifest}"
+)"
+if [[ "${context_untracked_count}" -gt 0 ]]; then
+  export GIT_DIRTY=true
+fi
+if [[ "${PRODUCTION_BUILD}" == "true" && "${GIT_DIRTY}" != "false" ]]; then
+  echo "生产构建拒绝 dirty 或含未跟踪上下文的工作树；证据：${build_context_manifest}" >&2
+  exit 2
+fi
+echo "构建上下文：sha256=${BUILD_CONTEXT_SHA256} evidence=${build_context_manifest}"
 
 runtime_image="${NANOBOT_RUNTIME_IMAGE:-nanobot-runtime:latest}"
 rollback_image="nanobot-runtime:rollback"
@@ -72,7 +113,38 @@ else
   exit "${build_exit}"
 fi
 
+write_build_evidence() {
+  local deployment_status="$1"
+  local image_id="$2"
+  local rollback_id="$3"
+  shift 3
+  local git_dirty_value="${GIT_DIRTY}"
+  if [[ "${git_dirty_value}" == "null" ]]; then
+    git_dirty_value="unknown"
+  fi
+  python scripts/write_runtime_build_evidence.py \
+    --git-full-commit "${GIT_FULL_COMMIT}" \
+    --git-dirty "${git_dirty_value}" \
+    --kt-commit "${GIT_KT_COMMIT}" \
+    --build-context-sha256 "${BUILD_CONTEXT_SHA256}" \
+    --build-context-manifest "${build_context_manifest}" \
+    --image-reference "${runtime_image}" \
+    --image-id "${image_id}" \
+    --rollback-image-id "${rollback_id}" \
+    --built-at "${built_at}" \
+    --deployment-status "${deployment_status}" \
+    "$@" \
+    --output "${build_evidence_dir}/runtime-build.json"
+}
+
 if [[ "${MODE}" == "build-only" ]]; then
+  built_image_id="$(
+    docker image inspect "${runtime_image}" --format '{{.Id}}'
+  )"
+  write_build_evidence \
+    "built_only" \
+    "${built_image_id}" \
+    "${previous_image_id}"
   if [[ -n "${previous_image_id}" ]]; then
     docker image rm "${predeploy_image}" >/dev/null 2>&1 \
       || echo "临时 predeploy 标签清理失败，已保留现场证据。" >&2
@@ -144,6 +216,35 @@ if ! wait_for_health; then
 fi
 
 current_image_id="$(docker image inspect "${runtime_image}" --format '{{.Id}}')"
+service_names=(
+  "nanobot-server"
+  "session-summary-worker"
+  "outbound-delivery-worker"
+  "semantic-index-worker"
+)
+container_names=(
+  "nanobot-server"
+  "nanobot-session-summary-worker"
+  "nanobot-outbound-delivery-worker"
+  "nanobot-semantic-index-worker"
+)
+service_image_args=()
+for index in "${!service_names[@]}"; do
+  service_image_id="$(
+    docker inspect \
+      --format '{{.Image}}' \
+      "${container_names[${index}]}"
+  )"
+  if [[ "${service_image_id}" != "${current_image_id}" ]]; then
+    echo "Runtime 服务镜像身份不一致：${service_names[${index}]}" >&2
+    restore_previous_runtime || true
+    exit 1
+  fi
+  service_image_args+=(
+    --service-image
+    "${service_names[${index}]}=${service_image_id}"
+  )
+done
 if [[ -n "${previous_image_id}" && "${previous_image_id}" != "${current_image_id}" ]]; then
   docker image tag "${previous_image_id}" "${rollback_image}"
 fi
@@ -163,4 +264,9 @@ if [[ -n "${previous_rollback_id}" \
   fi
 fi
 
+write_build_evidence \
+  "deployed" \
+  "${current_image_id}" \
+  "${previous_image_id}" \
+  "${service_image_args[@]}"
 echo "部署健康检查通过。当前镜像：${current_image_id}；回滚镜像：${previous_image_id:-无}"

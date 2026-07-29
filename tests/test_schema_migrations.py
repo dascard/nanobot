@@ -298,6 +298,107 @@ def test_schema_migrations_records_applied_versions():
     assert project_sequence == 10000
 
 
+def test_scheduled_task_owner_migration_scopes_valid_rows_and_blocks_unknown():
+    from core.schema_migrations import (
+        MIGRATIONS,
+        run_schema_migrations,
+    )
+
+    owner_version = "20260729_scheduled_task_owner_identity"
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations ("
+            "version TEXT PRIMARY KEY, name TEXT NOT NULL, "
+            "applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(
+            text(
+                "INSERT INTO schema_migrations(version, name) "
+                "VALUES (:version, :name)"
+            ),
+            [
+                {"version": version, "name": name}
+                for version, name, _migration in MIGRATIONS
+                if version != owner_version
+            ],
+        )
+        conn.execute(text(
+            "CREATE TABLE scheduled_tasks ("
+            "id INTEGER PRIMARY KEY, "
+            "target_type TEXT, target_id TEXT, enabled INTEGER)"
+        ))
+        conn.execute(
+            text(
+                "INSERT INTO scheduled_tasks("
+                "id, target_type, target_id, enabled"
+                ") VALUES (:id, :target_type, :target_id, 1)"
+            ),
+            [
+                {
+                    "id": 1,
+                    "target_type": "group",
+                    "target_id": "10001",
+                },
+                {
+                    "id": 2,
+                    "target_type": "private",
+                    "target_id": "u2",
+                },
+                {
+                    "id": 3,
+                    "target_type": "unknown",
+                    "target_id": "",
+                },
+            ],
+        )
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("scheduled_tasks")
+    }
+    assert {
+        "owner_chat_stream_id",
+        "owner_platform",
+        "owner_chat_type",
+        "owner_session_id",
+        "created_by_actor_id",
+        "owner_migration_required",
+        "definition_version",
+        "updated_at",
+    } <= columns
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT id, owner_chat_stream_id, owner_session_id, "
+            "created_by_actor_id, owner_migration_required, enabled "
+            "FROM scheduled_tasks ORDER BY id"
+        )).mappings().all()
+
+    assert dict(rows[0]) == {
+        "id": 1,
+        "owner_chat_stream_id": "qq:10001:group",
+        "owner_session_id": "group_10001",
+        "created_by_actor_id": "",
+        "owner_migration_required": 0,
+        "enabled": 1,
+    }
+    assert dict(rows[1]) == {
+        "id": 2,
+        "owner_chat_stream_id": "qq:u2:private",
+        "owner_session_id": "u2",
+        "created_by_actor_id": "u2",
+        "owner_migration_required": 0,
+        "enabled": 1,
+    }
+    assert rows[2]["owner_chat_stream_id"] == ""
+    assert rows[2]["owner_migration_required"] == 1
+    assert rows[2]["enabled"] == 0
+
+
 def test_block_session_memory_migration_adds_table_and_column():
     """块式会话记忆迁移:conversation_blocks 表 + rolling_session_summaries.block_id。"""
 

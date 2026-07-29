@@ -136,6 +136,19 @@ jobs:
           image_repo="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/nanobot-runtime"
           image_tag="${image_repo}:${SOURCE_SHA}"
           git_commit_date="$(git show -s --format=%cI "${SOURCE_SHA}")"
+          evidence_dir="${{ steps.verification.outputs.evidence_dir }}"
+          build_context_sha256="$(
+            python scripts/build_context_manifest.py \
+              --root . \
+              --dockerignore .dockerignore \
+              --include-git-identity \
+              --output "${evidence_dir}/build-context.json" \
+              --print-sha
+          )"
+          test "$(
+            jq '.untracked_context_files | length' \
+              "${evidence_dir}/build-context.json"
+          )" = "0"
           metadata_file="$(mktemp)"
           docker buildx build \
             --platform linux/amd64 \
@@ -144,6 +157,7 @@ jobs:
             --build-arg "GIT_FULL_COMMIT=${SOURCE_SHA}" \
             --build-arg "GIT_COMMIT_DATE=${git_commit_date}" \
             --build-arg "GIT_DIRTY=false" \
+            --build-arg "BUILD_CONTEXT_SHA256=${build_context_sha256}" \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
             --provenance=mode=max \
@@ -164,6 +178,8 @@ jobs:
           test "${revision}" = "${SOURCE_SHA}"
           printf 'reference=%s\n' "${image_reference}" >>"${GITHUB_OUTPUT}"
           printf 'image_id=%s\n' "${image_id}" >>"${GITHUB_OUTPUT}"
+          printf 'build_context_sha256=%s\n' \
+            "${build_context_sha256}" >>"${GITHUB_OUTPUT}"
 
       - name: 生成 SPDX SBOM
         uses: anchore/sbom-action@v0
@@ -180,6 +196,7 @@ jobs:
           RUNTIME_IMAGE_ID: ${{ steps.image.outputs.image_id }}
           KT_SHA: ${{ steps.verification.outputs.kt_sha }}
           EVIDENCE_DIR: ${{ steps.verification.outputs.evidence_dir }}
+          BUILD_CONTEXT_SHA256: ${{ steps.image.outputs.build_context_sha256 }}
         run: |
           set -euo pipefail
           python scripts/build_release_manifest.py artifact \
@@ -190,7 +207,8 @@ jobs:
             --input python_lock=requirements-prod.lock \
             --input web_lock=webui/package-lock.json \
             --input prompt_defaults=prompts.v2.default \
-            --schema-migration-head 20260726_scheduled_task_schedule_columns \
+            --input-sha "build_context=${BUILD_CONTEXT_SHA256}" \
+            --schema-migration-head 20260729_scheduled_task_workflow_execution \
             --image-reference "${NANOBOT_RUNTIME_IMAGE}" \
             --image-id "${RUNTIME_IMAGE_ID}" \
             --sbom-file "${EVIDENCE_DIR}/runtime.spdx.json" \
@@ -211,6 +229,7 @@ jobs:
           sha256sum \
             "${EVIDENCE_DIR}/runtime.spdx.json" \
             "${EVIDENCE_DIR}/verification-results.json" \
+            "${EVIDENCE_DIR}/build-context.json" \
             "${EVIDENCE_DIR}/runtime-artifact.json" \
             "${EVIDENCE_DIR}/release.json" \
             >"${EVIDENCE_DIR}/SHA256SUMS"

@@ -53,6 +53,12 @@ _ALWAYS_REQUIRED = {
             {"private_policy"},
             {"qq_common_policy", "group_policy", "qq_group_policy"},
         ),
+        (
+            "external_private",
+            "private",
+            {"private_policy"},
+            {"qq_common_policy", "group_policy", "qq_group_policy"},
+        ),
     ],
 )
 async def test_core_flow_contract_matches_all_live_branches(
@@ -439,26 +445,35 @@ def test_default_and_runtime_flow_files_are_identical():
     ]
     assert len(private_edges) == 1
     assert private_edges[0]["chat_types"] == ["private"]
-    assert private_edges[0]["platforms"] == ["web", "internal"]
+    assert private_edges[0]["platforms"] == [
+        "web",
+        "internal",
+        "external_private",
+    ]
     validate_runtime_contract(default_flow)
 
 
 @pytest.mark.asyncio
-async def test_unknown_platform_fails_closed_in_strict_compile():
+async def test_unknown_platform_uses_external_private_policy():
     from core.prompt_v2.compiler import compile_prompt_plan
-    from core.prompt_v2.flow import PromptFlowError
     from core.prompt_v2.schema import PromptCompileRequest
 
-    with pytest.raises(PromptFlowError, match="platform 不支持"):
-        await compile_prompt_plan(
-            PromptCompileRequest(
-                platform="unsupported-platform",
-                chat_type="private",
-                user_input="你好",
-                runtime_tool_prompt="[RuntimeTool]\n只允许 reply/no_reply",
-            ),
-            strict_audit=True,
-        )
+    plan = await compile_prompt_plan(
+        PromptCompileRequest(
+            platform="unsupported-platform",
+            chat_type="private",
+            user_input="你好",
+            runtime_tool_prompt="[RuntimeTool]\n只允许 reply/no_reply",
+        ),
+        strict_audit=True,
+    )
+
+    assert plan.platform == "unsupported-platform"
+    assert plan.policy_profile == "external_private"
+    assert plan.debug["policy_profile"] == "external_private"
+    node_ids = [section["node_id"] for section in plan.flow_sections]
+    assert "private_policy" in node_ids
+    assert "qq_common_policy" not in node_ids
 
 
 def test_flow_contract_rejects_custom_platform_even_with_complete_paths():

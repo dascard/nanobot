@@ -1,9 +1,10 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 
 
-def _context(user_id: str):
+def _untrusted_context(user_id: str):
     return SimpleNamespace(
         session=SimpleNamespace(
             extra={
@@ -16,19 +17,32 @@ def _context(user_id: str):
     )
 
 
+def _runtime_scope(user_id: str | None):
+    if user_id is None:
+        return nullcontext()
+    from core.agent_runtime.request_scope import runtime_context_scope
+
+    return runtime_context_scope({
+        "chat_type": "private",
+        "user_id": user_id,
+        "session_id": f"private_{user_id}",
+    })
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "context,args",
+    "runtime_user_id,context,args",
     [
-        (None, {}),
-        (SimpleNamespace(session=SimpleNamespace(extra={})), {}),
-        (_context(""), {}),
-        (_context("actor-user"), {"user_id": "other-user"}),
+        (None, None, {}),
+        (None, _untrusted_context("actor-user"), {}),
+        ("", None, {}),
+        ("actor-user", None, {"user_id": "other-user"}),
     ],
 )
 async def test_persona_update_rejects_missing_or_mismatched_actor_before_database(
     monkeypatch,
     db_session,
+    runtime_user_id,
     context,
     args,
 ):
@@ -56,7 +70,8 @@ async def test_persona_update_rejects_missing_or_mismatched_actor_before_databas
 
     monkeypatch.setattr("core.database.SessionLocal", fail_if_opened)
 
-    result = await PersonaUpdateTool().execute(args, context=context)
+    with _runtime_scope(runtime_user_id):
+        result = await PersonaUpdateTool().execute(args, context=context)
 
     assert result.error == "Persona update authorization failed"
     assert (
@@ -114,7 +129,11 @@ async def test_persona_update_uses_runtime_actor_and_enters_existing_flow(
 
     monkeypatch.setattr("core.database.SessionLocal", open_db)
 
-    result = await PersonaUpdateTool().execute(args, context=_context("actor-user"))
+    with _runtime_scope("actor-user"):
+        result = await PersonaUpdateTool().execute(
+            args,
+            context=_untrusted_context("other-user"),
+        )
 
     assert result.error is None
     assert "没有找到" in result.output
@@ -132,10 +151,11 @@ async def test_persona_update_rejects_unimplemented_instructions_before_database
         lambda: (_ for _ in ()).throw(AssertionError("database must not be opened")),
     )
 
-    result = await PersonaUpdateTool().execute(
-        {"instructions": "删除并重建我的画像"},
-        context=_context("actor-user"),
-    )
+    with _runtime_scope("actor-user"):
+        result = await PersonaUpdateTool().execute(
+            {"instructions": "删除并重建我的画像"},
+            context=_untrusted_context("other-user"),
+        )
 
     assert result.error == "Unsupported persona update arguments"
     assert "完成" not in str(result.output or "")

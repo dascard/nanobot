@@ -821,9 +821,15 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
 
     conversation = _FakeConversation()
     seen_events = []
+    seen_runtime_contexts = []
 
     async def fake_process_event(event):
+        from core.agent_runtime.request_scope import (
+            require_current_runtime_context,
+        )
+
         seen_events.append(event)
+        seen_runtime_contexts.append(require_current_runtime_context())
         _append_reply_exchange(
             conversation,
             "V2 回复",
@@ -968,10 +974,15 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     assert seen_events[0].content == "<user_input>\nPLAN_USER\n</user_input>"
     assert [call["chat_type"] for call in captured_tool_plan_calls] == ["group"]
     assert [call["group_id"] for call in captured_tool_plan_calls] == ["1001"]
-    runtime_context = bridge._agent.executor._session.extra["nanobot_runtime_context"]
+    assert len(seen_runtime_contexts) == 1
+    runtime_context = seen_runtime_contexts[0]
     assert runtime_context["is_super_user"] is True
     assert runtime_context["runtime_chat_type"] == "group"
     assert runtime_context["group_id"] == "1001"
+    assert bridge._agent.executor._session.extra == {}
+    from core.agent_runtime.request_scope import get_current_runtime_context
+
+    assert get_current_runtime_context() is None
     run = db_session.query(AgentRun).filter(AgentRun.session_id == "group_1001").first()
     assert run is not None
     assert run.group_id == "1001"
@@ -1050,10 +1061,20 @@ async def test_bridge_engine_v2_maps_private_runtime_metadata(
         "_apply_runtime_model_route",
         lambda *_args, **_kwargs: None,
     )
+    seen_runtime_contexts = []
+
+    async def fake_process_event(_event):
+        from core.agent_runtime.request_scope import (
+            require_current_runtime_context,
+        )
+
+        seen_runtime_contexts.append(require_current_runtime_context())
+        return "ok"
+
     bridge._agent = SimpleNamespace(
         controller=SimpleNamespace(conversation=_FakeConversation()),
         registry=SimpleNamespace(_tools={"reply": object(), "no_reply": object()}),
-        _process_event=AsyncMock(return_value="ok"),
+        _process_event=fake_process_event,
         executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
     )
 
@@ -1218,13 +1239,19 @@ async def test_bridge_engine_v2_maps_private_runtime_metadata(
         "chat_type": "private",
         "session_id": "private_placeholder",
     }]
-    runtime_context = bridge._agent.executor._session.extra["nanobot_runtime_context"]
+    assert len(seen_runtime_contexts) == 1
+    runtime_context = seen_runtime_contexts[0]
     assert runtime_context["is_super_user"] is expected_super_user
     assert runtime_context["group_id"] == ""
     assert runtime_context["session_id"] == "private_placeholder"
     assert runtime_context["runtime_chat_type"] == (
         "private_superuser" if expected_super_user else "private"
     )
+    assert runtime_context["user_id"] == "u1"
+    assert bridge._agent.executor._session.extra == {}
+    from core.agent_runtime.request_scope import get_current_runtime_context
+
+    assert get_current_runtime_context() is None
     run = (
         db_session.query(AgentRun)
         .filter(AgentRun.session_id == "private_placeholder")

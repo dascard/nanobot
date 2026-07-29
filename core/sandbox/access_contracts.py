@@ -45,6 +45,7 @@ TOOL_REQUIRED_CAPABILITY: dict[str, SandboxCapability] = {
     "workspace_read": SandboxCapability.WORKSPACE,
     "workspace_search": SandboxCapability.WORKSPACE,
     "workspace_write": SandboxCapability.WORKSPACE,
+    "workspace_edit": SandboxCapability.WORKSPACE,
     "workspace_apply_patch": SandboxCapability.WORKSPACE,
     "asset_import": SandboxCapability.ASSETS,
     "asset_publish": SandboxCapability.ASSETS,

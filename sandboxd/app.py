@@ -10,7 +10,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -86,25 +86,35 @@ class WorkspaceRequest(StrictModel):
 
 class FileListRequest(WorkspaceRequest):
     path: str = Field(default="", max_length=4096)
+    cwd: str = Field(default="", max_length=4096)
     cursor: str = Field(default="", max_length=64)
     limit: int = Field(default=100, ge=1, le=200)
 
 
 class FileReadRequest(WorkspaceRequest):
     path: str = Field(min_length=1, max_length=4096)
+    cwd: str = Field(default="", max_length=4096)
     offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=64 * 1024, ge=1, le=256 * 1024)
+    limit: int = Field(default=200, ge=1, le=2000)
 
 
 class FileSearchRequest(WorkspaceRequest):
-    query: str = Field(min_length=1, max_length=1024)
+    mode: Literal["content", "files", "tree"] = "content"
+    pattern: str = Field(default="", max_length=1024)
+    # 兼容旧 sandboxd 客户端；新模型 Schema 不暴露 query。
+    query: str = Field(default="", max_length=1024)
     path: str = Field(default="", max_length=4096)
+    cwd: str = Field(default="", max_length=4096)
     glob: str = Field(default="", max_length=512)
     limit: int = Field(default=50, ge=1, le=200)
+    ignore_case: bool = False
+    max_depth: int | None = Field(default=None, ge=0, le=100)
+    cursor: str = Field(default="", max_length=2048)
 
 
 class FileWriteRequest(WorkspaceRequest):
     path: str = Field(min_length=1, max_length=4096)
+    cwd: str = Field(default="", max_length=4096)
     content: str = Field(max_length=256 * 1024)
     overwrite: bool = False
     quota_bytes: int = Field(gt=0, le=1024 * 1024 * 1024 * 1024)
@@ -113,6 +123,26 @@ class FileWriteRequest(WorkspaceRequest):
 class FilePatchRequest(WorkspaceRequest):
     path: str = Field(min_length=1, max_length=4096)
     patch: str = Field(min_length=1, max_length=256 * 1024)
+    quota_bytes: int = Field(gt=0, le=1024 * 1024 * 1024 * 1024)
+
+
+class ExactEditOperation(StrictModel):
+    path: str = Field(min_length=1, max_length=4096)
+    old: str = Field(min_length=1, max_length=256 * 1024)
+    new: str = Field(max_length=256 * 1024)
+    replace_all: bool = False
+
+
+class DiffEditOperation(StrictModel):
+    diff: str = Field(min_length=1, max_length=256 * 1024)
+
+
+class FileEditRequest(WorkspaceRequest):
+    operations: list[ExactEditOperation | DiffEditOperation] = Field(
+        min_length=1,
+        max_length=50,
+    )
+    cwd: str = Field(default="", max_length=4096)
     quota_bytes: int = Field(gt=0, le=1024 * 1024 * 1024 * 1024)
 
 
@@ -1129,6 +1159,7 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
         data = current.workspace_files.list_files(
             body.workspace_id,
             path=body.path,
+            cwd=body.cwd,
             cursor=body.cursor,
             limit=body.limit,
         )
@@ -1139,6 +1170,7 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
         data = current.workspace_files.read_file(
             body.workspace_id,
             path=body.path,
+            cwd=body.cwd,
             offset=body.offset,
             limit=body.limit,
         )
@@ -1148,10 +1180,15 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
     def search_files(body: FileSearchRequest, current: RuntimeDependency):
         data = current.workspace_files.search_files(
             body.workspace_id,
-            query=body.query,
+            mode=body.mode,
+            pattern=body.pattern or body.query,
             path=body.path,
             glob=body.glob,
             limit=body.limit,
+            ignore_case=body.ignore_case,
+            max_depth=body.max_depth,
+            cursor=body.cursor,
+            cwd=body.cwd,
         )
         return success_result("工作区搜索完成", data=data)
 
@@ -1160,6 +1197,7 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
         data = current.workspace_files.write_file(
             body.workspace_id,
             path=body.path,
+            cwd=body.cwd,
             content=body.content,
             overwrite=body.overwrite,
             quota_bytes=body.quota_bytes,
@@ -1173,6 +1211,31 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
                 "path": data["path"],
                 "size_bytes": data["size_bytes"],
             }],
+        )
+
+    @app.post("/v1/files/edit")
+    def edit_files(body: FileEditRequest, current: RuntimeDependency):
+        data = current.workspace_files.edit_files(
+            body.workspace_id,
+            operations=[
+                operation.model_dump(exclude_none=True)
+                for operation in body.operations
+            ],
+            cwd=body.cwd,
+            quota_bytes=body.quota_bytes,
+        )
+        return success_result(
+            "Workspace 编辑完成",
+            data=data,
+            artifacts=[
+                {
+                    "type": "workspace_file",
+                    "ref": f"workspace://current/{item['path']}",
+                    "path": item["path"],
+                    "size_bytes": item["size_bytes"],
+                }
+                for item in data["files"]
+            ],
         )
 
     @app.post("/v1/files/apply-patch")

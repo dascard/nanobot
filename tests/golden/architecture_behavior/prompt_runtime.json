@@ -12,8 +12,8 @@
     },
     {
       "path": "data/prompts_v2/chat/flow.json",
-      "sha256": "ebbe5acaff4b745bc608365be2fc936bc2ba085eaae1367917ea1e7ff9437eb8",
-      "size_bytes": 3708
+      "sha256": "c5d3b870e29fe617c8b9839d5d6e0d2523a149dce4f690b4ec2cd4749a873711",
+      "size_bytes": 3728
     },
     {
       "path": "data/prompts_v2/chat/platform/qq/common.md",
@@ -36,6 +36,11 @@
       "size_bytes": 965
     },
     {
+      "path": "data/prompts_v2/tools/schedule_task/usage.md",
+      "sha256": "11d8acccadc805398659d89c8841d74d5b4da0153ea436173374843dc532396b",
+      "size_bytes": 4745
+    },
+    {
       "path": "data/prompts_v2/tools/sticker_search/usage.md",
       "sha256": "0e640b46803169efadbf125525a8d228bbffd1cf520ea71f58b7b4db923f2736",
       "size_bytes": 876
@@ -52,8 +57,8 @@
     },
     {
       "path": "prompts.v2.default/chat/flow.json",
-      "sha256": "ebbe5acaff4b745bc608365be2fc936bc2ba085eaae1367917ea1e7ff9437eb8",
-      "size_bytes": 3708
+      "sha256": "c5d3b870e29fe617c8b9839d5d6e0d2523a149dce4f690b4ec2cd4749a873711",
+      "size_bytes": 3728
     },
     {
       "path": "prompts.v2.default/chat/identity_context.md",
@@ -327,8 +332,8 @@
     },
     {
       "path": "prompts.v2.default/tools/schedule_task/usage.md",
-      "sha256": "159f47af7f2e0304838020f0168c9a05adc4d9ae25f134db22ae4c65b1620e2f",
-      "size_bytes": 2592
+      "sha256": "11d8acccadc805398659d89c8841d74d5b4da0153ea436173374843dc532396b",
+      "size_bytes": 4745
     },
     {
       "path": "prompts.v2.default/tools/sql_analysis/usage.md",
@@ -347,28 +352,33 @@
     },
     {
       "path": "prompts.v2.default/tools/workspace_apply_patch/usage.md",
-      "sha256": "da6af5fa98bde87a75e489569fb368aca125efbfcefab0025ade5ff10a922e37",
-      "size_bytes": 776
+      "sha256": "5ebd521db456ccd0481e6b8ceb1d68f190d6b5de1fb46282d890a868dafdb7a7",
+      "size_bytes": 447
+    },
+    {
+      "path": "prompts.v2.default/tools/workspace_edit/usage.md",
+      "sha256": "988af1ab624eeefafc0fea132360d1b0990bccbc982aca81c764fc7cbd4da2d4",
+      "size_bytes": 1185
     },
     {
       "path": "prompts.v2.default/tools/workspace_list/usage.md",
-      "sha256": "39f6615fc44f3c7a804d7c408dc190f1b83b65ece83e000904a1ddb771129895",
-      "size_bytes": 576
+      "sha256": "8071bf03b07d31d3bf41349d52d72dfcd09da892aa4e5746463d8c4c80cda866",
+      "size_bytes": 425
     },
     {
       "path": "prompts.v2.default/tools/workspace_read/usage.md",
-      "sha256": "7cea7604a8a0580cf5a84cc31a09bb56299312ced4db53645f9be03d2c4cad12",
-      "size_bytes": 547
+      "sha256": "7023ff422644364473e2d5357fb1f4ad8a83f437452583f6467355b1b893d871",
+      "size_bytes": 931
     },
     {
       "path": "prompts.v2.default/tools/workspace_search/usage.md",
-      "sha256": "fea1666f62624d52f83bf788939a7a7325a0d2641f9185626ddc4a35e32b8001",
-      "size_bytes": 564
+      "sha256": "69d10c1b4e5a1371ff81397eeb68c09f9cbdfb59ff312844438974194d818000",
+      "size_bytes": 1097
     },
     {
       "path": "prompts.v2.default/tools/workspace_write/usage.md",
-      "sha256": "a9e12ce31ebb69a9ff8a03d518a57e2586685412c53a8436e5ebfe9cc50d4adf",
-      "size_bytes": 685
+      "sha256": "c5adcc8eec6fa37ef745977f5263bdbe84d52e2a88554fde5471e985cded464b",
+      "size_bytes": 859
     }
   ],
   "schema_version": 1,

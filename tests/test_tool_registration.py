@@ -139,7 +139,7 @@ def test_new_sandbox_tools_have_schema_execution_and_prompt_bindings():
         "sandbox_poll",
         "sandbox_write_stdin",
         "sandbox_terminate",
-        "workspace_apply_patch",
+        "workspace_edit",
     }:
         registration = get_tool_registration(name)
         assert registration is not None
@@ -153,6 +153,14 @@ def test_new_sandbox_tools_have_schema_execution_and_prompt_bindings():
             f"tools/{name}/usage",
         )
         assert configs[name].module == "nanobot_kt.tools.sandbox"
+
+    for name in {"workspace_list", "workspace_apply_patch"}:
+        registration = get_tool_registration(name)
+        assert registration is not None
+        assert registration.lifecycle == "retired"
+        assert registration.execution_binding is None
+        assert registration.prompt_template_keys == ()
+        assert name not in configs
 
 
 def test_loaded_tool_drift_fails_closed_but_allows_framework_tools():

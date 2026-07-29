@@ -195,6 +195,7 @@ class SandboxToolService:
         return self.backend.list_files({
             "workspace_id": workspace.id,
             "path": str(args.get("path") or ""),
+            "cwd": str(args.get("cwd") or ""),
             "cursor": str(args.get("cursor") or ""),
             "limit": int(args.get("limit") or 100),
         })
@@ -205,8 +206,9 @@ class SandboxToolService:
         return self.backend.read_file({
             "workspace_id": workspace.id,
             "path": str(args.get("path") or ""),
+            "cwd": str(args.get("cwd") or ""),
             "offset": int(args.get("offset") or 0),
-            "limit": int(args.get("limit") or 64 * 1024),
+            "limit": int(args.get("limit") or 200),
         })
 
     def workspace_search(self, args: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
@@ -214,10 +216,17 @@ class SandboxToolService:
         workspace = self._workspace(access)
         return self.backend.search_files({
             "workspace_id": workspace.id,
-            "query": str(args.get("query") or ""),
+            "mode": str(args.get("mode") or "content"),
+            "pattern": str(
+                args.get("pattern") or args.get("query") or ""
+            ),
             "path": str(args.get("path") or ""),
+            "cwd": str(args.get("cwd") or ""),
             "glob": str(args.get("glob") or ""),
             "limit": int(args.get("limit") or 50),
+            "ignore_case": bool(args.get("ignore_case", False)),
+            "max_depth": args.get("max_depth"),
+            "cursor": str(args.get("cursor") or ""),
         })
 
     def workspace_write(self, args: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
@@ -226,6 +235,7 @@ class SandboxToolService:
         response = self.backend.write_file({
             "workspace_id": workspace.id,
             "path": str(args.get("path") or ""),
+            "cwd": str(args.get("cwd") or ""),
             "content": str(args.get("content") or ""),
             "overwrite": bool(args.get("overwrite", False)),
             "quota_bytes": int(access.quota_bytes),
@@ -245,6 +255,66 @@ class SandboxToolService:
             workspace.id,
             delta_bytes=int(data["usage_delta_bytes"]),
             observed_used_bytes=int(data["used_bytes"]),
+        )
+        return response
+
+    def workspace_edit(
+        self,
+        args: Mapping[str, Any],
+        context: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        access, _runtime = self.authorize("workspace_edit", context)
+        workspace = self._workspace(access)
+        raw_operations = args.get("operations")
+        if not isinstance(raw_operations, list):
+            raise SandboxServiceError(
+                SandboxErrorCode.EDIT_CONFLICT,
+                "workspace_edit.operations 必须是数组",
+            )
+        response = self.backend.edit_files({
+            "workspace_id": workspace.id,
+            "operations": [
+                dict(operation)
+                if isinstance(operation, Mapping)
+                else operation
+                for operation in raw_operations
+            ],
+            "cwd": str(args.get("cwd") or ""),
+            "quota_bytes": int(access.quota_bytes),
+        })
+        data = self._data(response)
+        files = data.get("files")
+        if not isinstance(files, list):
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox 控制面返回了无效编辑响应",
+                retryable=True,
+                stop=False,
+            )
+        total_delta = 0
+        observed_used_bytes = None
+        for item in files:
+            if not isinstance(item, Mapping):
+                raise SandboxServiceError(
+                    SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                    "Sandbox 控制面返回了无效编辑响应",
+                    retryable=True,
+                    stop=False,
+                )
+            total_delta += int(item.get("usage_delta_bytes") or 0)
+            if item.get("used_bytes") is not None:
+                observed_used_bytes = int(item["used_bytes"])
+        if observed_used_bytes is None:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox 控制面缺少编辑后的用量事实",
+                retryable=True,
+                stop=False,
+            )
+        self.workspace_service.record_usage_delta(
+            workspace.id,
+            delta_bytes=total_delta,
+            observed_used_bytes=observed_used_bytes,
         )
         return response
 

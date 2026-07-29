@@ -47,6 +47,7 @@ def build_runtime_event_registry() -> RuntimeEventRegistry:
             fields=(
                 _field("prompt_key", "identifier", max_chars=192),
                 _field("platform", "label"),
+                _field("policy_profile", "label"),
                 _field("chat_type", "label"),
                 _field("message_count", "count"),
                 _field("section_count", "count"),
@@ -123,6 +124,8 @@ def build_runtime_event_registry() -> RuntimeEventRegistry:
                 _field("result_truncated", "boolean"),
                 _field("failure_code", "label"),
                 _field("error_type", "label"),
+                _field("retryable", "boolean"),
+                _field("stop", "boolean"),
             ),
         ),
         RuntimeEventDescriptor(

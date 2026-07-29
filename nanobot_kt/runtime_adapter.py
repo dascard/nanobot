@@ -298,14 +298,9 @@ class Kt13RuntimeAdapter:
             # 追踪是 fail-open 辅助能力，不能阻断 Agent 启动。
             pass
 
-    def _bind_request_context(self, request: AgentTurnRequest) -> None:
-        """把受信合同映射到旧 KT tool session；不接受模型侧身份字段。"""
+    def _request_context(self, request: AgentTurnRequest) -> dict[str, object]:
+        """把受信合同转换为请求级不可变上下文。"""
 
-        executor = getattr(self._agent, "executor", None)
-        session = getattr(executor, "_session", None)
-        extra = getattr(session, "extra", None)
-        if not isinstance(extra, dict):
-            return
         attributes = {
             attribute.key: attribute.value for attribute in request.event_attributes
         }
@@ -319,7 +314,7 @@ class Kt13RuntimeAdapter:
         user_id = actor_user_id or (
             principal.owner_id if not is_group else ""
         )
-        extra["nanobot_runtime_context"] = {
+        return {
             "chat_type": context.chat_type.value,
             "runtime_chat_type": str(
                 attributes.get("runtime_chat_type", context.chat_type.value) or ""
@@ -391,8 +386,9 @@ class Kt13RuntimeAdapter:
     async def execute_turn(self, request: AgentTurnRequest) -> AgentTurnResult:
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
         from nanobot_kt.kt_adapter import create_user_event, process_event
+        from core.agent_runtime.request_scope import runtime_context_scope
 
-        self._bind_request_context(request)
+        runtime_context = self._request_context(request)
         event_context = {
             attribute.key: attribute.value for attribute in request.event_attributes
         }
@@ -404,7 +400,8 @@ class Kt13RuntimeAdapter:
         else:
             event = create_user_event(request.content, **event_context)
         try:
-            raw_result = await process_event(self._agent, event)
+            with runtime_context_scope(runtime_context):
+                raw_result = await process_event(self._agent, event)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -509,12 +506,14 @@ class Kt13RuntimeAdapter:
             RuntimeLifecycleState.RUNNING,
         )
         from nanobot_kt.tool_runtime import (
+            install_tool_loop_control,
             install_tool_plan_guard,
             install_tool_plan_native_schema_filter,
             tool_plan_runtime_status,
         )
 
         install_tool_plan_guard(self._agent)
+        install_tool_loop_control(self._agent)
         install_tool_plan_native_schema_filter(self._agent)
         raw_status = tool_plan_runtime_status(self._agent)
         status = RuntimeToolPolicyStatus(

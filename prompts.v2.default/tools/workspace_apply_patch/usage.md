@@ -1,15 +1,13 @@
 ---
 name: Workspace 补丁工具
-version: 1
+version: 2
 kind: tool
 tool_name: workspace_apply_patch
-description: workspace_apply_patch 的单文件统一 diff 规则。
+description: workspace_apply_patch 的退役兼容说明。
 ---
 ## workspace_apply_patch 工具边界
 
-对当前 Workspace 中一个既有 UTF-8 文本文件原子应用严格 unified diff。
+这是已退役的模型工具名。新的编辑请求统一使用 `workspace_edit`；运行时对旧名
+执行 fail-closed 拒绝，避免新旧契约同时暴露。
 
-- `path` 必须是 Workspace 相对路径，禁止绝对路径、反斜杠和 `..`；补丁不能修改其他文件。
-- `patch` 可包含匹配同一路径的 `---` / `+++` 文件头，也可只包含 `@@` hunks。
-- 应用器不做模糊匹配；上下文不一致时整个操作失败且文件保持不变。失败后先用 `workspace_read` 重新读取，再生成新补丁。
-- 与 `workspace_write` 互斥，并受同一磁盘水位、单次大小和 Workspace 硬配额约束。
+- 内部迁移或历史 Trace 可以识别该名称，但不得重新加入 ToolPlan。

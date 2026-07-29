@@ -20,8 +20,8 @@
       "match": {
         "category": "compatibility"
       },
-      "expected_count": 137,
-      "expected_rule_ids_sha256": "20ff3a565be456ed2cbe34e1cd087ed65a8da52748e000a70d9ed63b4c4a1e49",
+      "expected_count": 138,
+      "expected_rule_ids_sha256": "d3ee45c7b8a915ccb1c8643982af19c1e58195cfd558860527fe045e0be63940",
       "override": {
         "category": "compatibility",
         "disposition": "compatibility_migration",
@@ -471,8 +471,8 @@
       "match": {
         "path": "core/telemetry/persistence.py"
       },
-      "expected_count": 4,
-      "expected_rule_ids_sha256": "06a14f6f40445cc26bc1119bfc29343b3eeae54488dd4c4995a98d9076eee49a",
+      "expected_count": 5,
+      "expected_rule_ids_sha256": "5c462b6bf6c5fd36c05fdd0feb146280f9393544dbd1a85ec0b7570df4eb503c",
       "override": {
         "category": "security_invariant",
         "disposition": "preserve",

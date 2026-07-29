@@ -6,6 +6,8 @@
 .agents/
 .claude/
 .codex/
+.Codex/
+.qoder/
 .vscode/
 .idea/
 
@@ -16,6 +18,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 **/.pytest_cache/
+.tmp/
 .mypy_cache/
 .ruff_cache/
 **/.ruff_cache/

@@ -41,6 +41,22 @@ def _sandbox_infrastructure_ceiling(monkeypatch):
         settings.invalidate()
 
 
+@pytest.fixture(autouse=True)
+def _trusted_agent_runtime_context():
+    from core.agent_runtime.request_scope import runtime_context_scope
+
+    with runtime_context_scope({
+        "chat_type": "private",
+        "runtime_chat_type": "private_superuser",
+        "is_super_user": True,
+        "user_id": "super-1",
+        "group_id": "",
+        "platform": "qq",
+        "session_id": "private_super-1",
+    }):
+        yield
+
+
 def _set_setting(db, key: str, value: object) -> None:
     from core.database import SystemSetting
 
@@ -105,18 +121,19 @@ def _enable_sandbox(db, *, exec_enabled: bool = False) -> None:
 
 
 def _context(*, user_id: str = "super-1", superuser: bool = True):
-    runtime_chat_type = "private_superuser" if superuser else "private"
+    del user_id, superuser
+    # KT ToolContext 属于不受信输入，不能成为 Sandbox 身份来源。
     return SimpleNamespace(
         session=SimpleNamespace(
             extra={
                 "nanobot_runtime_context": {
-                    "chat_type": "private",
-                    "runtime_chat_type": runtime_chat_type,
-                    "is_super_user": superuser,
-                    "user_id": user_id,
+                    "chat_type": "group",
+                    "runtime_chat_type": "group",
+                    "is_super_user": False,
+                    "user_id": "attacker",
                     "group_id": "",
                     "platform": "qq",
-                    "session_id": f"private_{user_id}",
+                    "session_id": "group_attacker",
                 }
             }
         )
@@ -127,6 +144,20 @@ def _tool_factory(tool_class, backend):
     return tool_class(
         service_factory=lambda db: SandboxToolService(db, backend),
     )
+
+
+def _active_sandbox_tool_names() -> set[str]:
+    from core.tool_registry import get_tool_descriptor
+
+    return {
+        name
+        for name in SANDBOX_TOOL_NAMES
+        if (
+            get_tool_descriptor(name) is not None
+            and get_tool_descriptor(name).availability_policy
+            != "force_disabled"
+        )
+    }
 
 
 def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
@@ -153,8 +184,11 @@ def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
         db=db_session,
     )
     exec_tools = {"sandbox_exec", *LEASE_PROCESS_TOOL_NAMES}
-    assert SANDBOX_TOOL_NAMES - exec_tools <= workspace_only.sent_tool_names
+    active_sandbox_tools = _active_sandbox_tool_names()
+    assert active_sandbox_tools - exec_tools <= workspace_only.sent_tool_names
     assert not exec_tools & workspace_only.sent_tool_names
+    assert "workspace_list" not in workspace_only.sent_tool_names
+    assert "workspace_apply_patch" not in workspace_only.sent_tool_names
 
     exec_row = db_session.query(SystemSetting).filter_by(
         key="sandbox.exec_enabled",
@@ -170,7 +204,7 @@ def test_sandbox_feature_flags_and_allowlist_control_wire_schema(db_session):
         db=db_session,
     )
     assert (
-        SANDBOX_TOOL_NAMES - LEASE_PROCESS_TOOL_NAMES
+        active_sandbox_tools - LEASE_PROCESS_TOOL_NAMES
         <= all_enabled.sent_tool_names
     )
     assert not LEASE_PROCESS_TOOL_NAMES & all_enabled.sent_tool_names
@@ -273,6 +307,72 @@ def test_workspace_write_uses_trusted_context_and_stable_envelope(db_session):
     assert "owner_id" not in write_payload
 
 
+def test_workspace_edit_uses_trusted_context_and_updates_usage(db_session):
+    from core.database import Workspace
+    from creatures.nanobot.prompts.skills.sandbox.tool import (
+        WorkspaceEditTool,
+    )
+
+    _enable_sandbox(db_session)
+    workspace = db_session.query(Workspace).one()
+    backend = FakeSandboxBackend()
+    backend.set_response("edit_files", {
+        "status": "success",
+        "summary": "Workspace 编辑完成",
+        "next_actions": [],
+        "artifacts": [{
+            "type": "workspace_file",
+            "ref": "workspace://current/project/result.txt",
+            "path": "project/result.txt",
+            "size_bytes": 9,
+        }],
+        "data": {
+            "protocol_version": 2,
+            "file_count": 1,
+            "recovery_status": "not_needed",
+            "files": [{
+                "path": "project/result.txt",
+                "size_bytes": 9,
+                "previous_size_bytes": 6,
+                "used_bytes": 9,
+                "usage_delta_bytes": 3,
+                "replacement_count": 1,
+                "old_sha256": "a" * 64,
+                "new_sha256": "b" * 64,
+            }],
+        },
+    })
+    tool = _tool_factory(WorkspaceEditTool, backend)
+
+    result = run_async(tool.execute(
+        {
+            "cwd": "project",
+            "operations": [{
+                "path": "result.txt",
+                "old": "旧值",
+                "new": "新值",
+            }],
+        },
+        context=_context(),
+    ))
+    body = json.loads(result.output)
+    db_session.refresh(workspace)
+
+    assert result.success
+    assert body["data"]["file_count"] == 1
+    edit_payload = next(
+        payload
+        for name, payload in backend.calls
+        if name == "edit_files"
+    )
+    assert edit_payload["cwd"] == "project"
+    assert edit_payload["operations"][0]["path"] == "result.txt"
+    assert edit_payload["workspace_id"] == workspace.id
+    assert "owner_id" not in edit_payload
+    # 数据库是按增量更新的管理投影；sandboxd 的 observed=9 才是硬配额事实。
+    assert workspace.used_bytes == 3
+
+
 @pytest.mark.parametrize(
     "forbidden_field",
     ["owner_id", "workspace_id", "user_id", "image", "network", "volume"],
@@ -292,6 +392,9 @@ def test_sandbox_exec_rejects_model_controlled_identity_and_docker_fields(
     ))
     body = json.loads(result.output)
 
+    assert not result.success
+    assert result.exit_code == 1
+    assert "authorization_failed" in result.error
     assert body["status"] == "error"
     assert body["error"]["code"] == "authorization_failed"
     assert backend.calls == []

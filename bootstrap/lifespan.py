@@ -71,27 +71,52 @@ async def shutdown_bridge() -> None:
 def bind_agent_runtime(bridge: object) -> None:
     """把 KT Adapter 绑定到框架无关 Gateway Port。"""
 
+    from core import database
     from core.agent_link.runtime import get_agent_link_runtime
     from core.agent_runtime.gateway import bind_agent_runtime as _bind
+    from core.agent_runtime.gateway import (
+        clear_agent_runtime_bindings as _clear,
+    )
+    from core.scheduled_workflow_runtime import (
+        bind_scheduled_workflow_callbacks,
+        clear_scheduled_workflow_callbacks,
+    )
     from nanobot_kt.agent_link_adapter import KtAgentLinkChatAdapter
     from nanobot_kt.bridge import NanobotBridge
     from nanobot_kt.research_runtime import create_research_runtime
+    from nanobot_kt.scheduled_workflow_adapter import (
+        KtScheduledWorkflowCallbacks,
+    )
 
-    _bind(
-        gateway_provider=lambda: bridge,
-        isolated_gateway_factory=NanobotBridge,
-        research_runtime_factory=create_research_runtime,
-    )
-    get_agent_link_runtime().bind_chat_port(
-        KtAgentLinkChatAdapter(bridge)
-    )
+    try:
+        _bind(
+            gateway_provider=lambda: bridge,
+            isolated_gateway_factory=NanobotBridge,
+            research_runtime_factory=create_research_runtime,
+        )
+        bind_scheduled_workflow_callbacks(
+            lambda: KtScheduledWorkflowCallbacks(
+                session_factory=database.SessionLocal,
+            )
+        )
+        get_agent_link_runtime().bind_chat_port(
+            KtAgentLinkChatAdapter(bridge)
+        )
+    except BaseException:
+        clear_scheduled_workflow_callbacks()
+        _clear()
+        raise
 
 
 def clear_agent_runtime_bindings() -> None:
     from core.agent_runtime.gateway import (
         clear_agent_runtime_bindings as _clear,
     )
+    from core.scheduled_workflow_runtime import (
+        clear_scheduled_workflow_callbacks,
+    )
 
+    clear_scheduled_workflow_callbacks()
     _clear()
 
 
@@ -194,10 +219,13 @@ def _application_module_dependencies() -> ApplicationModuleDependencies:
 
 @asynccontextmanager
 async def lifespan(app: Any):
+    from config import log_agent_link_token_configuration
+
     logger = logging.getLogger("nanobot")
     testing = os.environ.get("NANOBOT_TESTING") == "1"
 
     logger.info("Starting Nanobot Server Gateway...")
+    log_agent_link_token_configuration(logger)
     mark_starting(testing=testing)
     app.state.bridge = None
     app.state.new_api_session = None

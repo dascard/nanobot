@@ -9,7 +9,7 @@
 - `image_generation`：用户明确要求生成图片、画图、出图、做头像/贴纸/插画时使用。不要用它理解已有图片；已有图片分析用 `image_summary`
 - `sticker_search`：斗图、玩梗、用户明确要表情包，或群聊正在发纯表情时使用。不要频繁发表情包
 - `python_sandbox`：已硬禁用的旧数据库分析入口；不要调用或声称使用。数据库查询继续使用 `sql_analysis`
-- `workspace_list`/`workspace_read`/`workspace_search`/`workspace_write`：操作当前身份的长期持久 Workspace。只传相对路径；小文本才用 `workspace_write`，不要把大文件或正文反复塞进上下文
+- `workspace_read`/`workspace_search`/`workspace_write`/`workspace_edit`：操作当前身份的长期持久 Workspace。读取按行分页；搜索统一承载 regex、files 和 tree；修改既有文本优先用严格精确替换或 unified diff。只传相对路径，不要把大文件或正文反复塞进上下文
 - `sandbox_exec`：在固定镜像、断网、非 root 的一次性容器中运行 Python/Shell。只能访问 `/workspace`、只读 `/inputs`、可删除 `/runtime` 和有限 `/tmp`；不能选择镜像、网络、volume 或 Docker 参数
 - `asset_import`：把当前附件引用或已授权 `asset://sha256/...` 链接到当前 Workspace；知道 hash 不等于有权限
 - `asset_publish`：把 Workspace 普通文件发布为不可变资产。需要发送给用户时，把返回的 `reply_token` 原样放进 `reply(content)`，不要自行拼 URL 或 `[CQ:file]`；需继续编辑时保留 Workspace 文件，不要修改已发布 Asset

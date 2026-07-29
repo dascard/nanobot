@@ -32,11 +32,16 @@ def test_tool_descriptor_registry_derives_runtime_and_prompt_contracts():
         "sandbox_poll",
         "sandbox_write_stdin",
         "sandbox_terminate",
-        "workspace_apply_patch",
+        "workspace_edit",
     }:
         assert descriptors[name].execution_policy == "foreground_only"
         assert descriptors[name].trace_policy == "metadata_only"
         assert descriptors[name].owner_module == "core.sandbox"
+    assert (
+        descriptors["workspace_apply_patch"].availability_policy
+        == "force_disabled"
+    )
+    assert descriptors["workspace_list"].availability_policy == "force_disabled"
     assert descriptors["group_analysis"].prompt_template_keys == (
         "tools/group_analysis/usage",
         "tools/group_analysis/system",

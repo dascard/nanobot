@@ -27,6 +27,8 @@ class SandboxBackend(Protocol):
 
     def write_file(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
 
+    def edit_files(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
+
     def apply_patch(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
 
     def publish_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
@@ -168,6 +170,9 @@ class FakeSandboxBackend:
 
     def write_file(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._call("write_file", payload)
+
+    def edit_files(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._call("edit_files", payload)
 
     def apply_patch(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._call("apply_patch", payload)

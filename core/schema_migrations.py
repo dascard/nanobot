@@ -77,6 +77,12 @@ _BLOCK_SESSION_MEMORY_VERSION = "20260726_block_session_memory_schema"
 _SCHEDULED_TASK_SCHEDULE_COLUMNS_VERSION = (
     "20260726_scheduled_task_schedule_columns"
 )
+_SCHEDULED_TASK_OWNER_IDENTITY_VERSION = (
+    "20260729_scheduled_task_owner_identity"
+)
+_SCHEDULED_TASK_WORKFLOW_EXECUTION_VERSION = (
+    "20260729_scheduled_task_workflow_execution"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3586,6 +3592,400 @@ def _scheduled_task_schedule_columns(
         )
 
 
+def _scheduled_task_owner_identity(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """补齐任务 owner 并让无法证明归属的旧任务失败关闭。"""
+
+    if "scheduled_tasks" not in _table_names(conn):
+        return
+    _add_missing_columns(
+        conn,
+        "scheduled_tasks",
+        {
+            "owner_chat_stream_id": (
+                "VARCHAR(512) NOT NULL DEFAULT ''"
+            ),
+            "owner_platform": "VARCHAR(32) NOT NULL DEFAULT ''",
+            "owner_chat_type": "VARCHAR(16) NOT NULL DEFAULT ''",
+            "owner_session_id": "VARCHAR(512) NOT NULL DEFAULT ''",
+            "created_by_actor_id": (
+                "VARCHAR(255) NOT NULL DEFAULT ''"
+            ),
+            "owner_migration_required": (
+                "INTEGER NOT NULL DEFAULT 1"
+            ),
+            "definition_version": "INTEGER NOT NULL DEFAULT 1",
+            # SQLite 的 ALTER TABLE 不允许添加 CURRENT_TIMESTAMP
+            # 这类非常量默认值；旧库先加可空列并在本迁移内回填。
+            "updated_at": "DATETIME",
+        },
+    )
+    columns = _columns(conn, "scheduled_tasks")
+    required = {
+        "id",
+        "target_type",
+        "target_id",
+        "enabled",
+        "owner_chat_stream_id",
+        "owner_platform",
+        "owner_chat_type",
+        "owner_session_id",
+        "created_by_actor_id",
+        "owner_migration_required",
+        "definition_version",
+        "updated_at",
+    }
+    if not required <= columns:
+        return
+
+    _create_indexes(
+        conn,
+        [
+            "CREATE INDEX IF NOT EXISTS ix_scheduled_tasks_owner "
+            "ON scheduled_tasks(owner_chat_stream_id, id)",
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_scheduled_tasks_owner_enabled "
+            "ON scheduled_tasks(owner_chat_stream_id, enabled)",
+        ],
+    )
+
+    rows = conn.execute(text(
+        "SELECT id, target_type, target_id, created_by_actor_id "
+        "FROM scheduled_tasks "
+        "WHERE owner_chat_stream_id = '' "
+        "OR owner_chat_stream_id IS NULL "
+        "OR owner_migration_required != 0"
+    )).fetchall()
+    migrated: list[dict[str, object]] = []
+    blocked_ids: list[int] = []
+    from core.scheduled_task_contract import (
+        ScheduledTaskContractError,
+        scheduled_task_owner_from_target,
+    )
+
+    for row_id, target_type, target_id, actor_id in rows:
+        try:
+            owner = scheduled_task_owner_from_target(
+                target_type=target_type,
+                target_id=target_id,
+                platform="qq",
+                created_by_actor_id=(
+                    actor_id
+                    or (
+                        target_id
+                        if str(target_type or "").strip().lower()
+                        == "private"
+                        else ""
+                    )
+                ),
+            )
+        except ScheduledTaskContractError:
+            conn.execute(
+                text(
+                    "UPDATE scheduled_tasks SET enabled = 0, "
+                    "owner_migration_required = 1, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = :task_id"
+                ),
+                {"task_id": row_id},
+            )
+            blocked_ids.append(int(row_id))
+            continue
+        conn.execute(
+            text(
+                "UPDATE scheduled_tasks SET "
+                "owner_chat_stream_id = :chat_stream_id, "
+                "owner_platform = :platform, "
+                "owner_chat_type = :chat_type, "
+                "owner_session_id = :session_id, "
+                "created_by_actor_id = :actor_id, "
+                "owner_migration_required = 0, "
+                "definition_version = CASE "
+                "WHEN definition_version IS NULL "
+                "OR definition_version < 1 THEN 1 "
+                "ELSE definition_version END, "
+                "updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = :task_id"
+            ),
+            {
+                "chat_stream_id": owner.chat_stream_id,
+                "platform": owner.platform,
+                "chat_type": owner.chat_type,
+                "session_id": owner.session_id,
+                "actor_id": owner.created_by_actor_id,
+                "task_id": row_id,
+            },
+        )
+        migrated.append(
+            {
+                "id": int(row_id),
+                "owner": owner.chat_stream_id,
+            }
+        )
+
+    report = {
+        "scanned": len(rows),
+        "migrated": len(migrated),
+        "blocked": len(blocked_ids),
+        "blocked_ids": blocked_ids,
+        "owners": migrated,
+    }
+    report_sha256 = hashlib.sha256(
+        json.dumps(
+            report,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    logging.getLogger("nanobot").info(
+        "Scheduled task owner migration scanned=%d migrated=%d "
+        "blocked=%d report_sha256=%s blocked_ids=%s",
+        len(rows),
+        len(migrated),
+        len(blocked_ids),
+        report_sha256,
+        blocked_ids[:50],
+    )
+
+
+def _scheduled_task_owner_identity_needs_backup(conn: Any) -> bool:
+    if "scheduled_tasks" not in _table_names(conn):
+        return False
+    required = {
+        "owner_chat_stream_id",
+        "owner_platform",
+        "owner_chat_type",
+        "owner_session_id",
+        "created_by_actor_id",
+        "owner_migration_required",
+        "definition_version",
+        "updated_at",
+    }
+    columns = _columns(conn, "scheduled_tasks")
+    if not required <= columns:
+        return True
+    row = conn.execute(text(
+        "SELECT 1 FROM scheduled_tasks "
+        "WHERE owner_chat_stream_id = '' "
+        "OR owner_chat_stream_id IS NULL "
+        "OR owner_migration_required != 0 "
+        "LIMIT 1"
+    )).first()
+    return row is not None
+
+
+def _scheduled_task_workflow_execution(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """建立统一任务 program、执行实例、步骤尝试和租约账本。"""
+
+    if "scheduled_tasks" in _table_names(conn):
+        _add_missing_columns(
+            conn,
+            "scheduled_tasks",
+            {
+                "program_json": "TEXT NOT NULL DEFAULT ''",
+                "program_sha256": "VARCHAR(64) NOT NULL DEFAULT ''",
+            },
+        )
+        columns = _columns(conn, "scheduled_tasks")
+        if {"id", "name", "prompt_template", "program_json"} <= columns:
+            rows = conn.execute(text(
+                "SELECT id, name, prompt_template, program_json "
+                "FROM scheduled_tasks "
+                "WHERE program_json = '' OR program_json IS NULL "
+                "ORDER BY id"
+            )).mappings().all()
+            from core.scheduled_task_contract import (
+                ScheduledTaskContractError,
+                normalize_scheduled_task_definition,
+            )
+
+            blocked_ids: list[int] = []
+            migrated = 0
+            for row in rows:
+                try:
+                    (
+                        _name,
+                        _prompt,
+                        _program,
+                        program_json,
+                        program_sha256,
+                    ) = normalize_scheduled_task_definition(
+                        name=row["name"],
+                        prompt_template=row["prompt_template"],
+                    )
+                except ScheduledTaskContractError:
+                    assignments = [
+                        "program_json = ''",
+                        "program_sha256 = ''",
+                    ]
+                    if "enabled" in columns:
+                        assignments.append("enabled = 0")
+                    # delivery_status / last_error_summary 是既有投递结果投影，
+                    # 不能被定义迁移复用。空 program + enabled=0 表达失败关闭，
+                    # 详细阻断清单写入迁移日志。
+                    conn.execute(
+                        text(
+                            "UPDATE scheduled_tasks SET "
+                            + ", ".join(assignments)
+                            + " WHERE id = :task_id"
+                        ),
+                        {"task_id": int(row["id"])},
+                    )
+                    blocked_ids.append(int(row["id"]))
+                    continue
+                conn.execute(
+                    text(
+                        "UPDATE scheduled_tasks SET "
+                        "program_json = :program_json, "
+                        "program_sha256 = :program_sha256 "
+                        "WHERE id = :task_id"
+                    ),
+                    {
+                        "program_json": program_json,
+                        "program_sha256": program_sha256,
+                        "task_id": int(row["id"]),
+                    },
+                )
+                migrated += 1
+            logging.getLogger("nanobot").info(
+                "Scheduled task workflow migration scanned=%d migrated=%d "
+                "blocked=%d blocked_ids=%s",
+                len(rows),
+                migrated,
+                len(blocked_ids),
+                blocked_ids[:50],
+            )
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS scheduled_task_executions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "task_id INTEGER NOT NULL, "
+        "task_version INTEGER NOT NULL, "
+        "owner_chat_stream_id VARCHAR(512) NOT NULL, "
+        "occurrence_key VARCHAR(255) NOT NULL, "
+        "trigger_type VARCHAR(32) NOT NULL, "
+        "scheduled_for DATETIME NOT NULL, "
+        "task_snapshot_json TEXT NOT NULL, "
+        "task_snapshot_sha256 VARCHAR(64) NOT NULL, "
+        "owner_snapshot_json TEXT NOT NULL, "
+        "trigger_snapshot_json TEXT NOT NULL, "
+        "program_snapshot_json TEXT NOT NULL, "
+        "program_snapshot_sha256 VARCHAR(64) NOT NULL, "
+        "state_json TEXT NOT NULL DEFAULT '{}', "
+        "current_step_id VARCHAR(255) NOT NULL DEFAULT '', "
+        "status VARCHAR(24) NOT NULL DEFAULT 'pending' "
+        "CHECK (status IN ("
+        "'pending','running','waiting','succeeded','failed',"
+        "'blocked','ambiguous')), "
+        "lease_owner VARCHAR(128), "
+        "lease_token VARCHAR(64), "
+        "lease_expires_at DATETIME, "
+        "wake_at DATETIME, "
+        "agent_trace_id VARCHAR(128) NOT NULL DEFAULT '', "
+        "agent_run_id VARCHAR(128) NOT NULL DEFAULT '', "
+        "outbound_run_id INTEGER, "
+        "last_error_code VARCHAR(128) NOT NULL DEFAULT '', "
+        "last_error_summary TEXT NOT NULL DEFAULT '', "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "started_at DATETIME, "
+        "finished_at DATETIME"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "uq_scheduled_task_execution_occurrence "
+        "ON scheduled_task_executions(task_id, occurrence_key)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_scheduled_task_execution_claim "
+        "ON scheduled_task_executions("
+        "status, wake_at, lease_expires_at)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_scheduled_task_execution_owner "
+        "ON scheduled_task_executions(owner_chat_stream_id, status)"
+    ))
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS scheduled_task_owner_leases ("
+        "owner_chat_stream_id VARCHAR(512) PRIMARY KEY, "
+        "execution_id INTEGER NOT NULL, "
+        "lease_owner VARCHAR(128) NOT NULL, "
+        "lease_token VARCHAR(64) NOT NULL, "
+        "lease_expires_at DATETIME NOT NULL, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS "
+        "ix_scheduled_task_owner_lease_expiry "
+        "ON scheduled_task_owner_leases(lease_expires_at)"
+    ))
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS scheduled_task_step_attempts ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "execution_id INTEGER NOT NULL "
+        "REFERENCES scheduled_task_executions(id), "
+        "step_id VARCHAR(255) NOT NULL, "
+        "attempt_no INTEGER NOT NULL, "
+        "idempotency_key VARCHAR(255) NOT NULL, "
+        "operation VARCHAR(16) NOT NULL "
+        "CHECK (operation IN ("
+        "'set','tool','model','branch','loop','wait','emit')), "
+        "status VARCHAR(24) NOT NULL DEFAULT 'started' "
+        "CHECK (status IN ("
+        "'started','succeeded','failed','blocked','ambiguous')), "
+        "input_sha256 VARCHAR(64) NOT NULL DEFAULT '', "
+        "output_sha256 VARCHAR(64) NOT NULL DEFAULT '', "
+        "tool_call_id VARCHAR(128) NOT NULL DEFAULT '', "
+        "model_trace_id VARCHAR(128) NOT NULL DEFAULT '', "
+        "checkpoint_json TEXT NOT NULL DEFAULT '', "
+        "error_type VARCHAR(128) NOT NULL DEFAULT '', "
+        "error_summary TEXT NOT NULL DEFAULT '', "
+        "started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "completed_at DATETIME"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "uq_scheduled_task_step_attempt "
+        "ON scheduled_task_step_attempts("
+        "execution_id, step_id, attempt_no)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS "
+        "ix_scheduled_task_step_idempotency "
+        "ON scheduled_task_step_attempts(idempotency_key)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS "
+        "ix_scheduled_task_step_execution_status "
+        "ON scheduled_task_step_attempts(execution_id, status)"
+    ))
+
+
+def _scheduled_task_workflow_execution_needs_backup(conn: Any) -> bool:
+    if "scheduled_tasks" not in _table_names(conn):
+        return False
+    columns = _columns(conn, "scheduled_tasks")
+    if not {"program_json", "program_sha256"} <= columns:
+        return True
+    return conn.execute(text(
+        "SELECT 1 FROM scheduled_tasks "
+        "WHERE program_json = '' OR program_json IS NULL LIMIT 1"
+    )).first() is not None
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -3765,6 +4165,16 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "scheduled task schedule spec and next fire columns",
         _scheduled_task_schedule_columns,
     ),
+    (
+        _SCHEDULED_TASK_OWNER_IDENTITY_VERSION,
+        "scheduled task owner identity and definition version",
+        _scheduled_task_owner_identity,
+    ),
+    (
+        _SCHEDULED_TASK_WORKFLOW_EXECUTION_VERSION,
+        "scheduled task unified program and workflow execution",
+        _scheduled_task_workflow_execution,
+    ),
 ]
 
 
@@ -3813,6 +4223,16 @@ def _prepare_schema_migration_backup(
         not in applied_before_transaction
         and _sandbox_execution_profiles_and_leases_needs_backup(conn)
     )
+    scheduled_task_owner_backup_needed = (
+        _SCHEDULED_TASK_OWNER_IDENTITY_VERSION
+        not in applied_before_transaction
+        and _scheduled_task_owner_identity_needs_backup(conn)
+    )
+    scheduled_task_workflow_backup_needed = (
+        _SCHEDULED_TASK_WORKFLOW_EXECUTION_VERSION
+        not in applied_before_transaction
+        and _scheduled_task_workflow_execution_needs_backup(conn)
+    )
     drivername = str(getattr(getattr(engine, "url", None), "drivername", ""))
     if drivername.startswith("sqlite") and (
         chat_log_backup_needed
@@ -3823,6 +4243,8 @@ def _prepare_schema_migration_backup(
         or group_learning_stage7c_backup_needed
         or group_learning_stage7d_backup_needed
         or sandbox_lease_backup_needed
+        or scheduled_task_owner_backup_needed
+        or scheduled_task_workflow_backup_needed
     ):
         backup_path = _migration_backup_path(engine, db_path)
         if backup_path is not None:

@@ -229,6 +229,7 @@ SANDBOX_TOOL_NAMES = frozenset({
     "workspace_read",
     "workspace_search",
     "workspace_write",
+    "workspace_edit",
     "workspace_apply_patch",
     "asset_import",
     "asset_publish",
@@ -360,7 +361,7 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
     "schedule_task": ToolDef(
         name="schedule_task", label="定时任务", category="system", risk_level="medium",
         private_default=True, group_default=True,
-        description="创建/管理定时推送任务；cron 使用 Asia/Shanghai，未指定目标时尝试当前会话。",
+        description="创建/管理当前会话 owner 的定时推送任务；cron 使用 Asia/Shanghai。",
     ),
     "memory_read": ToolDef(
         name="memory_read", label="记忆读取 (subagent)", category="system", risk_level="low",
@@ -405,19 +406,21 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
     "workspace_list": ToolDef(
         name="workspace_list", label="工作区列表", category="file", risk_level="low",
         private_default=False, group_default=False,
-        description="分页列出当前持久 Workspace 的相对路径和文件元数据。",
+        description="workspace_search 的内部兼容旧名；不再向模型注册。",
         supports_background=False,
+        force_disabled=True,
+        prompt_template_keys=(),
     ),
     "workspace_read": ToolDef(
         name="workspace_read", label="工作区读取", category="file", risk_level="low",
         private_default=False, group_default=False,
-        description="有界读取当前持久 Workspace 的文本文件；二进制文件只返回元数据。",
+        description="按行有界读取当前持久 Workspace 的 UTF-8 文本并返回稳定行号。",
         supports_background=False,
     ),
     "workspace_search": ToolDef(
         name="workspace_search", label="工作区搜索", category="file", risk_level="low",
         private_default=False, group_default=False,
-        description="在当前持久 Workspace 中执行有界字面量搜索。",
+        description="在当前持久 Workspace 中执行有界正则内容搜索、文件查找或目录树浏览。",
         supports_background=False,
     ),
     "workspace_write": ToolDef(
@@ -426,11 +429,19 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         description="向当前持久 Workspace 原子写入小文本文件。",
         supports_background=False,
     ),
+    "workspace_edit": ToolDef(
+        name="workspace_edit", label="工作区编辑", category="file", risk_level="medium",
+        private_default=False, group_default=False,
+        description="对当前持久 Workspace 原子执行精确替换或多文件 unified diff。",
+        supports_background=False,
+    ),
     "workspace_apply_patch": ToolDef(
         name="workspace_apply_patch", label="工作区补丁", category="file", risk_level="medium",
         private_default=False, group_default=False,
-        description="对当前持久 Workspace 中的单个 UTF-8 文本文件原子应用统一 diff。",
+        description="workspace_edit 的内部兼容旧名；不再向模型注册。",
         supports_background=False,
+        force_disabled=True,
+        prompt_template_keys=(),
     ),
     "asset_import": ToolDef(
         name="asset_import", label="资产导入", category="file", risk_level="medium",
@@ -479,7 +490,7 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
     "glob": ToolDef(
         name="glob", label="文件查找", category="file", risk_level="low",
         private_default=True, group_default=False,
-        description="旧 KT 宿主文件查找入口，已由 workspace_list 替代。",
+        description="旧 KT 宿主文件查找入口，已由 workspace_search 的 files/tree 模式替代。",
         force_disabled=True,
         prompt_template_keys=(),
     ),

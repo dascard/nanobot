@@ -13,8 +13,8 @@ Nanobot 在根路径 `/agent-link` 提供 Agent Link v1 WebSocket 服务端。Me
 Nanobot 使用以下环境变量：
 
 ```env
-# 留空时复用 NANOBOT_API_TOKEN
-NANOBOT_AGENT_LINK_TOKEN=
+# 生产使用独立凭据；留空只保留旧部署兼容，会回退 NANOBOT_API_TOKEN
+NANOBOT_AGENT_LINK_TOKEN=<independent-agent-link-token>
 
 # 可选资源限制
 NANOBOT_AGENT_LINK_MAX_FRAME_BYTES=16777216
@@ -29,6 +29,11 @@ NANOBOT_AGENT_LINK_MAX_TERMINAL_CHATS=256
 NANOBOT_AGENT_LINK_OUTGOING_QUEUE_SIZE=256
 NANOBOT_AGENT_LINK_MAX_INLINE_ATTACHMENT_BYTES=5242880
 ```
+
+兼容回退不会输出 Token 正文，但启动日志会告警
+`source=api_token_fallback`，Admin Runtime Overview 也只显示
+`configured/source/fallback`。完成现有客户端切换与回滚演练后，生产应取消
+回退并独立轮换 API Token 与 Agent Link Token。
 
 本机或显式信任的内网可以连接：
 
@@ -107,7 +112,11 @@ MeaPet 配置示例：
   "session_id": "meapet-session-1",
   "reply_to": "",
   "payload": {
-    "client": {"name": "MeaPet", "version": "1.0.0"},
+    "client": {
+      "id": "meapet",
+      "name": "MeaPet",
+      "version": "1.0.0"
+    },
     "device": {"id": "stable-device-id"},
     "auth": {"scheme": "bearer", "token": "configured-token"},
     "resume": {"session_id": "meapet-session-1"},
@@ -121,7 +130,24 @@ MeaPet 配置示例：
 }
 ```
 
-认证成功后 Nanobot 返回关联到 `hello.id` 的 `control.ready`，并声明：
+`client.id` 是客户端类型的稳定平台 ID，必须匹配
+`^[a-z][a-z0-9_-]{0,31}$`。它不是协议名、设备 ID 或会话 ID：
+
+- `agent-link.v1` 是传输协议；
+- `client.id` 标识客户端平台，例如 `meapet`；
+- `device.id` 标识一个具体客户端实例；
+- `session_id` 标识 Agent 会话。
+
+Nanobot 不维护平台白名单。合法的新 `client.id` 会随连接自动登记，断开最后
+一条对应连接后从进程内登记表移除。客户端不能指定 Prompt 策略；通过
+Agent Link 接入的外部客户端统一由服务端分配 `external_private`，即使把
+`client.id` 写成 `qq` 或 `internal` 也不会取得内部策略。Nanobot 其他受信
+入口仍保留已有的平台策略映射。握手会在返回 `control.ready` 前验证外部私聊
+分支，配置缺失时返回 `PROMPT_POLICY_UNAVAILABLE`，不会先宣告连接可用。
+
+认证成功后 Nanobot 返回关联到 `hello.id` 的 `control.ready`，其中
+`payload.client_context` 会回传服务端采用的 `platform_id`、
+`policy_profile` 和 `chat_type`，并声明：
 
 - `chat.submit=true`
 - `chat.streaming=false`：当前版本以 `chat.final.payload.text` 一次返回完整结果
@@ -216,8 +242,10 @@ Nanobot 可以先返回 `chat.accepted`，完成后返回：
 }
 ```
 
-失败时返回 `chat.error`。客户端取消时发送 `chat.cancel`，其中 `reply_to` 和
-`payload.request_id` 指向原 `chat.submit.id`。
+失败时返回 `chat.error`。Agent 返回空字符串也属于失败，Nanobot 返回
+`EMPTY_AGENT_RESULT`，不会伪造“暂时无法生成回复”的成功终态。客户端取消时
+发送 `chat.cancel`，其中 `reply_to` 和 `payload.request_id` 指向原
+`chat.submit.id`。
 
 `chat.submit.id` 是幂等键：
 

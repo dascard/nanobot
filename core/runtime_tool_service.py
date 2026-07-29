@@ -167,6 +167,14 @@ def _apply_sandbox_policy(
     )
 
     for tool_name in SANDBOX_TOOL_NAMES:
+        descriptor = get_tool_descriptor(tool_name)
+        if (
+            descriptor is not None
+            and descriptor.availability_policy == "force_disabled"
+        ):
+            enabled[tool_name] = False
+            disabled[tool_name] = "系统安全硬禁用"
+            continue
         if profile.mode == "force_only":
             enabled[tool_name] = False
             disabled[tool_name] = "当前运行时预设不允许 Sandbox 工具"
@@ -426,7 +434,7 @@ def build_sandbox_profile_guidance(
         "- 权限：容器内 Docker 不可用，没有 root 或 sudo；"
         "不能选择镜像、网络、挂载、设备或 capability。",
         "- 并发：命令之间可并发；workspace_write 与 "
-        "workspace_apply_patch 互斥。命令与文件写并发时不保证一致快照。",
+        "workspace_edit 互斥。命令与文件写并发时不保证一致快照。",
     ])
 
     if descriptor.execution_mode == "lease":
@@ -479,9 +487,9 @@ def _sandbox_prompt_profile(
     policy = SandboxAccessPolicy(db)
     preferred = (
         "sandbox_exec",
-        "workspace_apply_patch",
+        "workspace_edit",
         "workspace_read",
-        "workspace_list",
+        "workspace_search",
     )
     for tool_name in preferred:
         if not enabled.get(tool_name):

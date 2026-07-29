@@ -120,7 +120,11 @@ def test_migrate_internal_private_flow_v2_only_extends_unique_core_edge():
         if (edge.get("from"), edge.get("to"))
         == ("base_contract", "private_policy")
     )
-    assert migrated_edge["platforms"] == ["web", "internal"]
+    assert migrated_edge["platforms"] == [
+        "web",
+        "internal",
+        "external_private",
+    ]
     assert migrated_edge["chat_types"] == ["private"]
     assert migrated_edge["custom_note"] == "preserve-this-field"
     assert migrated["custom_top_level"] == {"owner": "operator"}
@@ -133,7 +137,11 @@ def test_migrate_internal_private_flow_v2_only_extends_unique_core_edge():
         if (edge.get("from"), edge.get("to"))
         == ("base_contract", "private_policy")
     )
-    expected_edge["platforms"] = ["web", "internal"]
+    expected_edge["platforms"] = [
+        "web",
+        "internal",
+        "external_private",
+    ]
     assert migrated == expected
 
 
@@ -231,7 +239,11 @@ def test_flow_v2_plan_then_apply_creates_exact_backup(tmp_path):
         if (edge.get("from"), edge.get("to"))
         == ("base_contract", "private_policy")
     )
-    assert applied_edge["platforms"] == ["web", "internal"]
+    assert applied_edge["platforms"] == [
+        "web",
+        "internal",
+        "external_private",
+    ]
 
     applied_bytes = runtime_path.read_bytes()
     fixed_time_ns = 1_700_000_000_000_000_000

@@ -5,12 +5,11 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.common_auth import verify_token
 from core.database import get_db
-from core.outbound_delivery import OutboundFencingError, OutboundSafetyError
 from core.schedule_spec import (
     ResolvedScheduleFields,
     ScheduleSpecError,
@@ -20,7 +19,18 @@ from core.schedule_spec import (
 from core.scheduled_task_outbound import (
     ScheduledTaskNotFoundError,
     cancel_scheduled_task_deliveries,
-    enqueue_scheduled_task_occurrence,
+)
+from core.scheduled_task_contract import (
+    MAX_SCHEDULED_TASK_NAME_CHARS,
+    MAX_SCHEDULED_TASK_PROMPT_CHARS,
+    ScheduledTaskContractError,
+    apply_scheduled_task_program,
+    apply_scheduled_task_owner,
+    normalize_scheduled_task_definition,
+    scheduled_task_owner_from_target,
+)
+from core.scheduled_workflow import (
+    enqueue_scheduled_task_execution,
 )
 
 
@@ -29,12 +39,19 @@ router = APIRouter(tags=["tasks"])
 
 
 class ScheduledTaskCreate(BaseModel):
-    name: str
+    name: str = Field(
+        min_length=1,
+        max_length=MAX_SCHEDULED_TASK_NAME_CHARS,
+    )
     schedule: str | None = None
     cron_expr: str = "0 9 * * *"
     target_type: str = "private"
     target_id: str
-    prompt_template: str
+    prompt_template: str | None = Field(
+        default=None,
+        max_length=MAX_SCHEDULED_TASK_PROMPT_CHARS,
+    )
+    program: dict | None = None
 
 
 def _resolved_schedule_or_422(req: ScheduledTaskCreate) -> ResolvedScheduleFields:
@@ -51,6 +68,37 @@ def _resolved_schedule_or_422(req: ScheduledTaskCreate) -> ResolvedScheduleField
         ) from exc
 
 
+def _owner_and_definition_or_422(req: ScheduledTaskCreate):
+    try:
+        owner = scheduled_task_owner_from_target(
+            target_type=req.target_type,
+            target_id=req.target_id,
+            platform="qq",
+            created_by_actor_id="admin:api",
+        )
+        (
+            name,
+            prompt,
+            program,
+            program_json,
+            program_sha256,
+        ) = normalize_scheduled_task_definition(
+            name=req.name,
+            prompt_template=req.prompt_template,
+            program=req.program,
+        )
+        return (
+            owner,
+            name,
+            prompt,
+            program,
+            program_json,
+            program_sha256,
+        )
+    except ScheduledTaskContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/tasks")
 def create_scheduled_task(
     req: ScheduledTaskCreate,
@@ -61,20 +109,34 @@ def create_scheduled_task(
     from core.database import ScheduledTask as ST
 
     fields = _resolved_schedule_or_422(req)
+    (
+        owner,
+        name,
+        prompt,
+        program,
+        _program_json,
+        _program_sha256,
+    ) = _owner_and_definition_or_422(req)
     task = ST(
-        name=req.name,
         cron_expr=fields.cron_expr,
         schedule_kind=fields.schedule_kind,
         schedule_spec=fields.schedule_spec,
         next_fire_at=fields.next_fire_at,
-        target_type=req.target_type,
-        target_id=req.target_id,
-        prompt_template=req.prompt_template,
+        target_type=owner.target_type,
+        target_id=owner.target_id,
+        definition_version=1,
     )
+    apply_scheduled_task_program(
+        task,
+        name=name,
+        prompt_template=prompt,
+        program=program,
+    )
+    apply_scheduled_task_owner(task, owner)
     db.add(task)
     db.commit()
     logger.info(
-        "Scheduled task created: %s schedule=%s", req.name, fields.display
+        "Scheduled task created: %s schedule=%s", name, fields.display
     )
     return {"status": "ok", "id": task.id}
 
@@ -98,6 +160,11 @@ def list_scheduled_tasks(
                 t.next_fire_at.isoformat() if t.next_fire_at else None
             ),
             "target_type": t.target_type,
+            "definition_version": t.definition_version,
+            "owner_migration_required": bool(t.owner_migration_required),
+            "owner_configured": bool(
+                str(t.owner_chat_stream_id or "").strip()
+            ),
             "target_configured": bool(str(t.target_id or "").strip()),
             "enabled": t.enabled,
             "last_run": t.last_run_at.isoformat() if t.last_run_at else None,
@@ -126,6 +193,15 @@ def update_scheduled_task(
     t = db.query(ST).filter(ST.id == task_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Task not found")
+    fields = _resolved_schedule_or_422(req)
+    (
+        owner,
+        name,
+        prompt,
+        program,
+        _program_json,
+        _program_sha256,
+    ) = _owner_and_definition_or_422(req)
     cancellation = cancel_scheduled_task_deliveries(
         db,
         task=t,
@@ -135,15 +211,21 @@ def update_scheduled_task(
     if cancellation.unsafe:
         db.rollback()
         raise HTTPException(status_code=409, detail="任务仍有投递中或结果不确定记录")
-    fields = _resolved_schedule_or_422(req)
-    t.name = req.name
     t.cron_expr = fields.cron_expr
     t.schedule_kind = fields.schedule_kind
     t.schedule_spec = fields.schedule_spec
     t.next_fire_at = fields.next_fire_at
-    t.target_type = req.target_type
-    t.target_id = req.target_id
-    t.prompt_template = req.prompt_template
+    t.target_type = owner.target_type
+    t.target_id = owner.target_id
+    apply_scheduled_task_program(
+        t,
+        name=name,
+        prompt_template=prompt,
+        program=program,
+    )
+    apply_scheduled_task_owner(t, owner)
+    t.definition_version = int(t.definition_version or 0) + 1
+    t.updated_at = utc_now_naive()
     db.commit()
     return {"status": "ok"}
 
@@ -170,6 +252,8 @@ def toggle_scheduled_task(
         db.rollback()
         raise HTTPException(status_code=409, detail="任务仍有投递中或结果不确定记录")
     t.enabled = 0 if t.enabled else 1
+    t.definition_version = int(t.definition_version or 0) + 1
+    t.updated_at = utc_now_naive()
     db.commit()
     return {"status": "ok", "enabled": bool(t.enabled)}
 
@@ -186,41 +270,31 @@ async def run_scheduled_task_now(
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),
 ):
-    """幂等登记一次手动运行；生成后先持久化再投递。"""
+    """幂等登记一次手动执行；worker 异步执行 program。"""
     normalized_key = idempotency_key.strip()
     if not normalized_key:
         raise HTTPException(status_code=422, detail="Idempotency-Key 不能为空")
-    from core import database
-
     try:
-        result = await enqueue_scheduled_task_occurrence(
+        result = enqueue_scheduled_task_execution(
             db,
             task_id=task_id,
             trigger_type="manual",
             manual_idempotency_key=normalized_key,
-            session_factory=database.SessionLocal,
         )
     except ScheduledTaskNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Task not found") from exc
-    except (OutboundFencingError, OutboundSafetyError) as exc:
-        raise HTTPException(status_code=409, detail="任务当前不可安全执行") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="幂等键或任务参数无效") from exc
-
-    if result.status == "failed" and result.outbox_id is None:
-        raise HTTPException(status_code=502, detail="任务内容生成失败")
-    if result.status == "blocked":
-        raise HTTPException(status_code=503, detail="投递通道当前不可用")
+    db.commit()
     logger.info(
-        "Manual scheduled task accepted task_id=%s run_id=%s status=%s",
+        "Manual scheduled task accepted task_id=%s execution_id=%s status=%s",
         task_id,
-        result.run_id,
+        result.execution_id,
         result.status,
     )
     return {
         "status": result.status,
-        "run_id": result.run_id,
-        "outbox_id": result.outbox_id,
+        "execution_id": result.execution_id,
         "deduplicated": result.deduplicated,
     }
 

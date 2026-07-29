@@ -302,6 +302,35 @@ def build_tool_plan(
     )
 
 
+def restrict_tool_plan(
+    plan: ToolPlan,
+    allowed_tool_names: set[str] | frozenset[str],
+    *,
+    disabled_reason: str = "当前执行阶段不允许调用",
+) -> ToolPlan:
+    """把现有计划只减不增地收窄到指定工具集合。"""
+
+    allowed = {
+        str(name or "").strip()
+        for name in allowed_tool_names
+        if str(name or "").strip()
+    }
+    enabled = dict(plan.enabled)
+    disabled = dict(plan.disabled)
+    for name in set(enabled) | set(plan.executable_tool_names):
+        if name in allowed and name in plan.executable_tool_names:
+            enabled[name] = True
+            disabled.pop(name, None)
+        else:
+            enabled[name] = False
+            disabled[name] = disabled_reason
+    return ToolPlan.from_effective_tools(
+        enabled=enabled,
+        disabled=disabled,
+        tool_schemas=list(plan.sent_tool_schemas),
+    )
+
+
 _CURRENT_TOOL_PLAN: ContextVar[ToolPlan | None] = ContextVar(
     "nanobot_tool_plan",
     default=None,

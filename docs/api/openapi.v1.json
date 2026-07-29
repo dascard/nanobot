@@ -6819,12 +6819,34 @@
             "type": "string"
           },
           "name": {
+            "maxLength": 120,
+            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
+          "program": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program"
+          },
           "prompt_template": {
-            "title": "Prompt Template",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 16000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Template"
           },
           "schedule": {
             "anyOf": [
@@ -6849,8 +6871,7 @@
         },
         "required": [
           "name",
-          "target_id",
-          "prompt_template"
+          "target_id"
         ],
         "title": "ScheduledTaskCreate",
         "type": "object"
@@ -21418,6 +21439,74 @@
         "operationId": "get_api_v1_admin_sandbox_status",
         "parameters": [
           {
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Platform"
+            }
+          },
+          {
+            "in": "query",
+            "name": "chat_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "private",
+                    "group"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Chat Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tool_name",
+            "required": false,
+            "schema": {
+              "default": "workspace_read",
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Tool Name",
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -27959,7 +28048,7 @@
     },
     "/api/v1/tasks/{task_id}/run": {
       "post": {
-        "description": "幂等登记一次手动运行；生成后先持久化再投递。",
+        "description": "幂等登记一次手动执行；worker 异步执行 program。",
         "operationId": "post_api_v1_tasks_task_id_run",
         "parameters": [
           {

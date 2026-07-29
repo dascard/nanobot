@@ -177,6 +177,7 @@ class _KtAgent:
         self._interrupt_requested = False
         self.interrupt_count = 0
         self.events: list[object] = []
+        self.runtime_contexts: list[dict[str, object]] = []
         self.plugins = _PluginManager()
         self.config = SimpleNamespace(name="test-creature")
         self.controller = SimpleNamespace(
@@ -202,7 +203,12 @@ class _KtAgent:
         self._running = False
 
     async def _process_event(self, event: object) -> str:
+        from core.agent_runtime.request_scope import (
+            require_current_runtime_context,
+        )
+
         self.events.append(event)
+        self.runtime_contexts.append(require_current_runtime_context())
         self.controller.conversation.append("user", getattr(event, "content", ""))
         self.controller.conversation.append("assistant", "KT 完成")
         return "raw-ok"
@@ -243,6 +249,23 @@ def test_kt13_runtime_adapter_wraps_turn_conversation_route_and_interrupt():
     ]
     assert getattr(agent.events[0], "context")["stream"] is True
     assert getattr(agent.events[0], "context")["source"] == "contract-test"
+    assert agent.runtime_contexts == [{
+        "chat_type": "private",
+        "runtime_chat_type": "private",
+        "is_group": False,
+        "is_super_user": False,
+        "session_id": "private_10001",
+        "group_id": "",
+        "user_id": "10001",
+        "platform": "qq",
+        "sender_name": "",
+        "trace_id": "trace-1",
+        "run_id": "run-1",
+        "message_id": "",
+    }]
+    from core.agent_runtime.request_scope import get_current_runtime_context
+
+    assert get_current_runtime_context() is None
 
     route = RuntimeModelRoute(
         route_id="reply/default",

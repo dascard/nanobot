@@ -166,7 +166,10 @@ class ToolRegistrationRegistry:
             )
             feature_lifecycle_id = (
                 "sandbox"
-                if name in SANDBOX_TOOL_NAMES
+                if (
+                    name in SANDBOX_TOOL_NAMES
+                    and lifecycle != "retired"
+                )
                 else f"tool.{name}"
             )
             try:
