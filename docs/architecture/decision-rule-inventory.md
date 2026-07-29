@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`6356de157be341435224cd684cb309f1c973c621`
-- 规则总数：6565
+- 源提交：`ab9556d57261dd210af57bf6f4c1e05f468d8835`
+- 规则总数：6603
 - 扫描错误：0
 - 人工复核队列：691
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 132 |
-| `configurable_policy` | 1147 |
-| `data_consistency` | 429 |
+| `configurable_policy` | 1155 |
+| `data_consistency` | 438 |
 | `natural_language_semantic` | 32 |
 | `presentation` | 5 |
-| `protocol_syntax` | 3460 |
-| `security_invariant` | 1360 |
+| `protocol_syntax` | 3479 |
+| `security_invariant` | 1362 |
 
 ## 文件汇总
 
@@ -115,6 +115,7 @@
 | `nanobot_kt/reply_contract.py` | 21 |
 | `api/endpoint_contracts.py` | 20 |
 | `core/admin/table_views.py` | 20 |
+| `core/agent_link/runtime.py` | 20 |
 | `core/semantic/jobs.py` | 20 |
 | `core/web_search/relevance.py` | 20 |
 | `nanobot_kt/tools/memory_query.py` | 20 |
@@ -228,6 +229,7 @@
 | `scripts/sandbox-smoke-summary.py` | 10 |
 | `scripts/sandbox-smoke-test.sh` | 10 |
 | `webui/src/features/models/ModelsPage.jsx` | 10 |
+| `api/agent_link_routes.py` | 9 |
 | `app/group_learning/candidate_service.py` | 9 |
 | `app/group_memory/retrieval_service.py` | 9 |
 | `core/config_registry.py` | 9 |
@@ -263,6 +265,7 @@
 | `scripts/render-sandbox-profile-manifest.py` | 8 |
 | `api/admin/web_search_routes.py` | 7 |
 | `api/memory_routes.py` | 7 |
+| `core/agent_link/protocol.py` | 7 |
 | `core/client_meta.py` | 7 |
 | `core/evolution.py` | 7 |
 | `core/inbound_claim_lifecycle.py` | 7 |
@@ -494,6 +497,8 @@
 | `creatures/nanobot/prompts/skills/sql_analysis/tool.py` | 1 |
 | `creatures/nanobot/prompts/skills/web_search/tool.py` | 1 |
 | `foundation/llm/tool_policy.py` | 1 |
+| `nanobot_kt/agent_link_adapter.py` | 1 |
+| `nanobot_kt/agent_link_tools.py` | 1 |
 | `nanobot_kt/model_attempts.py` | 1 |
 | `scripts/run_proactive_outreach_simulation.py` | 1 |
 | `webui/src/api/client.js` | 1 |
