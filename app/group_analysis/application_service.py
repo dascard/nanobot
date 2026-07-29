@@ -15,6 +15,8 @@ from app.group_analysis.schemas import RawChatLog
 from app.group_learning.candidate_service import (
     GroupLearningCandidateBatchRequest,
     GroupLearningMessage,
+    MAX_BATCH_CHARS,
+    MAX_BATCH_MESSAGES,
 )
 from app.group_learning.scheduler import (
     GroupLearningProcessingOutcome,
@@ -125,6 +127,7 @@ def build_group_analysis_learning_request(
     messages: list[GroupLearningMessage] = []
     signature: list[tuple[int, str, str]] = []
     seen_ids: set[int] = set()
+    total_chars = 0
     for raw in raw_messages:
         if (
             not isinstance(raw, Mapping)
@@ -149,12 +152,18 @@ def build_group_analysis_learning_request(
         content = str(raw.get("content") or "").strip()[:2000]
         if not sender_id or not content:
             continue
+        if (
+            len(messages) >= MAX_BATCH_MESSAGES
+            or total_chars + len(content) > MAX_BATCH_CHARS
+        ):
+            return None
         message = GroupLearningMessage(
             chat_log_id=chat_log_id,
             sender_id=sender_id,
             content=content,
         )
         messages.append(message)
+        total_chars += len(content)
         seen_ids.add(chat_log_id)
         signature.append((
             chat_log_id,

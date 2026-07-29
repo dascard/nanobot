@@ -281,6 +281,74 @@ def test_tool_learning_request_uses_only_trusted_messages_and_is_stable():
     ) == ("u1", "u2")
 
 
+def test_tool_learning_request_accepts_500_and_skips_501_without_raising():
+    from app.group_analysis.application_service import (
+        build_group_analysis_learning_request,
+    )
+    from app.group_learning.candidate_service import MAX_BATCH_MESSAGES
+
+    messages = [
+        {
+            "log_id": index,
+            "speaker_id": f"u{index}",
+            "content": "有效群聊消息",
+            "memory_evidence_trusted": True,
+        }
+        for index in range(1, MAX_BATCH_MESSAGES + 2)
+    ]
+    at_limit = build_group_analysis_learning_request(
+        chat_stream_id=CHAT_STREAM_ID,
+        aspects=("topics",),
+        payload={"messages": messages[:MAX_BATCH_MESSAGES]},
+        trigger="tool",
+        cursor_start_chat_log_id=0,
+        cursor_end_chat_log_id=MAX_BATCH_MESSAGES,
+    )
+    over_limit = build_group_analysis_learning_request(
+        chat_stream_id=CHAT_STREAM_ID,
+        aspects=("topics",),
+        payload={"messages": messages},
+        trigger="tool",
+        cursor_start_chat_log_id=0,
+        cursor_end_chat_log_id=MAX_BATCH_MESSAGES + 1,
+    )
+
+    assert at_limit is not None
+    assert len(at_limit.messages) == MAX_BATCH_MESSAGES
+    assert over_limit is None
+
+
+def test_tool_learning_request_skips_character_overflow_without_raising():
+    from app.group_analysis.application_service import (
+        build_group_analysis_learning_request,
+    )
+    from app.group_learning.candidate_service import MAX_BATCH_CHARS
+
+    content = "群" * 2000
+    payload = {
+        "messages": [
+            {
+                "log_id": index,
+                "speaker_id": f"u{index}",
+                "content": content,
+                "memory_evidence_trusted": True,
+            }
+            for index in range(1, MAX_BATCH_CHARS // len(content) + 2)
+        ],
+    }
+
+    request = build_group_analysis_learning_request(
+        chat_stream_id=CHAT_STREAM_ID,
+        aspects=("topics",),
+        payload=payload,
+        trigger="tool",
+        cursor_start_chat_log_id=0,
+        cursor_end_chat_log_id=len(payload["messages"]),
+    )
+
+    assert request is None
+
+
 def test_shared_service_can_render_report_without_learning_evidence():
     from app.group_analysis.application_service import (
         GroupAnalysisApplicationService,
