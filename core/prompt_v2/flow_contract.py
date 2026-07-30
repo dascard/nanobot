@@ -102,11 +102,6 @@ RESERVED_SECTION_CONTRACTS: tuple[ReservedSectionContract, ...] = (
         chat_types=frozenset({"private"}),
     ),
     ReservedSectionContract(
-        node_id="runtime_context",
-        node_type="runtime",
-        runtime_key="runtime_context",
-    ),
-    ReservedSectionContract(
         node_id="identity_context",
         node_type="template",
         template_key="chat/identity_context",
@@ -126,6 +121,11 @@ RESERVED_SECTION_CONTRACTS: tuple[ReservedSectionContract, ...] = (
         node_id="runtime_tool_prompt",
         node_type="runtime",
         runtime_key="runtime_tool_prompt",
+    ),
+    ReservedSectionContract(
+        node_id="runtime_context",
+        node_type="runtime",
+        runtime_key="runtime_context",
     ),
     ReservedSectionContract(
         node_id="current_user_event",

@@ -14,9 +14,11 @@ allowed-tools: [schedule_task]
 创建或更新时只填一个定义字段：
 
 - 固定正文用 `content`，不调用模型。
-- 需要工具、搜索、判断或循环时，优先用自然语言 `prompt_template`。每次触发启动
+- 每次触发都必须由模型决定如何完成时，用自然语言 `prompt_template`。它会启动
   一次完整 Agent Run；`no_reply` 只表示业务上无需通知，不能掩盖必需工具不可用。
-- 只有需要持久恢复的确定性流程时才用 `program`，具体结构以参数 schema 为准。
+- 能由工具先确定缓存命中或无变化时，用 `program` 先调用工具并分支；只有确实
+  需要语义生成的分支才调用 `model`，可直接组织的内容用 `emit`。不要让模型只为
+  决定 `no_reply` 而运行。
 
 修改复杂任务前，先 `list` 并带 `task_id` 读取完整定义、不可用工具和最近执行错误。
 不要用单独的 `prompt_template` 覆盖已有确定性 `program`。直接 `program` 中的
@@ -24,7 +26,8 @@ allowed-tools: [schedule_task]
 `steps.*.output`、循环历史可用 `steps.*.outputs`，JSON 字符串可用
 `$json_parse`。条件循环每轮重算 `condition`，并受 `max_iterations` 保护。
 `model` 步骤固定只执行一次。必需工具缺失时必须明确失败的任务，应把该工具写成
-直接 `tool` 步骤，不要藏在 `prompt_template` 中。
+直接 `tool` 步骤，不要藏在 `prompt_template` 中。跨轮次缓存由确定性工具持久化
+并返回稳定字段，`program` 负责在模型之前判断该字段。
 
 ## 调度
 

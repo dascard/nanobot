@@ -26,20 +26,34 @@ def test_redact_api_key():
     assert "sk-secret-key" not in text
 
 
-def test_redact_preserves_only_numeric_token_estimates():
+def test_redact_preserves_numeric_token_metrics_but_not_token_secrets():
     payload = json.loads(_json_dumps({
         "token_estimate": 123,
         "message_token_estimate": 100,
         "tool_schema_token_estimate": 23,
+        "prompt_tokens": 456,
+        "completion_tokens": 78,
+        "cached_tokens": 320,
+        "prompt_cache_hit_tokens": 320,
+        "prompt_cache_miss_tokens": 136,
         "access_token": "secret-access-token",
-        "nested": {"token_estimate": "secret-disguised-as-metric"},
+        "nested": {
+            "token_estimate": "secret-disguised-as-metric",
+            "cached_tokens": "secret-disguised-as-usage",
+        },
     }, max_chars=10000))
 
     assert payload["token_estimate"] == 123
     assert payload["message_token_estimate"] == 100
     assert payload["tool_schema_token_estimate"] == 23
+    assert payload["prompt_tokens"] == 456
+    assert payload["completion_tokens"] == 78
+    assert payload["cached_tokens"] == 320
+    assert payload["prompt_cache_hit_tokens"] == 320
+    assert payload["prompt_cache_miss_tokens"] == 136
     assert payload["access_token"] == "[REDACTED]"
     assert payload["nested"]["token_estimate"] == "[REDACTED]"
+    assert payload["nested"]["cached_tokens"] == "[REDACTED]"
 
 
 def test_request_json_preserves_messages():

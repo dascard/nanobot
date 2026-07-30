@@ -221,7 +221,6 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             "group_policy",
             "qq_group_policy",
             "private_policy",
-            "runtime_context",
             "identity_context",
             "session_guidance",
             "persona_reference",
@@ -230,6 +229,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             "group_context",
             "effort_constraint",
             "runtime_tool_prompt",
+            "runtime_context",
             "current_user_event",
         ]
 
@@ -247,7 +247,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         edited_flow["edges"] = [
             edge
             for edge in edited_flow["edges"]
-            if (edge["from"], edge["to"]) != ("private_policy", "runtime_context")
+            if (edge["from"], edge["to"]) != ("private_policy", "identity_context")
         ]
         edited_flow["edges"].extend(
             [
@@ -258,7 +258,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
                 },
                 {
                     "from": "custom_template",
-                    "to": "runtime_context",
+                    "to": "identity_context",
                     "chat_types": ["private"],
                 },
             ]

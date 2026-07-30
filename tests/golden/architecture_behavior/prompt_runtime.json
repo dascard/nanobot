@@ -12,8 +12,8 @@
     },
     {
       "path": "data/prompts_v2/chat/flow.json",
-      "sha256": "c5d3b870e29fe617c8b9839d5d6e0d2523a149dce4f690b4ec2cd4749a873711",
-      "size_bytes": 3728
+      "sha256": "af3894a38e54d9232cc3bcd452ba350d99d41107e0fc3f14b3a8cc94fd23ea91",
+      "size_bytes": 3730
     },
     {
       "path": "data/prompts_v2/chat/main.md",
@@ -72,8 +72,8 @@
     },
     {
       "path": "data/prompts_v2/tools/schedule_task/usage.md",
-      "sha256": "9e568d264fb81519a23d85ef31f9f7af723ef48914fa63d3d9ed69826cccd861",
-      "size_bytes": 3709
+      "sha256": "234efea2ddc8d22ab34b5314e11b7670ab4a0cc2f5763e88675647d0430d450c",
+      "size_bytes": 3910
     },
     {
       "path": "data/prompts_v2/tools/sql_analysis/usage.md",
@@ -122,8 +122,8 @@
     },
     {
       "path": "prompts.v2.default/chat/flow.json",
-      "sha256": "c5d3b870e29fe617c8b9839d5d6e0d2523a149dce4f690b4ec2cd4749a873711",
-      "size_bytes": 3728
+      "sha256": "af3894a38e54d9232cc3bcd452ba350d99d41107e0fc3f14b3a8cc94fd23ea91",
+      "size_bytes": 3730
     },
     {
       "path": "prompts.v2.default/chat/identity_context.md",
@@ -397,8 +397,8 @@
     },
     {
       "path": "prompts.v2.default/tools/schedule_task/usage.md",
-      "sha256": "9e568d264fb81519a23d85ef31f9f7af723ef48914fa63d3d9ed69826cccd861",
-      "size_bytes": 3709
+      "sha256": "234efea2ddc8d22ab34b5314e11b7670ab4a0cc2f5763e88675647d0430d450c",
+      "size_bytes": 3910
     },
     {
       "path": "prompts.v2.default/tools/sql_analysis/usage.md",

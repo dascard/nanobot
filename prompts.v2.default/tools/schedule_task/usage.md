@@ -26,13 +26,13 @@ description: schedule_task 工具的使用边界。
 创建和更新时，从下面三个字段中只填一个：
 
 - 固定提醒或固定通知用 `content`。它直接投递正文，不调用模型。
-- 需要搜索、读取、判断、循环或调用其他工具时，优先用自然语言
-  `prompt_template` 描述目标和完成条件。触发时会启动一次完整 Agent Run，由
-  Agent 自行使用当时获准的工具；选择 `no_reply` 表示本次成功但不推送。工作流
-  不会因空回复或失败重新执行整个 Agent Run。`no_reply` 只能表示业务上无需
-  通知，不能用来掩盖必需工具不可用。
-- 只有确实需要跨 worker 持久恢复的确定性步骤、分支或等待时才直接填写
-  `program`。以工具参数 schema 为准，不要为了普通任务手写程序。
+- 每次触发都必须由模型决定如何完成时，用自然语言 `prompt_template`。它会启动
+  一次完整 Agent Run；选择 `no_reply` 表示本次成功但不推送。工作流不会因空
+  回复或失败重新执行整个 Agent Run。`no_reply` 只能表示业务上无需通知，不能
+  用来掩盖必需工具不可用。
+- 能由确定性工具先判断是否需要继续时，用 `program`：先调用工具并判断缓存命中
+  或无变化，只有确实需要语义生成的分支才放 `model`，可直接组织的内容用
+  `emit`。这条规则也适用于频繁轮询，不要让模型只为决定 `no_reply` 而运行。
 
 修改复杂任务前，先用 `action=list` 加 `task_id` 读取完整 `program`、当前不可用
 工具和最近一次 execution；不要只凭列表摘要或旧聊天内容覆盖原定义。确定性
@@ -44,6 +44,8 @@ description: schedule_task 工具的使用边界。
   仍会再次校验。不能递归调用 `schedule_task/reply/no_reply/skill`。
 - 某个工具是完成任务的硬前提、缺失时必须明确失败，就把它写成直接 `tool` 步骤，
   不要藏在 `prompt_template` 中。
+- 跨轮次缓存由确定性工具负责持久化并返回稳定字段；`program` 先基于该字段分支，
+  不能把“是否命中缓存”的判断留给模型。
 - 工具结果优先保留结构化 JSON。可通过 `steps.<id>.output` 取最后结果，通过
   `steps.<id>.outputs` 取循环中的结果历史；JSON 字符串可用 `$json_parse`。
 - `loop` 可以遍历 `items`，也可以在每轮重新判断 `condition`；两者只能填一个，

@@ -675,12 +675,11 @@ _CANONICAL_ORDERING = MappingProxyType({
         ("base_contract", "qq_common_policy"),
     ),
     "qq_group_policy": (300, (), ("group_policy",)),
-    "runtime_context": (
+    "identity_context": (
         100,
         (),
         ("group_policy", "private_policy", "qq_group_policy"),
     ),
-    "identity_context": (200, (), ("runtime_context",)),
     "session_guidance": (100, (), ("identity_context",)),
     "persona_reference": (200, (), ("session_guidance",)),
     "conversation_context_header": (300, (), ("persona_reference",)),
@@ -692,7 +691,8 @@ _CANONICAL_ORDERING = MappingProxyType({
         ("history_messages", "group_context"),
     ),
     "runtime_tool_prompt": (100, (), ("effort_constraint",)),
-    "current_user_event": (100, (), ("runtime_tool_prompt",)),
+    "runtime_context": (200, (), ("runtime_tool_prompt",)),
+    "current_user_event": (100, (), ("runtime_context",)),
 })
 _CANONICAL_SCOPES = MappingProxyType({
     "qq_common_policy": (frozenset({"qq"}), frozenset()),

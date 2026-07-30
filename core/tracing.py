@@ -16,9 +16,23 @@ logger = logging.getLogger("nanobot.tracing")
 
 SENSITIVE_KEY_PARTS = ("api_key", "apikey", "authorization", "password", "secret", "token")
 SAFE_NUMERIC_TOKEN_KEYS = frozenset({
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "cache_write_tokens",
+    "cached_tokens",
+    "completion_tokens",
+    "input_tokens",
+    "max_tokens",
     "message_token_estimate",
+    "output_tokens",
+    "prompt_cache_hit_tokens",
+    "prompt_cache_miss_tokens",
+    "prompt_tokens",
+    "tokens_cached",
     "tool_schema_token_estimate",
     "token_estimate",
+    "total_cached_tokens",
+    "total_tokens",
 })
 MAX_PREVIEW_CHARS = 2000
 MAX_WEB_SEARCH_PREVIEW_CHARS = 40000

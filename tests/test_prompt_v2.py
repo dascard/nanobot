@@ -314,6 +314,60 @@ async def test_prompt_template_resolution_metadata_does_not_change_wire_request_
     assert runtime_plan.prompt_sha256 == default_plan.prompt_sha256
 
 
+@pytest.mark.asyncio
+async def test_prompt_cache_prefix_keeps_per_request_runtime_context_at_tail(
+    tmp_path,
+    monkeypatch,
+):
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    repo_root = Path(__file__).resolve().parents[1]
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    shutil.copytree(repo_root / "prompts.v2.default", default_dir)
+    shutil.copytree(default_dir, runtime_dir)
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    original_build_template_values = compiler.build_template_values
+    current_times = iter(
+        (
+            "2026-07-30 12:00:00 CST",
+            "2026-07-30 12:05:00 CST",
+        )
+    )
+    monkeypatch.setattr(
+        compiler,
+        "build_template_values",
+        lambda request: original_build_template_values(
+            request,
+            current_time=next(current_times),
+        ),
+    )
+    request = PromptCompileRequest(
+        chat_type="group",
+        platform="qq",
+        session_id="group_prompt_cache",
+        group_id="prompt_cache",
+        user_id="user_prompt_cache",
+        user_input="检查缓存前缀",
+        runtime_tool_prompt="[RuntimeTool]\n- workspace_read",
+    )
+
+    first = await compiler.compile_prompt_plan(request)
+    second = await compiler.compile_prompt_plan(request)
+    section_order = [item["node_id"] for item in first.flow_sections]
+    runtime_index = section_order.index("runtime_context")
+
+    assert section_order[runtime_index - 1] == "runtime_tool_prompt"
+    assert section_order[runtime_index + 1] == "current_user_event"
+    assert first.messages[:-2] == second.messages[:-2]
+    assert first.messages[-2] != second.messages[-2]
+    assert str(first.messages[-2]["content"]).startswith("<runtime_context>")
+    assert first.messages[-1] == second.messages[-1]
+
+
 def test_template_resolution_trace_serializer_drops_non_contract_fields():
     from core.prompt_v2.template_resolution import serialize_template_resolutions_json
 
@@ -1044,12 +1098,12 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
         "system",
         "system",
         "system",
-        "system",
         "user",
         "system",
         "user",
         "assistant",
         "user",
+        "system",
         "system",
         "user",
     ]
@@ -1698,7 +1752,7 @@ async def test_prompt_v2_strict_audit_rejects_missing_singleton_flow_node(monkey
         for edge in flow["edges"]
         if "runtime_tool_prompt" not in {edge["from"], edge["to"]}
     ]
-    flow["edges"].append({"from": "effort_constraint", "to": "current_user_event"})
+    flow["edges"].append({"from": "effort_constraint", "to": "runtime_context"})
     monkeypatch.setattr(
         compiler,
         "load_flow",

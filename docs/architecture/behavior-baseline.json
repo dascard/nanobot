@@ -73,7 +73,7 @@
       "stage": "阶段 7B"
     },
     {
-      "after_sha256": "9a243fc1c341dcd3e8dbc19e8589946a50dd95875aef82786567fac4ca9db224",
+      "after_sha256": "8d8b9bf88f299a987901985cef0248fdec6394150f5137e1c4cd233ff1337641",
       "before_sha256": "d6127b3f19ff082bdbb3163a384f394ca5b748fa524ecab0b176aa26e8fb54d5",
       "id": "stage7c_group_analysis_prompt",
       "reason": "为 group_analysis 增加 Registry 驱动的可选 aspects，同步显式工具兼容默认和定时学习默认；同时把经来源审核且无冲突的正式群体记忆作为不可信背景接入 canonical Prompt Contribution，未选择方面不创建模型分支或报告区块。",
@@ -156,7 +156,7 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "9a243fc1c341dcd3e8dbc19e8589946a50dd95875aef82786567fac4ca9db224"
+      "sha256": "8d8b9bf88f299a987901985cef0248fdec6394150f5137e1c4cd233ff1337641"
     },
     {
       "classification": "preserve",
