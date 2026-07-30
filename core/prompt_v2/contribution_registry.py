@@ -682,17 +682,19 @@ _CANONICAL_ORDERING = MappingProxyType({
     ),
     "session_guidance": (100, (), ("identity_context",)),
     "persona_reference": (200, (), ("session_guidance",)),
-    "runtime_tool_prompt": (300, (), ("persona_reference",)),
-    "conversation_context_header": (400, (), ("runtime_tool_prompt",)),
-    "history_messages": (500, (), ("conversation_context_header",)),
-    "group_context": (600, (), ("history_messages",)),
-    "effort_constraint": (
-        700,
+    "runtime_context": (300, (), ("persona_reference",)),
+    "group_context": (400, (), ("runtime_context",)),
+    "conversation_context_header": (
+        500,
         (),
-        ("history_messages", "group_context"),
+        ("runtime_context", "group_context"),
     ),
-    "runtime_context": (800, (), ("effort_constraint",)),
-    "current_user_event": (100, (), ("runtime_context",)),
+    "history_messages": (600, (), ("conversation_context_header",)),
+    "current_user_event": (
+        800,
+        (),
+        ("history_messages",),
+    ),
 })
 _CANONICAL_SCOPES = MappingProxyType({
     "qq_common_policy": (frozenset({"qq"}), frozenset()),
@@ -720,8 +722,6 @@ _CANONICAL_REQUIRED_VARIABLES = MappingProxyType({
     "conversation_context_header": frozenset({"history_header"}),
     "history_messages": frozenset({"history_messages"}),
     "group_context": frozenset({"group_profile_context"}),
-    "effort_constraint": frozenset({"effort_constraint"}),
-    "runtime_tool_prompt": frozenset({"runtime_tool_prompt"}),
     "current_user_event": frozenset({"user_input"}),
 })
 _CANONICAL_TEMPLATE_IDS = frozenset({

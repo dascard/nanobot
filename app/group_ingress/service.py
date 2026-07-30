@@ -746,6 +746,11 @@ class GroupIngressService:
             "sender_name": req.sender_name,
             "message": message_text,
             "message_id": req.message_id or "",
+            "event_ts": (
+                ambient_log.created_at.timestamp()
+                if ambient_log.created_at is not None
+                else 0.0
+            ),
             "is_reply_to_bot": bool(meta.get("directed", {}).get("reply_to_bot")),
             "is_at_bot": bool(meta.get("directed", {}).get("at_bot")),
             "segments": meta.get("segments", []),

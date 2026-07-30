@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.session_memory import config
-from core.db.models.chat import ConversationTurn
+from core.db.models.chat import ChatLog, ConversationTurn
 from core.token_utils import estimate_tokens
 
 RAW_WINDOW_CANDIDATE_MIN_LIMIT = 200
@@ -72,6 +72,28 @@ def is_context_eligible_turn(turn: ConversationTurn) -> tuple[bool, str]:
     if not str(getattr(turn, "content", "") or "").strip():
         return False, "empty_content"
 
+    return True, ""
+
+
+def is_context_eligible_chat_log(row: ChatLog) -> tuple[bool, str]:
+    """判断 ChatLog 是否可进入群聊原文窗口或摘要来源。"""
+
+    meta = safe_meta(getattr(row, "meta_json", "{}"))
+    moderation = meta.get("moderation")
+    if isinstance(moderation, dict) and moderation.get("no_context"):
+        return False, "moderation_no_context"
+    if meta.get("no_context") or meta.get("internal"):
+        return False, "meta_no_context"
+
+    kind = str(meta.get("kind", "chat") or "chat")
+    if kind in INTERNAL_KINDS:
+        return False, f"internal_kind:{kind}"
+
+    role = str(getattr(row, "role", "") or "")
+    if role not in {"ambient", "user", "assistant"}:
+        return False, f"unsupported_role:{role}"
+    if not str(getattr(row, "content", "") or "").strip():
+        return False, "empty_content"
     return True, ""
 
 
@@ -360,9 +382,14 @@ def should_rollup(
             len(pending) >= config.GROUP_ROLLING_MIN_TURNS
             or len(user_turns) >= config.GROUP_ROLLING_MIN_USER_TURNS
             or char_count >= config.GROUP_ROLLING_MIN_CHARS
-            or token_count >= config.GROUP_ROLLING_MIN_TOKENS
+            or token_count >= config.GROUP_ROLLING_LEGACY_MIN_TOKENS
         )
-        if ok and len(user_turns) >= 2 and len(distinct_senders) < config.GROUP_ROLLING_MIN_DISTINCT_SENDERS:
+        if (
+            ok
+            and len(user_turns) >= 2
+            and len(distinct_senders)
+            < config.GROUP_ROLLING_MIN_DISTINCT_SENDERS
+        ):
             return False, {
                 "reason": "not_enough_distinct_senders",
                 "turns": len(pending),

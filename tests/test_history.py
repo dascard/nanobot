@@ -174,8 +174,8 @@ def test_build_memory_keeps_old_private_turns_until_capacity_boundary(db_session
     assert "不要仅按时间间隔" in header
 
 
-def test_build_memory_uses_neutral_gap_hint_instead_of_topic_break(db_session):
-    """较长时间间隔只能作为信号，不能由代码判定前后话题无关。"""
+def test_build_memory_uses_fixed_event_time_instead_of_gap_hint(db_session):
+    """历史时间使用消息固定时间，间隔只留在调试信息中。"""
     from api.routes import _build_session_memory
 
     now = _local_now()
@@ -199,20 +199,20 @@ def test_build_memory_uses_neutral_gap_hint_instead_of_topic_break(db_session):
         user_id="gap-user",
     )
 
-    # Prompt v2 history 契约只接受 user/assistant；gap 提示必须折叠为
-    # 随后消息的正文前缀，独立 system 行会在编译时被静默丢弃。
     assert all(message["role"] in {"user", "assistant"} for message in messages)
-    hints = [
+    user_events = [
         message["content"]
         for message in messages
-        if "[时间间隔]" in message["content"]
+        if message["role"] == "user"
     ]
-    assert len(hints) == 1
-    assert "距上一条消息约" in hints[0]
-    assert hints[0].startswith("[时间间隔]")
-    assert "继续处理这个问题" in hints[0]
-    assert "话题断裂" not in hints[0]
-    assert "不应视为同一话题" not in hints[0]
+    assert len(user_events) == 2
+    assert all("<message_meta>" in content for content in user_events)
+    assert all('"event_time":"' in content for content in user_events)
+    assert "继续处理这个问题" in user_events[-1]
+    joined = "\n".join(user_events)
+    assert "[时间间隔]" not in joined
+    assert "话题断裂" not in joined
+    assert "不应视为同一话题" not in joined
     assert debug["gap_breaks"] == 1
 
 
@@ -367,19 +367,35 @@ def test_build_chat_context_group_uses_unified_chatlog_messages(db_session):
     assert debug["group_recent_messages"] == 2
 
 
-def test_build_chat_context_group_injects_active_rolling_summary(db_session):
-    """群聊真实 ChatLog 上下文也应带上 active rolling summary header。"""
+def test_build_chat_context_group_injects_active_llm_rolling_summary(db_session):
+    """群聊真实 ChatLog 上下文只注入后台生成的 LLM 摘要。"""
     from core.context_builder import build_chat_context
 
     now = _local_now()
+    covered_log = ChatLog(
+        user_id="group_1",
+        session_id="group_1",
+        role="ambient",
+        sender_name="A",
+        content="[A]: 先讨论 Prompt V2",
+        message_id="m0",
+        processed=1,
+        created_at=now - timedelta(minutes=1),
+    )
+    db_session.add(covered_log)
+    db_session.flush()
     db_session.add(RollingSessionSummary(
         session_id="group_1",
         user_id="group_1",
         chat_type="group",
         status="active",
+        summary_kind="llm_episode",
         summary_text="此前群聊已经确认要修复 Prompt V2 画布滚轮问题",
-        covered_until_turn_id=8,
-        source_turn_count=8,
+        source_type="chat_log",
+        covered_from_source_id=covered_log.id,
+        covered_until_source_id=covered_log.id,
+        source_ids_json=f"[{covered_log.id}]",
+        source_turn_count=1,
         updated_at=now,
     ))
     db_session.add(ChatLog(
@@ -403,13 +419,14 @@ def test_build_chat_context_group_injects_active_rolling_summary(db_session):
     )
 
     assert "<rolling_session_summary" in header
-    assert 'summary_kind="deterministic_fallback"' in header
+    assert 'summary_kind="llm_episode"' in header
+    assert 'source_type="chat_log"' in header
     assert "画布滚轮" in header
     assert header.index("<rolling_session_summary") < header.index("<conversation_context>")
     assert messages
     assert debug["rolling_summary_injected"] is True
-    assert debug["rolling_summary_kind"] == "deterministic_fallback"
-    assert debug["rolling_summary_covered_until_turn_id"] == 8
+    assert debug["rolling_summary_kind"] == "llm_episode"
+    assert debug["rolling_summary_covered_until_source_id"] == covered_log.id
 
 
 def test_build_memory_returns_struct_dicts(db_session):

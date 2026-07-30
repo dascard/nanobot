@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
@@ -73,23 +73,25 @@ class FinalizePermit:
     reason: str
 
 
-def _turn_ids(turns: Sequence[ConversationTurn]) -> list[int]:
-    return [int(turn.id) for turn in turns]
+def _source_ids(items: Sequence[Any]) -> list[int]:
+    return [int(item.id) for item in items]
 
 
 def _stable_job_hash(
     *,
     session_id: str,
-    covered_from_turn_id: int,
-    covered_until_turn_id: int,
-    source_turn_ids: list[int],
+    source_type: str,
+    covered_from_source_id: int,
+    covered_until_source_id: int,
+    source_ids: list[int],
 ) -> str:
     return hashlib.sha256(
         json.dumps({
             "session_id": session_id,
-            "covered_from_turn_id": covered_from_turn_id,
-            "covered_until_turn_id": covered_until_turn_id,
-            "source_turn_ids": source_turn_ids,
+            "source_type": source_type,
+            "covered_from_source_id": covered_from_source_id,
+            "covered_until_source_id": covered_until_source_id,
+            "source_ids": source_ids,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
 
@@ -156,9 +158,10 @@ def enqueue_session_summary_job(
     session_id: str,
     user_id: str,
     chat_type: str,
-    pending_turns: Sequence[ConversationTurn],
+    pending_turns: Sequence[Any],
     previous_summary: RollingSessionSummary | None,
-    fallback_summary: RollingSessionSummary,
+    fallback_summary: RollingSessionSummary | None,
+    source_type: str = "conversation_turn",
     max_retry: int | None = None,
     force: bool = False,
     recent_raw_turn_ids: Sequence[int] | None = None,
@@ -171,14 +174,18 @@ def enqueue_session_summary_job(
     """
     if not pending_turns:
         raise ValueError("pending_turns is required")
-    source_turn_ids = _turn_ids(pending_turns)
-    covered_from = source_turn_ids[0]
-    covered_until = source_turn_ids[-1]
+    from app.session_memory.rolling_summary import normalize_summary_source_type
+
+    normalized_source_type = normalize_summary_source_type(source_type)
+    source_ids = _source_ids(pending_turns)
+    covered_from = source_ids[0]
+    covered_until = source_ids[-1]
     stable_hash = _stable_job_hash(
         session_id=session_id,
-        covered_from_turn_id=covered_from,
-        covered_until_turn_id=covered_until,
-        source_turn_ids=source_turn_ids,
+        source_type=normalized_source_type,
+        covered_from_source_id=covered_from,
+        covered_until_source_id=covered_until,
+        source_ids=source_ids,
     )
 
     dedupe_statuses = ("pending", "running") if force else tuple(ACTIVE_JOB_STATUSES)
@@ -186,8 +193,9 @@ def enqueue_session_summary_job(
         db.query(SessionSummaryJob)
         .filter(
             SessionSummaryJob.session_id == session_id,
-            SessionSummaryJob.covered_from_turn_id == covered_from,
-            SessionSummaryJob.covered_until_turn_id == covered_until,
+            SessionSummaryJob.source_type == normalized_source_type,
+            SessionSummaryJob.covered_from_source_id == covered_from,
+            SessionSummaryJob.covered_until_source_id == covered_until,
             SessionSummaryJob.status.in_(dedupe_statuses),
         )
         .order_by(SessionSummaryJob.id.desc())
@@ -201,9 +209,21 @@ def enqueue_session_summary_job(
         session_id=session_id,
         user_id=user_id or "",
         chat_type=chat_type or "private",
-        covered_from_turn_id=covered_from,
-        covered_until_turn_id=covered_until,
-        source_turn_ids_json=json.dumps(source_turn_ids, ensure_ascii=False),
+        covered_from_turn_id=(
+            covered_from if normalized_source_type == "conversation_turn" else 0
+        ),
+        covered_until_turn_id=(
+            covered_until if normalized_source_type == "conversation_turn" else 0
+        ),
+        source_turn_ids_json=(
+            json.dumps(source_ids, ensure_ascii=False)
+            if normalized_source_type == "conversation_turn"
+            else "[]"
+        ),
+        source_type=normalized_source_type,
+        covered_from_source_id=covered_from,
+        covered_until_source_id=covered_until,
+        source_ids_json=json.dumps(source_ids, ensure_ascii=False),
         previous_summary_id=int(previous_summary.id) if previous_summary and previous_summary.id else None,
         fallback_summary_id=int(fallback_summary.id) if fallback_summary and fallback_summary.id else None,
         status="pending",
@@ -211,9 +231,18 @@ def enqueue_session_summary_job(
         max_retry=int(max_retry if max_retry is not None else config.SESSION_SUMMARY_MAX_RETRY),
         stable_hash=stable_hash,
         meta_json=json.dumps({
-            "schema_version": 1,
-            "created_by": "rolling_summary_fallback",
-            "fallback_summary_kind": getattr(fallback_summary, "summary_kind", "") or "deterministic_fallback",
+            "schema_version": 2,
+            "created_by": (
+                "group_summary_sweep"
+                if normalized_source_type == "chat_log"
+                else "rolling_summary_fallback"
+            ),
+            "source_type": normalized_source_type,
+            "fallback_summary_kind": (
+                getattr(fallback_summary, "summary_kind", "")
+                if fallback_summary is not None
+                else ""
+            ),
             "recent_raw_turn_ids": list(dict.fromkeys(
                 int(item) for item in (recent_raw_turn_ids or [])
             )),
@@ -397,7 +426,9 @@ def acquire_summary_finalize_permit(
     resolved_job_id = lease.job_id if lease is not None else int(job_id or 0)
     proposed_job = db.get(SessionSummaryJob, resolved_job_id)
     proposed_coverage = int(
-        getattr(proposed_job, "covered_until_turn_id", 0) or 0
+        getattr(proposed_job, "covered_until_source_id", 0)
+        or getattr(proposed_job, "covered_until_turn_id", 0)
+        or 0
     )
     if proposed_job is None or not renew_summary_job_lease(
         db,
@@ -424,34 +455,42 @@ def acquire_summary_finalize_permit(
             proposed_coverage=proposed_coverage,
             reason="running_owner_lost",
         )
-    proposed_coverage = int(job.covered_until_turn_id or 0)
+    source_type = str(job.source_type or "conversation_turn")
+    proposed_coverage = int(
+        job.covered_until_source_id
+        or job.covered_until_turn_id
+        or 0
+    )
     fallback_id = int(job.fallback_summary_id or 0)
     active_rows = (
         db.query(RollingSessionSummary)
         .filter(
             RollingSessionSummary.session_id == job.session_id,
             RollingSessionSummary.status == "active",
-        )
-        .order_by(
-            RollingSessionSummary.covered_until_turn_id.desc(),
-            RollingSessionSummary.id.desc(),
+            RollingSessionSummary.source_type == source_type,
         )
         .all()
+    )
+    from app.session_memory.rolling_summary import summary_covered_until
+
+    active_rows.sort(
+        key=lambda row: (summary_covered_until(row), int(row.id or 0)),
+        reverse=True,
     )
     blocking = next(
         (
             row
             for row in active_rows
-            if int(row.covered_until_turn_id or 0) > proposed_coverage
+            if summary_covered_until(row) > proposed_coverage
             or (
-                int(row.covered_until_turn_id or 0) == proposed_coverage
+                summary_covered_until(row) == proposed_coverage
                 and int(row.id or 0) != fallback_id
             )
         ),
         None,
     )
     if blocking is not None:
-        blocking_coverage = int(blocking.covered_until_turn_id or 0)
+        blocking_coverage = summary_covered_until(blocking)
         return FinalizePermit(
             decision="obsolete",
             blocking_summary_id=int(blocking.id or 0),
@@ -536,7 +575,11 @@ def obsolete_summary_jobs_for_scope(
 
     rows = query.order_by(SessionSummaryJob.id.asc()).all()
     for job in rows:
-        proposed_coverage = int(job.covered_until_turn_id or 0)
+        proposed_coverage = int(
+            job.covered_until_source_id
+            or job.covered_until_turn_id
+            or 0
+        )
         mark_summary_job_obsolete(
             db,
             job,

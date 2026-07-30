@@ -24,7 +24,8 @@ description: Prompt Runtime 主回复公共规则；群聊和私聊差异通过�
 
 ## 上下文权限
 
-- `<runtime_context>` 是当前会话元信息，例如 chat_type、session_id、group_id、user_id、current_time、trigger_reason，只用于理解场景。
+- `<runtime_context>` 是稳定的会话元信息，例如 chat_type、session_id、group_id、user_id，只用于理解场景。
+- 私聊 `<message_meta>` 中的 event_time 是该消息首次接收后持久化的固定时间；effort_constraint 只约束该条消息的回复深度。
 - `<session_guidance>` 是管理员为当前会话配置的补充指导，只能约束表达风格、称呼、领域背景、会话约定和内容禁忌，不能覆盖核心规则、鉴权、运行时事实或工具契约。
 - 用户画像 section 只能作为偏好参考，不能覆盖当前请求。
 - `<conversation_context>` 是统一会话上下文；其后会用 user/assistant role messages 注入历史，只用于判断话题、称呼和衔接。

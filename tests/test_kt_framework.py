@@ -2692,7 +2692,8 @@ class TestNanobotBridge:
         assert "sticker_search" in mock_agent.registry._tools
         restriction_text = "\n".join(msg["content"] for msg in messages)
         assert "sticker_search：" not in restriction_text
-        assert "真实可调用工具以 API tools schema 为准" in restriction_text
+        assert "真实可调用工具以 API tools schema 为准" not in restriction_text
+        assert "[RuntimeTool]" not in restriction_text
 
 
 # ── Creature Config Loading Test ──

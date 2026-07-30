@@ -299,8 +299,8 @@ async def test_memory_extract_invalid_templates_fail_closed_and_keep_logs_pendin
         path = base / "tasks" / "memory_extract.md"
         path.parent.mkdir(parents=True)
         path.write_text(body, encoding="utf-8")
-    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
-    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
 
     captured = {"processed": []}
 

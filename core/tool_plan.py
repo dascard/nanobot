@@ -16,7 +16,10 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
+from core.runtime_tool_service import (
+    build_sandbox_tool_schema_guidance,
+    resolve_effective_tools,
+)
 from core.tool_registration import TOOL_REGISTRATION_REGISTRY
 from core.tool_schema_preview import build_effective_tool_schemas
 
@@ -83,6 +86,53 @@ def _build_effective_tool_schemas(enabled: dict[str, bool], db: Any = None) -> l
     return build_effective_tool_schemas(enabled)
 
 
+def _attach_sandbox_profile_guidance(
+    schemas: list[dict[str, Any]],
+    *,
+    enabled: dict[str, bool],
+    chat_type: str,
+    platform: str,
+    session_id: str,
+    db: Any,
+) -> list[dict[str, Any]]:
+    """把请求级 Sandbox Profile 只附到一个实际发送的 Sandbox schema。"""
+
+    guidance = build_sandbox_tool_schema_guidance(
+        enabled,
+        chat_type,
+        platform=platform,
+        session_id=session_id,
+        db=db,
+    )
+    result = copy.deepcopy(schemas)
+    if not guidance:
+        return result
+    preferred = (
+        "sandbox_exec",
+        "workspace_edit",
+        "workspace_read",
+        "workspace_search",
+        "workspace_write",
+        "workspace_list",
+        "asset_import",
+        "asset_publish",
+    )
+    by_name = {
+        _tool_name(schema): schema
+        for schema in result
+    }
+    target = next((by_name[name] for name in preferred if name in by_name), None)
+    if target is None:
+        return result
+    function = target.get("function")
+    if isinstance(function, dict):
+        description = str(function.get("description") or "").rstrip()
+        function["description"] = (
+            f"{description}\n\n{guidance}".strip()
+        )
+    return result
+
+
 @dataclass(frozen=True)
 class ToolPlan:
     enabled: dict[str, bool]
@@ -144,6 +194,14 @@ class ToolPlan:
             schemas = list(tool_schemas)
         else:
             schemas = _build_effective_tool_schemas(enabled_map, db=db)
+        schemas = _attach_sandbox_profile_guidance(
+            schemas,
+            enabled=enabled_map,
+            chat_type=chat_type,
+            platform=platform,
+            session_id=session_id,
+            db=db,
+        )
         normalized_schemas = tuple(
             normalize_wire_tool_schema(tool)
             for tool in schemas
@@ -154,14 +212,7 @@ class ToolPlan:
             if _tool_name(tool) in sent_names
         )
         executable_names = frozenset(sent_names)
-        runtime_prompt = build_runtime_tool_prompt(
-            enabled_map,
-            disabled_map,
-            chat_type,
-            platform=platform,
-            session_id=session_id,
-            db=db,
-        )
+        runtime_prompt = ""
         registration_snapshot = (
             TOOL_REGISTRATION_REGISTRY.registry_snapshot
         )

@@ -268,11 +268,7 @@ def test_runtime_preset_prompt_does_not_expand_enabled_tool_schema():
         chat_type="group",
     )
 
-    assert "真实可调用工具以 API tools schema 为准" in prompt
-    assert "reply：" not in prompt
-    assert "ai_daily：" not in prompt
-    assert "bash：群聊强制禁用" in prompt
-    assert "no_reply(reason)" not in prompt
+    assert prompt == ""
 
 
 def test_runtime_tool_prompt_disambiguates_sql_and_memory():
@@ -284,10 +280,7 @@ def test_runtime_tool_prompt_disambiguates_sql_and_memory():
         chat_type="private",
     )
 
-    assert "聊天记录" in prompt
-    assert "sql_analysis" in prompt
-    assert "memory_query 只查询已生成的结构化摘要" in prompt
-    assert "chat_logs/conversation_turns" in prompt
+    assert prompt == ""
 
 
 def test_superuser_private_tool_defaults_are_more_open():

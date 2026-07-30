@@ -715,7 +715,7 @@ def test_image_only_message_uses_multimodal_prompt_placeholder(client, db_sessio
     assert "https://example.com/cat.png" in user_log.content
 
     user_turn = db_session.query(ConversationTurn).filter_by(user_id="normal-001", role="user").one()
-    assert user_turn.content == "[图片附件 1 张]"
+    assert user_turn.content == "[用户附带了 1 张图片，请结合图片内容理解并回答]"
 
 
 def test_private_prompt_v2_audit_failure_is_not_context_chat(client, db_session, monkeypatch):
@@ -1313,7 +1313,7 @@ async def test_private_buffer_merges_files_for_final_bridge_request(db_session, 
     user_turn = db_session.query(ConversationTurn).filter_by(user_id="u-files", role="user").one()
     assert "先看文字" in user_turn.content
     assert "再看图片" in user_turn.content
-    assert "[图片附件 2 张]" in user_turn.content
+    assert "[用户附带了 2 张图片，请结合图片内容理解并回答]" in user_turn.content
     assert "https://example.com/a.png" not in user_turn.content
     assert "u-files" not in _private_buffers
 

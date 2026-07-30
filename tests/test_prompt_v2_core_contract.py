@@ -14,7 +14,6 @@ _ALWAYS_REQUIRED = {
     "identity_context",
     "session_guidance",
     "persona_reference",
-    "runtime_tool_prompt",
     "current_user_event",
 }
 
@@ -98,6 +97,10 @@ async def test_core_flow_contract_matches_all_live_branches(
         expected_status = "empty" if node_id == "session_guidance" else "emitted"
         assert matching[0]["status"] == expected_status
     assert not ({section["node_id"] for section in sections} & forbidden)
+    assert "[RuntimeTool]" not in "\n".join(
+        str(message.get("content") or "")
+        for message in plan.messages
+    )
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ class ChatTurnPersistenceInput:
     client_meta: dict | None = None
     # 私聊/群聊;块式会话记忆仅对 private 归块,group 完全短路。
     chat_type: str = "private"
+    event_time: str = ""
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,22 @@ def _prepare_chat_turn(
     turn_answer, turn_answer_kind = _turn_answer(answer, guardrail_status)
     user_meta = safe_meta(json.dumps(req.client_meta or {}, ensure_ascii=False))
     user_meta["kind"] = user_kind
+    if req.event_time:
+        user_meta["event_time"] = str(req.event_time)
+    if req.sender_name:
+        user_meta["sender_name"] = str(req.sender_name)
+    if req.session_name:
+        user_meta["session_name"] = str(req.session_name)
+    if req.message_id:
+        user_meta["current_message_id"] = str(req.message_id)
+    if timing_meta:
+        from core.private_timing import get_effort_constraint
+
+        effort_constraint = get_effort_constraint(
+            str(timing_meta.get("effort") or "")
+        )
+        if effort_constraint:
+            user_meta["effort_constraint"] = effort_constraint
     if timing_meta:
         user_meta["timing_gate"] = timing_meta
 

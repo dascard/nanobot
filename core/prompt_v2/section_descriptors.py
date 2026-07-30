@@ -229,25 +229,6 @@ _CANONICAL_DESCRIPTORS = MappingProxyType({
         editable=False,
         failure_policy="skip_optional",
     ),
-    "effort_constraint": _descriptor(
-        "effort_constraint",
-        owner_module="core.prompt_v2.compiler",
-        domain="reply_policy",
-        phase="policy",
-        authority="application_policy",
-        trust="trusted_instruction",
-        editable=False,
-        failure_policy="skip_optional",
-    ),
-    "runtime_tool_prompt": _descriptor(
-        "runtime_tool_prompt",
-        owner_module="core.tool_registry",
-        domain="tool",
-        phase="tool",
-        authority="tool",
-        trust="trusted_instruction",
-        editable=False,
-    ),
     "current_user_event": _descriptor(
         "current_user_event",
         owner_module="core.prompt_v2.compiler",
@@ -276,8 +257,6 @@ _CANONICAL_BY_RUNTIME_KEY = MappingProxyType({
         "conversation_context_header",
         "history_messages",
         "group_context",
-        "effort_constraint",
-        "runtime_tool_prompt",
         "current_user_event",
     )
 })

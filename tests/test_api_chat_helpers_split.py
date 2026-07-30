@@ -70,7 +70,9 @@ def test_chatlog_and_conversation_content_keep_different_file_archive_contracts(
         "[图片1] http://img.example/a.png\n"
         "[图片2] token://b"
     )
-    assert conversation_content == "看看\n[图片附件 2 张]"
+    assert conversation_content == (
+        "看看\n[用户附带了 2 张图片，请结合图片内容理解并回答]"
+    )
     assert "http://img.example/a.png" not in conversation_content
     assert "token://b" not in conversation_content
 

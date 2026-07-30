@@ -19,7 +19,7 @@ async def test_compile_prompt_plan_strict_audit_error_carries_plan(monkeypatch):
                 user_id="u1",
                 user_input="你好",
                 persona_text="无已存储画像",
-                runtime_tool_prompt="[RuntimeTool]\n只允许 reply/no_reply",
+                event_time="2026-07-31 03:12:55 CST",
             ),
             strict_audit=True,
         )
@@ -27,7 +27,7 @@ async def test_compile_prompt_plan_strict_audit_error_carries_plan(monkeypatch):
     assert exc.value.issues == ["forced audit failure"]
     assert exc.value.plan is not None
     assert exc.value.plan.current_user_content == (
-        "<message_meta>\n{}\n</message_meta>\n"
+        '<message_meta>\n{"event_time":"2026-07-31 03:12:55 CST"}\n</message_meta>\n'
         "<user_input>\n你好\n</user_input>"
     )
 

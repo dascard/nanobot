@@ -541,7 +541,7 @@ def test_deterministic_summary_uses_clean_snippets_without_turn_metadata(db_sess
     )
     rendered = render_summary_text(payload)
 
-    assert "代码兜底摘要" in rendered
+    assert "代码兜底摘要" not in rendered
     assert "手动重新生成" in rendered
     assert "turn_id=" not in rendered
     assert "[user]" not in rendered
@@ -590,7 +590,7 @@ def test_deterministic_summary_redacts_urls_carried_from_previous_summary(db_ses
     assert "刚才这个链接有什么东西" in rendered
 
 
-def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session):
+def test_build_chat_context_group_uses_chatlog_without_synchronous_rollup(db_session):
     from core.context_builder import build_chat_context
 
     now = _local_now()
@@ -605,7 +605,7 @@ def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session
             meta={"kind": "chat", "sender_name": sender},
             created_at=now + timedelta(seconds=i),
         )
-    db_session.add(ChatLog(
+    chat_log = ChatLog(
         user_id="group_1",
         session_id="group_1",
         role="ambient",
@@ -615,7 +615,8 @@ def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session
         processed=1,
         created_at=now + timedelta(minutes=1),
         meta_json=json.dumps({"kind": "chat"}, ensure_ascii=False),
-    ))
+    )
+    db_session.add(chat_log)
     db_session.commit()
 
     header, messages, debug = build_chat_context(
@@ -635,14 +636,20 @@ def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session
         )
         .first()
     )
-    assert active_summary is not None
-    assert "<rolling_session_summary" in header
-    assert messages
-    assert debug["rolling_summary_injected"] is True
-    assert debug["rolling_summary_source"] == "conversation_turn"
-    assert debug["rolling_summary_scope"] == "bot_participation"
-    assert debug["rolling_summary_pending_turn_ids"]
-    assert debug["rolling_summary_recent_raw_turn_ids"][-1] == 24
+    assert active_summary is None
+    assert "<rolling_session_summary" not in header
+    assert len(messages) == 1
+    assert "继续刚才的话题" in messages[0]["content"]
+    assert debug["context_source"] == "chatlog"
+    assert debug["rolling_summary_injected"] is False
+    assert debug["rolling_summary_source"] == "chat_log"
+    assert debug["rolling_summary_scope"] == "full_group_chatlog"
+    assert debug["rolling_summary_pending_source_ids"] == []
+    assert debug["rolling_summary_recent_raw_source_ids"] == [chat_log.id]
+    assert debug["rolling_summary_pending_turn_ids"] == []
+    assert debug["rolling_summary_recent_raw_turn_ids"] == []
+    assert debug["rolling_summary_skipped_reason"] == "background_worker_only"
+    assert db_session.query(SessionSummaryJob).count() == 0
 
 
 def test_build_chat_context_rollup_survives_clean_transaction_release(tmp_path):
@@ -857,7 +864,6 @@ def test_read_only_rollup_header_matches_live_without_preview_writes(
         read_only=True,
     )
 
-    assert "<rolling_session_summary" in preview_header
     assert preview_debug["rolling_summary_read_only"] is True
     assert db_session.query(RollingSessionSummary).count() == 0
     assert db_session.query(SessionSummaryJob).count() == 0
@@ -873,8 +879,17 @@ def test_read_only_rollup_header_matches_live_without_preview_writes(
 
     assert live_header == preview_header
     assert live_debug["rolling_summary_read_only"] is False
-    assert db_session.query(RollingSessionSummary).count() == 1
-    assert db_session.query(SessionSummaryJob).count() == 1
+    if chat_type == "group":
+        assert "<rolling_session_summary" not in preview_header
+        assert preview_debug["rolling_summary_source"] == "chat_log"
+        assert live_debug["rolling_summary_source"] == "chat_log"
+        assert live_debug["rolling_summary_skipped_reason"] == "background_worker_only"
+        assert db_session.query(RollingSessionSummary).count() == 0
+        assert db_session.query(SessionSummaryJob).count() == 0
+    else:
+        assert "<rolling_session_summary" in preview_header
+        assert db_session.query(RollingSessionSummary).count() == 1
+        assert db_session.query(SessionSummaryJob).count() == 1
 
 
 def test_rollup_audit_rejects_current_user_input_leak(db_session):

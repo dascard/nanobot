@@ -621,12 +621,12 @@ def test_prompt_v2_init_runtime_dir_fails_closed_for_custom_live_flow_template_m
             edge
             for edge in flow["edges"]
             if (edge["from"], edge["to"])
-            != ("runtime_context", "current_user_event")
+            != ("history_messages", "current_user_event")
         ]
         flow["edges"].extend(
             [
                 {
-                    "from": "runtime_context",
+                    "from": "history_messages",
                     "to": "custom_live_policy",
                 },
                 {

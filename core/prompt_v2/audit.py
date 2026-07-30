@@ -37,7 +37,6 @@ class PromptAuditError(RuntimeError):
 
 _RUNTIME_REQUIRED_STRING_FIELDS = {
     "chat_type",
-    "current_time",
     "platform",
     "session_id",
     "timezone",
@@ -56,6 +55,8 @@ _MESSAGE_META_STRING_LIMITS = {
     "bot_id": 128,
     "bot_name": 160,
     "current_message_id": 128,
+    "effort_constraint": 240,
+    "event_time": 64,
     "self_id": 128,
     "sender_name": 160,
     "session_name": 160,
@@ -608,6 +609,13 @@ def _audit_message_meta(plan, sections: list[dict], issues: list[str]) -> None:
 
     carrier = _message_meta_carrier(final_message.get("content"), issues)
     if not carrier:
+        return
+    if (
+        str(getattr(plan, "chat_type", "") or "") == "group"
+        and "<message_meta>" not in carrier
+    ):
+        if "<user_input>" not in carrier or "</user_input>" not in carrier:
+            issues.append("group current_user_event must contain user_input")
         return
     metadata = _parse_tagged_json_object(
         carrier,

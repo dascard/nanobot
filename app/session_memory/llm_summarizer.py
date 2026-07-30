@@ -49,10 +49,22 @@ from app.session_memory.jobs import (
     renew_summary_job_lease,
     session_summary_job_lease,
 )
-from app.session_memory.rolling_summary import archive_active_summaries_for_session, audit_rolling_summary
+from app.session_memory.rolling_summary import (
+    SUMMARY_SOURCE_CONVERSATION_TURN,
+    archive_active_summaries_for_session,
+    audit_rolling_summary,
+    normalize_summary_source_type,
+    summary_covered_from,
+    summary_source_ids_json,
+)
 from app.session_memory.summarizer import render_summary_text
-from app.session_memory.windowing import estimate_tokens, is_context_eligible_turn
-from core.db.models.chat import ConversationTurn
+from app.session_memory.windowing import (
+    estimate_tokens,
+    is_context_eligible_chat_log,
+    is_context_eligible_turn,
+    safe_meta,
+)
+from core.db.models.chat import ChatLog, ConversationTurn
 from core.db.models.session_memory import RollingSessionSummary, SessionSummaryJob
 from core.time_utils import db_now_naive
 
@@ -183,7 +195,7 @@ class SessionSummaryTurnSnapshot:
     meta_json: str
 
 
-SessionSummaryTurn = ConversationTurn | SessionSummaryTurnSnapshot
+SessionSummaryTurn = ConversationTurn | ChatLog | SessionSummaryTurnSnapshot
 
 
 @dataclass(frozen=True)
@@ -196,6 +208,7 @@ class PreparedSessionSummaryJob:
     batch_contracts: tuple[SummaryRequestBatch, ...]
     previous_state: dict[str, Any]
     previous_obligations: tuple[SummaryObligation, ...]
+    source_type: str = "conversation_turn"
     max_fragment_chars: int = SESSION_SUMMARY_FRAGMENT_MAX_CHARS
     batch_traces: list[SummaryBatchTrace] = field(default_factory=list, compare=False)
 
@@ -302,25 +315,62 @@ def _json_list(value: str | None) -> list[int]:
     return result
 
 
-def _load_source_turns(db: Session, job: SessionSummaryJob) -> list[ConversationTurn]:
-    ids = _json_list(job.source_turn_ids_json)
+def _load_source_turns(
+    db: Session,
+    job: SessionSummaryJob,
+) -> list[ConversationTurn | ChatLog]:
+    from app.session_memory.rolling_summary import normalize_summary_source_type
+
+    source_type = normalize_summary_source_type(
+        getattr(job, "source_type", "conversation_turn")
+    )
+    ids = _json_list(
+        job.source_ids_json
+        if source_type == "chat_log"
+        else job.source_turn_ids_json
+    )
     if not ids:
         return []
+    source_model = ChatLog if source_type == "chat_log" else ConversationTurn
     rows = (
-        db.query(ConversationTurn)
-        .filter(ConversationTurn.id.in_(ids))
+        db.query(source_model)
+        .filter(source_model.id.in_(ids))
         .all()
     )
     by_id = {int(row.id): row for row in rows}
-    return [by_id[turn_id] for turn_id in ids if turn_id in by_id]
+    return [by_id[source_id] for source_id in ids if source_id in by_id]
 
 
-def _snapshot_turn(turn: ConversationTurn) -> SessionSummaryTurnSnapshot:
+def _snapshot_turn(
+    turn: ConversationTurn | ChatLog,
+    *,
+    source_type: str = "conversation_turn",
+) -> SessionSummaryTurnSnapshot:
+    role = str(turn.role or "")
+    content = str(turn.content or "")
+    if source_type == "chat_log":
+        from core.context_builder import format_group_canonical_message
+
+        sender = str(getattr(turn, "sender_name", "") or "").strip()
+        if not sender:
+            sender = "nanobot" if role == "assistant" else "未知用户"
+        meta = safe_meta(getattr(turn, "meta_json", "{}"))
+        content = format_group_canonical_message(
+            sender_name=sender,
+            content=content,
+            timestamp=turn.created_at,
+            message_id=str(getattr(turn, "message_id", "") or ""),
+            directed=meta.get("directed"),
+            mentions=meta.get("mentions"),
+            reply_to=meta.get("reply_to"),
+        )
+        if role in {"ambient", "user"}:
+            role = "user"
     return SessionSummaryTurnSnapshot(
         id=int(turn.id),
         created_at=turn.created_at,
-        role=str(turn.role or ""),
-        content=str(turn.content or ""),
+        role=role,
+        content=content,
         meta_json=str(turn.meta_json or "{}"),
     )
 
@@ -525,13 +575,25 @@ def audit_llm_session_summary(
         if not isinstance(payload.get(key), list):
             issues.append(f"{key}_not_list")
 
-    expected_ids = _json_list(job.source_turn_ids_json)
+    source_type = normalize_summary_source_type(
+        getattr(job, "source_type", SUMMARY_SOURCE_CONVERSATION_TURN)
+    )
+    expected_ids = _json_list(
+        getattr(job, "source_ids_json", "[]")
+        if source_type == "chat_log"
+        else getattr(job, "source_turn_ids_json", "[]")
+    )
     actual_ids = [int(turn.id) for turn in source_turns]
     if expected_ids != actual_ids:
         issues.append("source_turn_ids_mismatch")
 
+    eligibility_check = (
+        is_context_eligible_chat_log
+        if source_type == "chat_log"
+        else is_context_eligible_turn
+    )
     for turn in source_turns:
-        ok, reason = is_context_eligible_turn(turn)
+        ok, reason = eligibility_check(turn)
         if not ok:
             issues.append(f"source_turn_not_eligible:{turn.id}:{reason}")
 
@@ -578,10 +640,14 @@ def audit_llm_session_summary(
 def _audit_intermediate_summary_payload(
     payload: dict[str, Any],
     source_turns: tuple[SessionSummaryTurnSnapshot, ...],
+    *,
+    source_type: str,
 ) -> None:
     turn_ids = [int(turn.id) for turn in source_turns]
     ephemeral_job = SimpleNamespace(
         source_turn_ids_json=json.dumps(turn_ids, ensure_ascii=False),
+        source_ids_json=json.dumps(turn_ids, ensure_ascii=False),
+        source_type=source_type,
         meta_json="{}",
     )
     ok, issues = audit_llm_session_summary(
@@ -796,6 +862,7 @@ def _accept_summary_batch_payload(
     _audit_intermediate_summary_payload(
         business_payload,
         _source_turns_for_batch(prepared, batch),
+        source_type=prepared.source_type,
     )
     state = canonical_summary_state(
         business_payload,
@@ -947,14 +1014,16 @@ async def _summarize_prepared_async(
 def _summary_stable_hash(
     *,
     session_id: str,
-    source_turn_ids: list[int],
+    source_type: str,
+    source_ids: list[int],
     payload: dict[str, Any],
 ) -> str:
     return hashlib.sha256(
         json.dumps({
             "kind": "llm_episode",
             "session_id": session_id,
-            "source_turn_ids": source_turn_ids,
+            "source_type": source_type,
+            "source_ids": source_ids,
             "summary": payload.get("summary") or "",
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
@@ -965,7 +1034,7 @@ def save_llm_session_summary(
     *,
     job: SessionSummaryJob,
     payload: dict[str, Any],
-    source_turns: list[ConversationTurn],
+    source_turns: list[ConversationTurn | ChatLog],
     model: str = "",
     requested_model: str = "",
     llm_request_log_id: int | None = None,
@@ -973,18 +1042,34 @@ def save_llm_session_summary(
 ) -> RollingSessionSummary:
     if not source_turns:
         raise ValueError("source_turns is required")
-    fallback = db.get(RollingSessionSummary, int(job.fallback_summary_id or 0)) if job.fallback_summary_id else None
-    previous = db.get(RollingSessionSummary, int(job.previous_summary_id or 0)) if job.previous_summary_id else None
+    source_type = normalize_summary_source_type(
+        getattr(job, "source_type", SUMMARY_SOURCE_CONVERSATION_TURN)
+    )
+    fallback = (
+        db.get(RollingSessionSummary, int(job.fallback_summary_id or 0))
+        if job.fallback_summary_id
+        else None
+    )
+    previous = (
+        db.get(RollingSessionSummary, int(job.previous_summary_id or 0))
+        if job.previous_summary_id
+        else None
+    )
     # 块式会话记忆(P2):LLM 升级继承 fallback 的 block_id,确保
     # get_best_session_summary(block_id=X) 能召回到 LLM 版本;归档/替换同块内进行。
     block_id = (
         int(fallback.block_id)
-        if fallback is not None and getattr(fallback, "block_id", None) is not None
+        if (
+            source_type == SUMMARY_SOURCE_CONVERSATION_TURN
+            and fallback is not None
+            and getattr(fallback, "block_id", None) is not None
+        )
         else None
     )
     superseded_query = db.query(RollingSessionSummary.id).filter(
         RollingSessionSummary.session_id == job.session_id,
         RollingSessionSummary.status == "active",
+        RollingSessionSummary.source_type == source_type,
     )
     if block_id is not None:
         superseded_query = superseded_query.filter(
@@ -993,14 +1078,50 @@ def save_llm_session_summary(
     superseded_document_ids = [
         int(row.id) for row in superseded_query.all() if int(row.id or 0) > 0
     ]
-    archive_active_summaries_for_session(db, job.session_id, block_id=block_id)
+    archive_active_summaries_for_session(
+        db,
+        job.session_id,
+        block_id=block_id,
+        source_type=source_type,
+    )
 
-    pending_turn_ids = [int(turn.id) for turn in source_turns]
-    previous_turn_ids = _json_list(getattr(previous, "source_turn_ids_json", "[]"))
-    source_turn_ids = list(dict.fromkeys([*previous_turn_ids, *pending_turn_ids]))
-    covered_from_turn_id = int(getattr(previous, "covered_from_turn_id", 0) or 0)
-    if covered_from_turn_id <= 0:
-        covered_from_turn_id = source_turn_ids[0]
+    pending_source_ids = [int(turn.id) for turn in source_turns]
+    previous_source_ids = _json_list(summary_source_ids_json(previous))
+    source_ids = list(dict.fromkeys([*previous_source_ids, *pending_source_ids]))
+    covered_from_source_id = summary_covered_from(previous)
+    if covered_from_source_id <= 0:
+        covered_from_source_id = source_ids[0]
+    legacy_source_ids = (
+        source_ids if source_type == SUMMARY_SOURCE_CONVERSATION_TURN else []
+    )
+    legacy_covered_from = (
+        covered_from_source_id
+        if source_type == SUMMARY_SOURCE_CONVERSATION_TURN
+        else 0
+    )
+    legacy_covered_until = (
+        source_ids[-1]
+        if source_type == SUMMARY_SOURCE_CONVERSATION_TURN
+        else 0
+    )
+    try:
+        job_meta = json.loads(job.meta_json or "{}")
+        if not isinstance(job_meta, dict):
+            job_meta = {}
+    except (TypeError, json.JSONDecodeError):
+        job_meta = {}
+    recent_raw_source_ids = [
+        int(item)
+        for item in job_meta.get("recent_raw_turn_ids", [])
+        if str(item).isdigit()
+    ]
+    raw_window_start_source_id = (
+        recent_raw_source_ids[0] if recent_raw_source_ids else 0
+    )
+    if source_type == SUMMARY_SOURCE_CONVERSATION_TURN and fallback is not None:
+        raw_window_start_source_id = int(
+            getattr(fallback, "raw_window_start_turn_id", 0) or 0
+        )
     quality = payload.get("quality") if isinstance(payload.get("quality"), dict) else {}
     issues = quality.get("issues") if isinstance(quality.get("issues"), list) else []
     summary_text = render_summary_text(payload)
@@ -1013,10 +1134,14 @@ def save_llm_session_summary(
         summary_kind="llm_episode",
         summary_text=summary_text,
         summary_json=json.dumps(payload, ensure_ascii=False),
-        covered_from_turn_id=covered_from_turn_id,
-        covered_until_turn_id=source_turn_ids[-1],
-        source_turn_ids_json=json.dumps(source_turn_ids, ensure_ascii=False),
-        source_turn_count=len(source_turn_ids),
+        covered_from_turn_id=legacy_covered_from,
+        covered_until_turn_id=legacy_covered_until,
+        source_turn_ids_json=json.dumps(legacy_source_ids, ensure_ascii=False),
+        source_type=source_type,
+        covered_from_source_id=covered_from_source_id,
+        covered_until_source_id=source_ids[-1],
+        source_ids_json=json.dumps(source_ids, ensure_ascii=False),
+        source_turn_count=len(source_ids),
         source_token_estimate=(
             int(getattr(previous, "source_token_estimate", 0) or 0)
             + sum(estimate_tokens(turn.content or "") for turn in source_turns)
@@ -1025,7 +1150,12 @@ def save_llm_session_summary(
             int(getattr(previous, "source_char_count", 0) or 0)
             + sum(len(turn.content or "") for turn in source_turns)
         ),
-        raw_window_start_turn_id=int(getattr(fallback, "raw_window_start_turn_id", 0) or 0),
+        raw_window_start_turn_id=(
+            raw_window_start_source_id
+            if source_type == SUMMARY_SOURCE_CONVERSATION_TURN
+            else 0
+        ),
+        raw_window_start_source_id=raw_window_start_source_id,
         quality_score=float(quality.get("score") or 0.0),
         issues_json=json.dumps(issues, ensure_ascii=False),
         model=model or "unknown",
@@ -1036,17 +1166,25 @@ def save_llm_session_summary(
         llm_model=model or "unknown",
         llm_request_log_id=llm_request_log_id,
         block_id=block_id,
-        supersedes_summary_id=int(fallback.id) if fallback and fallback.id else None,
+        supersedes_summary_id=(
+            int(fallback.id)
+            if fallback and fallback.id
+            else int(previous.id)
+            if previous and previous.id
+            else None
+        ),
         stable_hash=_summary_stable_hash(
             session_id=job.session_id,
-            source_turn_ids=source_turn_ids,
+            source_type=source_type,
+            source_ids=source_ids,
             payload=payload,
         ),
         meta_json=json.dumps({
-            "schema_version": 2,
+            "schema_version": 3,
             "contract_version": 2,
             "created_by": "session_summary_worker",
             "summary_kind": "llm_episode",
+            "source_type": source_type,
             "fallback_summary_id": int(getattr(fallback, "id", 0) or 0),
             "previous_summary_id": int(getattr(previous, "id", 0) or 0),
             "requested_model": requested_model or "unknown",
@@ -1178,8 +1316,18 @@ def prepare_claimed_session_summary_job(
     source_turns = _load_source_turns(db, job)
     if not source_turns:
         raise NonRetryableSessionSummaryError("source_turns_empty")
-    previous = db.get(RollingSessionSummary, int(job.previous_summary_id or 0)) if job.previous_summary_id else None
-    source_turn_snapshots = tuple(_snapshot_turn(turn) for turn in source_turns)
+    source_type = normalize_summary_source_type(
+        getattr(job, "source_type", SUMMARY_SOURCE_CONVERSATION_TURN)
+    )
+    previous = (
+        db.get(RollingSessionSummary, int(job.previous_summary_id or 0))
+        if job.previous_summary_id
+        else None
+    )
+    source_turn_snapshots = tuple(
+        _snapshot_turn(turn, source_type=source_type)
+        for turn in source_turns
+    )
     (
         fragments,
         manifest,
@@ -1199,6 +1347,7 @@ def prepare_claimed_session_summary_job(
         batch_contracts=batch_contracts,
         previous_state=previous_state,
         previous_obligations=previous_obligations,
+        source_type=source_type,
     )
 
 
@@ -1219,8 +1368,17 @@ def finalize_claimed_session_summary_job(
     source_turns = _load_source_turns(db, job)
     if not source_turns:
         raise ValueError("summary_input_manifest_mismatch")
+    source_type = normalize_summary_source_type(
+        getattr(job, "source_type", SUMMARY_SOURCE_CONVERSATION_TURN)
+    )
+    if source_type != prepared.source_type:
+        raise ValueError("summary_input_manifest_mismatch")
+    current_snapshots = tuple(
+        _snapshot_turn(turn, source_type=source_type)
+        for turn in source_turns
+    )
     current_fragments = _fragment_source_turns(
-        source_turns,
+        current_snapshots,
         max_fragment_chars=prepared.max_fragment_chars,
     )
     current_manifest = build_coverage_manifest(current_fragments)
@@ -1246,7 +1404,7 @@ def finalize_claimed_session_summary_job(
     )
     audit_ok, issues = audit_llm_session_summary(
         payload=payload,
-        source_turns=source_turns,
+        source_turns=list(current_snapshots),
         job=job,
     )
     if not audit_ok:

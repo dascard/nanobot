@@ -16,7 +16,6 @@ _FRAMEWORK_MARKERS = {
     "background_execution": "Background Execution",
 }
 
-_TOOL_LINE_RE = re.compile(r"^\s*-\s*`?([A-Za-z0-9_.-]+)`?\s*[：:].*$")
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,4}\s+(.+?)\s*$", re.MULTILINE)
 
 
@@ -52,48 +51,6 @@ def extract_actual_sent_tools(request: dict[str, Any]) -> list[str]:
     return [name for name in names if name]
 
 
-def _extract_runtime_tool_notes(messages: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
-    enabled: list[str] = []
-    disabled: list[str] = []
-    section = ""
-    in_runtime_tool = False
-
-    for msg in messages:
-        content = _as_text(msg.get("content") if isinstance(msg, dict) else "")
-        if "[RuntimeTool]" not in content:
-            continue
-        in_runtime_tool = True
-        for line in content.splitlines():
-            if "可调用工具" in line:
-                section = "enabled"
-                continue
-            if "已禁用工具" in line:
-                section = "disabled"
-                continue
-            if line.strip().startswith("规则"):
-                section = ""
-                continue
-            match = _TOOL_LINE_RE.match(line)
-            if not match or not in_runtime_tool:
-                continue
-            name = match.group(1)
-            if section == "enabled" and name not in enabled:
-                enabled.append(name)
-            elif section == "disabled" and name not in disabled:
-                disabled.append(name)
-    return enabled, disabled
-
-
-def _has_schema_authoritative_runtime_tool(messages: list[dict[str, Any]]) -> bool:
-    for msg in messages:
-        content = _as_text(msg.get("content") if isinstance(msg, dict) else "")
-        if "[RuntimeTool]" not in content:
-            continue
-        if "tools schema 为准" in content or "tool schema 为准" in content:
-            return True
-    return False
-
-
 def _detect_framework_markers(text: str) -> list[str]:
     return [key for key, marker in _FRAMEWORK_MARKERS.items() if marker in text]
 
@@ -115,7 +72,7 @@ def infer_message_sources(messages: list[dict[str, Any]]) -> list[dict[str, Any]
         source = explicit_source
         if not source:
             if role == "system" and "[RuntimeTool]" in content:
-                source = "runtime_tool"
+                source = "legacy_runtime_tool_prompt"
             elif role == "system" and _detect_framework_markers(content):
                 source = "kt_framework_tools_doc"
             elif role == "system" and content.lstrip().startswith("## 交互定位"):
@@ -220,9 +177,8 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
         tools=raw_tools,
     )
     actual_sent_tools = extract_actual_sent_tools(payload)
-    runtime_enabled, runtime_disabled = _extract_runtime_tool_notes(messages)
-    if not runtime_enabled and _has_schema_authoritative_runtime_tool(messages):
-        runtime_enabled = list(actual_sent_tools)
+    runtime_enabled = list(actual_sent_tools)
+    runtime_disabled: list[str] = []
     message_sources = infer_message_sources(messages)
     issues: list[dict[str, Any]] = []
 
@@ -252,6 +208,20 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
             "system_heading_duplicate",
             "system message 中存在重复标题。",
             headings=duplicate_headings[:20],
+        )
+
+    legacy_runtime_tool_indexes = [
+        src["index"]
+        for src in message_sources
+        if src["source"] == "legacy_runtime_tool_prompt"
+    ]
+    if legacy_runtime_tool_indexes:
+        _add_issue(
+            issues,
+            "P0",
+            "legacy_runtime_tool_prompt_present",
+            "最终 Prompt 中仍包含已废弃的 RuntimeTool 说明。",
+            indexes=legacy_runtime_tool_indexes[:20],
         )
 
     unknown_system_indexes = [
@@ -286,32 +256,6 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
             "Nanobot 运行时请求缺少当前 <user_input> user message。",
         )
 
-    sent_set = set(actual_sent_tools)
-    enabled_set = set(runtime_enabled)
-    disabled_set = set(runtime_disabled)
-    if enabled_set:
-        extra = sorted(sent_set - enabled_set)
-        missing = sorted(enabled_set - sent_set)
-        if extra or missing:
-            _add_issue(
-                issues,
-                "P0",
-                "runtime_tool_mismatch",
-                "RuntimeTool 可调用工具与实际发送 tools 不一致。",
-                extra_sent=extra,
-                missing_sent=missing,
-            )
-
-    disabled_sent = sorted(sent_set & disabled_set)
-    if disabled_sent:
-        _add_issue(
-            issues,
-            "P0",
-            "disabled_tool_sent",
-            "已禁用工具仍出现在 API tools_schema 中。",
-            tools=disabled_sent,
-        )
-
     framework_markers: set[str] = set()
     for msg in messages:
         content = _as_text(msg.get("content"))
@@ -325,24 +269,6 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
                 "KT 自动工具说明进入最终 prompt。",
                 markers=markers,
             )
-
-    non_runtime_prompt = "\n".join(
-        _as_text(msg.get("content"))
-        for msg in messages
-        if "[RuntimeTool]" not in _as_text(msg.get("content"))
-    )
-    disabled_mentions = [
-        name for name in runtime_disabled
-        if re.search(rf"(`{re.escape(name)}`|\b{re.escape(name)}\b)", non_runtime_prompt)
-    ]
-    if disabled_mentions:
-        _add_issue(
-            issues,
-            "P0",
-            "disabled_tool_mentioned",
-            "已禁用工具仍出现在非 RuntimeTool prompt 文本中。",
-            tools=disabled_mentions,
-        )
 
     for src in message_sources:
         if src["role"] != "user":

@@ -55,7 +55,7 @@
         "circuit_breaker_policy_id": "model_failure_tracker.default",
         "default_provider_id": "newapi",
         "defaults": {
-          "enable_thinking": "auto",
+          "enable_thinking": "true",
           "max_tokens": 0,
           "temperature": 0.7,
           "timeout_seconds": 120
@@ -978,7 +978,7 @@
         "trace_source": "classifier.timing_proactive"
       }
     ],
-    "sha256": "cffde7bed54d00eb6d125a48f4e1e15177a40d017a8a2afb3b35d8baf0ee5e83"
+    "sha256": "46b7b6eaa86a06dd43f56ff4c1c4b4047c05c26b433e4b8210ece2d00b504443"
   },
   "news_source_registry": {
     "generation": 1,
@@ -4488,7 +4488,7 @@
     {
       "category": "model",
       "dangerous": false,
-      "default": "auto",
+      "default": "true",
       "env_name": "",
       "key": "model.route.reply.enable_thinking",
       "owner_module": "core.model_provider",

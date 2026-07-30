@@ -86,6 +86,9 @@ _SCHEDULED_TASK_WORKFLOW_EXECUTION_VERSION = (
 _LLM_REQUEST_EXECUTION_PHASE_VERSION = (
     "20260730_llm_request_execution_phase"
 )
+_GROUP_ROLLING_CHATLOG_SOURCE_VERSION = (
+    "20260731_group_rolling_chatlog_source"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -1075,6 +1078,80 @@ def _block_session_memory_schema(
         "ON conversation_block_episodes(session_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_block_episode_user_session "
         "ON conversation_block_episodes(user_id, session_id)",
+    ])
+
+
+def _group_rolling_chatlog_source(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """为群聊 Rolling Summary 增加不与 ConversationTurn 混用的来源游标。"""
+
+    _add_missing_columns(conn, "rolling_session_summaries", {
+        "source_type": "TEXT NOT NULL DEFAULT 'conversation_turn'",
+        "covered_from_source_id": "INTEGER NOT NULL DEFAULT 0",
+        "covered_until_source_id": "INTEGER NOT NULL DEFAULT 0",
+        "source_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+        "raw_window_start_source_id": "INTEGER NOT NULL DEFAULT 0",
+    })
+    _add_missing_columns(conn, "session_summary_jobs", {
+        "source_type": "TEXT NOT NULL DEFAULT 'conversation_turn'",
+        "covered_from_source_id": "INTEGER NOT NULL DEFAULT 0",
+        "covered_until_source_id": "INTEGER NOT NULL DEFAULT 0",
+        "source_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+    })
+    if "rolling_session_summaries" in _table_names(conn):
+        conn.execute(text(
+            "UPDATE rolling_session_summaries SET "
+            "source_type = 'conversation_turn', "
+            "covered_from_source_id = covered_from_turn_id, "
+            "covered_until_source_id = covered_until_turn_id, "
+            "source_ids_json = source_turn_ids_json, "
+            "raw_window_start_source_id = raw_window_start_turn_id "
+            "WHERE source_type IS NULL OR source_type = '' "
+            "OR covered_until_source_id = 0"
+        ))
+        # 旧群聊摘要只覆盖 bot 参与的 ConversationTurn，不能再作为完整群现场
+        # 注入。只归档派生摘要，ChatLog 原始档案不做任何删除。
+        conn.execute(
+            text(
+                "UPDATE rolling_session_summaries SET "
+                "status = 'archived', updated_at = :now "
+                "WHERE chat_type = 'group' AND status = 'active' "
+                "AND source_type != 'chat_log'"
+            ),
+            {"now": db_now_naive()},
+        )
+    if "session_summary_jobs" in _table_names(conn):
+        conn.execute(text(
+            "UPDATE session_summary_jobs SET "
+            "source_type = 'conversation_turn', "
+            "covered_from_source_id = covered_from_turn_id, "
+            "covered_until_source_id = covered_until_turn_id, "
+            "source_ids_json = source_turn_ids_json "
+            "WHERE source_type IS NULL OR source_type = '' "
+            "OR covered_until_source_id = 0"
+        ))
+        conn.execute(
+            text(
+                "UPDATE session_summary_jobs SET "
+                "status = 'obsolete', "
+                "error = '', next_retry_at = NULL, "
+                "locked_by = '', locked_at = NULL, "
+                "lease_token = '', lease_expires_at = NULL, "
+                "finished_at = :now, updated_at = :now "
+                "WHERE chat_type = 'group' "
+                "AND status IN ('pending', 'running', 'failed') "
+                "AND source_type != 'chat_log'"
+            ),
+            {"now": db_now_naive()},
+        )
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_rss_source_coverage "
+        "ON rolling_session_summaries(session_id, source_type, covered_until_source_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ssj_source_coverage "
+        "ON session_summary_jobs(session_id, source_type, covered_from_source_id, covered_until_source_id)",
     ])
 
 
@@ -4199,6 +4276,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _LLM_REQUEST_EXECUTION_PHASE_VERSION,
         "llm request execution phase and round indexes",
         _llm_request_execution_phase,
+    ),
+    (
+        _GROUP_ROLLING_CHATLOG_SOURCE_VERSION,
+        "group rolling summary ChatLog source cursors",
+        _group_rolling_chatlog_source,
     ),
 ]
 

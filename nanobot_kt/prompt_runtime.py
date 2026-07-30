@@ -96,6 +96,7 @@ class PromptRuntimeInput:
     audit_failure_policy: str = "fail_fast"
     platform: str = "qq"
     policy_profile: str = ""
+    event_time: str = ""
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,7 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         session_name=input.session_name,
         trigger_reason=input.trigger_reason,
         timing_decision=input.timing_decision,
+        event_time=input.event_time,
         current_message_id=input.current_message_id,
         source_message_ids=input.source_message_ids,
         self_id=input.self_id,

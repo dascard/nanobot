@@ -53,13 +53,6 @@ from core.prompt_v2.variables import render_scoped_template
 from core.session_guidance import normalize_session_guidance
 
 
-def _clean_runtime_tool_prompt(text: str) -> str:
-    value = str(text or "").strip()
-    if value:
-        return value
-    return "[RuntimeTool]\n本轮真实可调用工具以 API tools schema 为准。如需回复必须调用 reply(content)，不回复则调用 no_reply(reason)。"
-
-
 def _extract_marked_sections(text: str, start: str, end: str) -> tuple[list[str], str]:
     sections: list[str] = []
     rest = str(text or "")
@@ -236,7 +229,6 @@ async def _compile_prompt_plan_locked(
             "\n\n".join(group_profile_sections),
             request.group_profile_context,
         )
-    runtime_tool_prompt = _clean_runtime_tool_prompt(request.runtime_tool_prompt)
     current_user = build_current_user_event(request)
     flow_state = load_flow()
     selected_nodes = ordered_nodes_for_chat(
@@ -275,8 +267,6 @@ async def _compile_prompt_plan_locked(
         ),
         "history_messages": history_messages,
         "group_context": group_context,
-        "effort_constraint": request.effort_constraint,
-        "runtime_tool_prompt": runtime_tool_prompt,
         "current_user_event": current_user,
     }
 
@@ -289,7 +279,6 @@ async def _compile_prompt_plan_locked(
     singleton_runtime_keys = {
         "session_guidance",
         "persona_reference",
-        "runtime_tool_prompt",
         "current_user_event",
     }
     current_user_flow_section: PromptFlowSection | None = None
@@ -558,31 +547,6 @@ async def _compile_prompt_plan_locked(
             )
         )
         warnings.append("flow missing persona_reference; compiler appended singleton runtime section")
-    if "runtime_tool_prompt" not in seen_runtime_keys:
-        descriptor = descriptor_for_node(
-            {
-                "id": "runtime_tool_prompt",
-                "type": "runtime",
-                "runtime_key": "runtime_tool_prompt",
-            }
-        )
-        message_indexes = append_section(
-            "runtime_tool_prompt",
-            runtime_tool_prompt,
-            descriptor,
-        )
-        flow_sections.append(
-            section_metadata(
-                node_id="runtime_tool_prompt",
-                node_type="runtime",
-                runtime_key="runtime_tool_prompt",
-                origin="fallback",
-                status="emitted" if message_indexes else "empty",
-                message_indexes=message_indexes,
-                descriptor=descriptor,
-            )
-        )
-        warnings.append("flow missing runtime_tool_prompt; compiler appended singleton runtime section")
     if "current_user_event" not in section_hashes:
         hash_section(section_hashes, "current_user_event", current_user)
     if not seen_current_user:

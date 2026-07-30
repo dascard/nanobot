@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.session_memory import config
+from app.session_memory.group_rollup import discover_group_summary_jobs
 from app.session_memory.jobs import (
     SessionSummaryJobLease,
     claim_summary_job,
@@ -61,6 +62,14 @@ def _claim_next_job(
     db = SessionLocal()
     try:
         recovered = recover_stale_running_jobs(db, limit=limit)
+        try:
+            discovery = discover_group_summary_jobs(db, limit=limit)
+            if discovery.get("created"):
+                logger.info("group summary jobs discovered: %s", discovery)
+        except Exception as exc:
+            db.rollback()
+            recovered = recover_stale_running_jobs(db, limit=limit)
+            logger.exception("group summary discovery failed: %s", exc)
         jobs = fetch_pending_summary_jobs(db, limit=limit)
         claimed_lease: SessionSummaryJobLease | None = None
         for job in jobs:

@@ -127,6 +127,7 @@ class PromptCompileRequest:
     session_name: str = ""
     trigger_reason: str = ""
     timing_decision: str = ""
+    event_time: str = ""
     current_message_id: str = ""
     source_message_ids: list[str] = field(default_factory=list)
     self_id: str = ""

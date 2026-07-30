@@ -29,8 +29,7 @@ def test_tool_plan_builds_prompt_schemas_and_stable_hash(monkeypatch):
     assert plan.sent_tool_names == frozenset({"reply", "no_reply"})
     assert [tool["function"]["name"] for tool in plan.sent_tool_schemas] == ["no_reply", "reply"]
     assert plan.executable_tool_names == frozenset({"reply", "no_reply"})
-    assert "[RuntimeTool]" in plan.runtime_tool_prompt
-    assert "python_sandbox：测试禁用" in plan.runtime_tool_prompt
+    assert plan.runtime_tool_prompt == ""
     assert len(plan.sha256) == 64
     assert plan.sha256 == same_plan.sha256
 
@@ -187,7 +186,7 @@ def test_tool_plan_exposes_memory_query_by_default_and_can_disable(db_session):
     disabled_plan = build_tool_plan(chat_type="private", runtime_preset="full", db=db_session)
     assert "memory_query" not in disabled_plan.sent_tool_names
     assert all(schema["function"]["name"] != "memory_query" for schema in disabled_plan.sent_tool_schemas)
-    assert "memory_query：测试禁用" in disabled_plan.runtime_tool_prompt
+    assert disabled_plan.runtime_tool_prompt == ""
 
 
 def test_superuser_tool_plan_uses_web_configuration_for_all_request_text(db_session):

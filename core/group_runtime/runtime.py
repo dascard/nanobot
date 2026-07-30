@@ -187,7 +187,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             sender_name=str(msg.get("sender_name", "")),
             message=str(msg.get("message", "")),
             message_id=str(msg.get("message_id", "")),
-            ts=_time.time(),
+            ts=float(msg.get("event_ts") or _time.time()),
             is_at_bot=bool(msg.get("is_at_bot", False)),
             is_reply_to_bot=bool(msg.get("is_reply_to_bot", False)),
             trigger_reason=str(trigger_reason or ""),

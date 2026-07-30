@@ -42,24 +42,74 @@ class _RollupHeadChanged(RuntimeError):
     """active summary 已变化，当前 rollup 应让位给新 head。"""
 
 
+SUMMARY_SOURCE_CONVERSATION_TURN = "conversation_turn"
+SUMMARY_SOURCE_CHAT_LOG = "chat_log"
+SUMMARY_SOURCE_TYPES = frozenset({
+    SUMMARY_SOURCE_CONVERSATION_TURN,
+    SUMMARY_SOURCE_CHAT_LOG,
+})
+
+
+def normalize_summary_source_type(value: object) -> str:
+    normalized = str(value or SUMMARY_SOURCE_CONVERSATION_TURN).strip()
+    if normalized not in SUMMARY_SOURCE_TYPES:
+        raise ValueError(f"unsupported summary source type: {normalized}")
+    return normalized
+
+
+def summary_covered_from(row: object | None) -> int:
+    if row is None:
+        return 0
+    source_type = normalize_summary_source_type(
+        getattr(row, "source_type", SUMMARY_SOURCE_CONVERSATION_TURN)
+    )
+    if source_type == SUMMARY_SOURCE_CONVERSATION_TURN:
+        return int(getattr(row, "covered_from_turn_id", 0) or 0)
+    return int(getattr(row, "covered_from_source_id", 0) or 0)
+
+
+def summary_covered_until(row: object | None) -> int:
+    if row is None:
+        return 0
+    source_type = normalize_summary_source_type(
+        getattr(row, "source_type", SUMMARY_SOURCE_CONVERSATION_TURN)
+    )
+    if source_type == SUMMARY_SOURCE_CONVERSATION_TURN:
+        return int(getattr(row, "covered_until_turn_id", 0) or 0)
+    return int(getattr(row, "covered_until_source_id", 0) or 0)
+
+
+def summary_source_ids_json(row: object | None) -> str:
+    if row is None:
+        return "[]"
+    source_type = normalize_summary_source_type(
+        getattr(row, "source_type", SUMMARY_SOURCE_CONVERSATION_TURN)
+    )
+    if source_type == SUMMARY_SOURCE_CONVERSATION_TURN:
+        return str(getattr(row, "source_turn_ids_json", "[]") or "[]")
+    return str(getattr(row, "source_ids_json", "[]") or "[]")
+
+
 def get_active_summary(
     db: Session,
     session_id: str,
     *,
+    source_type: str | None = None,
     after_clear_at: datetime | None = None,
     mutate_stale: bool = True,
 ) -> RollingSessionSummary | None:
     """读取可消费摘要；过期过滤不得在读路径隐式修改业务状态。"""
 
-    row = (
-        db.query(RollingSessionSummary)
-        .filter(
-            RollingSessionSummary.session_id == session_id,
-            RollingSessionSummary.status == "active",
-        )
-        .order_by(RollingSessionSummary.id.desc())
-        .first()
+    query = db.query(RollingSessionSummary).filter(
+        RollingSessionSummary.session_id == session_id,
+        RollingSessionSummary.status == "active",
     )
+    if source_type is not None:
+        query = query.filter(
+            RollingSessionSummary.source_type
+            == normalize_summary_source_type(source_type)
+        )
+    row = query.order_by(RollingSessionSummary.id.desc()).first()
     if row is None:
         return None
     if after_clear_at and row.updated_at and row.updated_at <= after_clear_at:
@@ -72,6 +122,8 @@ def get_best_session_summary(
     session_id: str,
     *,
     block_id: int | None = None,
+    source_type: str | None = None,
+    allow_fallback: bool = True,
     after_clear_at: datetime | None = None,
     mutate_stale: bool = True,
 ) -> RollingSessionSummary | None:
@@ -87,6 +139,11 @@ def get_best_session_summary(
         RollingSessionSummary.session_id == session_id,
         RollingSessionSummary.status == "active",
     )
+    if source_type is not None:
+        query = query.filter(
+            RollingSessionSummary.source_type
+            == normalize_summary_source_type(source_type)
+        )
     if block_id is not None:
         query = query.filter(RollingSessionSummary.block_id == int(block_id))
     rows = query.order_by(RollingSessionSummary.id.desc()).all()
@@ -111,22 +168,24 @@ def get_best_session_summary(
     ]
     best_llm = max(
         llm_rows,
-        key=lambda row: (int(row.covered_until_turn_id or 0), int(row.id or 0)),
+        key=lambda row: (summary_covered_until(row), int(row.id or 0)),
         default=None,
     )
     best_fallback = max(
         fallback_rows,
-        key=lambda row: (int(row.covered_until_turn_id or 0), int(row.id or 0)),
+        key=lambda row: (summary_covered_until(row), int(row.id or 0)),
         default=None,
     )
     if best_llm and (
         best_fallback is None
-        or int(best_llm.covered_until_turn_id or 0) >= int(best_fallback.covered_until_turn_id or 0)
+        or summary_covered_until(best_llm) >= summary_covered_until(best_fallback)
     ):
         return best_llm
-    if best_fallback:
+    if allow_fallback and best_fallback:
         return best_fallback
-    return valid[0]
+    if allow_fallback:
+        return valid[0]
+    return best_llm
 
 
 def _enqueue_archived_summary_delete_jobs(
@@ -189,6 +248,7 @@ def archive_active_summaries_for_session(
     session_id: str,
     *,
     block_id: int | None = None,
+    source_type: str | None = None,
     enqueue_semantic_delete: bool = False,
     delete_reason: str = "summary_archived",
 ) -> int:
@@ -196,6 +256,11 @@ def archive_active_summaries_for_session(
         RollingSessionSummary.session_id == session_id,
         RollingSessionSummary.status == "active",
     )
+    if source_type is not None:
+        query = query.filter(
+            RollingSessionSummary.source_type
+            == normalize_summary_source_type(source_type)
+        )
     if block_id is not None:
         query = query.filter(RollingSessionSummary.block_id == int(block_id))
     rows = query.all()
@@ -338,6 +403,10 @@ def save_new_active_summary(
         covered_from_turn_id=covered_from_turn_id,
         covered_until_turn_id=source_turn_ids[-1],
         source_turn_ids_json=json.dumps(source_turn_ids, ensure_ascii=False),
+        source_type=SUMMARY_SOURCE_CONVERSATION_TURN,
+        covered_from_source_id=covered_from_turn_id,
+        covered_until_source_id=source_turn_ids[-1],
+        source_ids_json=json.dumps(source_turn_ids, ensure_ascii=False),
         source_turn_count=len(source_turn_ids),
         source_token_estimate=(
             int(getattr(old_summary, "source_token_estimate", 0) or 0)
@@ -348,6 +417,7 @@ def save_new_active_summary(
             + sum(len(turn.content or "") for turn in pending_turns)
         ),
         raw_window_start_turn_id=int(raw_window_start_turn_id or 0),
+        raw_window_start_source_id=int(raw_window_start_turn_id or 0),
         quality_score=float(quality.get("score") or 0.0),
         issues_json=json.dumps(issues, ensure_ascii=False),
         model=model or "",

@@ -40,6 +40,7 @@ from core.inbound_idempotency import (
 )
 from core.identity import is_super_user_id
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
+from core.time_utils import db_now_naive
 from core import user_block_rules
 from nanobot_kt.bridge import get_bridge
 from clients.classifier_client import get_guardrail
@@ -513,6 +514,14 @@ def _chat_persistence_input(req: ChatProxyRequest) -> chat_persistence.ChatTurnP
         source_message_ids=req.source_message_ids,
         client_meta=req.client_meta,
         chat_type=_chat_request_type(req),
+        event_time=str(
+            (
+                req.client_meta
+                if isinstance(req.client_meta, dict)
+                else {}
+            ).get("event_time")
+            or ""
+        ),
     )
 
 
@@ -880,6 +889,28 @@ def _prepare_chat_database_phase(
     private_request_sha256: str,
 ) -> _ChatDatabasePreparation:
     """完成 Bridge 前的数据库读写；调用方必须把整个阶段放入工作线程。"""
+
+    event_time = db_now_naive()
+    if private_claim_key is not None:
+        journal = (
+            db.query(ChatLog)
+            .filter(
+                ChatLog.session_id == req.session_id,
+                ChatLog.message_id == req.message_id,
+                ChatLog.role == "user",
+            )
+            .order_by(ChatLog.id.asc())
+            .first()
+        )
+        if journal is not None and journal.created_at is not None:
+            event_time = journal.created_at
+    client_meta = (
+        dict(req.client_meta)
+        if isinstance(req.client_meta, dict)
+        else {}
+    )
+    client_meta["event_time"] = event_time.strftime("%Y-%m-%d %H:%M:%S CST")
+    req.client_meta = client_meta
 
     user = db.query(User).filter(User.id == req.user_id).first()
     if not user:

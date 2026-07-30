@@ -21,6 +21,10 @@ MIB = 1024 * 1024
 @pytest.fixture(autouse=True)
 def _sandbox_infrastructure_ceiling(monkeypatch):
     monkeypatch.setenv(
+        "NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE",
+        str(Path("config/sandbox-execution-profiles.v1.json").resolve()),
+    )
+    monkeypatch.setenv(
         "NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED",
         "true",
     )
@@ -107,7 +111,7 @@ def _plan(db, *, suffix: str, profile_id: str):
     )
 
 
-def test_restricted_prompt_uses_actual_oneshot_profile_capabilities(
+def test_restricted_schema_uses_actual_oneshot_profile_capabilities(
     db_session,
 ):
     plan = _plan(
@@ -115,15 +119,20 @@ def test_restricted_prompt_uses_actual_oneshot_profile_capabilities(
         suffix="restricted",
         profile_id="restricted",
     )
-    prompt = plan.runtime_tool_prompt
+    schema_guidance = next(
+        schema["function"]["description"]
+        for schema in plan.sent_tool_schemas
+        if schema["function"]["name"] == "sandbox_exec"
+    )
 
-    assert "当前 Profile：restricted" in prompt
-    assert "单条命令最大时长：120 秒" in prompt
-    assert "无网络（network=none）" in prompt
-    assert "公网可用" not in prompt
-    assert "命令与文件写并发时不保证一致快照" in prompt
-    assert "一次性执行 Profile" in prompt
-    assert "不支持长进程、detached、stdin" in prompt
+    assert plan.runtime_tool_prompt == ""
+    assert "当前 Profile：restricted" in schema_guidance
+    assert "单条命令最大时长：120 秒" in schema_guidance
+    assert "无网络（network=none）" in schema_guidance
+    assert "公网可用" not in schema_guidance
+    assert "命令与文件写并发时不保证一致快照" in schema_guidance
+    assert "一次性执行 Profile" in schema_guidance
+    assert "不支持长进程、detached、stdin" in schema_guidance
     assert "sandbox_poll" not in plan.sent_tool_names
     assert "sandbox_write_stdin" not in plan.sent_tool_names
     assert "sandbox_terminate" not in plan.sent_tool_names
@@ -132,7 +141,7 @@ def test_restricted_prompt_uses_actual_oneshot_profile_capabilities(
     assert "workspace_list" not in plan.sent_tool_names
 
 
-def test_developer_prompt_explains_lease_shell_storage_and_termination(
+def test_developer_schema_explains_lease_shell_storage_and_termination(
     db_session,
 ):
     plan = _plan(
@@ -140,39 +149,44 @@ def test_developer_prompt_explains_lease_shell_storage_and_termination(
         suffix="developer",
         profile_id="developer",
     )
-    prompt = plan.runtime_tool_prompt
+    schema_guidance = next(
+        schema["function"]["description"]
+        for schema in plan.sent_tool_schemas
+        if schema["function"]["name"] == "sandbox_exec"
+    )
 
-    assert "当前 Profile：developer" in prompt
-    assert "单条命令最大时长：1800 秒" in prompt
-    assert "只能经受控代理访问以下域名" in prompt
-    assert "github.com" in prompt
-    assert "codeload.github.com" in prompt
-    assert "registry.npmjs.org" in prompt
-    assert "IP 直连、私网、宿主和其他容器均不可达" in prompt
-    assert "HTTP_PROXY/HTTPS_PROXY 只负责应用选路，不是安全边界" in prompt
-    assert "公网可用" not in prompt
-    assert "git" in prompt
-    assert "rg" in prompt
-    assert "pytest" in prompt
-    assert "Docker 不可用" in prompt
-    assert "root 或 sudo" in prompt
-    assert "支持；detached 后台进程：不支持；stdin：支持" in prompt
-    assert "命令与文件写并发时不保证一致快照" in prompt
-    assert "前台命令" in prompt
-    assert "yield_time_ms" in prompt
-    assert "不要使用 `cmd &`" in prompt
-    assert "当前 Lease" in prompt
-    assert "全部活动进程" in prompt
-    assert "/workspace 与 /runtime 保留" in prompt
-    assert "/tmp 和全部旧 process_id 失效" in prompt
-    assert "新的 `/bin/bash -lc`" in prompt
-    assert "`cd`、`export`、`alias`、`source activate` 不跨命令保留" in prompt
-    assert "cwd" in prompt
-    assert "`FOO=bar cmd`" in prompt
-    assert "`.venv/bin/python`" in prompt
-    assert "HOME=/runtime/home" in prompt
-    assert "`~/.profile`" in prompt
-    assert "/tmp 只在同一 Lease 内持久" in prompt
+    assert plan.runtime_tool_prompt == ""
+    assert "当前 Profile：developer" in schema_guidance
+    assert "单条命令最大时长：1800 秒" in schema_guidance
+    assert "只能经受控代理访问以下域名" in schema_guidance
+    assert "github.com" in schema_guidance
+    assert "codeload.github.com" in schema_guidance
+    assert "registry.npmjs.org" in schema_guidance
+    assert "IP 直连、私网、宿主和其他容器均不可达" in schema_guidance
+    assert "HTTP_PROXY/HTTPS_PROXY 只负责应用选路，不是安全边界" in schema_guidance
+    assert "公网可用" not in schema_guidance
+    assert "git" in schema_guidance
+    assert "rg" in schema_guidance
+    assert "pytest" in schema_guidance
+    assert "Docker 不可用" in schema_guidance
+    assert "root 或 sudo" in schema_guidance
+    assert "支持；detached 后台进程：不支持；stdin：支持" in schema_guidance
+    assert "命令与文件写并发时不保证一致快照" in schema_guidance
+    assert "前台命令" in schema_guidance
+    assert "yield_time_ms" in schema_guidance
+    assert "不要使用 `cmd &`" in schema_guidance
+    assert "当前 Lease" in schema_guidance
+    assert "全部活动进程" in schema_guidance
+    assert "/workspace 与 /runtime 保留" in schema_guidance
+    assert "/tmp 和全部旧 process_id 失效" in schema_guidance
+    assert "新的 `/bin/bash -lc`" in schema_guidance
+    assert "`cd`、`export`、`alias`、`source activate` 不跨命令保留" in schema_guidance
+    assert "cwd" in schema_guidance
+    assert "`FOO=bar cmd`" in schema_guidance
+    assert "`.venv/bin/python`" in schema_guidance
+    assert "HOME=/runtime/home" in schema_guidance
+    assert "`~/.profile`" in schema_guidance
+    assert "/tmp 只在同一 Lease 内持久" in schema_guidance
     assert {
         "sandbox_exec",
         "sandbox_poll",

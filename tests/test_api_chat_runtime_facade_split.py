@@ -61,6 +61,7 @@ def _runtime_input(**updates):
         "private_decision": _Decision(),
         "guardrail_status": "safe",
         "classifier_ran": True,
+        "event_time": "2026-07-31 03:00:00 CST",
     }
     data.update(updates)
     return ChatRuntimeInput(**data)
@@ -101,6 +102,7 @@ def test_build_chat_runtime_payload_preserves_private_metadata_contract():
         "sender_name": "用户",
         "session_name": "私聊",
         "message_id": "m-runtime",
+        "event_time": "2026-07-31 03:00:00 CST",
         "files": ["img://a"],
         "persona_text": "画像文本",
         "raw_query": "用户原始问题 files=1",

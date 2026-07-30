@@ -120,7 +120,6 @@ def build_runtime_context(request, *, current_time: str | None = None) -> str:
     group_id = _request_group_id(request)
     facts = {
         "chat_type": chat_type,
-        "current_time": _bounded_text(_current_time_text(current_time), _DECISION_MAX_CHARS),
         "is_super_user": request.is_super_user is True,
         "platform": _bounded_text(platform, 32),
         "session_id": _bounded_text(request.session_id, _ID_MAX_CHARS),
@@ -152,6 +151,11 @@ def build_message_meta(request) -> str:
             "bot_id": bot_id,
             "bot_name": _bounded_text(request.bot_name, _NAME_MAX_CHARS),
             "current_message_id": current_message_id,
+            "effort_constraint": _bounded_text(request.effort_constraint, 240),
+            "event_time": _bounded_text(
+                request.event_time or _current_time_text(),
+                _DECISION_MAX_CHARS,
+            ),
             "self_id": self_id,
             "sender_name": _bounded_text(request.sender_name, _NAME_MAX_CHARS),
             "session_name": _bounded_text(request.session_name, _NAME_MAX_CHARS),
@@ -167,6 +171,11 @@ def build_message_meta(request) -> str:
 
 
 def build_current_user_event(request) -> Any:
+    if request.normalized_chat_type == "group":
+        if isinstance(request.user_input, list):
+            return list(request.user_input)
+        return ensure_user_input_block(request.user_input)
+
     message_meta = build_message_meta(request)
     if isinstance(request.user_input, list):
         return [
@@ -174,6 +183,67 @@ def build_current_user_event(request) -> Any:
             *list(request.user_input),
         ]
     return f"{message_meta}\n{ensure_user_input_block(request.user_input)}"
+
+
+def build_private_history_user_event(
+    content: str,
+    *,
+    meta: dict[str, Any] | None,
+    created_at: datetime | None,
+) -> str:
+    """按当前私聊 user event 的同一 wire format 渲染历史消息。"""
+
+    values = dict(meta or {})
+    if not str(values.get("event_time") or "").strip() and created_at is not None:
+        values["event_time"] = created_at.strftime("%Y-%m-%d %H:%M:%S CST")
+    metadata = {
+        key: value
+        for key, value in {
+            "bot_id": _bounded_text(values.get("bot_id"), _ID_MAX_CHARS),
+            "bot_name": _bounded_text(values.get("bot_name"), _NAME_MAX_CHARS),
+            "current_message_id": _bounded_text(
+                values.get("current_message_id"),
+                _ID_MAX_CHARS,
+            ),
+            "effort_constraint": _bounded_text(
+                values.get("effort_constraint"),
+                240,
+            ),
+            "event_time": _bounded_text(
+                values.get("event_time"),
+                _DECISION_MAX_CHARS,
+            ),
+            "self_id": _bounded_text(values.get("self_id"), _ID_MAX_CHARS),
+            "sender_name": _bounded_text(
+                values.get("sender_name"),
+                _NAME_MAX_CHARS,
+            ),
+            "session_name": _bounded_text(
+                values.get("session_name"),
+                _NAME_MAX_CHARS,
+            ),
+            "timing_decision": _bounded_text(
+                values.get("timing_decision"),
+                _DECISION_MAX_CHARS,
+            ),
+            "trigger_reason": _bounded_text(
+                values.get("trigger_reason"),
+                _DECISION_MAX_CHARS,
+            ),
+        }.items()
+        if value
+    }
+    aliases = [
+        _bounded_text(item, _ALIAS_MAX_CHARS)
+        for item in list(values.get("bot_aliases") or [])[:_ALIAS_MAX_ITEMS]
+    ]
+    aliases = [item for item in aliases if item]
+    if aliases:
+        metadata["bot_aliases"] = aliases
+    return (
+        f"{_tagged_json('message_meta', metadata)}\n"
+        f"{ensure_user_input_block(content)}"
+    )
 
 
 def build_identity_context(request) -> str:

@@ -505,6 +505,33 @@ def _sandbox_prompt_profile(
     return ""
 
 
+def build_sandbox_tool_schema_guidance(
+    enabled: dict[str, bool],
+    chat_type: str = "group",
+    *,
+    platform: str = "",
+    session_id: str = "",
+    db=None,
+) -> str:
+    """为已启用的 Sandbox 工具 schema 生成当前授权 Profile 说明。"""
+
+    profile_id = _sandbox_prompt_profile(
+        enabled,
+        chat_type=chat_type,
+        platform=platform,
+        session_id=session_id,
+        db=db,
+    )
+    if not profile_id:
+        return ""
+    return build_sandbox_profile_guidance(
+        profile_id,
+        enabled_tool_names=frozenset(
+            name for name, allowed in enabled.items() if allowed
+        ),
+    )
+
+
 def build_runtime_tool_prompt(
     enabled: dict[str, bool],
     disabled: dict[str, str],
@@ -514,43 +541,9 @@ def build_runtime_tool_prompt(
     session_id: str = "",
     db=None,
 ) -> str:
-    """生成动态 [RuntimeTool] 系统消息。"""
-    inactive = [n for n, v in enabled.items() if not v]
+    """兼容旧管理接口；工具事实只通过 API tools schema 暴露给模型。"""
 
-    lines = ["[RuntimeTool]"]
-    scope = "本群" if chat_type == "group" else "本轮"
-    lines.append(f"{scope}真实可调用工具以 API tools schema 为准，本段只做说明和审计。")
-
-    if inactive:
-        lines.append(f"已禁用工具（{len(inactive)}个）：")
-        for name in sorted(inactive):
-            reason = disabled.get(name, "未指定")
-            lines.append(f"  - {name}：{reason}")
-
-    if enabled.get("sql_analysis"):
-        lines.append(
-            "工具边界：查聊天记录、上一句、刚才说过什么、会话日志或数据库统计时使用 "
-            "sql_analysis；memory_query 只查询已生成的结构化摘要，不用于检索未摘要的 "
-            "chat_logs/conversation_turns。"
-        )
-
-    profile_id = _sandbox_prompt_profile(
-        enabled,
-        chat_type=chat_type,
-        platform=platform,
-        session_id=session_id,
-        db=db,
-    )
-    if profile_id:
-        lines.append(build_sandbox_profile_guidance(
-            profile_id,
-            enabled_tool_names=frozenset(
-                name for name, allowed in enabled.items() if allowed
-            ),
-        ))
-
-    lines.append("规则：不要声称调用未出现在 tools schema 中的工具，也不要声称调用已禁用工具。")
-    return "\n".join(lines)
+    return ""
 
 
 def record_runtime_tool_decision(

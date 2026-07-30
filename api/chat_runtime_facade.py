@@ -26,6 +26,7 @@ class ChatRuntimeInput:
     private_decision: Any | None
     guardrail_status: str | None
     classifier_ran: bool
+    event_time: str = ""
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ def build_chat_runtime_payload(
         "sender_name": runtime_input.sender_name,
         "session_name": runtime_input.session_name,
         "message_id": runtime_input.message_id,
+        "event_time": runtime_input.event_time,
         "files": runtime_input.final_files,
         "persona_text": runtime_input.persona_text,
         "raw_query": safe_user_input,

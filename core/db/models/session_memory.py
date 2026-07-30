@@ -10,8 +10,9 @@ from core.db.base import Base
 class RollingSessionSummary(Base):
     """当前 session 的滚动上下文摘要。
 
-    只覆盖已被 recent raw ConversationTurn window 挤出的旧上下文，不承载
-    daily digest、persona 或 group memory 语义。
+    私聊覆盖被 recent raw ConversationTurn window 挤出的旧上下文；群聊
+    覆盖被保护 raw ChatLog tail 挤出的旧现场。来源游标必须与 source_type
+    配套读取，不能把 ChatLog.id 写入 legacy turn 字段。
     """
 
     __tablename__ = "rolling_session_summaries"
@@ -29,11 +30,16 @@ class RollingSessionSummary(Base):
     covered_from_turn_id = Column(Integer, default=0)
     covered_until_turn_id = Column(Integer, index=True, default=0)
     source_turn_ids_json = Column(Text, default="[]")
+    source_type = Column(String, index=True, default="conversation_turn")
+    covered_from_source_id = Column(Integer, default=0)
+    covered_until_source_id = Column(Integer, index=True, default=0)
+    source_ids_json = Column(Text, default="[]")
     source_turn_count = Column(Integer, default=0)
     source_token_estimate = Column(Integer, default=0)
     source_char_count = Column(Integer, default=0)
 
     raw_window_start_turn_id = Column(Integer, default=0)
+    raw_window_start_source_id = Column(Integer, default=0)
     quality_score = Column(Float, default=0.0)
     issues_json = Column(Text, default="[]")
 
@@ -164,6 +170,10 @@ class SessionSummaryJob(Base):
     covered_from_turn_id = Column(Integer, index=True, default=0)
     covered_until_turn_id = Column(Integer, index=True, default=0)
     source_turn_ids_json = Column(Text, default="[]")
+    source_type = Column(String, index=True, default="conversation_turn")
+    covered_from_source_id = Column(Integer, index=True, default=0)
+    covered_until_source_id = Column(Integer, index=True, default=0)
+    source_ids_json = Column(Text, default="[]")
 
     previous_summary_id = Column(Integer, nullable=True)
     fallback_summary_id = Column(Integer, nullable=True)

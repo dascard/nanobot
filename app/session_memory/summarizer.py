@@ -67,6 +67,29 @@ def _clean_summary_memory_text(text: str) -> str:
     return value.strip()
 
 
+def _strip_deterministic_fallback_scaffolding(text: str) -> str:
+    """移除旧版 fallback 自我描述，避免每轮递归继承同一段样板。"""
+
+    import re
+
+    value = str(text or "")
+    value = re.sub(
+        r"代码兜底摘要：仅继承上次摘要正文；本轮新增内容见结构化字段，\s*"
+        r"建议等待或手动生成 LLM 摘要提升质量。",
+        "",
+        value,
+    )
+    value = re.sub(r"(?m)^\s*此前已知:\s*$", "", value)
+    value = re.sub(
+        r"(?m)^\s*本轮新增\s+\d+\s+条消息"
+        r"（用户\s+\d+\s+条、助手\s+\d+\s+条）。\s*$",
+        "",
+        value,
+    )
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    return value.strip()
+
+
 def _format_turn_snippet(turn: ConversationTurn, *, max_chars: int = 160) -> str:
     from core.context_builder import sanitize_prompt_text
 
@@ -88,35 +111,14 @@ def _compact_previous_and_pending(
     pending_turns: Sequence[ConversationTurn],
     max_chars: int,
 ) -> str:
-    previous = _truncate_text(_clean_summary_memory_text(previous_text), 600, suffix="\n...[旧摘要截断]")
-    user_count = sum(1 for turn in pending_turns if turn.role == "user")
-    assistant_count = sum(1 for turn in pending_turns if turn.role == "assistant")
-    parts: list[str] = [
-        "代码兜底摘要：仅继承上次摘要正文；本轮新增内容见结构化字段，"
-        "建议等待或手动生成 LLM 摘要提升质量。"
-    ]
+    previous = _strip_deterministic_fallback_scaffolding(
+        _clean_summary_memory_text(previous_text)
+    )
     if previous:
-        parts.append("此前已知:\n" + previous)
+        return _truncate_text(previous, max_chars)
     if pending_turns:
-        parts.append(
-            f"本轮新增 {len(pending_turns)} 条消息（用户 {user_count} 条、助手 {assistant_count} 条）。"
-        )
-
-    summary = "\n\n".join(parts).strip()
-    if len(summary) <= max_chars:
-        return summary
-
-    parts = [
-        "代码兜底摘要：仅继承上次摘要正文；本轮新增内容见结构化字段，"
-        "建议等待或手动生成 LLM 摘要提升质量。"
-    ]
-    if previous:
-        parts.append("此前已知:\n" + _truncate_text(_clean_summary_memory_text(previous_text), 300, suffix="\n...[旧摘要截断]"))
-    if pending_turns:
-        parts.append(
-            f"本轮新增 {len(pending_turns)} 条消息（用户 {user_count} 条、助手 {assistant_count} 条）。"
-        )
-    return _truncate_text("\n\n".join(parts).strip(), max_chars)
+        return "近期对话事实已保留在下方结构化字段中。"
+    return ""
 
 
 def _previous_summary_payload(

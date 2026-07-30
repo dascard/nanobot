@@ -254,7 +254,7 @@ def test_group_memory_uses_untrusted_data_contribution_contract():
     assert descriptor.phase == "context"
     assert descriptor.authority == "data"
     assert descriptor.trust == "untrusted_data"
-    assert descriptor.after == ("history_messages",)
+    assert descriptor.after == ("runtime_context",)
     assert descriptor.chat_types == frozenset({"group"})
     assert descriptor.required_variables == frozenset({
         "group_profile_context",
@@ -301,18 +301,17 @@ def test_unknown_flow_extension_is_low_authority_many_untrusted_data():
         "template_key": "chat/external_context",
         "chat_types": ["private"],
     }
-    effort_index = next(
+    current_user_index = next(
         index
         for index, node in enumerate(flow["nodes"])
-        if node["id"] == "effort_constraint"
+        if node["id"] == "current_user_event"
     )
-    flow["nodes"].insert(effort_index, extension)
+    flow["nodes"].insert(current_user_index, extension)
     edge = next(
         item
         for item in flow["edges"]
         if item["from"] == "history_messages"
-        and item["to"] == "effort_constraint"
-        and item.get("chat_types") == ["private"]
+        and item["to"] == "current_user_event"
     )
     flow["edges"].remove(edge)
     flow["edges"].extend([
@@ -323,8 +322,7 @@ def test_unknown_flow_extension_is_low_authority_many_untrusted_data():
         },
         {
             "from": "external_context",
-            "to": "effort_constraint",
-            "chat_types": ["private"],
+            "to": "current_user_event",
         },
     ])
     ordered_nodes = ordered_nodes_for_chat(flow, "private", platform="qq")

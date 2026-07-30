@@ -36,12 +36,11 @@ def test_linter_extracts_runtime_tool_and_internal_message_issues():
     result = lint_llm_request(request)
 
     assert result["actual_sent_tools"] == ["reply", "python_sandbox"]
-    assert result["runtime_enabled_tools"] == ["reply"]
-    assert result["runtime_disabled_tools"] == ["python_sandbox"]
+    assert result["runtime_enabled_tools"] == ["reply", "python_sandbox"]
+    assert result["runtime_disabled_tools"] == []
     assert result["framework_injected_tools"] == ["available_functions"]
     codes = {issue["code"] for issue in result["issues"]}
-    assert "disabled_tool_sent" in codes
-    assert "runtime_tool_mismatch" in codes
+    assert "legacy_runtime_tool_prompt_present" in codes
     assert "kt_framework_tool_docs" in codes
     assert "internal_tool_message_as_user" in codes
     assert "reply_retry_as_user" not in codes
@@ -92,7 +91,7 @@ def test_record_request_persists_request_lint_fields(db_session):
     )
     assert len(lint["payload_metrics"]["prompt_sha256"]) == 64
     sources = json.loads(row.message_sources_json)
-    assert sources[0]["source"] == "runtime_tool"
+    assert sources[0]["source"] == "legacy_runtime_tool_prompt"
 
 
 def test_linter_payload_metrics_use_only_actual_messages_and_tools():
@@ -162,7 +161,7 @@ def test_linter_payload_metrics_use_only_actual_messages_and_tools():
     assert tuple_payload == first
 
 
-def test_linter_accepts_schema_authoritative_runtime_tool():
+def test_linter_rejects_legacy_runtime_tool_even_when_it_defers_to_schema():
     from core.llm_request_linter import lint_llm_request
 
     request = {
@@ -190,9 +189,10 @@ def test_linter_accepts_schema_authoritative_runtime_tool():
 
     assert result["actual_sent_tools"] == ["reply"]
     assert result["runtime_enabled_tools"] == ["reply"]
-    assert result["runtime_disabled_tools"] == ["python_sandbox"]
+    assert result["runtime_disabled_tools"] == []
     codes = {issue["code"] for issue in result["issues"]}
-    assert "runtime_tool_mismatch" not in codes
+    assert "legacy_runtime_tool_prompt_present" in codes
+    assert result["ok"] is False
 
 
 def test_linter_flags_nanobot_request_without_current_user_input():

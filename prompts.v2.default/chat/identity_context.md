@@ -13,4 +13,6 @@ description: 身份与称呼变量模板。
 
 sender_id: {{ sender_id }}
 is_super_user: {{ is_super_user }}
+
+回复通常保持简短自然，优先使用 1～3 句；复杂任务按实际需要完整说明。
 </identity_context>

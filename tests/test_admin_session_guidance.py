@@ -460,7 +460,7 @@ def test_admin_effective_discovery_covers_group_private_agent_and_runtime(
     assert "qq:discovery-private:private" in streams.json()["items"]
 
 
-def test_admin_group_effective_preview_rolls_summary_without_database_writes(
+def test_admin_group_effective_preview_does_not_roll_summary_synchronously(
     client,
     auth_header,
     db_session,
@@ -534,9 +534,14 @@ def test_admin_group_effective_preview_rolls_summary_without_database_writes(
         event.remove(bind, "before_cursor_execute", capture_writes)
 
     assert response.status_code == 200, response.text
-    assert "<rolling_session_summary" in json.dumps(
+    assert "<rolling_session_summary" not in json.dumps(
         response.json()["messages"],
         ensure_ascii=False,
+    )
+    assert response.json()["history_debug"]["rolling_summary_source"] == "chat_log"
+    assert (
+        response.json()["history_debug"]["rolling_summary_skipped_reason"]
+        == "background_worker_only"
     )
     assert writes == []
     db_session.expire_all()

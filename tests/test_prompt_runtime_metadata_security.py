@@ -177,7 +177,7 @@ async def test_runtime_and_message_metadata_apply_contract_length_limits():
     from core.prompt_v2.compiler import compile_prompt_plan
     from core.prompt_v2.schema import PromptCompileRequest
 
-    plan = await compile_prompt_plan(
+    group_plan = await compile_prompt_plan(
         PromptCompileRequest(
             chat_type="group",
             platform="qq",
@@ -193,6 +193,7 @@ async def test_runtime_and_message_metadata_apply_contract_length_limits():
             bot_id="b" * 200,
             bot_name="q" * 220,
             bot_aliases=[str(index) + "a" * 100 for index in range(12)],
+            event_time="e" * 100,
             user_input="正常输入",
         ),
         strict_audit=True,
@@ -200,19 +201,45 @@ async def test_runtime_and_message_metadata_apply_contract_length_limits():
 
     runtime = next(
         str(message["content"])
-        for message in plan.messages
+        for message in group_plan.messages
         if str(message.get("content") or "").startswith("<runtime_context>")
     )
     facts = _tagged_json_object(runtime, "runtime_context")
-    metadata = _tagged_json_object(str(plan.current_user_content), "message_meta")
-
     assert len(facts["session_id"]) == 128
     assert len(facts["user_id"]) == 128
     assert len(facts["group_id"]) == 128
+    assert "<message_meta>" not in str(group_plan.current_user_content)
+
+    private_plan = await compile_prompt_plan(
+        PromptCompileRequest(
+            chat_type="private",
+            platform="qq",
+            session_id="s" * 200,
+            user_id="u" * 200,
+            sender_name="n" * 220,
+            session_name="c" * 220,
+            trigger_reason="r" * 100,
+            timing_decision="t" * 100,
+            current_message_id="m" * 200,
+            self_id="x" * 200,
+            bot_id="b" * 200,
+            bot_name="q" * 220,
+            bot_aliases=[str(index) + "a" * 100 for index in range(12)],
+            event_time="e" * 100,
+            user_input="正常输入",
+        ),
+        strict_audit=True,
+    )
+    metadata = _tagged_json_object(
+        str(private_plan.current_user_content),
+        "message_meta",
+    )
+
     assert len(metadata["sender_name"]) == 160
     assert len(metadata["session_name"]) == 160
     assert len(metadata["trigger_reason"]) == 64
     assert len(metadata["timing_decision"]) == 64
+    assert len(metadata["event_time"]) == 64
     assert len(metadata["current_message_id"]) == 128
     assert len(metadata["self_id"]) == 128
     assert len(metadata["bot_id"]) == 128

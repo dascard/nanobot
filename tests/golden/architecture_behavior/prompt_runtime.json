@@ -12,18 +12,18 @@
     },
     {
       "path": "data/prompts_v2/chat/flow.json",
-      "sha256": "a547ca7c5cc1d7b326eca59b33f0b1222baf4b4320b6e2c6378a5fc97a314171",
-      "size_bytes": 3730
+      "sha256": "da132cf15f0a22b527ec54dac4200f9450ce21cf61fb722a76d6f967cdf39f97",
+      "size_bytes": 3335
     },
     {
       "path": "data/prompts_v2/chat/main.md",
-      "sha256": "0d2b335bd48b4bc99ee9f587fff5d9f1be71e891879328bb09b4d338e7ad4a5c",
-      "size_bytes": 4630
+      "sha256": "4a4b1883bee0680946f57a6e224534fbbbc3ecbf332e0ce185faaf4cfaa3cdfc",
+      "size_bytes": 4757
     },
     {
       "path": "data/prompts_v2/chat/platform/qq/common.md",
-      "sha256": "7cd04cfef395ea6e33774998d119b94252a19b4e023cce4df5b917ca3327a7e9",
-      "size_bytes": 874
+      "sha256": "22d801abd19e3b70bd51034ad47cfd522e4e4e61562bbe2bd936326b74c217e2",
+      "size_bytes": 887
     },
     {
       "path": "data/prompts_v2/chat/platform/qq/group.md",
@@ -67,8 +67,8 @@
     },
     {
       "path": "data/prompts_v2/tools/sandbox_exec/usage.md",
-      "sha256": "3b02603438f5357bdf6e22352e3ab4cee11a57bddcd0aadf4e4431b192653891",
-      "size_bytes": 1410
+      "sha256": "ca88c5477a2d04306400c9bb5fdda211c36cd12d1644f3bd462fbe56977ec206",
+      "size_bytes": 1424
     },
     {
       "path": "data/prompts_v2/tools/schedule_task/usage.md",
@@ -122,23 +122,23 @@
     },
     {
       "path": "prompts.v2.default/chat/flow.json",
-      "sha256": "a547ca7c5cc1d7b326eca59b33f0b1222baf4b4320b6e2c6378a5fc97a314171",
-      "size_bytes": 3730
+      "sha256": "da132cf15f0a22b527ec54dac4200f9450ce21cf61fb722a76d6f967cdf39f97",
+      "size_bytes": 3335
     },
     {
       "path": "prompts.v2.default/chat/identity_context.md",
-      "sha256": "a5545014858e201274e3c47261c2dfdb7b349604e59b37bef3be79c03579ec5b",
-      "size_bytes": 287
+      "sha256": "c10bab58653b14e4b05d9f067da233b3a6828781ef2240edbe3f5f07fcfdb46d",
+      "size_bytes": 389
     },
     {
       "path": "prompts.v2.default/chat/main.md",
-      "sha256": "0d2b335bd48b4bc99ee9f587fff5d9f1be71e891879328bb09b4d338e7ad4a5c",
-      "size_bytes": 4630
+      "sha256": "4a4b1883bee0680946f57a6e224534fbbbc3ecbf332e0ce185faaf4cfaa3cdfc",
+      "size_bytes": 4757
     },
     {
       "path": "prompts.v2.default/chat/platform/qq/common.md",
-      "sha256": "7cd04cfef395ea6e33774998d119b94252a19b4e023cce4df5b917ca3327a7e9",
-      "size_bytes": 874
+      "sha256": "22d801abd19e3b70bd51034ad47cfd522e4e4e61562bbe2bd936326b74c217e2",
+      "size_bytes": 887
     },
     {
       "path": "prompts.v2.default/chat/platform/qq/group.md",
@@ -377,8 +377,8 @@
     },
     {
       "path": "prompts.v2.default/tools/sandbox_exec/usage.md",
-      "sha256": "3b02603438f5357bdf6e22352e3ab4cee11a57bddcd0aadf4e4431b192653891",
-      "size_bytes": 1410
+      "sha256": "ca88c5477a2d04306400c9bb5fdda211c36cd12d1644f3bd462fbe56977ec206",
+      "size_bytes": 1424
     },
     {
       "path": "prompts.v2.default/tools/sandbox_poll/usage.md",
@@ -490,20 +490,6 @@
         "request"
       ],
       "trust": "untrusted_instruction"
-    },
-    {
-      "authority": "application_policy",
-      "dependencies": [],
-      "domain": "reply_policy",
-      "editable": false,
-      "failure_policy": "skip_optional",
-      "owner_module": "core.prompt_v2.compiler",
-      "phase": "policy",
-      "section_id": "effort_constraint",
-      "source_precedence": [
-        "request"
-      ],
-      "trust": "trusted_instruction"
     },
     {
       "authority": "data",
@@ -635,20 +621,6 @@
         "request"
       ],
       "trust": "trusted_data"
-    },
-    {
-      "authority": "tool",
-      "dependencies": [],
-      "domain": "tool",
-      "editable": false,
-      "failure_policy": "fail_closed",
-      "owner_module": "core.tool_registry",
-      "phase": "tool",
-      "section_id": "runtime_tool_prompt",
-      "source_precedence": [
-        "request"
-      ],
-      "trust": "trusted_instruction"
     },
     {
       "authority": "operator_policy",

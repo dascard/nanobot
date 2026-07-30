@@ -22,6 +22,10 @@ os.environ["NANOBOT_API_TOKEN"] = "" # 测试环境禁用 API Token
 os.environ["NEW_API_KEY"] = "test-key-for-ci"  # Prevent KT init crash
 os.environ["NANOBOT_TESTING"] = "1"  # 测试环境跳过生产启动副作用
 os.environ.setdefault("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
+# 不继承开发机 .env 的 Prompt Runtime 路径，保证临时目录测试可重复。
+# 空值仍会走代码默认目录，也允许兼容变量测试显式覆盖。
+os.environ["NANOBOT_PROMPT_DEFAULT_DIR"] = ""
+os.environ["NANOBOT_PROMPT_RUNTIME_DIR"] = ""
 
 from core.database import get_db  # noqa: E402
 from core.db import get_db as canonical_get_db  # noqa: E402

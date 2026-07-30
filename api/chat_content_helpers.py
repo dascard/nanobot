@@ -66,10 +66,8 @@ def build_chatlog_user_content(query: str, files: list[str] | None) -> str:
 
 
 def build_conversation_user_content(query: str, files: list[str] | None) -> str:
-    text = str(query or "").strip()
-    file_summary = build_file_archive_summary(files, include_refs=False)
-    if text and file_summary:
-        return f"{text}\n{file_summary}"
-    if file_summary:
-        return file_summary
-    return query
+    return build_multimodal_user_input_text(
+        query,
+        files,
+        max_chars=2000,
+    )

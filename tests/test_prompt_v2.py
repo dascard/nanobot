@@ -315,7 +315,7 @@ async def test_prompt_template_resolution_metadata_does_not_change_wire_request_
 
 
 @pytest.mark.asyncio
-async def test_prompt_cache_prefix_keeps_per_request_runtime_context_at_tail(
+async def test_prompt_cache_prefix_keeps_stable_runtime_context_before_history(
     tmp_path,
     monkeypatch,
 ):
@@ -352,7 +352,6 @@ async def test_prompt_cache_prefix_keeps_per_request_runtime_context_at_tail(
         "session_id": "group_prompt_cache",
         "group_id": "prompt_cache",
         "user_id": "user_prompt_cache",
-        "runtime_tool_prompt": "[RuntimeTool]\n- workspace_read",
     }
     first_request = PromptCompileRequest(
         **common,
@@ -393,18 +392,18 @@ async def test_prompt_cache_prefix_keeps_per_request_runtime_context_at_tail(
     ]["message_indexes"][0]
 
     assert section_order.index("persona_reference") < section_order.index(
-        "runtime_tool_prompt"
+        "runtime_context"
     )
-    assert section_order.index("runtime_tool_prompt") < section_order.index(
+    assert section_order.index("runtime_context") < section_order.index(
+        "group_context"
+    )
+    assert section_order.index("group_context") < section_order.index(
         "conversation_context_header"
     )
     assert section_order.index("conversation_context_header") < (
         section_order.index("history_messages")
     )
     assert section_order.index("history_messages") < section_order.index(
-        "runtime_context"
-    )
-    assert section_order.index("runtime_context") < section_order.index(
         "current_user_event"
     )
     assert first.messages[:first_header_index + 1] == (
@@ -413,13 +412,14 @@ async def test_prompt_cache_prefix_keeps_per_request_runtime_context_at_tail(
     assert "已裁剪的群聊上下文" in str(
         first.messages[first_header_index]["content"]
     )
-    assert first.messages[first_runtime_index] != second.messages[
+    assert first.messages[first_runtime_index] == second.messages[
         second_runtime_index
     ]
+    assert "current_time" not in str(first.messages[first_runtime_index]["content"])
 
 
 @pytest.mark.asyncio
-async def test_prompt_cache_prefix_keeps_runtime_context_after_history(
+async def test_prompt_cache_runtime_context_is_stable_across_wall_clock_changes(
     tmp_path,
     monkeypatch,
 ):
@@ -456,7 +456,6 @@ async def test_prompt_cache_prefix_keeps_runtime_context_after_history(
         group_id="prompt_cache",
         user_id="user_prompt_cache",
         user_input="检查缓存前缀",
-        runtime_tool_prompt="[RuntimeTool]\n- workspace_read",
     )
 
     first = await compiler.compile_prompt_plan(request)
@@ -464,11 +463,22 @@ async def test_prompt_cache_prefix_keeps_runtime_context_after_history(
     section_order = [item["node_id"] for item in first.flow_sections]
     runtime_index = section_order.index("runtime_context")
 
-    assert section_order[runtime_index + 1] == "current_user_event"
-    assert first.messages[:-2] == second.messages[:-2]
-    assert first.messages[-2] != second.messages[-2]
-    assert str(first.messages[-2]["content"]).startswith("<runtime_context>")
-    assert first.messages[-1] == second.messages[-1]
+    assert section_order[runtime_index + 1] == "group_context"
+    assert section_order.index("runtime_context") < section_order.index(
+        "conversation_context_header"
+    )
+    assert first.messages == second.messages
+    runtime_message_index = next(
+        section["message_indexes"][0]
+        for section in first.flow_sections
+        if section["node_id"] == "runtime_context"
+    )
+    assert str(first.messages[runtime_message_index]["content"]).startswith(
+        "<runtime_context>"
+    )
+    assert "current_time" not in str(
+        first.messages[runtime_message_index]["content"]
+    )
 
 
 def test_template_resolution_trace_serializer_drops_non_contract_fields():
@@ -799,7 +809,7 @@ def _mutate_reserved_flow_node(flow, node_id, invalid_fields):
     [
         ("persona_reference", {"id": "renamed_persona_reference"}),
         (
-            "runtime_tool_prompt",
+            "runtime_context",
             {"type": "template", "template_key": "chat/main"},
         ),
         ("current_user_event", {"runtime_key": "runtime_context"}),
@@ -812,7 +822,7 @@ def _mutate_reserved_flow_node(flow, node_id, invalid_fields):
     ],
     ids=(
         "persona-node-id",
-        "runtime-tool-node-type",
+        "runtime-context-node-type",
         "current-user-runtime-key",
         "private-policy-node-id",
         "group-policy-node-type",
@@ -842,8 +852,8 @@ def test_prompt_v2_save_flow_rejects_renamed_reserved_node_before_write(
     flow = copy.deepcopy(flow_module.DEFAULT_FLOW)
     _mutate_reserved_flow_node(
         flow,
-        "runtime_tool_prompt",
-        {"id": "renamed_runtime_tool_prompt"},
+        "runtime_context",
+        {"id": "renamed_runtime_context"},
     )
     runtime_path = tmp_path / "chat" / "flow.json"
     monkeypatch.setattr(flow_module, "runtime_flow_path", lambda: runtime_path)
@@ -875,20 +885,29 @@ def test_prompt_v2_save_flow_rejects_runtime_contract_that_strict_audit_would_re
     flow = copy.deepcopy(flow_module.DEFAULT_FLOW)
     if invalid_variant == "missing-singleton":
         flow["nodes"] = [
-            node for node in flow["nodes"] if node["id"] != "runtime_tool_prompt"
+            node for node in flow["nodes"] if node["id"] != "runtime_context"
         ]
         flow["edges"] = [
             edge
             for edge in flow["edges"]
-            if "runtime_tool_prompt" not in {edge["from"], edge["to"]}
+            if "runtime_context" not in {edge["from"], edge["to"]}
         ]
-        flow["edges"].append(
-            {"from": "effort_constraint", "to": "current_user_event"}
-        )
+        flow["edges"].extend([
+            {
+                "from": "persona_reference",
+                "to": "group_context",
+                "chat_types": ["group"],
+            },
+            {
+                "from": "persona_reference",
+                "to": "conversation_context_header",
+                "chat_types": ["private"],
+            },
+        ])
     elif invalid_variant == "fully-renamed-singleton":
         _mutate_reserved_flow_node(
             flow,
-            "runtime_tool_prompt",
+            "runtime_context",
             {
                 "id": "custom_runtime_context",
                 "runtime_key": "runtime_context",
@@ -896,7 +915,7 @@ def test_prompt_v2_save_flow_rejects_runtime_contract_that_strict_audit_would_re
         )
     elif invalid_variant == "platform-excluded-singleton":
         node = next(
-            item for item in flow["nodes"] if item["id"] == "runtime_tool_prompt"
+            item for item in flow["nodes"] if item["id"] == "runtime_context"
         )
         node["platforms"] = ["qq"]
     else:
@@ -1181,7 +1200,7 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
     assert plan.tool_schemas[0]["function"]["description"] != "外部修改"
     assert plan.prompt_sha256 == sha256_text(stable_json(plan.request_json))
     assert plan.section_hashes["base_contract"]
-    assert plan.section_hashes["runtime_tool_prompt"]
+    assert plan.section_hashes["runtime_context"]
     assert plan.debug["history_message_count"] == 2
     assert plan.debug["flow_node_ids"][:4] == [
         "base_contract",
@@ -1203,11 +1222,10 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
         "system",
         "user",
         "system",
+        "user",
         "system",
         "user",
         "assistant",
-        "user",
-        "system",
         "user",
     ]
 
@@ -1221,7 +1239,7 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
     assert "[ExpressionContext]" not in joined
     assert "[JargonContext]" not in joined
     assert sum("<user_input>" in c for c in contents) == 1
-    assert sum("[RuntimeTool]" in c for c in contents) == 1
+    assert all("[RuntimeTool]" not in c for c in contents)
     assert sum('"section":"persona_reference"' in c for c in contents) == 1
     assert not any("<persona_reference" in c for c in contents)
     assert "当前问题" in plan.current_user_content
@@ -1250,24 +1268,14 @@ async def test_prompt_v2_flow_sections_describe_output_status_and_message_indexe
         },
         {"id": "runtime_context", "type": "runtime", "runtime_key": "runtime_context"},
         {
-            "id": "effort_constraint",
+            "id": "session_guidance",
             "type": "runtime",
-            "runtime_key": "effort_constraint",
-        },
-        {
-            "id": "runtime_tool_prompt",
-            "type": "runtime",
-            "runtime_key": "runtime_tool_prompt",
+            "runtime_key": "session_guidance",
         },
         {
             "id": "current_user_event",
             "type": "runtime",
             "runtime_key": "current_user_event",
-        },
-        {
-            "id": "duplicate_runtime_tool_prompt",
-            "type": "runtime",
-            "runtime_key": "runtime_tool_prompt",
         },
     ]
     monkeypatch.setattr(
@@ -1297,7 +1305,6 @@ async def test_prompt_v2_flow_sections_describe_output_status_and_message_indexe
             user_id="u1",
             user_input="CURRENT USER SECTION",
             persona_text="FALLBACK PERSONA",
-            runtime_tool_prompt="RUNTIME TOOL SECTION",
         ),
         strict_audit=False,
     )
@@ -1312,26 +1319,26 @@ async def test_prompt_v2_flow_sections_describe_output_status_and_message_indexe
         "BASE SECTION"
     ]
 
-    runtime_tool = sections["runtime_tool_prompt"]
-    assert (runtime_tool["origin"], runtime_tool["status"]) == ("flow", "emitted")
+    runtime_context = sections["runtime_context"]
+    assert (runtime_context["origin"], runtime_context["status"]) == (
+        "flow",
+        "emitted",
+    )
     assert [
         plan.messages[index]["content"]
-        for index in runtime_tool["message_indexes"]
-    ] == ["RUNTIME TOOL SECTION"]
+        for index in runtime_context["message_indexes"]
+    ][0].startswith("<runtime_context>")
 
-    effort = sections["effort_constraint"]
-    assert (effort["origin"], effort["status"], effort["message_indexes"]) == (
+    session_guidance = sections["session_guidance"]
+    assert (
+        session_guidance["origin"],
+        session_guidance["status"],
+        session_guidance["message_indexes"],
+    ) == (
         "flow",
         "empty",
         [],
     )
-
-    duplicate = sections["duplicate_runtime_tool_prompt"]
-    assert (
-        duplicate["origin"],
-        duplicate["status"],
-        duplicate["message_indexes"],
-    ) == ("flow", "skipped_duplicate", [])
 
     persona = sections["persona_reference"]
     assert (persona["origin"], persona["status"]) == ("fallback", "emitted")
@@ -1358,6 +1365,7 @@ async def test_prompt_v2_compiles_private_plan_and_keeps_rules_separate():
             session_id="private_u1",
             user_id="u1",
             sender_name="用户",
+            event_time="2026-07-31 02:41:22 CST",
             user_input="<user_input>\n你好\n</user_input>",
             persona_text="无已存储画像",
             history_header="<conversation_context>\n私聊历史说明\n</conversation_context>",
@@ -1373,14 +1381,17 @@ async def test_prompt_v2_compiles_private_plan_and_keeps_rules_separate():
     assert "## 群聊行为" not in joined
     assert "## 群聊发言时机" not in joined
     assert plan.current_user_content == (
-        '<message_meta>\n{"sender_name":"用户"}\n</message_meta>\n'
+        '<message_meta>\n'
+        '{"event_time":"2026-07-31 02:41:22 CST","sender_name":"用户"}\n'
+        "</message_meta>\n"
         "<user_input>\n你好\n</user_input>"
     )
+    assert "[RuntimeTool]" not in joined
     assert sum("<user_input>" in str(m["content"]) for m in plan.messages) == 1
 
 
 @pytest.mark.asyncio
-async def test_prompt_v2_moves_group_profile_header_after_history_messages():
+async def test_prompt_v2_places_group_profile_before_history_messages():
     from core.prompt_v2.compiler import compile_prompt_plan
     from core.prompt_v2.schema import PromptCompileRequest
 
@@ -1401,17 +1412,21 @@ async def test_prompt_v2_moves_group_profile_header_after_history_messages():
     )
 
     contents = [str(m["content"]) for m in plan.messages]
-    header_idx = next(i for i, c in enumerate(contents) if "<conversation_context>" in c)
+    header_idx = next(
+        i
+        for i, c in enumerate(contents)
+        if c.strip().startswith("<conversation_context>")
+    )
     history_idx = next(i for i, c in enumerate(contents) if "UNIQUE_HISTORY_MESSAGE" in c)
     profile_idx = next(i for i, c in enumerate(contents) if "[GroupProfileContext]" in c)
 
-    assert header_idx < history_idx < profile_idx
+    assert profile_idx < header_idx < history_idx
     assert sum("[GroupProfileContext]" in c for c in contents) == 1
     assert "[GroupProfileContext]" not in contents[header_idx]
 
 
 @pytest.mark.asyncio
-async def test_prompt_v2_moves_group_memory_context_after_history_messages():
+async def test_prompt_v2_places_group_memory_context_before_history_messages():
     from core.prompt_v2.compiler import compile_prompt_plan
     from core.prompt_v2.schema import PromptCompileRequest
 
@@ -1431,7 +1446,11 @@ async def test_prompt_v2_moves_group_memory_context_after_history_messages():
     )
 
     contents = [str(m["content"]) for m in plan.messages]
-    header_idx = next(i for i, c in enumerate(contents) if "<conversation_context>" in c)
+    header_idx = next(
+        i
+        for i, c in enumerate(contents)
+        if c.strip().startswith("<conversation_context>")
+    )
     history_idx = next(i for i, c in enumerate(contents) if "UNIQUE_HISTORY_MESSAGE" in c)
     memory_idx = next(
         i
@@ -1439,7 +1458,7 @@ async def test_prompt_v2_moves_group_memory_context_after_history_messages():
         if 'selected_count=\\"1\\"' in c
     )
 
-    assert header_idx < history_idx < memory_idx
+    assert memory_idx < header_idx < history_idx
     assert sum('selected_count=\\"1\\"' in c for c in contents) == 1
     assert "<group_memory_context" not in contents[header_idx]
     assert "[GroupProfileContext]" not in contents[memory_idx]
@@ -1454,7 +1473,7 @@ def test_prompt_v2_audit_reports_duplicate_required_sections():
     flow_sections = _valid_prompt_v2_flow_sections("group")
     for node_id in (
         "persona_reference",
-        "runtime_tool_prompt",
+        "runtime_context",
         "current_user_event",
     ):
         flow_sections.append(
@@ -1491,7 +1510,7 @@ def test_prompt_v2_audit_reports_duplicate_required_sections():
         for issue in audit.issues
     )
     assert any(
-        "required flow section runtime_tool_prompt must appear once, got 2" in issue
+        "required flow section runtime_context must appear once, got 2" in issue
         for issue in audit.issues
     )
     assert any(
@@ -1583,7 +1602,7 @@ def test_prompt_v2_audit_does_not_treat_explicit_empty_status_as_legacy():
     ("runtime_key", "invalid_fields"),
     [
         ("persona_reference", {"node_id": "renamed_persona_reference"}),
-        ("runtime_tool_prompt", {"node_type": "template"}),
+        ("runtime_context", {"node_type": "template"}),
         ("current_user_event", {"template_key": "chat/main"}),
     ],
     ids=("wrong-node-id", "wrong-node-type", "unexpected-template-key"),
@@ -1682,8 +1701,8 @@ async def test_prompt_v2_compile_audit_rejects_renamed_singleton_node(
     from core.prompt_v2.schema import PromptCompileRequest
 
     flow = copy.deepcopy(DEFAULT_FLOW)
-    old_node_id = "runtime_tool_prompt"
-    new_node_id = "renamed_runtime_tool_prompt"
+    old_node_id = "runtime_context"
+    new_node_id = "renamed_runtime_context"
     next(node for node in flow["nodes"] if node["id"] == old_node_id)["id"] = new_node_id
     for edge in flow["edges"]:
         if edge["from"] == old_node_id:
@@ -1819,9 +1838,9 @@ async def test_prompt_v2_strict_audit_rejects_duplicate_singleton_flow_node(monk
     flow = copy.deepcopy(DEFAULT_FLOW)
     flow["nodes"].append(
         {
-            "id": "duplicate_runtime_tool_prompt",
+            "id": "duplicate_runtime_context",
             "type": "runtime",
-            "runtime_key": "runtime_tool_prompt",
+            "runtime_key": "runtime_context",
         }
     )
     monkeypatch.setattr(
@@ -1849,16 +1868,24 @@ async def test_prompt_v2_strict_audit_rejects_missing_singleton_flow_node(monkey
     from core.prompt_v2.schema import PromptCompileRequest
 
     flow = copy.deepcopy(DEFAULT_FLOW)
-    flow["nodes"] = [node for node in flow["nodes"] if node["id"] != "runtime_tool_prompt"]
+    flow["nodes"] = [node for node in flow["nodes"] if node["id"] != "runtime_context"]
     flow["edges"] = [
         edge
         for edge in flow["edges"]
-        if "runtime_tool_prompt" not in {edge["from"], edge["to"]}
+        if "runtime_context" not in {edge["from"], edge["to"]}
     ]
-    flow["edges"].append({
-        "from": "persona_reference",
-        "to": "conversation_context_header",
-    })
+    flow["edges"].extend([
+        {
+            "from": "persona_reference",
+            "to": "group_context",
+            "chat_types": ["group"],
+        },
+        {
+            "from": "persona_reference",
+            "to": "conversation_context_header",
+            "chat_types": ["private"],
+        },
+    ])
     monkeypatch.setattr(
         compiler,
         "load_flow",
@@ -1872,17 +1899,13 @@ async def test_prompt_v2_strict_audit_rejects_missing_singleton_flow_node(monkey
         )
 
     assert any(
-        "required flow section runtime_tool_prompt must appear once, got 0" in issue
+        "required flow section runtime_context must appear once, got 0" in issue
         for issue in exc.value.issues
     )
-    fallback = next(
-        section
+    assert all(
+        section["runtime_key"] != "runtime_context"
         for section in exc.value.plan.flow_sections
-        if section["runtime_key"] == "runtime_tool_prompt"
-        and section["origin"] == "fallback"
     )
-    assert fallback["status"] == "emitted"
-    assert fallback["message_indexes"]
 
 
 @pytest.mark.asyncio

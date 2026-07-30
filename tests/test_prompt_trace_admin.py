@@ -330,7 +330,8 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     assert "history_message_count" in effective_v2_json["debug"]
     rendered_v2_request = json.dumps(effective_v2_json["request_json"], ensure_ascii=False)
     assert rendered_v2_request.count("EFFECTIVE_PROMPT_V2_MARKER") == 1
-    assert rendered_v2_request.count("[RuntimeTool]") == 1
+    assert rendered_v2_request.count("[RuntimeTool]") == 0
+    assert effective_v2_json["request_json"]["tools"]
     context_payloads = []
     for message in effective_v2_json["request_json"]["messages"]:
         content = str(message.get("content") or "")

@@ -148,6 +148,17 @@ def build_chat_runtime_route_context(
             private_decision=runtime_input.private_decision,
             guardrail_status=runtime_input.guardrail_status,
             classifier_ran=runtime_input.classifier_ran,
+                event_time=str(
+                    (
+                        getattr(runtime_input.req, "client_meta", None)
+                        if isinstance(
+                            getattr(runtime_input.req, "client_meta", None),
+                            dict,
+                        )
+                        else {}
+                    ).get("event_time")
+                    or ""
+            ),
         ),
         build_multimodal_user_input_text=services.build_multimodal_user_input_text,
         max_query_chars=services.max_query_chars,

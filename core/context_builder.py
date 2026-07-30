@@ -7,6 +7,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 
+from app.session_memory import config
 from core.time_utils import db_now_naive
 from core.token_utils import estimate_tokens as estimate_tokens
 
@@ -337,7 +338,10 @@ def build_session_memory(
         chat_type=chat_type,
         max_turns=max_turns,
         max_tokens=max_tokens,
-        max_per_msg=max_per_msg,
+        max_per_msg=max(
+            int(max_per_msg or 0),
+            config.PRIVATE_CONTEXT_MAX_MESSAGE_CHARS,
+        ) if not is_group else max_per_msg,
         after_clear_at=history_clear_at,
         after_turn_id=last_covered_id,
     )
@@ -431,20 +435,24 @@ def build_session_memory(
     prev_dt: datetime | None = None
     for item in recent_window:
         cur_dt = item.get("created_at")
-        # Prompt v2 的 history 契约只接受 user/assistant role，独立 system 行
-        # 会在 normalized_history_messages() 被丢弃；时间间隔提示必须折叠进
-        # 随后一条消息的正文前缀才能真正到达模型。
-        gap_hint = ""
         if prev_dt is not None and cur_dt is not None:
             gap_min = (cur_dt - prev_dt).total_seconds() / 60
             if gap_min > CONTEXT_GAP_HINT_MIN:
-                gap_hint = f"[时间间隔] 距上一条消息约{int(gap_min)}分钟\n"
                 gap_breaks += 1
-        time_label = relative_time_label(cur_dt) if cur_dt else ""
-        display = f"{time_label} {item['content']}".strip() if time_label else item["content"]
+        display = item["content"]
+        if item["role"] == "user":
+            from core.prompt_v2.context_adapters import (
+                build_private_history_user_event,
+            )
+
+            display = build_private_history_user_event(
+                display,
+                meta=_safe_meta(item.get("meta_json", "{}")),
+                created_at=cur_dt,
+            )
         history_messages.append({
             "role": item["role"],
-            "content": f"{gap_hint}{display}",
+            "content": display,
             "meta_json": item.get("meta_json", "{}"),
             "_created_at": cur_dt,
             "turn_id": item.get("turn_id"),
@@ -601,18 +609,92 @@ def format_group_planner_message(
     timestamp: datetime | None = None,
     message_id: str = "",
     include_message_id: bool = True,
+    max_content_chars: int = config.GROUP_CONTEXT_MAX_MESSAGE_CHARS,
 ) -> str:
     """生成 Maibot planner 风格的群消息文本块。"""
     safe_sender = sanitize_prompt_text(sender_name or "未知用户", 80)
-    safe_content = sanitize_prompt_text(_strip_speaker_prefix(content, sender_name), 500)
+    safe_content = sanitize_prompt_text(
+        _strip_speaker_prefix(content, sender_name),
+        max_content_chars,
+    )
     ts = timestamp or db_now_naive()
     lines: list[str] = []
     if include_message_id and message_id:
         lines.append(f"[msg_id]{sanitize_prompt_text(message_id, 120)}")
-    lines.append(f"[时间]{ts.strftime('%H:%M:%S')}")
+    lines.append(f"[时间]{ts.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"[用户名]{safe_sender}")
     lines.append(f"[发言内容]{safe_content}")
     return "\n".join(lines)
+
+
+def format_group_direction_lines(
+    *,
+    directed: dict | None = None,
+    mentions: list[dict] | None = None,
+    reply_to: dict | None = None,
+) -> list[str]:
+    """把群消息指向性元数据渲染为稳定文本行。"""
+
+    direction = directed if isinstance(directed, dict) else {}
+    normalized_mentions = mentions if isinstance(mentions, list) else []
+    normalized_reply = reply_to if isinstance(reply_to, dict) else None
+    lines: list[str] = []
+    if direction.get("at_bot"):
+        lines.append("[指向性] @bot")
+    if direction.get("reply_to_bot"):
+        lines.append("[指向性] 回复bot")
+    if direction.get("at_others"):
+        names = [
+            str(item.get("nickname") or item.get("user_id") or "?")
+            for item in normalized_mentions
+            if isinstance(item, dict) and not item.get("is_bot")
+        ]
+        if names:
+            lines.append(f"[指向性] @其他人: {', '.join(names[:5])}")
+        else:
+            lines.append("[指向性] @其他人")
+    if direction.get("reply_to_others"):
+        lines.append("[指向性] 回复其他人")
+    if normalized_reply:
+        sender = str(
+            normalized_reply.get("sender_name")
+            or normalized_reply.get("sender_id")
+            or "未知用户"
+        )
+        content = str(normalized_reply.get("content") or "")
+        if content:
+            lines.append(f"[引用] {sender}: {content[:160]}")
+    return lines
+
+
+def format_group_canonical_message(
+    *,
+    sender_name: str,
+    content: str,
+    timestamp: datetime | None = None,
+    message_id: str = "",
+    directed: dict | None = None,
+    mentions: list[dict] | None = None,
+    reply_to: dict | None = None,
+    max_chars: int = config.GROUP_CONTEXT_MAX_MESSAGE_CHARS,
+) -> str:
+    """统一渲染群聊当前事件、历史原文和摘要输入。"""
+
+    block = format_group_planner_message(
+        sender_name=sender_name,
+        content=content,
+        timestamp=timestamp,
+        message_id=message_id,
+        max_content_chars=max_chars,
+    )
+    direction_lines = format_group_direction_lines(
+        directed=directed,
+        mentions=mentions,
+        reply_to=reply_to,
+    )
+    if direction_lines:
+        block = "\n".join([*direction_lines, block])
+    return sanitize_prompt_text(block, max_chars).strip()
 
 
 def build_timing_recent_context(
@@ -692,9 +774,12 @@ def build_group_recent_messages(
     db,
     session_id: str,
     *,
-    limit: int = MAX_GROUP_RECENT_ROWS,
+    limit: int | None = MAX_GROUP_RECENT_ROWS,
     max_per_msg: int = 500,
     max_total: int = 3000,
+    max_tokens: int | None = None,
+    after_source_id: int = 0,
+    after_clear_at: datetime | None = None,
     exclude_message_ids: list[str] | None = None,
 ) -> tuple[list[dict], dict]:
     """从 ChatLog 构建群聊统一上下文 role messages。
@@ -706,17 +791,27 @@ def build_group_recent_messages(
     from core.database import ChatLog
 
     excluded = {str(x) for x in (exclude_message_ids or []) if str(x).strip()}
-    rows = (
-        db.query(ChatLog)
-        .filter(ChatLog.session_id == session_id,
-                ChatLog.role.in_(("ambient", "user", "assistant")))
-        .order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
-        .limit(max(1, limit * 3))
-        .all()
+    query = db.query(ChatLog).filter(
+        ChatLog.session_id == session_id,
+        ChatLog.id > int(after_source_id or 0),
+        ChatLog.role.in_(("ambient", "user", "assistant")),
     )
-    selected = []
+    if after_clear_at is not None:
+        query = query.filter(ChatLog.created_at > after_clear_at)
+    rows = query.order_by(ChatLog.id.desc()).yield_per(500)
+    selected_desc: list[tuple[object, str, str, int]] = []
     skipped_excluded = 0
     skipped_no_context = 0
+    total_chars = 0
+    total_tokens = 0
+    truncated = False
+    normalized_limit = max(1, int(limit)) if limit is not None else None
+    normalized_max_chars = max(0, int(max_total or 0))
+    normalized_max_tokens = (
+        max(1, int(max_tokens))
+        if max_tokens is not None
+        else None
+    )
     for row in rows:
         if excluded and _chatlog_source_ids(row) & excluded:
             skipped_excluded += 1
@@ -725,43 +820,92 @@ def build_group_recent_messages(
         if _chatlog_context_skip(meta):
             skipped_no_context += 1
             continue
-        selected.append(row)
-        if len(selected) >= limit:
-            break
-
-    messages: list[dict] = []
-    total = 0
-    for row in reversed(selected):
         sender = row.sender_name or ("nanobot" if row.role == "assistant" else "未知用户")
         content = sanitize_prompt_text(row.content or "", max_per_msg)
         if not content.strip():
             continue
-        block = format_group_planner_message(
+        block = format_group_canonical_message(
             sender_name=sender,
             content=content,
             timestamp=row.created_at,
             message_id=row.message_id or "",
+            directed=meta.get("directed"),
+            mentions=meta.get("mentions"),
+            reply_to=meta.get("reply_to"),
+            max_chars=max_per_msg,
         )
-        if messages and total + len(block) > max_total:
+        token_cost = estimate_tokens(block)
+        if selected_desc and (
+            (
+                normalized_max_chars > 0
+                and total_chars + len(block) > normalized_max_chars
+            )
+            or (
+                normalized_max_tokens is not None
+                and total_tokens + token_cost > normalized_max_tokens
+            )
+        ):
+            truncated = True
             break
         role = "assistant" if row.role == "assistant" else "user"
-        messages.append({
-            "role": role,
-            "content": block,
-            "meta_json": row.meta_json,
-            "_created_at": row.created_at,
-            "source": "chatlog",
-            "message_id": row.message_id or "",
-        })
-        total += len(block)
+        selected_desc.append((row, block, role, token_cost))
+        total_chars += len(block)
+        total_tokens += token_cost
+        if normalized_limit is not None and len(selected_desc) >= normalized_limit:
+            truncated = True
+            break
+
+    from core.prompt_v2.context_adapters import ensure_user_input_block
+
+    messages: list[dict] = []
+    for row, block, role, _token_cost in reversed(selected_desc):
+        if role == "user" and messages and messages[-1]["role"] == "user":
+            previous = messages[-1]
+            previous_content = str(previous.get("content") or "")
+            if (
+                previous_content.startswith("<user_input>\n")
+                and previous_content.endswith("\n</user_input>")
+            ):
+                previous_content = previous_content[
+                    len("<user_input>\n"):-len("\n</user_input>")
+                ]
+            previous["content"] = ensure_user_input_block(
+                f"{previous_content}\n\n{block}"
+            )
+            previous.setdefault("source_ids", []).append(int(row.id or 0))
+            continue
+        messages.append(
+            {
+                "role": role,
+                "content": (
+                    ensure_user_input_block(block)
+                    if role == "user"
+                    else str(row.content or "")
+                ),
+                "meta_json": row.meta_json,
+                "_created_at": row.created_at,
+                "source": "chatlog",
+                "message_id": row.message_id or "",
+                "source_id": int(row.id or 0),
+                "source_ids": [int(row.id or 0)],
+            }
+        )
 
     debug = {
         "context_source": "chatlog",
-        "group_recent_rows": len(rows),
+        "group_recent_rows": len(selected_desc) + skipped_excluded + skipped_no_context,
         "group_recent_messages": len(messages),
-        "group_recent_chars": total,
+        "group_recent_chars": total_chars,
+        "group_recent_tokens": total_tokens,
         "group_recent_excluded": skipped_excluded,
         "group_recent_no_context_skipped": skipped_no_context,
+        "group_recent_truncated": truncated,
+        "group_recent_source_ids": [
+            int(source_id)
+            for item in messages
+            for source_id in list(item.get("source_ids") or [])
+        ],
+        "group_recent_after_source_id": int(after_source_id or 0),
     }
     return messages, debug
 
@@ -781,9 +925,8 @@ def build_chat_context(
 ) -> tuple[str, list[dict], dict]:
     """构建真实回复链路使用的统一上下文。
 
-    私聊继续使用 ConversationTurn；群聊使用 ChatLog 作为现场 raw window 来源。
-    第一版群聊 rolling summary 仍基于 ConversationTurn，只覆盖 bot 参与过的
-    query/answer，不代表完整 ambient 群聊现场。
+    私聊继续使用 ConversationTurn；群聊只消费后台生成的 ChatLog Rolling
+    Summary，并注入其游标之后的连续群聊原文。回复链路本身不生成摘要。
     """
     if not is_group:
         header, messages, debug = build_session_memory(
@@ -799,14 +942,93 @@ def build_chat_context(
         debug["context_source"] = "conversation_turn"
         return header, messages, debug
 
+    from app.session_memory import config as session_memory_config
+    from app.session_memory.renderer import render_rolling_summary_context
+    from app.session_memory.rolling_summary import (
+        SUMMARY_SOURCE_CHAT_LOG,
+        get_best_session_summary,
+        summary_covered_until,
+    )
+    from core.database import User
+
+    history_clear_at = None
+    owner_ids = [item for item in (session_id, user_id) if item]
+    if owner_ids:
+        users = db.query(User).filter(User.id.in_(owner_ids)).all()
+        clear_points = [
+            row.history_clear_at
+            for row in users
+            if row.history_clear_at is not None
+        ]
+        if clear_points:
+            history_clear_at = max(clear_points)
+
+    active_summary = get_best_session_summary(
+        db,
+        session_id,
+        source_type=SUMMARY_SOURCE_CHAT_LOG,
+        allow_fallback=False,
+        after_clear_at=history_clear_at,
+        mutate_stale=False,
+    )
+    covered_until_source_id = summary_covered_until(active_summary)
     messages, debug = build_group_recent_messages(
         db,
         session_id,
-        limit=MAX_GROUP_RECENT_ROWS,
-        max_per_msg=max_per_msg,
-        max_total=max_total,
+        limit=None,
+        max_per_msg=max(
+            int(max_per_msg or 0),
+            session_memory_config.GROUP_CONTEXT_MAX_MESSAGE_CHARS,
+        ),
+        max_total=0,
+        max_tokens=session_memory_config.GROUP_CONTEXT_MAX_TOKENS,
+        after_source_id=covered_until_source_id,
+        after_clear_at=history_clear_at,
         exclude_message_ids=exclude_message_ids,
     )
+    summary_header = ""
+    try:
+        summary_header = render_rolling_summary_context(active_summary)
+        source_ids = list(debug.get("group_recent_source_ids") or [])
+        debug.update({
+            "rolling_summary_enabled": True,
+            "rolling_summary_read_only": read_only,
+            "rolling_summary_source": SUMMARY_SOURCE_CHAT_LOG,
+            "rolling_summary_scope": "full_group_chatlog",
+            "rolling_summary_kind": (
+                str(getattr(active_summary, "summary_kind", "") or "")
+                if summary_header else ""
+            ),
+            "rolling_summary_injected": bool(summary_header),
+            "rolling_summary_id": int(getattr(active_summary, "id", 0) or 0) if summary_header else 0,
+            "rolling_summary_covered_until_source_id": covered_until_source_id,
+            "rolling_summary_covered_until_turn_id": 0,
+            "rolling_summary_source_turn_count": (
+                int(getattr(active_summary, "source_turn_count", 0) or 0)
+                if summary_header else 0
+            ),
+            "rolling_summary_pending_source_ids": [],
+            "rolling_summary_raw_start_source_id": (
+                int(source_ids[0]) if source_ids else 0
+            ),
+            "rolling_summary_recent_raw_source_ids": source_ids,
+            "rolling_summary_pending_turn_ids": [],
+            "rolling_summary_raw_start_turn_id": 0,
+            "rolling_summary_recent_raw_turn_ids": [],
+            "rolling_summary_skipped_reason": "background_worker_only",
+            "rolling_summary_error": "",
+            "rolling_summary_committed": False,
+            "rolling_summary_eligible_skipped": [],
+            "rolling_summary_pending_truncated": False,
+            "rolling_summary_raw_window_count": len(messages),
+        })
+    except Exception as exc:
+        logger.warning("[Context] group rolling summary render failed: %s", exc)
+        debug.update({
+            "rolling_summary_enabled": True,
+            "rolling_summary_injected": False,
+            "rolling_summary_error": str(exc),
+        })
     profile_header = ""
     profile_debug: dict = {
         "group_profile_mode": "off",
@@ -824,121 +1046,6 @@ def build_chat_context(
             allow_model_calls=not read_only,
         )
     debug.update(profile_debug)
-    summary_header = ""
-    try:
-        from app.session_memory.renderer import render_rolling_summary_context
-        from app.session_memory.rolling_summary import get_best_session_summary, maybe_rollup_session_summary
-        from app.session_memory.windowing import (
-            load_latest_raw_window,
-            load_pending_for_summary_turns,
-            raw_window_limits,
-        )
-        from core.database import User
-
-        user = db.query(User).filter(User.id == user_id).first() if user_id else None
-        history_clear_at = user.history_clear_at if user and user.history_clear_at else None
-        active_summary = get_best_session_summary(
-            db,
-            session_id,
-            after_clear_at=history_clear_at,
-            mutate_stale=not read_only,
-        )
-        last_covered_id = int(active_summary.covered_until_turn_id or 0) if active_summary else 0
-        max_turns, max_tokens = raw_window_limits("group", max_total=max_total)
-        rolling_raw_window, raw_debug = load_latest_raw_window(
-            db,
-            session_id=session_id,
-            chat_type="group",
-            max_turns=max_turns,
-            max_tokens=max_tokens,
-            max_per_msg=max_per_msg,
-            after_clear_at=history_clear_at,
-            after_turn_id=last_covered_id,
-        )
-        raw_start_id = int(raw_debug.get("raw_window_start_turn_id") or 0)
-        pending, pending_debug = load_pending_for_summary_turns(
-            db,
-            session_id=session_id,
-            last_covered_id=last_covered_id,
-            raw_window_start_turn_id=raw_start_id,
-            after_clear_at=history_clear_at,
-        )
-        if pending:
-            rollup_result = maybe_rollup_session_summary(
-                db,
-                session_id=session_id,
-                user_id=user_id,
-                chat_type="group",
-                active_summary=active_summary,
-                pending_turns=pending,
-                recent_raw_turn_ids=raw_debug.get("raw_window_turn_ids") or [],
-                raw_window_start_turn_id=raw_start_id,
-                current_user_input=current_user_input,
-                after_clear_at=history_clear_at,
-                dry_run=read_only,
-            )
-            if rollup_result.skipped_reason == "history_clear_changed":
-                active_summary = None
-            elif rollup_result.summary is not None:
-                active_summary = rollup_result.summary
-            elif read_only and rollup_result.summary_text:
-                active_summary = _build_transient_rollup_summary(
-                    session_id=session_id,
-                    user_id=user_id,
-                    chat_type="group",
-                    summary_text=rollup_result.summary_text,
-                    pending=pending,
-                    raw_window_start_turn_id=raw_start_id,
-                )
-            skipped_reason = rollup_result.skipped_reason
-            rollup_error = rollup_result.error
-            rollup_committed = _commit_rollup_unit_of_work(db, rollup_result)
-        else:
-            skipped_reason = "empty_pending"
-            rollup_error = ""
-            rollup_committed = False
-
-        summary_header = render_rolling_summary_context(active_summary)
-        debug.update({
-            "rolling_summary_enabled": True,
-            "rolling_summary_read_only": read_only,
-            "rolling_summary_source": "conversation_turn",
-            "rolling_summary_scope": "bot_participation",
-            "rolling_summary_kind": (
-                str(getattr(active_summary, "summary_kind", "") or "deterministic_fallback")
-                if summary_header else ""
-            ),
-            "rolling_summary_injected": bool(summary_header),
-            "rolling_summary_id": int(getattr(active_summary, "id", 0) or 0) if summary_header else 0,
-            "rolling_summary_covered_until_turn_id": (
-                int(getattr(active_summary, "covered_until_turn_id", 0) or 0)
-                if summary_header else 0
-            ),
-            "rolling_summary_source_turn_count": (
-                int(getattr(active_summary, "source_turn_count", 0) or 0)
-                if summary_header else 0
-            ),
-            "rolling_summary_pending_turn_ids": [int(turn.id) for turn in pending],
-            "rolling_summary_raw_start_turn_id": raw_start_id,
-            "rolling_summary_recent_raw_turn_ids": list(raw_debug.get("raw_window_turn_ids") or []),
-            "rolling_summary_skipped_reason": skipped_reason,
-            "rolling_summary_error": rollup_error,
-            "rolling_summary_committed": rollup_committed,
-            "rolling_summary_eligible_skipped": (
-                list(raw_debug.get("raw_window_skipped") or [])
-                + list(pending_debug.get("pending_skipped") or [])
-            ),
-            "rolling_summary_pending_truncated": bool(pending_debug.get("pending_truncated")),
-            "rolling_summary_raw_window_count": len(rolling_raw_window),
-        })
-    except Exception as exc:
-        db.rollback()
-        logger.warning("[Context] group rolling summary render failed: %s", exc)
-        debug.update({
-            "rolling_summary_enabled": True,
-            "rolling_summary_injected": False,
-            "rolling_summary_error": str(exc),
-        })
     header = "\n".join(
         x for x in [
             profile_header,

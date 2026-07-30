@@ -38,8 +38,6 @@ RUNTIME_NODE_KEYS = frozenset(
         "conversation_context_header",
         "history_messages",
         "group_context",
-        "effort_constraint",
-        "runtime_tool_prompt",
         "current_user_event",
     }
 )
@@ -116,11 +114,6 @@ RESERVED_SECTION_CONTRACTS: tuple[ReservedSectionContract, ...] = (
         node_id="persona_reference",
         node_type="runtime",
         runtime_key="persona_reference",
-    ),
-    ReservedSectionContract(
-        node_id="runtime_tool_prompt",
-        node_type="runtime",
-        runtime_key="runtime_tool_prompt",
     ),
     ReservedSectionContract(
         node_id="runtime_context",

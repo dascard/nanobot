@@ -153,7 +153,7 @@ def _sha256_text(text: str) -> str:
 def _strip_kt_framework_prompt_sections(text: str) -> str:
     """移除 KT 自动追加的工具/技能说明。
 
-    真实工具权限由 API tools schema 和 RuntimeTool 决定；这些大段说明容易
+    真实工具权限由 API tools schema 和服务端 ToolPlan 决定；这些大段说明容易
     和运行时裁剪后的 schema 不一致。
     """
     content = str(text or "")
@@ -476,7 +476,6 @@ class NanobotBridge(MessageContractBridgeMixin):
         "[PersonaContext]",
         "[CurrentTimeContext]",
         "[GroupRestriction]",
-        "[RuntimeTool]",
         "<group_recent_context>",
         "<group_memory_context",
         "[GroupProfileContext]",
@@ -647,6 +646,7 @@ class NanobotBridge(MessageContractBridgeMixin):
             session_name=str(meta.get("session_name") or ""),
             trigger_reason=str(meta.get("trigger_reason") or ""),
             timing_decision=str(meta.get("timing_decision") or ""),
+            event_time=str(meta.get("event_time") or ""),
             current_message_id=str(meta.get("message_id") or ""),
             source_message_ids=source_message_ids,
             self_id=str(meta.get("self_id") or ""),

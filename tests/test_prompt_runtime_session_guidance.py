@@ -405,7 +405,6 @@ async def test_guidance_cannot_change_tool_plan_or_runtime_facts(
     assert _runtime_facts(injected.messages) == _runtime_facts(baseline.messages)
     assert _runtime_facts(injected.messages) == {
         "chat_type": "group",
-        "current_time": "2026-07-13 12:00:00 CST",
         "group_id": "invariant",
         "is_super_user": True,
         "platform": "qq",
