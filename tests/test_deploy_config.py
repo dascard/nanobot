@@ -467,7 +467,7 @@ def test_runtime_release_workflow_builds_sbom_and_manifest_after_both_gates():
     assert "build_release_manifest.py release" in workflow
     assert (
         "--schema-migration-head "
-        "20260729_scheduled_task_workflow_execution"
+        "20260730_llm_request_execution_phase"
     ) in workflow
     assert "scripts/build_context_manifest.py" in workflow
     assert '--input-sha "build_context=${BUILD_CONTEXT_SHA256}"' in workflow

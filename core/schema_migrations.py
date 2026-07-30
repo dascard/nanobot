@@ -83,6 +83,9 @@ _SCHEDULED_TASK_OWNER_IDENTITY_VERSION = (
 _SCHEDULED_TASK_WORKFLOW_EXECUTION_VERSION = (
     "20260729_scheduled_task_workflow_execution"
 )
+_LLM_REQUEST_EXECUTION_PHASE_VERSION = (
+    "20260730_llm_request_execution_phase"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -777,6 +780,23 @@ def _llm_request_log_columns(conn: Any, engine: Any, db_path: str | None) -> Non
         "runtime_disabled_tools_json": "TEXT DEFAULT '[]'",
         "framework_injected_tools_json": "TEXT DEFAULT '[]'",
     })
+
+
+def _llm_request_execution_phase(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    _add_missing_columns(conn, "llm_api_request_logs", {
+        "phase": "TEXT DEFAULT ''",
+        "round_index": "INTEGER DEFAULT 0",
+        "route_attempt_index": "INTEGER DEFAULT 0",
+    })
+    if "llm_api_request_logs" in _table_names(conn):
+        _create_indexes(conn, [
+            "CREATE INDEX IF NOT EXISTS idx_llm_api_request_phase "
+            "ON llm_api_request_logs(phase)",
+        ])
 
 
 def _reply_contract_check_logs(conn: Any, engine: Any, db_path: str | None) -> None:
@@ -4174,6 +4194,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _SCHEDULED_TASK_WORKFLOW_EXECUTION_VERSION,
         "scheduled task unified program and workflow execution",
         _scheduled_task_workflow_execution,
+    ),
+    (
+        _LLM_REQUEST_EXECUTION_PHASE_VERSION,
+        "llm request execution phase and round indexes",
+        _llm_request_execution_phase,
     ),
 ]
 

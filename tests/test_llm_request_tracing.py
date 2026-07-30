@@ -58,6 +58,9 @@ def test_record_request_returns_id_and_finish_updates_same_row(db_session):
         trace_id="trace-response",
         run_id="run-response",
         source="unit",
+        phase="agent.tool_round",
+        round_index=3,
+        route_attempt_index=1,
         provider="newapi",
         model="model-r",
         url="http://llm.test/v1/chat/completions",
@@ -74,6 +77,7 @@ def test_record_request_returns_id_and_finish_updates_same_row(db_session):
         response_status=200,
         status="success",
         latency_ms=123,
+        phase="agent.final_action",
     )
 
     row = db_session.query(LLMApiRequestLog).filter_by(id=log_id).one()
@@ -82,6 +86,9 @@ def test_record_request_returns_id_and_finish_updates_same_row(db_session):
     assert row.response_preview
     assert row.response_status == 200
     assert row.status == "success"
+    assert row.phase == "agent.final_action"
+    assert row.round_index == 3
+    assert row.route_attempt_index == 1
     assert row.latency_ms == 123
     assert row.finished_at is not None
     assert "secret-token" not in row.headers_json
@@ -222,6 +229,127 @@ def test_openai_sdk_tracer_records_non_stream_request(monkeypatch):
     assert finished[0]["log_id"] == 456
     assert finished[0]["status"] == "success"
     assert finished[0]["response"]["choices"][0]["message"]["content"] == "ok"
+
+
+def test_openai_sdk_tracer_records_agent_phase_and_monotonic_rounds(
+    monkeypatch,
+):
+    from core.llm_trace_context import llm_trace_scope
+    from core.llm_sdk_tracing import install_openai_chat_completion_tracer
+    from core.tool_execution_policy import tool_execution_scope
+
+    recorded = []
+    finished = []
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **kwargs: recorded.append(kwargs) or len(recorded)),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **kwargs: finished.append(kwargs)),
+    )
+    create = AsyncMock(side_effect=[
+        {
+            "choices": [{
+                "message": {
+                    "tool_calls": [{
+                        "function": {
+                            "name": "workspace_search",
+                            "arguments": "{}",
+                        },
+                    }],
+                },
+            }],
+        },
+        {"choices": [{"message": {"content": "直接文本终态"}}]},
+    ])
+    llm = SimpleNamespace(
+        _client=SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=create),
+            ),
+        ),
+        _api_key="key",
+        _extra_headers={},
+        base_url="http://provider.test/v1",
+        provider_name="newapi",
+    )
+    assert install_openai_chat_completion_tracer(llm)
+
+    with (
+        tool_execution_scope("request-1"),
+        llm_trace_scope(
+            trace_id="trace-1",
+            run_id="run-1",
+            source="replyer.group",
+            phase="agent.tool_round",
+            route_attempt_index=1,
+        ),
+    ):
+        run_async(llm._client.chat.completions.create(model="m", messages=[]))
+        run_async(llm._client.chat.completions.create(model="m", messages=[]))
+
+    assert [item["round_index"] for item in recorded] == [1, 2]
+    assert all(item["phase"] == "agent.tool_round" for item in recorded)
+    assert all(item["route_attempt_index"] == 1 for item in recorded)
+    assert finished[0]["phase"] == "agent.tool_round"
+    assert finished[1]["phase"] == "agent.final_action"
+
+
+def test_openai_sdk_tracer_keeps_route_and_contract_retry_phases(monkeypatch):
+    from core.llm_trace_context import llm_trace_scope
+    from core.llm_sdk_tracing import install_openai_chat_completion_tracer
+    from core.tool_execution_policy import tool_execution_scope
+
+    recorded = []
+    finished = []
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **kwargs: recorded.append(kwargs) or len(recorded)),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **kwargs: finished.append(kwargs)),
+    )
+    create = AsyncMock(
+        return_value={"choices": [{"message": {"content": "完成"}}]},
+    )
+    llm = SimpleNamespace(
+        _client=SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=create),
+            ),
+        ),
+        _api_key="key",
+        _extra_headers={},
+        base_url="http://provider.test/v1",
+        provider_name="newapi",
+    )
+    assert install_openai_chat_completion_tracer(llm)
+
+    with tool_execution_scope("request-2"):
+        with llm_trace_scope(
+            phase="model.route_retry",
+            route_attempt_index=2,
+        ):
+            run_async(
+                llm._client.chat.completions.create(model="m", messages=[]),
+            )
+        with llm_trace_scope(phase="agent.reply_contract_retry"):
+            run_async(
+                llm._client.chat.completions.create(model="m", messages=[]),
+            )
+
+    assert [item["phase"] for item in recorded] == [
+        "model.route_retry",
+        "agent.reply_contract_retry",
+    ]
+    assert [item["round_index"] for item in recorded] == [1, 2]
+    assert recorded[0]["route_attempt_index"] == 2
+    assert [item["phase"] for item in finished] == [
+        "model.route_retry",
+        "agent.reply_contract_retry",
+    ]
 
 
 def test_openai_sdk_tracer_recomputes_metrics_for_each_tool_loop_request(db_session):

@@ -1,4 +1,9 @@
-"""LLM 请求链路上下文——通过 ContextVar 传递 trace_id/run_id/source 到深层调用。"""
+"""LLM 请求链路上下文。
+
+通过 ContextVar 向深层调用传递 trace_id、run_id、业务 source 和 Agent
+执行阶段。业务 source 用于说明“谁发起调用”，phase 用于区分工具轮次、
+最终动作、回复合同重试和真实模型路由重试。
+"""
 
 from __future__ import annotations
 
@@ -8,11 +13,22 @@ from contextvars import ContextVar
 llm_trace_id: ContextVar[str] = ContextVar("llm_trace_id", default="")
 llm_run_id: ContextVar[str] = ContextVar("llm_run_id", default="")
 llm_source: ContextVar[str] = ContextVar("llm_source", default="")
+llm_phase: ContextVar[str] = ContextVar("llm_phase", default="")
+llm_route_attempt_index: ContextVar[int] = ContextVar(
+    "llm_route_attempt_index",
+    default=0,
+)
 
 
 def get_llm_trace_vars() -> tuple[str, str, str]:
     """返回当前上下文的 (trace_id, run_id, source)。"""
     return llm_trace_id.get(), llm_run_id.get(), llm_source.get()
+
+
+def get_llm_trace_execution_vars() -> tuple[str, int]:
+    """返回当前上下文的 (phase, route_attempt_index)。"""
+
+    return llm_phase.get(), llm_route_attempt_index.get()
 
 
 @contextmanager
@@ -21,21 +37,32 @@ def llm_trace_scope(
     trace_id: str = "",
     run_id: str = "",
     source: str = "",
+    phase: str = "",
+    route_attempt_index: int | None = None,
 ):
     """LLM 请求链路上下文管理器。
 
-    内层 source 覆盖外层，trace_id/run_id 默认继承外层。
+    内层 source/phase 覆盖外层，trace_id/run_id 默认继承外层；
+    route_attempt_index 未提供时继承外层。
     支持嵌套使用。
     """
     prev_t = llm_trace_id.get()
     prev_r = llm_run_id.get()
     prev_s = llm_source.get()
+    prev_p = llm_phase.get()
+    prev_a = llm_route_attempt_index.get()
     tok_t = llm_trace_id.set(trace_id or prev_t)
     tok_r = llm_run_id.set(run_id or prev_r)
     tok_s = llm_source.set(source or prev_s)
+    tok_p = llm_phase.set(phase or prev_p)
+    tok_a = llm_route_attempt_index.set(
+        prev_a if route_attempt_index is None else max(0, int(route_attempt_index))
+    )
     try:
         yield
     finally:
+        llm_route_attempt_index.reset(tok_a)
+        llm_phase.reset(tok_p)
         llm_source.reset(tok_s)
         llm_run_id.reset(tok_r)
         llm_trace_id.reset(tok_t)

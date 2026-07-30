@@ -4,7 +4,7 @@
     "registry": {
       "generation": 1,
       "namespace": "admin_table_view",
-      "sha256": "c2d01fdd1ba7c46d752d69dc1474be05148567904479089bc545e15172be011c"
+      "sha256": "c55305a23d85d4329d2d0df2e293cdb22d791cc3c523e44a863ddf566fd177e2"
     },
     "request_fields": [
       "cursor",
@@ -46,6 +46,9 @@
           "trace_id",
           "run_id",
           "source",
+          "phase",
+          "round_index",
+          "route_attempt_index",
           "provider",
           "model",
           "url",

@@ -870,6 +870,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 trace_id=trace_id,
                 run_id=run_id,
                 source=retry_source,
+                phase="agent.reply_contract_retry",
             ),
         ):
             turn = await self._require_runtime().execute_turn(
@@ -1172,7 +1173,15 @@ class NanobotBridge(MessageContractBridgeMixin):
                 from core.llm_trace_context import llm_trace_scope
 
                 with llm_trace_scope(
-                    trace_id=trace_id, run_id=run_id, source=reply_llm_source
+                    trace_id=trace_id,
+                    run_id=run_id,
+                    source=reply_llm_source,
+                    phase=(
+                        "agent.tool_round"
+                        if attempt == 0
+                        else "model.route_retry"
+                    ),
+                    route_attempt_index=attempt + 1,
                 ):
                     turn = await self._require_runtime().execute_turn(
                         AgentTurnRequest(

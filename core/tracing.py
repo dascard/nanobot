@@ -922,6 +922,9 @@ class LLMRequestTracer:
         trace_id: str = "",
         run_id: str = "",
         source: str = "",
+        phase: str = "",
+        round_index: int = 0,
+        route_attempt_index: int = 0,
         provider: str = "",
         model: str = "",
         url: str = "",
@@ -963,6 +966,12 @@ class LLMRequestTracer:
                         trace_id=str(trace_id or "")[:64],
                         run_id=str(run_id or "")[:80],
                         source=str(source or "")[:64],
+                        phase=str(phase or "")[:64],
+                        round_index=max(0, int(round_index or 0)),
+                        route_attempt_index=max(
+                            0,
+                            int(route_attempt_index or 0),
+                        ),
                         provider=str(provider or "")[:64],
                         model=str(model or "")[:160],
                         url=safe_url_for_logging(url),
@@ -1006,6 +1015,7 @@ class LLMRequestTracer:
         status: str = "success",
         error: str = "",
         latency_ms: int = 0,
+        phase: str | None = None,
     ) -> None:
         if not log_id:
             return
@@ -1041,6 +1051,8 @@ class LLMRequestTracer:
                         )
                     log.response_status = int(response_status or 0)
                     log.status = normalized_status
+                    if phase is not None:
+                        log.phase = str(phase or "")[:64]
                     log.error = safe_response_summary(error, max_chars=2000)
                     log.latency_ms = int(latency_ms or 0)
                     log.finished_at = db_now_naive()

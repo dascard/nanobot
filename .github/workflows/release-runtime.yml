@@ -208,7 +208,7 @@ jobs:
             --input web_lock=webui/package-lock.json \
             --input prompt_defaults=prompts.v2.default \
             --input-sha "build_context=${BUILD_CONTEXT_SHA256}" \
-            --schema-migration-head 20260729_scheduled_task_workflow_execution \
+            --schema-migration-head 20260730_llm_request_execution_phase \
             --image-reference "${NANOBOT_RUNTIME_IMAGE}" \
             --image-id "${RUNTIME_IMAGE_ID}" \
             --sbom-file "${EVIDENCE_DIR}/runtime.spdx.json" \

@@ -113,7 +113,16 @@ def test_schema_migrations_records_applied_versions():
     assert "prompt_template_resolutions_json" in [
         col["name"] for col in inspector.get_columns("prompt_render_logs")
     ]
-    assert "response_json" in [col["name"] for col in inspector.get_columns("llm_api_request_logs")]
+    llm_log_columns = {
+        col["name"]
+        for col in inspector.get_columns("llm_api_request_logs")
+    }
+    assert {
+        "response_json",
+        "phase",
+        "round_index",
+        "route_attempt_index",
+    } <= llm_log_columns
     reply_contract_columns = [col["name"] for col in inspector.get_columns("reply_contract_check_logs")]
     assert "reply_tool_call_count" in reply_contract_columns
     assert "total_final_action_count" in reply_contract_columns
