@@ -224,11 +224,11 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             "identity_context",
             "session_guidance",
             "persona_reference",
+            "runtime_tool_prompt",
             "conversation_context_header",
             "history_messages",
             "group_context",
             "effort_constraint",
-            "runtime_tool_prompt",
             "runtime_context",
             "current_user_event",
         ]

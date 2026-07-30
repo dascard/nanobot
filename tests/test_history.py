@@ -79,10 +79,11 @@ def test_sanitize_caps_at_max_chars():
 # ── _build_session_memory ──
 
 def test_build_memory_empty_db(db_session):
-    """Empty database returns empty tuple."""
+    """空历史仍返回稳定的上下文契约头。"""
     from api.routes import _build_session_memory
     header, messages, _debug = _build_session_memory(db_session, "no_such_session")
-    assert header == ""
+    assert header.startswith("<conversation_context>")
+    assert "已裁剪的私聊上下文" in header
     assert messages == []
 
 

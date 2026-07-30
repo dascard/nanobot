@@ -319,6 +319,110 @@ async def test_prompt_cache_prefix_keeps_per_request_runtime_context_at_tail(
     tmp_path,
     monkeypatch,
 ):
+    from core.context_builder import build_conversation_context_header
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    repo_root = Path(__file__).resolve().parents[1]
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    shutil.copytree(repo_root / "prompts.v2.default", default_dir)
+    shutil.copytree(default_dir, runtime_dir)
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    original_build_template_values = compiler.build_template_values
+    current_times = iter(
+        (
+            "2026-07-30 12:00:00 CST",
+            "2026-07-30 12:05:00 CST",
+        )
+    )
+    monkeypatch.setattr(
+        compiler,
+        "build_template_values",
+        lambda request: original_build_template_values(
+            request,
+            current_time=next(current_times),
+        ),
+    )
+    common = {
+        "chat_type": "group",
+        "platform": "qq",
+        "session_id": "group_prompt_cache",
+        "group_id": "prompt_cache",
+        "user_id": "user_prompt_cache",
+        "runtime_tool_prompt": "[RuntimeTool]\n- workspace_read",
+    }
+    first_request = PromptCompileRequest(
+        **common,
+        user_input="检查首轮缓存前缀",
+    )
+    second_request = PromptCompileRequest(
+        **common,
+        user_input="检查次轮缓存前缀",
+        history_header=build_conversation_context_header(is_group=True),
+        history_messages=[
+            {"role": "user", "content": "检查首轮缓存前缀"},
+            {"role": "assistant", "content": "首轮完成"},
+        ],
+    )
+
+    first = await compiler.compile_prompt_plan(first_request)
+    second = await compiler.compile_prompt_plan(second_request)
+    section_order = [item["node_id"] for item in first.flow_sections]
+    first_sections = {
+        item["node_id"]: item
+        for item in first.flow_sections
+    }
+    second_sections = {
+        item["node_id"]: item
+        for item in second.flow_sections
+    }
+    first_header_index = first_sections[
+        "conversation_context_header"
+    ]["message_indexes"][0]
+    second_header_index = second_sections[
+        "conversation_context_header"
+    ]["message_indexes"][0]
+    first_runtime_index = first_sections[
+        "runtime_context"
+    ]["message_indexes"][0]
+    second_runtime_index = second_sections[
+        "runtime_context"
+    ]["message_indexes"][0]
+
+    assert section_order.index("persona_reference") < section_order.index(
+        "runtime_tool_prompt"
+    )
+    assert section_order.index("runtime_tool_prompt") < section_order.index(
+        "conversation_context_header"
+    )
+    assert section_order.index("conversation_context_header") < (
+        section_order.index("history_messages")
+    )
+    assert section_order.index("history_messages") < section_order.index(
+        "runtime_context"
+    )
+    assert section_order.index("runtime_context") < section_order.index(
+        "current_user_event"
+    )
+    assert first.messages[:first_header_index + 1] == (
+        second.messages[:second_header_index + 1]
+    )
+    assert "已裁剪的群聊上下文" in str(
+        first.messages[first_header_index]["content"]
+    )
+    assert first.messages[first_runtime_index] != second.messages[
+        second_runtime_index
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prompt_cache_prefix_keeps_runtime_context_after_history(
+    tmp_path,
+    monkeypatch,
+):
     from core.prompt_v2 import compiler
     from core.prompt_v2.schema import PromptCompileRequest
 
@@ -360,7 +464,6 @@ async def test_prompt_cache_prefix_keeps_per_request_runtime_context_at_tail(
     section_order = [item["node_id"] for item in first.flow_sections]
     runtime_index = section_order.index("runtime_context")
 
-    assert section_order[runtime_index - 1] == "runtime_tool_prompt"
     assert section_order[runtime_index + 1] == "current_user_event"
     assert first.messages[:-2] == second.messages[:-2]
     assert first.messages[-2] != second.messages[-2]
@@ -1100,10 +1203,10 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
         "system",
         "user",
         "system",
+        "system",
         "user",
         "assistant",
         "user",
-        "system",
         "system",
         "user",
     ]
@@ -1752,7 +1855,10 @@ async def test_prompt_v2_strict_audit_rejects_missing_singleton_flow_node(monkey
         for edge in flow["edges"]
         if "runtime_tool_prompt" not in {edge["from"], edge["to"]}
     ]
-    flow["edges"].append({"from": "effort_constraint", "to": "runtime_context"})
+    flow["edges"].append({
+        "from": "persona_reference",
+        "to": "conversation_context_header",
+    })
     monkeypatch.setattr(
         compiler,
         "load_flow",

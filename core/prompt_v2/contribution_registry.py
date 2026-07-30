@@ -682,16 +682,16 @@ _CANONICAL_ORDERING = MappingProxyType({
     ),
     "session_guidance": (100, (), ("identity_context",)),
     "persona_reference": (200, (), ("session_guidance",)),
-    "conversation_context_header": (300, (), ("persona_reference",)),
-    "history_messages": (400, (), ("conversation_context_header",)),
-    "group_context": (500, (), ("history_messages",)),
+    "runtime_tool_prompt": (300, (), ("persona_reference",)),
+    "conversation_context_header": (400, (), ("runtime_tool_prompt",)),
+    "history_messages": (500, (), ("conversation_context_header",)),
+    "group_context": (600, (), ("history_messages",)),
     "effort_constraint": (
-        600,
+        700,
         (),
         ("history_messages", "group_context"),
     ),
-    "runtime_tool_prompt": (100, (), ("effort_constraint",)),
-    "runtime_context": (200, (), ("runtime_tool_prompt",)),
+    "runtime_context": (800, (), ("effort_constraint",)),
     "current_user_event": (100, (), ("runtime_context",)),
 })
 _CANONICAL_SCOPES = MappingProxyType({

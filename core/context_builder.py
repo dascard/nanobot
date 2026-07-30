@@ -128,7 +128,7 @@ def _safe_meta(meta_json: str) -> dict:
         return {}
 
 
-def _build_conversation_context_header(*, is_group: bool) -> str:
+def build_conversation_context_header(*, is_group: bool) -> str:
     scope = "群聊" if is_group else "私聊"
     extra = (
         "群聊消息会在每条消息内容中携带 [msg_id]、[时间]、[用户名]、[发言内容] 元数据。"
@@ -416,7 +416,12 @@ def build_session_memory(
     if not recent_window:
         debug["skipped_no_context"] = skipped_no_context
         return (
-            _join_context_headers(profile_header, prev_block_header, summary_header),
+            _join_context_headers(
+                profile_header,
+                prev_block_header,
+                summary_header,
+                build_conversation_context_header(is_group=is_group),
+            ),
             [],
             debug,
         )
@@ -457,7 +462,12 @@ def build_session_memory(
         debug["skipped_no_context"] = skipped_no_context
         debug["gap_breaks"] = gap_breaks
         return (
-            _join_context_headers(profile_header, prev_block_header, summary_header),
+            _join_context_headers(
+                profile_header,
+                prev_block_header,
+                summary_header,
+                build_conversation_context_header(is_group=is_group),
+            ),
             [],
             debug,
         )
@@ -476,7 +486,7 @@ def build_session_memory(
         raw_debug.get("raw_window_tokens", 0),
     )
 
-    history_header = _build_conversation_context_header(is_group=is_group)
+    history_header = build_conversation_context_header(is_group=is_group)
     header = _join_context_headers(
         profile_header, prev_block_header, summary_header, history_header
     )
@@ -930,11 +940,15 @@ def build_chat_context(
             "rolling_summary_error": str(exc),
         })
     header = "\n".join(
-        x for x in [profile_header, summary_header, _build_conversation_context_header(is_group=True)]
+        x for x in [
+            profile_header,
+            summary_header,
+            build_conversation_context_header(is_group=True),
+        ]
         if x
     )
     if not messages:
-        return _join_context_headers(profile_header, summary_header), [], debug
+        return header, [], debug
     return header, messages, debug
 
 

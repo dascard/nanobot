@@ -5,6 +5,7 @@ import time
 from types import MappingProxyType
 from typing import Any
 
+from core.context_builder import build_conversation_context_header
 from core.prompt_v2.audit import PromptAuditError, audit_prompt_plan
 from core.prompt_v2.contribution_registry import (
     PROMPT_CONTRIBUTION_REGISTRY,
@@ -270,7 +271,7 @@ async def _compile_prompt_plan_locked(
         "session_guidance": session_guidance,
         "persona_reference": persona_reference,
         "conversation_context_header": history_header or (
-            "<conversation_context>\n本轮没有可注入的历史上下文。\n</conversation_context>"
+            build_conversation_context_header(is_group=chat_type == "group")
         ),
         "history_messages": history_messages,
         "group_context": group_context,

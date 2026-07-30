@@ -12,7 +12,7 @@
     },
     {
       "path": "data/prompts_v2/chat/flow.json",
-      "sha256": "af3894a38e54d9232cc3bcd452ba350d99d41107e0fc3f14b3a8cc94fd23ea91",
+      "sha256": "a547ca7c5cc1d7b326eca59b33f0b1222baf4b4320b6e2c6378a5fc97a314171",
       "size_bytes": 3730
     },
     {
@@ -122,7 +122,7 @@
     },
     {
       "path": "prompts.v2.default/chat/flow.json",
-      "sha256": "af3894a38e54d9232cc3bcd452ba350d99d41107e0fc3f14b3a8cc94fd23ea91",
+      "sha256": "a547ca7c5cc1d7b326eca59b33f0b1222baf4b4320b6e2c6378a5fc97a314171",
       "size_bytes": 3730
     },
     {

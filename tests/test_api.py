@@ -349,7 +349,10 @@ def test_proxy_chat(client, db_session):
         called_query = mock_bridge.handle_message.await_args.args[0]
         assert called_query == "<user_input>\nhello proxy\n</user_input>"
         _, kwargs = mock_bridge.handle_message.await_args
-        assert kwargs["metadata"]["history_header"] == ""
+        assert kwargs["metadata"]["history_header"].startswith(
+            "<conversation_context>"
+        )
+        assert "已裁剪的群聊上下文" in kwargs["metadata"]["history_header"]
         assert kwargs["metadata"]["chat_type"] == "group"
 
 
