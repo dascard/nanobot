@@ -23,6 +23,7 @@ from app.session_memory.windowing import (
 from core.db.models.chat import ChatLog, User
 from core.db.models.session_memory import RollingSessionSummary, SessionSummaryJob
 from core.time_utils import db_now_naive, to_db_naive
+from foundation.identity import parse_compatibility_chat_stream_identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,15 +263,23 @@ def _candidate_group_session_ids(
             func.max(ChatLog.id).label("latest_id"),
         )
         .filter(
-            ChatLog.session_id.like("group_%"),
             ChatLog.role.in_(("ambient", "user", "assistant")),
         )
         .group_by(ChatLog.session_id)
         .order_by(func.max(ChatLog.id).desc())
-        .limit(max(1, int(limit)))
-        .all()
+        .yield_per(200)
     )
-    return [str(row.session_id) for row in rows if str(row.session_id or "").strip()]
+    selected: list[str] = []
+    selection_limit = max(1, int(limit))
+    for row in rows:
+        session_id = str(row.session_id or "").strip()
+        identity = parse_compatibility_chat_stream_identity(session_id)
+        if identity is None or identity.chat_type != "group":
+            continue
+        selected.append(session_id)
+        if len(selected) >= selection_limit:
+            break
+    return selected
 
 
 def discover_group_summary_jobs(

@@ -180,6 +180,44 @@ def test_group_rollup_discovery_deduplicates_inflight_and_failed_coverage(
     assert job.fallback_summary_id is None
 
 
+def test_group_rollup_discovery_accepts_canonical_group_identity(
+    db_session,
+    monkeypatch,
+):
+    from app.session_memory.group_rollup import discover_group_summary_jobs
+
+    _small_thresholds(monkeypatch)
+    started_at = datetime(2026, 7, 31, 12, 30, 0)
+    rows = _add_group_logs(
+        db_session,
+        session_id="qq:canonical-group:group",
+        count=14,
+        started_at=started_at,
+    )
+    db_session.add(
+        ChatLog(
+            user_id="private_user",
+            session_id="private_user",
+            role="user",
+            content="更新更晚的私聊消息",
+            processed=1,
+            created_at=rows[-1].created_at + timedelta(seconds=1),
+        )
+    )
+    db_session.flush()
+
+    result = discover_group_summary_jobs(
+        db_session,
+        now=rows[-1].created_at + timedelta(seconds=61),
+        limit=1,
+    )
+
+    job = db_session.query(SessionSummaryJob).one()
+    assert result["scanned"] == 1
+    assert result["created"] == 1
+    assert job.session_id == "qq:canonical-group:group"
+
+
 def test_group_rollup_below_threshold_creates_no_job(
     db_session,
     monkeypatch,
