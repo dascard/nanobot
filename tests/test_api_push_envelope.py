@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -228,6 +229,80 @@ def test_task_list_hides_target_and_reports_delivery_watermarks(
     assert body["last_attempt_at"] == "2026-07-15T04:01:00"
     assert body["last_success_at"] == "2026-07-15T04:02:00"
     assert body["delivery_status"] == "delivered"
+
+
+def test_task_create_content_builds_static_program(
+    client,
+    db_session,
+):
+    from core.database import ScheduledTask
+
+    response = client.post(
+        "/api/v1/tasks",
+        json={
+            "name": "固定提醒",
+            "schedule": "30m",
+            "target_type": "private",
+            "target_id": "u1",
+            "content": "该喝水了",
+        },
+    )
+
+    assert response.status_code == 200
+    task = db_session.get(ScheduledTask, response.json()["id"])
+    assert task.prompt_template == ""
+    assert [
+        step["op"]
+        for step in json.loads(task.program_json)["steps"]
+    ] == ["emit"]
+
+
+def test_task_toggle_reenable_clears_stale_next_fire(
+    client,
+    db_session,
+):
+    _seed_scheduled_outbox_control(db_session)
+    task = _seed_manual_task(db_session)
+    task.enabled = 0
+    task.next_fire_at = datetime(2026, 7, 15, 9, 0, 0)
+    db_session.commit()
+
+    response = client.post(f"/api/v1/tasks/{task.id}/toggle")
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+    db_session.expire_all()
+    assert db_session.get(type(task), task.id).next_fire_at is None
+
+
+def test_task_list_reports_latest_workflow_failure(
+    client,
+    db_session,
+):
+    from core.database import ScheduledTaskExecution
+    from core.scheduled_workflow import enqueue_scheduled_task_execution
+
+    task = _seed_manual_task(db_session)
+    queued = enqueue_scheduled_task_execution(
+        db_session,
+        task_id=task.id,
+        trigger_type="manual",
+        manual_idempotency_key="list-workflow-failure",
+    )
+    execution = db_session.get(
+        ScheduledTaskExecution,
+        queued.execution_id,
+    )
+    execution.status = "failed"
+    execution.last_error_code = "tool_unavailable"
+    db_session.commit()
+
+    response = client.get("/api/v1/tasks")
+
+    assert response.status_code == 200
+    body = response.json()[0]
+    assert body["workflow_status"] == "failed"
+    assert body["workflow_error_code"] == "tool_unavailable"
 
 
 def test_task_delete_cancels_pending_delivery_but_keeps_audit_leaf(

@@ -1,5 +1,6 @@
 """在当前会话 owner 边界内管理定时推送任务。"""
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -47,6 +48,81 @@ def _owned_task_query(db: Any, model: Any, owner_chat_stream_id: str) -> Any:
     )
 
 
+def _program_tool_names(program: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+
+    def visit(steps: Any) -> None:
+        for step in steps if isinstance(steps, list) else ():
+            if not isinstance(step, dict):
+                continue
+            operation = str(step.get("op") or "")
+            if operation == "tool":
+                name = str(step.get("tool") or "").strip()
+                if name:
+                    names.add(name)
+            elif operation == "branch":
+                visit(step.get("then"))
+                visit(step.get("else"))
+            elif operation == "loop":
+                visit(step.get("steps"))
+
+    visit(program.get("steps"))
+    return names
+
+
+def _unavailable_program_tools(
+    program: dict[str, Any],
+) -> dict[str, str]:
+    """按当前请求 ToolPlan 预检直接工具步骤；执行时仍会再次校验。"""
+
+    from core.tool_plan import get_current_tool_plan
+
+    plan = get_current_tool_plan()
+    if plan is None:
+        return {}
+    return {
+        name: plan.disabled_reason(name)
+        for name in sorted(_program_tool_names(program))
+        if not plan.can_execute(name)
+    }
+
+
+def _is_model_emit_program(program: dict[str, Any]) -> bool:
+    steps = program.get("steps")
+    return (
+        isinstance(steps, list)
+        and len(steps) == 2
+        and [step.get("op") for step in steps if isinstance(step, dict)]
+        == ["model", "emit"]
+    )
+
+
+def _latest_execution_payload(db: Any, task_id: int) -> dict[str, Any] | None:
+    from core.database import ScheduledTaskExecution
+
+    row = (
+        db.query(ScheduledTaskExecution)
+        .filter(ScheduledTaskExecution.task_id == int(task_id))
+        .order_by(ScheduledTaskExecution.id.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    return {
+        "execution_id": int(row.id),
+        "status": str(row.status),
+        "current_step_id": str(row.current_step_id or ""),
+        "error_code": str(row.last_error_code or ""),
+        "error_summary": str(row.last_error_summary or ""),
+        "started_at": (
+            row.started_at.isoformat() if row.started_at else None
+        ),
+        "finished_at": (
+            row.finished_at.isoformat() if row.finished_at else None
+        ),
+    }
+
+
 class ScheduleTaskTool(BaseTool):
     """Manage timed push notification tasks for QQ."""
 
@@ -87,7 +163,11 @@ class ScheduleTaskTool(BaseTool):
                     "description": "create(创建) | list(列出) | update(修改) | toggle(启停) | run(立即执行) | delete(删除)",
                     "enum": ["create", "list", "update", "toggle", "run", "delete"],
                 },
-                "task_id": {"type": "integer", "description": "任务ID（update/toggle/delete 必填）"},
+                "task_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "任务ID（list 详情、update/toggle/run/delete 使用）",
+                },
                 "name": {"type": "string", "description": "任务名（create/update）"},
                 "schedule": {
                     "type": "string",
@@ -116,6 +196,11 @@ class ScheduleTaskTool(BaseTool):
                     "maxLength": 16000,
                     "description": "兼容写法：自动转换为 model→emit 程序；使用 program 时可省略",
                 },
+                "content": {
+                    "type": "string",
+                    "maxLength": 65536,
+                    "description": "固定推送正文；编译为单个 emit，不调用模型",
+                },
                 "program": scheduled_task_program_schema(),
                 "idempotency_key": {
                     "type": "string",
@@ -143,6 +228,15 @@ class ScheduleTaskTool(BaseTool):
 
         action = str(args.get("action", "create")).strip()
         task_id = args.get("task_id")
+        if action not in {
+            "create",
+            "list",
+            "update",
+            "toggle",
+            "run",
+            "delete",
+        }:
+            return ToolResult(error=f"不支持的 action: {action}")
 
         try:
             try:
@@ -154,11 +248,70 @@ class ScheduleTaskTool(BaseTool):
             db = SessionLocal()
             try:
                 if action == "list":
-                    tasks = _owned_task_query(
+                    query = _owned_task_query(
                         db,
                         ScheduledTask,
                         owner.chat_stream_id,
-                    ).all()
+                    )
+                    if task_id is not None:
+                        task = query.filter(
+                            ScheduledTask.id == int(task_id)
+                        ).first()
+                        if task is None:
+                            return ToolResult(
+                                error=f"任务 {task_id} 不存在"
+                            )
+                        raw_program = str(task.program_json or "")
+                        try:
+                            if raw_program:
+                                program = json.loads(raw_program)
+                                if not isinstance(program, dict):
+                                    raise ValueError("program 不是对象")
+                            else:
+                                program = (
+                                    normalize_scheduled_task_definition(
+                                        name=task.name,
+                                        prompt_template=(
+                                            task.prompt_template
+                                        ),
+                                    )[2]
+                                )
+                        except (
+                            ScheduledTaskContractError,
+                            TypeError,
+                            ValueError,
+                        ):
+                            program = {
+                                "error": "任务 program 无法解析",
+                            }
+                        payload = {
+                            "id": int(task.id),
+                            "name": str(task.name),
+                            "enabled": bool(task.enabled),
+                            "schedule": _schedule_display_for_row(task),
+                            "next_fire_at": _format_next_fire(
+                                task.next_fire_at
+                            ),
+                            "prompt_template": str(
+                                task.prompt_template or ""
+                            ),
+                            "program": program,
+                            "unavailable_tools": _unavailable_program_tools(
+                                program
+                            ),
+                            "latest_execution": (
+                                _latest_execution_payload(db, int(task.id))
+                            ),
+                        }
+                        return ToolResult(
+                            output=json.dumps(
+                                payload,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                            exit_code=0,
+                        )
+                    tasks = query.all()
                     if not tasks:
                         return ToolResult(output="暂无定时任务", exit_code=0)
                     lines = []
@@ -174,12 +327,34 @@ class ScheduleTaskTool(BaseTool):
                             if t.last_success_at
                             else "从未"
                         )
+                        latest_execution = _latest_execution_payload(
+                            db,
+                            int(t.id),
+                        )
+                        workflow = (
+                            "从未"
+                            if latest_execution is None
+                            else str(latest_execution["status"])
+                        )
+                        workflow_error = (
+                            ""
+                            if latest_execution is None
+                            else str(
+                                latest_execution.get("error_code") or ""
+                            )
+                        )
                         lines.append(
                             f"[{t.id}] {s} {t.name} "
                             f"| {_schedule_display_for_row(t)} "
                             f"| 下次={_format_next_fire(t.next_fire_at)} "
                             f"| 最近尝试={attempted} | 最近成功={succeeded} "
-                            f"| 投递状态={t.delivery_status}"
+                            f"| 投递状态={t.delivery_status} "
+                            f"| 工作流={workflow}"
+                            + (
+                                f"({workflow_error})"
+                                if workflow_error
+                                else ""
+                            )
                         )
                     return ToolResult(output="\n".join(lines), exit_code=0)
 
@@ -305,22 +480,55 @@ class ScheduleTaskTool(BaseTool):
                             if args.get("prompt_template") is not None
                             else t.prompt_template
                         )
+                        definition_fields = [
+                            key
+                            for key in (
+                                "program",
+                                "content",
+                                "prompt_template",
+                            )
+                            if args.get(key) is not None
+                        ]
+                        if len(definition_fields) > 1:
+                            return ToolResult(
+                                error=(
+                                    "program、content 和 prompt_template "
+                                    "只能修改一个"
+                                )
+                            )
+                        existing_program_json = str(
+                            t.program_json or ""
+                        )
+                        existing_program = (
+                            json.loads(existing_program_json)
+                            if existing_program_json
+                            else None
+                        )
+                        proposed_content = None
                         if args.get("program") is not None:
                             proposed_program = args.get("program")
+                            proposed_prompt = ""
+                        elif args.get("content") is not None:
+                            proposed_program = None
+                            proposed_prompt = ""
+                            proposed_content = args.get("content")
                         elif args.get("prompt_template") is not None:
-                            # 显式修改旧 prompt 等价于显式重建 model→emit。
+                            if (
+                                isinstance(existing_program, dict)
+                                and not _is_model_emit_program(
+                                    existing_program
+                                )
+                            ):
+                                return ToolResult(
+                                    error=(
+                                        "当前任务是确定性 program；不能仅用 "
+                                        "prompt_template 覆盖，请提交完整 "
+                                        "program 或固定 content"
+                                    )
+                                )
                             proposed_program = None
                         else:
-                            import json
-
-                            existing_program_json = str(
-                                t.program_json or ""
-                            )
-                            proposed_program = (
-                                json.loads(existing_program_json)
-                                if existing_program_json
-                                else None
-                            )
+                            proposed_program = existing_program
                         (
                             normalized_name,
                             normalized_prompt,
@@ -331,7 +539,19 @@ class ScheduleTaskTool(BaseTool):
                             name=proposed_name,
                             prompt_template=proposed_prompt,
                             program=proposed_program,
+                            content=proposed_content,
                         )
+                        unavailable = _unavailable_program_tools(
+                            normalized_program
+                        )
+                        if definition_fields and unavailable:
+                            detail = "；".join(
+                                f"{name}: {reason}"
+                                for name, reason in unavailable.items()
+                            )
+                            return ToolResult(
+                                error=f"任务所需工具当前不可用：{detail}"
+                            )
                     except ScheduledTaskContractError as exc:
                         return ToolResult(error=str(exc))
                     except (TypeError, ValueError):
@@ -391,6 +611,22 @@ class ScheduleTaskTool(BaseTool):
                         target_type=args.get("target_type"),
                         target_id=args.get("target_id"),
                     )
+                    definition_fields = [
+                        key
+                        for key in (
+                            "program",
+                            "content",
+                            "prompt_template",
+                        )
+                        if args.get(key) is not None
+                    ]
+                    if len(definition_fields) > 1:
+                        return ToolResult(
+                            error=(
+                                "program、content 和 prompt_template "
+                                "只能填写一个"
+                            )
+                        )
                     (
                         name,
                         prompt,
@@ -401,7 +637,19 @@ class ScheduleTaskTool(BaseTool):
                         name=args.get("name"),
                         prompt_template=args.get("prompt_template"),
                         program=args.get("program"),
+                        content=args.get("content"),
                     )
+                    unavailable = _unavailable_program_tools(
+                        normalized_program
+                    )
+                    if unavailable:
+                        detail = "；".join(
+                            f"{name}: {reason}"
+                            for name, reason in unavailable.items()
+                        )
+                        return ToolResult(
+                            error=f"任务所需工具当前不可用：{detail}"
+                        )
                 except ScheduledTaskContractError as exc:
                     return ToolResult(error=str(exc))
                 schedule_text = str(

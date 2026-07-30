@@ -397,7 +397,12 @@ def test_generate_task_message_uses_kt_agent(monkeypatch):
         prompt_template="给我今天的AI日报",
     )
 
-    result = run_async(daily_digest._generate_task_message(task))
+    result = run_async(daily_digest._generate_task_message(
+        task,
+        trace_id="trace-scheduled-1",
+        workflow_idempotency_key="workflow-stable-1",
+        task_run_id="execution-7",
+    ))
 
     assert result.startswith("<article")
     assert calls["started"] is True
@@ -406,6 +411,14 @@ def test_generate_task_message_uses_kt_agent(monkeypatch):
     assert calls["session_id"] == "0000000000"
     assert calls["sender_name"] == "定时任务"
     assert calls["metadata"]["raw_query"] == "给我今天的AI日报"
+    assert calls["metadata"]["trace_id"] == "trace-scheduled-1"
+    assert calls["metadata"]["message_id"] == "workflow-stable-1"
+    assert calls["metadata"]["request_id"] == "workflow-stable-1"
+    assert (
+        calls["metadata"]["workflow_idempotency_key"]
+        == "workflow-stable-1"
+    )
+    assert calls["metadata"]["task_run_id"] == "execution-7"
     assert (
         calls["metadata"]["scheduled_task_owner_chat_stream_id"]
         == "qq:0000000000:private"

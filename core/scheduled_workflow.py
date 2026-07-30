@@ -56,7 +56,7 @@ _TERMINAL_STATUSES = frozenset(
     {"succeeded", "failed", "blocked", "ambiguous"}
 )
 _SAFE_RECOVERY_OPERATIONS = frozenset(
-    {"set", "model", "branch", "loop", "wait", "emit"}
+    {"set", "branch", "loop", "wait", "emit"}
 )
 _PROCESS_OWNER = (
     f"scheduled-workflow:{socket.gethostname().strip() or 'host'}:"
@@ -75,6 +75,10 @@ class ScheduledWorkflowFencingError(ScheduledWorkflowError):
 
 class ScheduledWorkflowStateError(ScheduledWorkflowError):
     """持久状态、快照或 cursor 不满足恢复合同。"""
+
+
+class ScheduledWorkflowLoopLimitError(ScheduledWorkflowStateError):
+    """条件循环到达显式上限后仍未结束。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +120,7 @@ class ScheduledWorkflowStepOutcome:
     retryable: bool = False
     ambiguous: bool = False
     blocked: bool = False
+    stop: bool = False
 
     @property
     def success(self) -> bool:
@@ -130,13 +135,21 @@ class ScheduledWorkflowStepOutcome:
         retryable: bool = False,
         ambiguous: bool = False,
         blocked: bool = False,
+        stop: bool = False,
+        tool_call_id: str = "",
+        model_trace_id: str = "",
+        agent_run_id: str = "",
     ) -> "ScheduledWorkflowStepOutcome":
         return cls(
+            tool_call_id=str(tool_call_id or "")[:128],
+            model_trace_id=str(model_trace_id or "")[:128],
+            agent_run_id=str(agent_run_id or "")[:128],
             error_code=str(code or "step_error")[:128],
             error_summary=str(summary or "任务步骤执行失败")[:1000],
             retryable=bool(retryable),
             ambiguous=bool(ambiguous),
             blocked=bool(blocked),
+            stop=bool(stop),
         )
 
 
@@ -752,8 +765,19 @@ def _load_state(raw: object, program: Mapping[str, Any]) -> dict[str, Any]:
     if any(step_id not in known_ids for step_id in state["steps"]):
         raise ScheduledWorkflowStateError("任务 checkpoint 含未知步骤")
     for value in state["steps"].values():
-        if not isinstance(value, Mapping) or "output" not in value:
+        if (
+            not isinstance(value, Mapping)
+            or ("output" not in value and "outputs" not in value)
+        ):
             raise ScheduledWorkflowStateError("任务步骤 checkpoint 无效")
+        history = value.get("outputs", [])
+        if not isinstance(history, list) or any(
+            not isinstance(item, Mapping)
+            or "runtime_step_id" not in item
+            or "output" not in item
+            for item in history
+        ):
+            raise ScheduledWorkflowStateError("任务步骤输出历史无效")
     for frame in state["frames"]:
         if not isinstance(frame, dict):
             raise ScheduledWorkflowStateError("任务 cursor frame 无效")
@@ -771,21 +795,48 @@ def _load_state(raw: object, program: Mapping[str, Any]) -> dict[str, Any]:
                 raise ScheduledWorkflowStateError("任务 steps frame 无效")
         elif kind == "loop":
             loop_step = steps_by_id.get(str(frame.get("step_id") or ""))
-            items = frame.get("items")
             index = frame.get("index")
             body_ids = frame.get("body_ids")
-            if (
+            common_invalid = (
                 loop_step is None
                 or loop_step["op"] != "loop"
-                or not isinstance(items, list)
-                or len(items) > int(loop_step["max_iterations"])
                 or type(index) is not int
-                or not 0 <= index < len(items)
                 or body_ids != _step_ids(loop_step["steps"])
-                or frame.get("item_name") != loop_step["item"]
-                or frame.get("index_name") != loop_step["index"]
-            ):
+            )
+            mode = str(
+                frame.get("mode")
+                or ("items" if "items" in (loop_step or {}) else "condition")
+            )
+            if common_invalid:
                 raise ScheduledWorkflowStateError("任务 loop frame 无效")
+            if mode == "items":
+                items = frame.get("items")
+                previous = frame.get("previous_variables", {})
+                missing = frame.get("missing_variables", [])
+                if (
+                    "items" not in loop_step
+                    or not isinstance(items, list)
+                    or len(items) > int(loop_step["max_iterations"])
+                    or not 0 <= index < len(items)
+                    or frame.get("item_name") != loop_step["item"]
+                    or frame.get("index_name") != loop_step["index"]
+                    or not isinstance(previous, Mapping)
+                    or not isinstance(missing, list)
+                    or any(not isinstance(item, str) for item in missing)
+                ):
+                    raise ScheduledWorkflowStateError(
+                        "任务 foreach loop frame 无效"
+                    )
+            elif mode == "condition":
+                if (
+                    "condition" not in loop_step
+                    or not 0 <= index < int(loop_step["max_iterations"])
+                ):
+                    raise ScheduledWorkflowStateError(
+                        "任务 condition loop frame 无效"
+                    )
+            else:
+                raise ScheduledWorkflowStateError("任务 loop mode 无效")
         else:
             raise ScheduledWorkflowStateError("任务 cursor frame 类型无效")
     for runtime_step_id, wake_raw in state["waits"].items():
@@ -864,6 +915,24 @@ def _evaluate(value: Any, state: Mapping[str, Any]) -> Any:
             if resolved is not None:
                 return resolved
         return None
+    if operator == "$json_parse":
+        raw = _evaluate(operand, state)
+        if not isinstance(raw, str):
+            raise ScheduledWorkflowStateError(
+                "$json_parse 只能解析 JSON 字符串"
+            )
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ScheduledWorkflowStateError(
+                "$json_parse 收到无效 JSON"
+            ) from exc
+        _bounded_json(
+            parsed,
+            max_bytes=MAX_WORKFLOW_OUTPUT_BYTES,
+            label="$json_parse 结果",
+        )
+        return parsed
     left = _evaluate(operand[0], state)
     right = _evaluate(operand[1], state)
     if operator == "$eq":
@@ -911,7 +980,54 @@ def _set_loop_variables(state: dict[str, Any], frame: Mapping[str, Any]) -> None
     state["variables"][str(frame["index_name"])] = index
 
 
-def _normalize_frames(state: dict[str, Any]) -> None:
+def _capture_loop_variables(
+    state: Mapping[str, Any],
+    *,
+    item_name: str,
+    index_name: str,
+) -> tuple[dict[str, Any], list[str]]:
+    previous: dict[str, Any] = {}
+    missing: list[str] = []
+    for name in dict.fromkeys((item_name, index_name)):
+        if name in state["variables"]:
+            previous[name] = state["variables"][name]
+        else:
+            missing.append(name)
+    return previous, missing
+
+
+def _restore_loop_variables(
+    state: dict[str, Any],
+    frame: Mapping[str, Any],
+) -> None:
+    # 若循环变量覆盖了外层同名变量，离开当前循环时恢复外层值。原先不存在
+    # 的变量保留最后一次迭代值，兼容既有 program 在循环后读取 index/item。
+    for name, value in dict(frame.get("previous_variables") or {}).items():
+        state["variables"][str(name)] = value
+
+
+def _initialize_step_output_histories(
+    state: dict[str, Any],
+    steps: Sequence[Mapping[str, Any]],
+) -> None:
+    for step in steps:
+        step_id = str(step["id"])
+        existing = state["steps"].get(step_id)
+        if existing is None:
+            state["steps"][step_id] = {"outputs": []}
+        elif "outputs" not in existing:
+            existing["outputs"] = []
+        if step["op"] == "branch":
+            _initialize_step_output_histories(state, step["then"])
+            _initialize_step_output_histories(state, step["else"])
+        elif step["op"] == "loop":
+            _initialize_step_output_histories(state, step["steps"])
+
+
+def _normalize_frames(
+    state: dict[str, Any],
+    steps_by_id: Mapping[str, dict[str, Any]],
+) -> None:
     """只做无副作用 cursor 推进，直到得到待执行静态步骤或终态。"""
 
     frames = state["frames"]
@@ -923,13 +1039,37 @@ def _normalize_frames(state: dict[str, Any]) -> None:
             frames.pop()
             continue
         # loop frame 只会在当前迭代 body frame 完成后成为栈顶。
+        loop_step = steps_by_id.get(str(top.get("step_id") or ""))
+        if loop_step is None or loop_step["op"] != "loop":
+            raise ScheduledWorkflowStateError("任务 loop step 不存在")
         next_index = int(top["index"]) + 1
-        if next_index >= len(top["items"]):
-            frames.pop()
-            continue
+        mode = str(
+            top.get("mode")
+            or ("items" if "items" in loop_step else "condition")
+        )
+        if mode == "items":
+            if next_index >= len(top["items"]):
+                frames.pop()
+                _restore_loop_variables(state, top)
+                continue
+        elif mode == "condition":
+            should_continue = bool(
+                _evaluate(loop_step["condition"], state)
+            )
+            if not should_continue:
+                frames.pop()
+                continue
+            if next_index >= int(loop_step["max_iterations"]):
+                raise ScheduledWorkflowLoopLimitError(
+                    f"条件循环 {loop_step['id']} 达到 max_iterations "
+                    "后条件仍为 true"
+                )
+        else:
+            raise ScheduledWorkflowStateError("任务 loop mode 无效")
         top["index"] = next_index
         state["loop_iterations"] = int(state["loop_iterations"]) + 1
-        _set_loop_variables(state, top)
+        if mode == "items":
+            _set_loop_variables(state, top)
         frames.append(
             {
                 "kind": "steps",
@@ -943,7 +1083,7 @@ def _next_step(
     state: dict[str, Any],
     steps_by_id: Mapping[str, dict[str, Any]],
 ) -> tuple[dict[str, Any], str] | None:
-    _normalize_frames(state)
+    _normalize_frames(state, steps_by_id)
     if not state["frames"]:
         return None
     frame = state["frames"][-1]
@@ -965,8 +1105,12 @@ def _advance_step(state: dict[str, Any]) -> None:
 
 
 def _step_max_attempts(step: Mapping[str, Any]) -> int:
-    if step["op"] in {"tool", "model"}:
+    if step["op"] == "tool":
         return int(step.get("max_attempts") or 1)
+    # model 步骤运行的是可能调用真实工具的完整 Agent，不是纯函数。模型路由
+    # 自身可在 Agent 内重试，workflow 不得整体重放该步骤。
+    if step["op"] == "model":
+        return 1
     return 1
 
 
@@ -1215,14 +1359,21 @@ def _attempt_input(
     if operation == "branch":
         return {"condition": bool(_evaluate(step["condition"], state))}
     if operation == "loop":
-        items = _evaluate(step["items"], state)
-        if not isinstance(items, list):
-            raise ScheduledWorkflowStateError("loop items 求值后必须是数组")
-        if len(items) > int(step["max_iterations"]):
-            raise ScheduledWorkflowStateError(
-                "loop items 超过显式 max_iterations"
-            )
-        return {"items": items}
+        if "items" in step:
+            items = _evaluate(step["items"], state)
+            if not isinstance(items, list):
+                raise ScheduledWorkflowStateError(
+                    "loop items 求值后必须是数组"
+                )
+            if len(items) > int(step["max_iterations"]):
+                raise ScheduledWorkflowStateError(
+                    "loop items 超过显式 max_iterations"
+                )
+            return {"mode": "items", "items": items}
+        return {
+            "mode": "condition",
+            "condition": bool(_evaluate(step["condition"], state)),
+        }
     if operation == "wait":
         seconds = _evaluate(step["seconds"], state)
         if (
@@ -1257,9 +1408,22 @@ def _record_step_output(
         label="任务步骤输出",
     )
     static_id = str(step["id"])
+    existing = state["steps"].get(static_id)
+    history = (
+        list(existing.get("outputs") or [])
+        if isinstance(existing, Mapping)
+        else []
+    )
+    history.append(
+        {
+            "runtime_step_id": runtime_step_id,
+            "output": output,
+        }
+    )
     state["steps"][static_id] = {
         "output": output,
         "runtime_step_id": runtime_step_id,
+        "outputs": history,
     }
     save_as = str(step.get("save_as") or "")
     if save_as:
@@ -1297,27 +1461,67 @@ def _apply_success_transition(
                 }
             )
     elif operation == "loop":
-        items = list(attempt_input["items"])
+        mode = str(attempt_input["mode"])
+        items = (
+            list(attempt_input["items"])
+            if mode == "items"
+            else []
+        )
         _record_step_output(
             state,
             step,
             runtime_step_id,
-            {"item_count": len(items)},
+            (
+                {"mode": "items", "item_count": len(items)}
+                if mode == "items"
+                else {
+                    "mode": "condition",
+                    "entered": bool(attempt_input["condition"]),
+                }
+            ),
         )
         _advance_step(state)
-        if items:
+        _initialize_step_output_histories(state, step["steps"])
+        if mode == "items":
+            item_name = str(step["item"])
+            index_name = str(step["index"])
+            previous, missing = _capture_loop_variables(
+                state,
+                item_name=item_name,
+                index_name=index_name,
+            )
+            if not items:
+                for name in missing:
+                    state["variables"][name] = None
+                state["step_count"] = int(state["step_count"]) + 1
+                return
+            should_enter = True
+        else:
+            should_enter = bool(attempt_input["condition"])
+            previous = {}
+            missing = []
+        if should_enter:
             state["loop_iterations"] = int(state["loop_iterations"]) + 1
             frame = {
                 "kind": "loop",
+                "mode": mode,
                 "step_id": step["id"],
-                "items": items,
                 "index": 0,
                 "body_ids": _step_ids(step["steps"]),
-                "item_name": step["item"],
-                "index_name": step["index"],
             }
+            if mode == "items":
+                frame.update(
+                    {
+                        "items": items,
+                        "item_name": step["item"],
+                        "index_name": step["index"],
+                        "previous_variables": previous,
+                        "missing_variables": missing,
+                    }
+                )
             state["frames"].append(frame)
-            _set_loop_variables(state, frame)
+            if mode == "items":
+                _set_loop_variables(state, frame)
             state["frames"].append(
                 {
                     "kind": "steps",
@@ -1459,7 +1663,24 @@ async def execute_claimed_scheduled_task(
             )
             return "failed"
         if int(state["step_count"]) >= int(limits["max_steps"]):
-            _normalize_frames(state)
+            try:
+                _normalize_frames(state, steps_by_id)
+            except ScheduledWorkflowLoopLimitError as exc:
+                state_json = _bounded_json(
+                    state,
+                    max_bytes=MAX_WORKFLOW_STATE_BYTES,
+                    label="任务状态",
+                )
+                _finish_execution(
+                    db,
+                    claim,
+                    status="failed",
+                    state_json=state_json,
+                    error_code="loop_budget_exhausted",
+                    error_summary=str(exc),
+                    now=current,
+                )
+                return "failed"
             if state["frames"]:
                 state_json = _bounded_json(
                     state,
@@ -1495,7 +1716,24 @@ async def execute_claimed_scheduled_task(
             )
             return "failed"
 
-        next_item = _next_step(state, steps_by_id)
+        try:
+            next_item = _next_step(state, steps_by_id)
+        except ScheduledWorkflowLoopLimitError as exc:
+            state_json = _bounded_json(
+                state,
+                max_bytes=MAX_WORKFLOW_STATE_BYTES,
+                label="任务状态",
+            )
+            _finish_execution(
+                db,
+                claim,
+                status="failed",
+                state_json=state_json,
+                error_code="loop_budget_exhausted",
+                error_summary=str(exc),
+                now=current,
+            )
+            return "failed"
         if next_item is None:
             state_json = _bounded_json(
                 state,
@@ -1812,18 +2050,32 @@ async def execute_claimed_scheduled_task(
                 "ambiguous"
                 if outcome.ambiguous
                 else "blocked"
-                if outcome.blocked
+                if outcome.blocked or outcome.stop
                 else "failed"
             )
             can_retry = (
                 outcome.retryable
                 and not outcome.ambiguous
+                and not outcome.stop
                 and attempt_no < max_attempts
             )
             attempt.status = "failed" if can_retry else terminal_status
             attempt.error_type = str(outcome.error_code)[:128]
             attempt.error_summary = str(outcome.error_summary)[:1000]
+            attempt.tool_call_id = str(outcome.tool_call_id or "")[:128]
+            attempt.model_trace_id = str(
+                outcome.model_trace_id or ""
+            )[:128]
             attempt.completed_at = current
+            if outcome.model_trace_id:
+                execution.agent_trace_id = str(
+                    outcome.model_trace_id
+                )[:128]
+            if outcome.agent_run_id:
+                execution.agent_run_id = str(
+                    outcome.agent_run_id
+                )[:128]
+            execution.updated_at = current
             db.commit()
             if can_retry:
                 continue
@@ -1845,24 +2097,107 @@ async def execute_claimed_scheduled_task(
             return terminal_status
 
         output = outcome.output
+        if outcome.stop:
+            stopped_output = (
+                output
+                if output is not None
+                else {"status": "stopped"}
+            )
+            try:
+                _record_step_output(
+                    state,
+                    step,
+                    runtime_step_id,
+                    stopped_output,
+                )
+                if outcome.model_trace_id:
+                    state["steps"][static_step_id][
+                        "model_trace_id"
+                    ] = str(outcome.model_trace_id)[:128]
+                state["step_count"] = int(state["step_count"]) + 1
+                state["frames"] = []
+                checkpoint = _bounded_json(
+                    state,
+                    max_bytes=MAX_WORKFLOW_STATE_BYTES,
+                    label="任务 stop checkpoint",
+                )
+            except ScheduledWorkflowStateError as exc:
+                attempt.status = "blocked"
+                attempt.error_type = "checkpoint_invalid"
+                attempt.error_summary = str(exc)[:1000]
+                attempt.completed_at = current
+                db.commit()
+                _finish_execution(
+                    db,
+                    claim,
+                    status="blocked",
+                    state_json=_bounded_json(
+                        state,
+                        max_bytes=MAX_WORKFLOW_STATE_BYTES,
+                        label="任务状态",
+                    ),
+                    current_step_id=runtime_step_id,
+                    error_code="checkpoint_invalid",
+                    error_summary=str(exc),
+                    now=current,
+                )
+                return "blocked"
+            attempt.status = "succeeded"
+            attempt.output_sha256 = _sha256_json(stopped_output)
+            attempt.tool_call_id = str(
+                outcome.tool_call_id or ""
+            )[:128]
+            attempt.model_trace_id = str(
+                outcome.model_trace_id or ""
+            )[:128]
+            attempt.checkpoint_json = checkpoint
+            attempt.completed_at = current
+            execution.state_json = checkpoint
+            execution.current_step_id = ""
+            if outcome.model_trace_id:
+                execution.agent_trace_id = str(
+                    outcome.model_trace_id
+                )[:128]
+            if outcome.agent_run_id:
+                execution.agent_run_id = str(
+                    outcome.agent_run_id
+                )[:128]
+            execution.updated_at = current
+            db.commit()
+            _finish_execution(
+                db,
+                claim,
+                status="succeeded",
+                state_json=checkpoint,
+                now=current,
+            )
+            return "succeeded"
         if operation == "model":
             if not isinstance(output, str) or not output.strip():
                 outcome = ScheduledWorkflowStepOutcome.failed(
                     "empty_model_output",
                     "模型步骤没有生成内容",
-                    retryable=attempt_no < max_attempts,
+                    retryable=False,
+                    model_trace_id=outcome.model_trace_id,
+                    agent_run_id=outcome.agent_run_id,
                 )
-                attempt.status = (
-                    "failed"
-                    if attempt_no < max_attempts
-                    else "blocked"
-                )
+                attempt.status = "blocked"
                 attempt.error_type = outcome.error_code
                 attempt.error_summary = outcome.error_summary
+                attempt.model_trace_id = str(
+                    outcome.model_trace_id or ""
+                )[:128]
                 attempt.completed_at = current
+                if outcome.model_trace_id:
+                    execution.agent_trace_id = str(
+                        outcome.model_trace_id
+                    )[:128]
+                if outcome.agent_run_id:
+                    execution.agent_run_id = str(
+                        outcome.agent_run_id
+                    )[:128]
+                execution.updated_at = current
                 db.commit()
-                if attempt_no < max_attempts:
-                    continue
                 state_json = _bounded_json(
                     state,
                     max_bytes=MAX_WORKFLOW_STATE_BYTES,

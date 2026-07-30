@@ -72,8 +72,8 @@
     },
     {
       "path": "data/prompts_v2/tools/schedule_task/usage.md",
-      "sha256": "11d8acccadc805398659d89c8841d74d5b4da0153ea436173374843dc532396b",
-      "size_bytes": 4745
+      "sha256": "9e568d264fb81519a23d85ef31f9f7af723ef48914fa63d3d9ed69826cccd861",
+      "size_bytes": 3709
     },
     {
       "path": "data/prompts_v2/tools/sql_analysis/usage.md",
@@ -397,8 +397,8 @@
     },
     {
       "path": "prompts.v2.default/tools/schedule_task/usage.md",
-      "sha256": "11d8acccadc805398659d89c8841d74d5b4da0153ea436173374843dc532396b",
-      "size_bytes": 4745
+      "sha256": "9e568d264fb81519a23d85ef31f9f7af723ef48914fa63d3d9ed69826cccd861",
+      "size_bytes": 3709
     },
     {
       "path": "prompts.v2.default/tools/sql_analysis/usage.md",

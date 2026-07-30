@@ -1456,6 +1456,8 @@ async def _generate_task_message(
     task: ScheduledTask,
     *,
     trace_id: str = "",
+    workflow_idempotency_key: str = "",
+    task_run_id: str = "",
 ) -> str | None:
     """通过隔离 Agent Gateway 执行定时任务，让模型拥有真实工具调用能力。"""
     from core.agent_runtime.gateway import create_isolated_agent_gateway
@@ -1466,6 +1468,17 @@ async def _generate_task_message(
         metadata = _scheduled_task_metadata(task)
         if trace_id:
             metadata["trace_id"] = trace_id
+        stable_request_id = str(workflow_idempotency_key or "").strip()
+        if stable_request_id:
+            metadata.update(
+                {
+                    "message_id": stable_request_id,
+                    "request_id": stable_request_id,
+                    "workflow_idempotency_key": stable_request_id,
+                }
+            )
+        if task_run_id:
+            metadata["task_run_id"] = str(task_run_id)
         response = await asyncio.wait_for(
             bridge.handle_message(
                 _build_scheduled_task_query(task),

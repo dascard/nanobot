@@ -49,6 +49,7 @@ _EXPRESSION_OPERATORS = frozenset(
         "$exists",
         "$concat",
         "$coalesce",
+        "$json_parse",
     }
 )
 
@@ -450,7 +451,7 @@ def _normalize_program_steps(
                 raw_step.get("save_as") or f"{step_id}_output",
                 field_name=f"步骤 {step_id}.save_as",
             )
-            max_attempts = raw_step.get("max_attempts", 2)
+            max_attempts = raw_step.get("max_attempts", 1)
             if (
                 type(max_attempts) is not int
                 or max_attempts < 1
@@ -485,19 +486,26 @@ def _normalize_program_steps(
             else:
                 step["else"] = []
         elif operation == "loop":
-            if "items" not in raw_step:
+            has_items = "items" in raw_step
+            has_condition = "condition" in raw_step
+            if has_items == has_condition:
                 raise ScheduledTaskContractError(
-                    f"步骤 {step_id} 缺少 items"
+                    f"步骤 {step_id} 必须且只能填写 items 或 condition"
                 )
-            step["items"] = _validate_expression(raw_step["items"])
-            step["item"] = _validate_variable_name(
-                raw_step.get("item") or "item",
-                field_name=f"步骤 {step_id}.item",
-            )
-            step["index"] = _validate_variable_name(
-                raw_step.get("index") or "index",
-                field_name=f"步骤 {step_id}.index",
-            )
+            if has_items:
+                step["items"] = _validate_expression(raw_step["items"])
+                step["item"] = _validate_variable_name(
+                    raw_step.get("item") or "item",
+                    field_name=f"步骤 {step_id}.item",
+                )
+                step["index"] = _validate_variable_name(
+                    raw_step.get("index") or "index",
+                    field_name=f"步骤 {step_id}.index",
+                )
+            else:
+                step["condition"] = _validate_expression(
+                    raw_step["condition"]
+                )
             max_iterations = raw_step.get(
                 "max_iterations",
                 root_loop_limit,
@@ -549,74 +557,180 @@ def _normalize_program_steps(
 def _validate_program_references(
     steps: list[dict[str, Any]],
 ) -> None:
-    """校验所有 ``$ref`` 至少指向已声明变量或程序内步骤输出。"""
+    """按真实执行顺序校验 ``$ref``，拒绝前向和分支泄漏引用。"""
 
-    step_ids: set[str] = set()
-    variable_names: set[str] = set()
-    references: list[str] = []
-
-    def collect_expression(value: Any) -> None:
-        if isinstance(value, list):
-            for item in value:
-                collect_expression(item)
-            return
-        if not isinstance(value, Mapping):
-            return
-        if set(value) == {"$ref"}:
-            references.append(str(value["$ref"]))
-            return
-        for item in value.values():
-            collect_expression(item)
-
-    def visit(items: list[dict[str, Any]]) -> None:
-        for step in items:
-            step_ids.add(str(step["id"]))
-            operation = step["op"]
-            if operation == "set":
-                variable_names.add(str(step["name"]))
-                collect_expression(step["value"])
-            elif operation == "tool":
-                if step.get("save_as"):
-                    variable_names.add(str(step["save_as"]))
-                collect_expression(step["args"])
-            elif operation == "model":
-                variable_names.add(str(step["save_as"]))
-                collect_expression(step["prompt"])
-            elif operation == "branch":
-                collect_expression(step["condition"])
-                visit(step["then"])
-                visit(step["else"])
-            elif operation == "loop":
-                variable_names.add(str(step["item"]))
-                variable_names.add(str(step["index"]))
-                collect_expression(step["items"])
-                visit(step["steps"])
-            elif operation == "wait":
-                collect_expression(step["seconds"])
-            else:
-                collect_expression(step["content"])
-
-    visit(steps)
-    for reference in references:
+    def validate_reference(
+        reference: str,
+        *,
+        variable_names: set[str],
+        step_outputs: set[str],
+        step_histories: set[str],
+    ) -> None:
         parts = reference.split(".")
         if parts[0] == "variables":
             valid = len(parts) >= 2 and parts[1] in variable_names
         elif parts[0] == "steps":
             valid = (
                 len(parts) >= 3
-                and parts[1] in step_ids
-                and parts[2] == "output"
+                and (
+                    (
+                        parts[2] == "output"
+                        and parts[1] in step_outputs
+                    )
+                    or (
+                        parts[2] == "outputs"
+                        and parts[1] in step_histories
+                    )
+                )
             )
         else:
             valid = (
                 len(parts) >= 2
-                and parts[0] in step_ids
-                and parts[1] == "output"
+                and (
+                    (
+                        parts[1] == "output"
+                        and parts[0] in step_outputs
+                    )
+                    or (
+                        parts[1] == "outputs"
+                        and parts[0] in step_histories
+                    )
+                )
             )
         if not valid:
             raise ScheduledTaskContractError(
-                f"任务表达式引用未声明或不是步骤输出: {reference}"
+                f"任务表达式引用在执行前不可用: {reference}"
             )
+
+    def validate_expression(
+        value: Any,
+        *,
+        variable_names: set[str],
+        step_outputs: set[str],
+        step_histories: set[str],
+    ) -> None:
+        if isinstance(value, list):
+            for item in value:
+                validate_expression(
+                    item,
+                    variable_names=variable_names,
+                    step_outputs=step_outputs,
+                    step_histories=step_histories,
+                )
+            return
+        if not isinstance(value, Mapping):
+            return
+        if set(value) == {"$ref"}:
+            validate_reference(
+                str(value["$ref"]),
+                variable_names=variable_names,
+                step_outputs=step_outputs,
+                step_histories=step_histories,
+            )
+            return
+        for item in value.values():
+            validate_expression(
+                item,
+                variable_names=variable_names,
+                step_outputs=step_outputs,
+                step_histories=step_histories,
+            )
+
+    def visit(
+        items: list[dict[str, Any]],
+        *,
+        variable_names: set[str],
+        step_outputs: set[str],
+        step_histories: set[str],
+    ) -> tuple[set[str], set[str], set[str]]:
+        variables = set(variable_names)
+        outputs = set(step_outputs)
+        histories = set(step_histories)
+        for step in items:
+            step_id = str(step["id"])
+            operation = str(step["op"])
+            expression: Any
+            if operation == "set":
+                expression = step["value"]
+            elif operation == "tool":
+                expression = step["args"]
+            elif operation == "model":
+                expression = step["prompt"]
+            elif operation == "branch":
+                expression = step["condition"]
+            elif operation == "loop":
+                expression = (
+                    step["items"]
+                    if "items" in step
+                    else step["condition"]
+                )
+            elif operation == "wait":
+                expression = step["seconds"]
+            else:
+                expression = step["content"]
+            validate_expression(
+                expression,
+                variable_names=variables,
+                step_outputs=outputs,
+                step_histories=histories,
+            )
+
+            outputs.add(step_id)
+            histories.add(step_id)
+            if operation == "set":
+                variables.add(str(step["name"]))
+            elif operation == "tool" and step.get("save_as"):
+                variables.add(str(step["save_as"]))
+            elif operation == "model":
+                variables.add(str(step["save_as"]))
+            elif operation == "branch":
+                then_scope = visit(
+                    step["then"],
+                    variable_names=set(variables),
+                    step_outputs=set(outputs),
+                    step_histories=set(histories),
+                )
+                else_scope = visit(
+                    step["else"],
+                    variable_names=set(variables),
+                    step_outputs=set(outputs),
+                    step_histories=set(histories),
+                )
+                variables = then_scope[0] & else_scope[0]
+                outputs = then_scope[1] & else_scope[1]
+                histories = then_scope[2] & else_scope[2]
+            elif operation == "loop":
+                loop_variables = set(variables)
+                if "items" in step:
+                    # foreach 即使为空也会初始化两个循环变量为 null，
+                    # 保证后续引用不会因空数组在运行期突然失效。
+                    loop_variables.add(str(step["item"]))
+                    loop_variables.add(str(step["index"]))
+                    variables.update(loop_variables)
+                body_scope = visit(
+                    step["steps"],
+                    variable_names=loop_variables,
+                    step_outputs=set(outputs),
+                    step_histories=set(histories),
+                )
+                # 循环体可能一次都不执行，变量和单次 output 不能泄漏；
+                # outputs 历史会在进入 loop 时初始化为空数组，可安全读取。
+                histories.update(body_scope[2])
+                if (
+                    "items" in step
+                    and isinstance(step["items"], list)
+                    and bool(step["items"])
+                ):
+                    variables.update(body_scope[0])
+                    outputs.update(body_scope[1])
+        return variables, outputs, histories
+
+    visit(
+        steps,
+        variable_names=set(),
+        step_outputs=set(),
+        step_histories=set(),
+    )
 
 
 def normalize_scheduled_task_program(
@@ -704,7 +818,7 @@ def scheduled_task_program_schema() -> dict[str, Any]:
         "description": (
             "JSON 常量或受限表达式；表达式对象只能包含一个 "
             "$ref/$eq/$ne/$lt/$lte/$gt/$gte/$and/$or/$not/"
-            "$exists/$concat/$coalesce 运算符"
+            "$exists/$concat/$coalesce/$json_parse 运算符"
         )
     }
     step = {
@@ -732,6 +846,9 @@ def scheduled_task_program_schema() -> dict[str, Any]:
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 3,
+                "description": (
+                    "tool 步骤的显式安全重试次数；model 步骤固定只执行一次"
+                ),
             },
             "idempotency_arg": {"type": "string"},
             "prompt": expression,
@@ -757,8 +874,9 @@ def scheduled_task_program_schema() -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "description": (
-            "version=1 的统一任务程序；只有 model 步骤调用模型，"
-            "其余步骤由持久执行器直接解释"
+            "version=1 的统一任务程序。固定正文优先使用顶层 content；"
+            "复杂流程才使用 program。loop 可用 items 遍历或 condition "
+            "条件循环，两者只能填写一个；model 步骤不会由工作流重复调用"
         ),
         "properties": {
             "version": {"type": "integer", "enum": [1]},
@@ -815,7 +933,7 @@ def build_legacy_scheduled_task_program(
                 "op": "model",
                 "prompt": prompt,
                 "save_as": "legacy_output",
-                "max_attempts": 2,
+                "max_attempts": 1,
             },
             {
                 "id": "legacy_emit",
@@ -831,11 +949,40 @@ def build_legacy_scheduled_task_program(
     }
 
 
+def build_static_scheduled_task_program(content: object) -> dict[str, Any]:
+    """把固定正文编译成不调用模型的单步 ``emit`` 程序。"""
+
+    normalized = str(content or "")
+    if not normalized.strip():
+        raise ScheduledTaskContractError("固定推送正文不能为空")
+    if len(normalized.encode("utf-8")) > MAX_SCHEDULED_TASK_PROGRAM_BYTES:
+        raise ScheduledTaskContractError(
+            "固定推送正文 UTF-8 大小不能超过 "
+            f"{MAX_SCHEDULED_TASK_PROGRAM_BYTES} 字节"
+        )
+    return {
+        "version": SCHEDULED_TASK_PROGRAM_VERSION,
+        "steps": [
+            {
+                "id": "static_emit",
+                "op": "emit",
+                "content": normalized,
+            }
+        ],
+        "limits": {
+            "max_steps": MAX_SCHEDULED_TASK_STEPS,
+            "max_loop_iterations": MAX_SCHEDULED_TASK_LOOP_ITERATIONS,
+            "max_duration_seconds": MAX_SCHEDULED_TASK_DURATION_SECONDS,
+        },
+    }
+
+
 def normalize_scheduled_task_definition(
     *,
     name: object,
     prompt_template: object = "",
     program: object | None = None,
+    content: object | None = None,
 ) -> tuple[str, str, dict[str, Any], str, str]:
     """统一 API、Agent 工具、迁移与执行器使用的任务定义入口。"""
 
@@ -846,11 +993,35 @@ def normalize_scheduled_task_definition(
             "任务提示模板不能超过 "
             f"{MAX_SCHEDULED_TASK_PROMPT_CHARS} 个 Unicode 字符"
         )
-    selected_program = (
-        build_legacy_scheduled_task_program(normalized_prompt)
-        if program is None
-        else program
+    normalized_content = (
+        str(content)
+        if content is not None
+        else ""
     )
+    if (
+        program is None
+        and not normalized_prompt
+        and not normalized_content.strip()
+    ):
+        raise ScheduledTaskContractError(
+            "任务必须填写 content、prompt_template 或 program"
+        )
+    if normalized_content.strip() and (
+        program is not None or normalized_prompt
+    ):
+        raise ScheduledTaskContractError(
+            "content、prompt_template 和 program 只能填写一个"
+        )
+    if program is not None:
+        selected_program = program
+    elif normalized_content.strip():
+        selected_program = build_static_scheduled_task_program(
+            normalized_content
+        )
+    else:
+        selected_program = build_legacy_scheduled_task_program(
+            normalized_prompt
+        )
     normalized_program, program_json, program_sha256 = (
         normalize_scheduled_task_program(selected_program)
     )
@@ -869,6 +1040,7 @@ def apply_scheduled_task_program(
     name: object,
     prompt_template: object = "",
     program: object | None = None,
+    content: object | None = None,
 ) -> dict[str, Any]:
     """校验并把统一定义投影到 ORM 任务。"""
 
@@ -882,6 +1054,7 @@ def apply_scheduled_task_program(
         name=name,
         prompt_template=prompt_template,
         program=program,
+        content=content,
     )
     task.name = normalized_name
     task.prompt_template = normalized_prompt
@@ -925,6 +1098,7 @@ __all__ = [
     "apply_scheduled_task_program",
     "apply_scheduled_task_owner",
     "build_legacy_scheduled_task_program",
+    "build_static_scheduled_task_program",
     "ensure_task_target_matches_owner",
     "normalize_scheduled_task_definition",
     "normalize_scheduled_task_program",

@@ -6813,6 +6813,18 @@
       },
       "ScheduledTaskCreate": {
         "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "maxLength": 65536,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
           "cron_expr": {
             "default": "0 9 * * *",
             "title": "Cron Expr",

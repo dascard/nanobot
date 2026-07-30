@@ -1,3 +1,4 @@
+import json
 from tests.async_helpers import run_async
 from datetime import datetime, timedelta
 
@@ -158,7 +159,7 @@ def test_schedule_task_schema_declares_manual_idempotency_key():
     runtime_properties = ScheduleTaskTool().get_parameters_schema()["properties"]
     preview_properties = STATIC_TOOL_SCHEMAS["schedule_task"]["parameters"]["properties"]
     assert "idempotency_key" in runtime_properties
-    assert runtime_properties["idempotency_key"] == preview_properties["idempotency_key"]
+    assert runtime_properties == preview_properties
 
 
 def test_schedule_task_toggle_cancels_pending_delivery(monkeypatch, db_session):
@@ -429,3 +430,201 @@ def test_schedule_task_rejects_oversized_prompt_before_database(
 
     assert not result.success
     assert "16000" in str(result.error)
+
+
+def test_schedule_task_create_content_compiles_to_static_emit(monkeypatch):
+    from core import database
+    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+        ScheduleTaskTool,
+    )
+
+    added = []
+
+    class FakeDB:
+        def add(self, obj):
+            obj.id = 456
+            added.append(obj)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: FakeDB())
+
+    result = run_async(
+        ScheduleTaskTool().execute(
+            {
+                "action": "create",
+                "name": "固定提醒",
+                "schedule": "30m",
+                "content": "该喝水了",
+            }
+        )
+    )
+
+    assert result.success
+    assert added[0].prompt_template == ""
+    program = json.loads(added[0].program_json)
+    assert [step["op"] for step in program["steps"]] == ["emit"]
+    assert program["steps"][0]["content"] == "该喝水了"
+
+
+def test_schedule_task_list_detail_returns_program_and_latest_failure(
+    db_session,
+):
+    from core.database import ScheduledTaskExecution
+    from core.scheduled_workflow import enqueue_scheduled_task_execution
+    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+        ScheduleTaskTool,
+    )
+
+    task = _seed_task(db_session)
+    queued = enqueue_scheduled_task_execution(
+        db_session,
+        task_id=task.id,
+        trigger_type="manual",
+        manual_idempotency_key="detail-failure",
+    )
+    execution = db_session.get(
+        ScheduledTaskExecution,
+        queued.execution_id,
+    )
+    execution.status = "failed"
+    execution.last_error_code = "tool_unavailable"
+    execution.last_error_summary = "sandbox_exec 当前不可用"
+    db_session.commit()
+
+    result = run_async(
+        ScheduleTaskTool().execute(
+            {"action": "list", "task_id": task.id}
+        )
+    )
+
+    assert result.success
+    payload = json.loads(result.output)
+    assert [step["op"] for step in payload["program"]["steps"]] == [
+        "model",
+        "emit",
+    ]
+    assert payload["latest_execution"]["status"] == "failed"
+    assert (
+        payload["latest_execution"]["error_code"]
+        == "tool_unavailable"
+    )
+
+
+def test_schedule_task_prompt_update_cannot_overwrite_static_program(
+    db_session,
+):
+    from core.scheduled_task_contract import apply_scheduled_task_program
+    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+        ScheduleTaskTool,
+    )
+
+    task = _seed_task(db_session)
+    apply_scheduled_task_program(
+        task,
+        name=task.name,
+        content="固定正文",
+    )
+    original_program_json = task.program_json
+    db_session.commit()
+
+    result = run_async(
+        ScheduleTaskTool().execute(
+            {
+                "action": "update",
+                "task_id": task.id,
+                "prompt_template": "把任务改成模型生成",
+            }
+        )
+    )
+
+    assert not result.success
+    assert "确定性 program" in str(result.error)
+    db_session.expire_all()
+    assert (
+        db_session.get(type(task), task.id).program_json
+        == original_program_json
+    )
+
+
+def test_schedule_task_create_rejects_unavailable_direct_program_tool(
+    monkeypatch,
+):
+    from core import database
+    from core.tool_plan import ToolPlan, tool_plan_scope
+    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+        ScheduleTaskTool,
+    )
+
+    class FakeDB:
+        def add(self, _obj):
+            raise AssertionError("包含不可用工具的任务不得落库")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: FakeDB())
+    plan = ToolPlan.from_effective_tools(
+        enabled={"schedule_task": True, "sandbox_exec": False},
+        disabled={"sandbox_exec": "当前会话未授予 Sandbox"},
+        chat_type="group",
+        tool_schemas=[],
+    )
+    program = {
+        "version": 1,
+        "steps": [
+            {
+                "id": "run",
+                "op": "tool",
+                "tool": "sandbox_exec",
+                "args": {"command": "true"},
+            },
+            {
+                "id": "done",
+                "op": "emit",
+                "content": "完成",
+            },
+        ],
+    }
+
+    with tool_plan_scope(plan):
+        result = run_async(
+            ScheduleTaskTool().execute(
+                {
+                    "action": "create",
+                    "name": "不可运行任务",
+                    "schedule": "every 5m",
+                    "program": program,
+                }
+            )
+        )
+
+    assert not result.success
+    assert "sandbox_exec" in str(result.error)
+    assert "未授予 Sandbox" in str(result.error)
+
+
+def test_schedule_task_rejects_unknown_action_without_database(monkeypatch):
+    from core import database
+    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+        ScheduleTaskTool,
+    )
+
+    monkeypatch.setattr(
+        database,
+        "SessionLocal",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("未知 action 不得打开数据库")
+        ),
+    )
+
+    result = run_async(
+        ScheduleTaskTool().execute({"action": "invent"})
+    )
+
+    assert not result.success
+    assert "不支持的 action" in str(result.error)

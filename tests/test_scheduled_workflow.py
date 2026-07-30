@@ -172,7 +172,7 @@ def test_program_rejects_duplicate_step_id_and_recursive_task_tool():
             ],
         })
 
-    with pytest.raises(ScheduledTaskContractError, match="引用未声明"):
+    with pytest.raises(ScheduledTaskContractError, match="执行前不可用"):
         normalize_scheduled_task_program({
             "version": 1,
             "steps": [
@@ -181,6 +181,59 @@ def test_program_rejects_duplicate_step_id_and_recursive_task_tool():
                     "op": "emit",
                     "content": {"$ref": "variables.missing"},
                 }
+            ],
+        })
+
+
+def test_program_rejects_forward_and_branch_scoped_references():
+    with pytest.raises(ScheduledTaskContractError, match="执行前不可用"):
+        normalize_scheduled_task_program({
+            "version": 1,
+            "steps": [
+                {
+                    "id": "send",
+                    "op": "emit",
+                    "content": {"$ref": "variables.later"},
+                },
+                {
+                    "id": "later",
+                    "op": "set",
+                    "name": "later",
+                    "value": "太晚",
+                },
+            ],
+        })
+
+    with pytest.raises(ScheduledTaskContractError, match="执行前不可用"):
+        normalize_scheduled_task_program({
+            "version": 1,
+            "steps": [
+                {
+                    "id": "choose",
+                    "op": "branch",
+                    "condition": False,
+                    "then": [
+                        {
+                            "id": "only_then",
+                            "op": "set",
+                            "name": "message",
+                            "value": "只在 then",
+                        }
+                    ],
+                    "else": [
+                        {
+                            "id": "only_else",
+                            "op": "set",
+                            "name": "fallback",
+                            "value": "只在 else",
+                        }
+                    ],
+                },
+                {
+                    "id": "send",
+                    "op": "emit",
+                    "content": {"$ref": "variables.message"},
+                },
             ],
         })
 
@@ -285,6 +338,256 @@ def test_deterministic_program_uses_tools_branches_and_loops_without_model(
     assert execution.outbound_run_id == 42
 
 
+def test_nested_loop_restores_outer_item_and_keeps_iteration_outputs(
+    db_session,
+):
+    program = {
+        "version": 1,
+        "steps": [
+            {
+                "id": "outer",
+                "op": "loop",
+                "items": ["外层A"],
+                "steps": [
+                    {
+                        "id": "inner",
+                        "op": "loop",
+                        "items": ["内层1", "内层2"],
+                        "steps": [
+                            {
+                                "id": "inspect",
+                                "op": "tool",
+                                "tool": "inspect_image",
+                                "args": {
+                                    "value": {
+                                        "$ref": "variables.item"
+                                    }
+                                },
+                                "max_attempts": 1,
+                            }
+                        ],
+                    },
+                    {
+                        "id": "capture_outer",
+                        "op": "set",
+                        "name": "captured",
+                        "value": {"$ref": "variables.item"},
+                    },
+                ],
+            },
+            {
+                "id": "send",
+                "op": "emit",
+                "content": {"$ref": "variables.captured"},
+            },
+        ],
+    }
+    task = _seed_task(db_session, program)
+    queued, claim = _enqueue_and_claim(db_session, task)
+    callbacks = _Callbacks()
+
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=callbacks,
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    db_session.expire_all()
+    execution = db_session.get(
+        ScheduledTaskExecution,
+        queued.execution_id,
+    )
+    state = json.loads(execution.state_json)
+    assert status == "succeeded"
+    assert callbacks.emit_calls[0][0] == "外层A"
+    assert [
+        item["output"]["value"]
+        for item in state["steps"]["inspect"]["outputs"]
+    ] == ["内层1", "内层2"]
+
+
+def test_condition_loop_rechecks_state_until_false(db_session):
+    class ConditionalCallbacks(_Callbacks):
+        async def execute_tool(
+            self,
+            _context,
+            *,
+            tool_name,
+            args,
+            idempotency_key,
+        ):
+            self.tool_calls.append((tool_name, args, idempotency_key))
+            return ScheduledWorkflowStepOutcome(
+                output={"continue": len(self.tool_calls) < 2}
+            )
+
+    program = {
+        "version": 1,
+        "steps": [
+            {
+                "id": "seed",
+                "op": "set",
+                "name": "keep_going",
+                "value": True,
+            },
+            {
+                "id": "poll",
+                "op": "loop",
+                "condition": {"$ref": "variables.keep_going"},
+                "max_iterations": 3,
+                "steps": [
+                    {
+                        "id": "check",
+                        "op": "tool",
+                        "tool": "sandbox_poll",
+                        "args": {},
+                        "save_as": "poll_result",
+                        "max_attempts": 1,
+                    },
+                    {
+                        "id": "continue",
+                        "op": "set",
+                        "name": "keep_going",
+                        "value": {
+                            "$ref": "variables.poll_result.continue"
+                        },
+                    },
+                ],
+            },
+            {"id": "send", "op": "emit", "content": "轮询完成"},
+        ],
+    }
+    task = _seed_task(db_session, program)
+    _queued, claim = _enqueue_and_claim(db_session, task)
+    callbacks = ConditionalCallbacks()
+
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=callbacks,
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    assert status == "succeeded"
+    assert len(callbacks.tool_calls) == 2
+    assert callbacks.emit_calls[0][0] == "轮询完成"
+
+
+def test_condition_loop_fails_when_condition_remains_true_at_limit(
+    db_session,
+):
+    program = {
+        "version": 1,
+        "steps": [
+            {
+                "id": "poll",
+                "op": "loop",
+                "condition": True,
+                "max_iterations": 2,
+                "steps": [
+                    {
+                        "id": "tick",
+                        "op": "set",
+                        "name": "last_tick",
+                        "value": "done",
+                    }
+                ],
+            },
+            {"id": "send", "op": "emit", "content": "不应发送"},
+        ],
+    }
+    task = _seed_task(db_session, program)
+    queued, claim = _enqueue_and_claim(db_session, task)
+    callbacks = _Callbacks()
+
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=callbacks,
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    db_session.expire_all()
+    execution = db_session.get(
+        ScheduledTaskExecution,
+        queued.execution_id,
+    )
+    assert status == "failed"
+    assert execution.last_error_code == "loop_budget_exhausted"
+    assert callbacks.emit_calls == []
+
+
+def test_json_parse_expression_supports_structured_branch(db_session):
+    program = {
+        "version": 1,
+        "steps": [
+            {
+                "id": "raw",
+                "op": "set",
+                "name": "raw",
+                "value": '{"action":"noop"}',
+            },
+            {
+                "id": "parse",
+                "op": "set",
+                "name": "parsed",
+                "value": {
+                    "$json_parse": {"$ref": "variables.raw"}
+                },
+            },
+            {
+                "id": "choose",
+                "op": "branch",
+                "condition": {
+                    "$eq": [
+                        {"$ref": "variables.parsed.action"},
+                        "noop",
+                    ]
+                },
+                "then": [
+                    {
+                        "id": "noop",
+                        "op": "set",
+                        "name": "result",
+                        "value": "无需推送",
+                    }
+                ],
+                "else": [
+                    {
+                        "id": "report",
+                        "op": "set",
+                        "name": "result",
+                        "value": "需要推送",
+                    }
+                ],
+            },
+            {
+                "id": "send",
+                "op": "emit",
+                "content": {"$ref": "variables.result"},
+            },
+        ],
+    }
+    task = _seed_task(db_session, program)
+    _queued, claim = _enqueue_and_claim(db_session, task)
+    callbacks = _Callbacks()
+
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=callbacks,
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    assert status == "succeeded"
+    assert callbacks.emit_calls[0][0] == "无需推送"
+
+
 def test_model_trace_is_forwarded_only_to_emit(db_session):
     task = _seed_task(db_session, {
         "version": 1,
@@ -325,6 +628,235 @@ def test_model_trace_is_forwarded_only_to_emit(db_session):
             "trace-model-1",
         )
     ]
+
+
+def test_successful_stop_finishes_without_emit_or_retry(db_session):
+    class NoReplyCallbacks(_Callbacks):
+        async def execute_model(
+            self,
+            _context,
+            *,
+            prompt,
+            idempotency_key,
+        ):
+            self.model_calls.append((prompt, idempotency_key))
+            return ScheduledWorkflowStepOutcome(
+                output={"status": "no_reply"},
+                model_trace_id="trace-no-reply",
+                agent_run_id="run-no-reply",
+                stop=True,
+            )
+
+    task = _seed_task(db_session, {
+        "version": 1,
+        "steps": [
+            {
+                "id": "check",
+                "op": "model",
+                "prompt": "没有变化时不回复",
+                "max_attempts": 3,
+            },
+            {"id": "send", "op": "emit", "content": "不应发送"},
+        ],
+    })
+    queued, claim = _enqueue_and_claim(db_session, task)
+    callbacks = NoReplyCallbacks()
+
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=callbacks,
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    db_session.expire_all()
+    execution = db_session.get(
+        ScheduledTaskExecution,
+        queued.execution_id,
+    )
+    attempts = (
+        db_session.query(ScheduledTaskStepAttempt)
+        .filter_by(execution_id=queued.execution_id)
+        .all()
+    )
+    assert status == "succeeded"
+    assert callbacks.model_calls == [
+        ("没有变化时不回复", callbacks.model_calls[0][1])
+    ]
+    assert callbacks.emit_calls == []
+    assert len(attempts) == 1
+    assert attempts[0].model_trace_id == "trace-no-reply"
+    assert execution.agent_trace_id == "trace-no-reply"
+    assert execution.agent_run_id == "run-no-reply"
+
+
+def test_model_step_is_not_retried_after_retryable_failure(db_session):
+    class FailingModelCallbacks(_Callbacks):
+        async def execute_model(
+            self,
+            _context,
+            *,
+            prompt,
+            idempotency_key,
+        ):
+            self.model_calls.append((prompt, idempotency_key))
+            return ScheduledWorkflowStepOutcome.failed(
+                "empty_model_output",
+                "模型没有生成内容",
+                retryable=True,
+                model_trace_id="trace-failed",
+                agent_run_id="run-failed",
+            )
+
+    task = _seed_task(db_session, {
+        "version": 1,
+        "steps": [
+            {
+                "id": "model",
+                "op": "model",
+                "prompt": "执行带工具的任务",
+                "max_attempts": 3,
+            }
+        ],
+    })
+    queued, claim = _enqueue_and_claim(db_session, task)
+    callbacks = FailingModelCallbacks()
+
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=callbacks,
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    db_session.expire_all()
+    execution = db_session.get(
+        ScheduledTaskExecution,
+        queued.execution_id,
+    )
+    attempts = (
+        db_session.query(ScheduledTaskStepAttempt)
+        .filter_by(execution_id=queued.execution_id)
+        .all()
+    )
+    assert status == "failed"
+    assert len(callbacks.model_calls) == 1
+    assert len(attempts) == 1
+    assert attempts[0].model_trace_id == "trace-failed"
+    assert execution.agent_trace_id == "trace-failed"
+    assert execution.agent_run_id == "run-failed"
+
+
+def test_empty_successful_model_output_keeps_trace_and_does_not_retry(
+    db_session,
+):
+    class EmptyModelCallbacks(_Callbacks):
+        async def execute_model(
+            self,
+            _context,
+            *,
+            prompt,
+            idempotency_key,
+        ):
+            self.model_calls.append((prompt, idempotency_key))
+            return ScheduledWorkflowStepOutcome(
+                output="",
+                model_trace_id="trace-empty",
+                agent_run_id="run-empty",
+            )
+
+    task = _seed_task(db_session, {
+        "version": 1,
+        "steps": [
+            {
+                "id": "model",
+                "op": "model",
+                "prompt": "生成内容",
+                "max_attempts": 3,
+            }
+        ],
+    })
+    queued, claim = _enqueue_and_claim(db_session, task)
+    callbacks = EmptyModelCallbacks()
+
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=callbacks,
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    db_session.expire_all()
+    execution = db_session.get(
+        ScheduledTaskExecution,
+        queued.execution_id,
+    )
+    assert status == "blocked"
+    assert len(callbacks.model_calls) == 1
+    assert execution.agent_trace_id == "trace-empty"
+    assert execution.agent_run_id == "run-empty"
+
+
+def test_tool_stop_signal_blocks_without_retry(db_session):
+    class StoppingToolCallbacks(_Callbacks):
+        async def execute_tool(
+            self,
+            _context,
+            *,
+            tool_name,
+            args,
+            idempotency_key,
+        ):
+            self.tool_calls.append((tool_name, args, idempotency_key))
+            return ScheduledWorkflowStepOutcome.failed(
+                "sandbox_not_enabled",
+                "当前 owner 未启用 Sandbox",
+                retryable=True,
+                blocked=True,
+                stop=True,
+                tool_call_id="tool-stop-1",
+                agent_run_id="agent-stop-1",
+            )
+
+    task = _seed_task(db_session, {
+        "version": 1,
+        "steps": [
+            {
+                "id": "sandbox",
+                "op": "tool",
+                "tool": "sandbox_exec",
+                "args": {"command": "true"},
+                "recovery": "safe_retry",
+                "max_attempts": 3,
+            },
+            {"id": "send", "op": "emit", "content": "不应发送"},
+        ],
+    })
+    queued, claim = _enqueue_and_claim(db_session, task)
+    callbacks = StoppingToolCallbacks()
+
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=callbacks,
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    db_session.expire_all()
+    attempts = (
+        db_session.query(ScheduledTaskStepAttempt)
+        .filter_by(execution_id=queued.execution_id)
+        .all()
+    )
+    assert status == "blocked"
+    assert len(callbacks.tool_calls) == 1
+    assert len(attempts) == 1
+    assert attempts[0].tool_call_id == "tool-stop-1"
+    assert callbacks.emit_calls == []
 
 
 def test_wait_parks_and_resumes_from_checkpoint(db_session):

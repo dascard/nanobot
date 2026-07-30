@@ -32,8 +32,33 @@ def _render_tool_output(value: Any) -> str:
         )
 
 
+def _workflow_tool_output(result: Any) -> Any:
+    """优先保留工具的稳定结构化信封，供条件和循环直接读取。"""
+
+    metadata = getattr(result, "metadata", None)
+    structured = (
+        metadata.get("structured_content")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if structured is not None:
+        try:
+            # 防止 Mapping 子类、NaN 或不可序列化对象进入持久 checkpoint。
+            return json.loads(
+                json.dumps(
+                    structured,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    return _render_tool_output(getattr(result, "output", result))
+
+
 class KtScheduledWorkflowCallbacks:
-    """生产 callback：只有 model 步骤调用 LLM，emit 只提交 outbox。"""
+    """生产 callback：model 启动完整 Agent Run，emit 只提交 outbox。"""
 
     def __init__(self, *, session_factory: Any) -> None:
         self._session_factory = session_factory
@@ -111,12 +136,18 @@ class KtScheduledWorkflowCallbacks:
                     failure.code,
                     failure.summary,
                     retryable=failure.retryable,
-                    blocked=failure.code
-                    in {
-                        "authorization_failed",
-                        "sandbox_not_enabled",
-                        "asset_not_authorized",
-                    },
+                    blocked=(
+                        failure.stop
+                        or failure.code
+                        in {
+                            "authorization_failed",
+                            "sandbox_not_enabled",
+                            "asset_not_authorized",
+                        }
+                    ),
+                    stop=failure.stop,
+                    tool_call_id=result.tool_call_id,
+                    agent_run_id=result.run_id,
                 )
             if not result.success:
                 code = "tool_execution_failed"
@@ -137,7 +168,7 @@ class KtScheduledWorkflowCallbacks:
                     blocked=code in {"OFFLINE", "TOOL_UNAVAILABLE"},
                 )
             return ScheduledWorkflowStepOutcome(
-                output=_render_tool_output(result.output),
+                output=_workflow_tool_output(result),
                 tool_call_id=result.tool_call_id,
                 agent_run_id=result.run_id,
             )
@@ -217,28 +248,41 @@ class KtScheduledWorkflowCallbacks:
         content = await _generate_task_message(
             step_snapshot,
             trace_id=trace_id,
+            workflow_idempotency_key=idempotency_key,
+            task_run_id=str(context.execution_id),
         )
-        if not content:
-            return ScheduledWorkflowStepOutcome.failed(
-                "empty_model_output",
-                "模型没有生成可用内容",
-                retryable=True,
-            )
         agent_run_id = ""
+        agent_status = ""
         db = self._session_factory()
         try:
             from core.database import AgentRun
 
             row = (
-                db.query(AgentRun.run_id)
+                db.query(AgentRun.run_id, AgentRun.status)
                 .filter(AgentRun.trace_id == trace_id)
                 .order_by(AgentRun.started_at.desc())
                 .first()
             )
             if row is not None:
                 agent_run_id = str(row[0] or "")
+                agent_status = str(row[1] or "")
         finally:
             db.close()
+        if agent_status in {"no_reply", "suppressed"}:
+            return ScheduledWorkflowStepOutcome(
+                output={"status": agent_status},
+                model_trace_id=trace_id,
+                agent_run_id=agent_run_id,
+                stop=True,
+            )
+        if not content:
+            return ScheduledWorkflowStepOutcome.failed(
+                "empty_model_output",
+                "模型没有生成可用内容",
+                retryable=False,
+                model_trace_id=trace_id,
+                agent_run_id=agent_run_id,
+            )
         return ScheduledWorkflowStepOutcome(
             output=str(content),
             model_trace_id=trace_id,

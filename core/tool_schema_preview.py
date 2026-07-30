@@ -254,7 +254,11 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "description": "create(创建) | list(列出) | update(修改) | toggle(启停) | run(立即执行) | delete(删除)",
                     "enum": ["create", "list", "update", "toggle", "run", "delete"],
                 },
-                "task_id": {"type": "integer", "description": "任务ID（update/toggle/delete 必填）"},
+                "task_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "任务ID（list 详情、update/toggle/run/delete 使用）",
+                },
                 "name": {"type": "string", "description": "任务名（create/update）"},
                 "schedule": {
                     "type": "string",
@@ -272,6 +276,11 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "maxLength": 16000,
                     "description": "兼容写法：自动转换为 model→emit 程序；使用 program 时可省略",
+                },
+                "content": {
+                    "type": "string",
+                    "maxLength": 65536,
+                    "description": "固定推送正文；编译为单个 emit，不调用模型",
                 },
                 "program": scheduled_task_program_schema(),
                 "idempotency_key": {
