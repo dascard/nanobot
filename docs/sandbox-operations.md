@@ -170,9 +170,8 @@ sudo scripts/manage-sandbox-production.sh smoke
 ~~~
 
 该入口要求新提交是旧 RELEASE 的快进后代，且 `smoke-passed`、
-`control-plane-ready`、`runtime-deployed` 均不存在。复用时 VERSION、IMAGE ID
-和 `image-built` 凭据保持不变；旧 RELEASE 的失败 Smoke worktree 作为现场证据
-保留，不会自动删除。
+`control-plane-ready` 均不存在。复用时 VERSION、IMAGE ID 和 `image-built`
+凭据保持不变；旧 RELEASE 的失败 Smoke worktree 作为现场证据保留，不会自动删除。
 
 如果真实 Smoke 已通过、但控制面安装尚未通过，且修复提交仍未修改 Sandbox
 镜像输入，可以显式归档旧 Smoke 阶段凭据，并要求新 RELEASE 重新执行完整
@@ -190,9 +189,14 @@ sudo scripts/manage-sandbox-production.sh install-control-plane
 ~~~
 
 `--rerun-smoke` 只能与 `--reuse-built-image` 同时使用；已有
-`control-plane-ready` 或 `runtime-deployed` 时仍会失败关闭。脚本会先校验旧
-Smoke 证据与当前固定镜像一致，再将阶段凭据改名归档；不会删除原始证据目录，
-也不会把旧 Smoke 结果沿用到新 RELEASE。
+`control-plane-ready` 时仍会失败关闭，必须按帮助说明显式使用
+`--recover-failed-deploy` 重新验收控制面。脚本会先校验旧 Smoke 证据与当前固定
+镜像一致，再将阶段凭据改名归档；不会删除原始证据目录，也不会把旧 Smoke 结果
+沿用到新 RELEASE。
+
+Runtime 的 `current/pending/rollback` 由 ReleaseManifest 部署器独立维护，不属于
+Sandbox 安装器阶段。升级时如果发现旧版本遗留的 `runtime-deployed` 文件，只会将
+其改名归档，不用它判断当前 Runtime 状态。
 
 RELEASE 始终由完整提交哈希固定。默认发布来源为 `origin/master`；为了避免把宿主
 验收期间发现的问题逐次写入主分支，也可以显式使用

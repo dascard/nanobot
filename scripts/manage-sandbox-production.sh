@@ -157,10 +157,7 @@ update-release 参数：
   [--version <镜像版本>]
   [--reuse-built-image]     镜像输入未变化时复用已构建镜像
   [--rerun-smoke]           配合复用镜像归档旧 Smoke 凭据并强制重新验证
-  [--recover-failed-deploy] 仅在控制面就绪但 Runtime 未部署时，归档旧控制面凭据
-                            必须同时使用 --reuse-built-image --rerun-smoke
-  [--upgrade-deployed-release]
-                            仅在 Runtime 已部署且健康时，归档完整旧阶段凭据
+  [--recover-failed-deploy] 已有控制面就绪时，归档旧控制面凭据并重新验收
                             必须同时使用 --reuse-built-image --rerun-smoke
 
 build-image 参数：
@@ -274,8 +271,7 @@ assert_no_advanced_stages() {
   for stage in \
     image-built \
     smoke-passed \
-    control-plane-ready \
-    runtime-deployed; do
+    control-plane-ready; do
     if stage_exists "${stage}"; then
       die "已存在后续阶段凭据 ${stage}，拒绝修改存储分配或 RELEASE"
     fi
@@ -639,14 +635,12 @@ update_release_command() {
   local reuse_built_image=false
   local rerun_smoke=false
   local recover_failed_deploy=false
-  local upgrade_deployed_release=false
   local smoke_stage_present=false
   local control_plane_stage_present=false
-  local runtime_stage_present=false
+  local legacy_runtime_stage_present=false
   local archived_smoke_stage=""
   local archived_control_plane_stage=""
-  local archived_runtime_stage=""
-  local deployed_runtime_release=""
+  local archived_legacy_runtime_stage=""
 
   shift
   while (( $# )); do
@@ -678,10 +672,6 @@ update_release_command() {
         recover_failed_deploy=true
         shift
         ;;
-      --upgrade-deployed-release)
-        upgrade_deployed_release=true
-        shift
-        ;;
       -h|--help)
         usage
         return 0
@@ -710,49 +700,28 @@ update_release_command() {
         || "${rerun_smoke}" != "true" ) ]]; then
     die "--recover-failed-deploy 必须同时使用 --reuse-built-image --rerun-smoke"
   fi
-  if [[ "${upgrade_deployed_release}" == "true" \
-      && ( "${reuse_built_image}" != "true" \
-        || "${rerun_smoke}" != "true" ) ]]; then
-    die "--upgrade-deployed-release 必须同时使用 --reuse-built-image --rerun-smoke"
-  fi
-  if [[ "${recover_failed_deploy}" == "true" \
-      && "${upgrade_deployed_release}" == "true" ]]; then
-    die "--recover-failed-deploy 与 --upgrade-deployed-release 不能同时使用"
+
+  if stage_exists runtime-deployed; then
+    legacy_runtime_stage_present=true
   fi
 
   if [[ "${reuse_built_image}" == "true" ]]; then
     require_stage image-built
-    if stage_exists runtime-deployed; then
-      [[ "${upgrade_deployed_release}" == "true" ]] \
-        || die "已存在后续阶段凭据 runtime-deployed，拒绝复用已构建镜像更新 RELEASE"
-      assert_runtime_current
-      deployed_runtime_release="$(runtime_release_from_stage)"
-      repo_git merge-base --is-ancestor \
-        "${deployed_runtime_release}" "${new_release}" \
-        || die "完整 RELEASE 更新只允许当前 Runtime 的快进后代"
-      runtime_stage_present=true
-    elif [[ "${upgrade_deployed_release}" == "true" ]]; then
-      die "--upgrade-deployed-release 要求存在 runtime-deployed"
-    fi
     if stage_exists control-plane-ready; then
-      [[ "${recover_failed_deploy}" == "true" \
-          || "${upgrade_deployed_release}" == "true" ]] \
+      [[ "${recover_failed_deploy}" == "true" ]] \
         || die "已存在后续阶段凭据 control-plane-ready，拒绝复用已构建镜像更新 RELEASE"
       assert_control_plane_current
       control_plane_stage_present=true
     elif [[ "${recover_failed_deploy}" == "true" ]]; then
-      die "--recover-failed-deploy 要求存在 control-plane-ready 且不存在 runtime-deployed"
-    elif [[ "${runtime_stage_present}" == "true" ]]; then
-      die "--upgrade-deployed-release 要求存在 control-plane-ready"
+      die "--recover-failed-deploy 要求存在 control-plane-ready"
     fi
     if stage_exists smoke-passed; then
       [[ "${rerun_smoke}" == "true" ]] \
         || die "已存在后续阶段凭据 smoke-passed；如需更新 RELEASE，必须显式增加 --rerun-smoke 并重新验证"
       assert_smoke_current
       smoke_stage_present="true"
-    elif [[ "${recover_failed_deploy}" == "true" \
-        || "${upgrade_deployed_release}" == "true" ]]; then
-      die "恢复或升级已部署 RELEASE 要求存在 smoke-passed"
+    elif [[ "${recover_failed_deploy}" == "true" ]]; then
+      die "重新验收控制面要求存在 smoke-passed"
     fi
     repo_git merge-base --is-ancestor "${previous_release}" "${new_release}" \
       || die "复用已构建镜像只允许更新到当前 RELEASE 的快进后代"
@@ -784,11 +753,11 @@ update_release_command() {
         && ! -L "${archived_control_plane_stage}" ]] \
       || die "旧控制面阶段凭据归档目标已存在：${archived_control_plane_stage}"
   fi
-  if [[ "${runtime_stage_present}" == "true" ]]; then
-    archived_runtime_stage="${STATE_DIR}/runtime-deployed.superseded-${previous_release}-by-${new_release}"
-    [[ ! -e "${archived_runtime_stage}" \
-        && ! -L "${archived_runtime_stage}" ]] \
-      || die "旧 Runtime 阶段凭据归档目标已存在：${archived_runtime_stage}"
+  if [[ "${legacy_runtime_stage_present}" == "true" ]]; then
+    archived_legacy_runtime_stage="${STATE_DIR}/runtime-deployed.legacy-${previous_release}-by-${new_release}"
+    [[ ! -e "${archived_legacy_runtime_stage}" \
+        && ! -L "${archived_legacy_runtime_stage}" ]] \
+      || die "旧 Runtime 遗留凭据归档目标已存在：${archived_legacy_runtime_stage}"
   fi
   if [[ -n "${archived_smoke_stage}" ]]; then
     mv -- "${STATE_DIR}/smoke-passed" "${archived_smoke_stage}"
@@ -796,8 +765,8 @@ update_release_command() {
   if [[ -n "${archived_control_plane_stage}" ]]; then
     mv -- "${STATE_DIR}/control-plane-ready" "${archived_control_plane_stage}"
   fi
-  if [[ -n "${archived_runtime_stage}" ]]; then
-    mv -- "${STATE_DIR}/runtime-deployed" "${archived_runtime_stage}"
+  if [[ -n "${archived_legacy_runtime_stage}" ]]; then
+    mv -- "${STATE_DIR}/runtime-deployed" "${archived_legacy_runtime_stage}"
   fi
 
   RELEASE="${new_release}"
@@ -823,9 +792,9 @@ update_release_command() {
     log "旧控制面阶段凭据已归档：${archived_control_plane_stage}"
     log "新 RELEASE 必须重新安装并验收 sandboxd 控制面"
   fi
-  if [[ -n "${archived_runtime_stage}" ]]; then
-    log "旧 Runtime 阶段凭据已归档：${archived_runtime_stage}"
-    log "新 RELEASE 必须重新执行官方 deploy，且 Sandbox 开关继续保持关闭"
+  if [[ -n "${archived_legacy_runtime_stage}" ]]; then
+    log "旧 Runtime 遗留凭据已归档：${archived_legacy_runtime_stage}"
+    log "Runtime 发布状态继续由 ReleaseManifest 部署器独立维护"
   fi
   printf 'PREVIOUS_RELEASE=%s\n' "${previous_release}"
   printf 'PREVIOUS_VERSION=%s\n' "${previous_version}"
@@ -2006,62 +1975,6 @@ assert_control_plane_current() {
     || die "控制面凭据与当前 RELEASE/Profile manifest 不匹配"
 }
 
-runtime_release_from_stage() {
-  local marker
-  local release_part
-  local flags_part
-  local extra_part
-  marker="$(read_stage runtime-deployed)"
-  IFS='|' read -r release_part flags_part extra_part <<<"${marker}"
-  [[ "${release_part}" =~ ^release=([0-9a-f]{40})$ \
-      && ( "${flags_part}" == "flags=off" \
-        || "${flags_part}" == "flags=preserved" ) \
-      && -z "${extra_part}" ]] \
-    || die "Runtime 部署凭据格式无效"
-  printf '%s\n' "${BASH_REMATCH[1]}"
-}
-
-assert_runtime_current() {
-  local runtime_release
-  local running_release
-  runtime_release="$(runtime_release_from_stage)"
-  running_release="$(docker inspect nanobot-server \
-    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-    2>/dev/null || true)"
-  [[ "${running_release}" == "${runtime_release}" ]] \
-    || die "Runtime 部署凭据与运行镜像 revision 不匹配"
-}
-
-validate_runtime_release_target() {
-  local target_release="$1"
-  local target_release_ref="$2"
-  local current_runtime_release
-  local blocked_changes
-
-  [[ "${target_release}" =~ ^[0-9a-f]{40}$ ]] \
-    || die "deploy-runtime 必须提供 40 位小写 --release"
-  repo_git cat-file -e "${target_release}^{commit}" 2>/dev/null \
-    || die "本地仓库不存在 Runtime RELEASE=${target_release}"
-  [[ "$(repo_git rev-parse HEAD)" == "${target_release}" ]] \
-    || die "deploy-runtime 要求 --release 等于当前 HEAD"
-  [[ -z "$(repo_git status --porcelain)" ]] \
-    || die "生产 checkout 不干净；请先完成审查、测试、提交和推送"
-  assert_release_published "${target_release}" "${target_release_ref}"
-
-  current_runtime_release="$(runtime_release_from_stage)"
-  repo_git merge-base --is-ancestor \
-    "${current_runtime_release}" "${target_release}" \
-    || die "deploy-runtime 只允许当前 Runtime 的快进后代"
-
-  blocked_changes="$(repo_git diff --name-only \
-    "${current_runtime_release}" "${target_release}" -- \
-    "${SANDBOX_CONTROL_PLANE_PATHS[@]}")"
-  if [[ -n "${blocked_changes}" ]]; then
-    printf '以下变更需要完整 Sandbox 验收：\n%s\n' "${blocked_changes}" >&2
-    die "deploy-runtime 拒绝包含 Sandbox 控制面或镜像变更的提交"
-  fi
-}
-
 run_smoke_matrix_with_controller_quiesced() (
   local sandboxd_was_active=false
   local active_sandboxes=""
@@ -2981,9 +2894,7 @@ status_command() {
         --format '{{.Config.Image}}' 2>/dev/null || true)"
       printf '运行 Runtime 提交：%s\n' "$(docker inspect nanobot-server \
         --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
-      if stage_exists runtime-deployed; then
-        printf 'Runtime 部署凭据：%s\n' "$(runtime_release_from_stage)"
-      fi
+      printf 'Runtime 发布状态：由 ReleaseManifest 部署器独立维护\n'
       if docker exec nanobot-server python -c 'import core.sandbox' >/dev/null 2>&1; then
         local api_status
         if api_status="$(admin_api GET /sandbox/status 2>/dev/null)"; then
@@ -3002,8 +2913,7 @@ status_command() {
     host-prepared \
     image-built \
     smoke-passed \
-    control-plane-ready \
-    runtime-deployed; do
+    control-plane-ready; do
     if stage_exists "${stage}"; then
       printf '  %-24s DONE\n' "${stage}"
     else

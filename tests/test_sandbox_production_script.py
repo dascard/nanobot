@@ -109,8 +109,6 @@ require_stage() {{ stage_exists "$1" || die "missing stage: $1"; }}
 stage_exists() {{ [[ -f "${{STATE_DIR}}/$1" && ! -L "${{STATE_DIR}}/$1" ]]; }}
 assert_smoke_current() {{ printf 'checked\n' >"${{SMOKE_CHECK}}"; }}
 assert_control_plane_current() {{ printf 'CONTROL_PLANE_CHECKED\n'; }}
-assert_runtime_current() {{ printf 'RUNTIME_CHECKED\n'; }}
-runtime_release_from_stage() {{ printf '%s\n' "${{RELEASE}}"; }}
 assert_no_advanced_stages() {{ die "unexpected non-reuse path"; }}
 image_id_from_stage() {{ printf 'sha256:%064d\n' 0; }}
 validate_config_values() {{ :; }}
@@ -209,106 +207,6 @@ promote_release_command promote-release "$@"
         check=False,
     )
     return result, config_capture, control_plane_marker
-
-
-def _run_runtime_release_validation_harness(
-    tmp_path: Path,
-    *,
-    control_plane_changed: bool = False,
-    runtime_flags: str = "off",
-) -> subprocess.CompletedProcess[str]:
-    source = SCRIPT.read_text(encoding="utf-8")
-    start = source.index("runtime_release_from_stage() {")
-    end = source.index("\nsmoke_command() {", start)
-    functions = source[start:end]
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    current_release = "1" * 40
-    target_release = "2" * 40
-    (state_dir / "runtime-deployed").write_text(
-        f"release={current_release}|flags={runtime_flags}\n",
-        encoding="utf-8",
-    )
-    harness = f"""
-set -Eeuo pipefail
-STATE_DIR={shlex.quote(str(state_dir))}
-TARGET_RELEASE={target_release}
-TARGET_REF=origin/release-candidates/sandbox-control-plane
-CONTROL_PLANE_CHANGED={"true" if control_plane_changed else "false"}
-SANDBOX_CONTROL_PLANE_PATHS=(core/sandbox sandboxd docker/sandbox)
-require_stage() {{ [[ -f "${{STATE_DIR}}/$1" ]] || die "missing stage: $1"; }}
-read_stage() {{ require_stage "$1"; head -n 1 "${{STATE_DIR}}/$1"; }}
-assert_release_published() {{ printf 'PUBLISHED %s %s\n' "$1" "$2"; }}
-die() {{ printf '%s\n' "$*" >&2; exit 1; }}
-repo_git() {{
-  case "$1" in
-    cat-file) return 0 ;;
-    rev-parse) printf '%s\n' "${{TARGET_RELEASE}}"; return 0 ;;
-    status) return 0 ;;
-    merge-base) return 0 ;;
-    diff)
-      if [[ "${{CONTROL_PLANE_CHANGED}}" == "true" ]]; then
-        printf 'sandboxd/app.py\n'
-      fi
-      return 0
-      ;;
-  esac
-  die "unexpected repo_git call: $*"
-}}
-docker() {{
-  if [[ "$1 $2 $3" == "image inspect nanobot-runtime:latest" ]]; then
-    printf '%s\n' "${{TARGET_RELEASE}}"
-    return 0
-  fi
-  die "unexpected docker call: $*"
-}}
-{functions}
-validate_runtime_release_target "${{TARGET_RELEASE}}" "${{TARGET_REF}}"
-"""
-    return subprocess.run(
-        ["bash", "-c", harness],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def _run_runtime_marker_harness(
-    tmp_path: Path,
-    *,
-    marker_release: str,
-    running_release: str,
-    flags: str,
-) -> subprocess.CompletedProcess[str]:
-    source = SCRIPT.read_text(encoding="utf-8")
-    start = source.index("runtime_release_from_stage() {")
-    end = source.index("\nvalidate_runtime_release_target() {", start)
-    functions = source[start:end]
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    (state_dir / "runtime-deployed").write_text(
-        f"release={marker_release}|flags={flags}\n",
-        encoding="utf-8",
-    )
-    harness = f"""
-set -Eeuo pipefail
-STATE_DIR={shlex.quote(str(state_dir))}
-RUNNING_RELEASE={running_release}
-require_stage() {{ [[ -f "${{STATE_DIR}}/$1" ]] || die "missing stage: $1"; }}
-read_stage() {{ require_stage "$1"; head -n 1 "${{STATE_DIR}}/$1"; }}
-die() {{ printf '%s\n' "$*" >&2; exit 1; }}
-docker() {{ printf '%s\n' "${{RUNNING_RELEASE}}"; }}
-{functions}
-assert_runtime_current
-"""
-    return subprocess.run(
-        ["bash", "-c", harness],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
 
 def _run_activate_release_tree_harness(
@@ -475,7 +373,6 @@ def test_update_release_can_reuse_unchanged_image_before_smoke():
     assert 'VERSION="${previous_version}"' in source
     assert "smoke-passed" in source
     assert "control-plane-ready" in source
-    assert "runtime-deployed" in source
 
 
 def test_local_image_build_keeps_separate_twenty_gib_reserve():
@@ -519,31 +416,15 @@ def test_runtime_deploy_commands_are_retired_in_favor_of_release_manifest():
     assert "deploy_runtime_release" not in deploy_body
 
 
-def test_runtime_marker_can_track_release_independently_from_control_plane(
-    tmp_path,
-):
-    release = "8" * 40
-    result = _run_runtime_marker_harness(
-        tmp_path,
-        marker_release=release,
-        running_release=release,
-        flags="preserved",
-    )
+def test_status_leaves_runtime_state_to_release_manifest_deployer():
+    source = SCRIPT.read_text(encoding="utf-8")
+    status_body = source.split("status_command() {", 1)[1].split(
+        "\nsandbox_web_management_required_command() {",
+        1,
+    )[0]
 
-    assert result.returncode == 0, result.stderr
-
-
-def test_runtime_marker_rejects_unknown_feature_policy(tmp_path):
-    release = "8" * 40
-    result = _run_runtime_marker_harness(
-        tmp_path,
-        marker_release=release,
-        running_release=release,
-        flags="unknown",
-    )
-
-    assert result.returncode != 0
-    assert "Runtime 部署凭据格式无效" in result.stderr
+    assert "Runtime 发布状态：由 ReleaseManifest 部署器独立维护" in status_body
+    assert "runtime-deployed" not in status_body
 
 
 def test_release_gate_accepts_only_master_or_explicit_candidate_ref():
@@ -812,8 +693,9 @@ def test_update_release_recovers_control_plane_ready_before_runtime_deploy(tmp_p
     )
 
 
-def test_update_release_recovery_refuses_completed_runtime(tmp_path):
+def test_update_release_archives_legacy_runtime_marker(tmp_path):
     new_release = "2" * 40
+    previous_release = "1" * 40
     result, state_dir, config_capture, smoke_check = _run_update_release_harness(
         tmp_path,
         "--release",
@@ -821,15 +703,19 @@ def test_update_release_recovery_refuses_completed_runtime(tmp_path):
         "--reuse-built-image",
         "--rerun-smoke",
         "--recover-failed-deploy",
-        advanced_stage="runtime-deployed",
+        advanced_stages=("control-plane-ready", "runtime-deployed"),
     )
 
-    assert result.returncode != 0
-    assert "runtime-deployed" in result.stderr
-    assert (state_dir / "runtime-deployed").exists()
-    assert (state_dir / "smoke-passed").exists()
-    assert not config_capture.exists()
-    assert not smoke_check.exists()
+    archived_runtime = state_dir / (
+        f"runtime-deployed.legacy-{previous_release}-by-{new_release}"
+    )
+    assert result.returncode == 0, result.stderr
+    assert archived_runtime.read_text(encoding="utf-8") == "advanced\n"
+    assert not (state_dir / "runtime-deployed").exists()
+    assert smoke_check.read_text(encoding="utf-8") == "checked\n"
+    assert config_capture.read_text(encoding="utf-8") == (
+        f"{new_release}\norigin/master\nexisting-version\n"
+    )
 
 
 def test_update_release_recovery_requires_control_plane_stage(tmp_path):
@@ -846,54 +732,6 @@ def test_update_release_recovery_requires_control_plane_stage(tmp_path):
     assert result.returncode != 0
     assert "要求存在 control-plane-ready" in result.stderr
     assert (state_dir / "smoke-passed").exists()
-    assert not config_capture.exists()
-    assert not smoke_check.exists()
-
-
-def test_update_release_upgrades_fully_deployed_candidate(tmp_path):
-    new_release = "2" * 40
-    previous_release = "1" * 40
-    result, state_dir, config_capture, smoke_check = _run_update_release_harness(
-        tmp_path,
-        "--release",
-        new_release,
-        "--reuse-built-image",
-        "--rerun-smoke",
-        "--upgrade-deployed-release",
-        advanced_stages=("control-plane-ready", "runtime-deployed"),
-    )
-
-    assert result.returncode == 0, result.stderr
-    for stage in ("smoke-passed", "control-plane-ready", "runtime-deployed"):
-        archived = state_dir / (
-            f"{stage}.superseded-{previous_release}-by-{new_release}"
-        )
-        assert archived.read_text(encoding="utf-8") in {"smoke\n", "advanced\n"}
-        assert not (state_dir / stage).exists()
-    assert "CONTROL_PLANE_CHECKED" in result.stdout
-    assert "RUNTIME_CHECKED" in result.stdout
-    assert smoke_check.read_text(encoding="utf-8") == "checked\n"
-    assert config_capture.read_text(encoding="utf-8") == (
-        f"{new_release}\norigin/master\nexisting-version\n"
-    )
-
-
-def test_update_release_upgrade_requires_runtime_stage(tmp_path):
-    new_release = "2" * 40
-    result, state_dir, config_capture, smoke_check = _run_update_release_harness(
-        tmp_path,
-        "--release",
-        new_release,
-        "--reuse-built-image",
-        "--rerun-smoke",
-        "--upgrade-deployed-release",
-        advanced_stage="control-plane-ready",
-    )
-
-    assert result.returncode != 0
-    assert "要求存在 runtime-deployed" in result.stderr
-    assert (state_dir / "smoke-passed").exists()
-    assert (state_dir / "control-plane-ready").exists()
     assert not config_capture.exists()
     assert not smoke_check.exists()
 

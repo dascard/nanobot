@@ -124,7 +124,12 @@ def test_production_smoke_uses_only_hashed_minimal_dependencies():
         for line in smoke_input.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
-    assert declared == {"docker==7.1.0", "pytest==9.1.1"}
+    assert declared == {
+        "docker==7.1.0",
+        "pathspec==0.12.1",
+        "pytest==9.1.1",
+        "regex==2026.7.19",
+    }
 
     smoke_lock = (
         REPO_ROOT / "requirements-sandbox-smoke.lock"
@@ -140,9 +145,11 @@ def test_production_smoke_uses_only_hashed_minimal_dependencies():
         "idna",
         "iniconfig",
         "packaging",
+        "pathspec",
         "pluggy",
         "pygments",
         "pytest",
+        "regex",
         "requests",
         "urllib3",
     }
