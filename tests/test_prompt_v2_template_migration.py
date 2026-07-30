@@ -184,6 +184,63 @@ def test_template_baseline_marks_invalid_when_blob_integrity_is_broken(
 
 
 @pytest.mark.parametrize(
+    "template_key",
+    ("chat/flow", "tasks/private_decision"),
+)
+def test_historical_baseline_does_not_need_to_match_current_runtime_contract(
+    tmp_path,
+    template_key,
+):
+    store, default_dir, runtime_dir, _state_dir = _store(tmp_path)
+    suffix = ".json" if template_key == "chat/flow" else ".md"
+    relative_path = Path(f"{template_key}{suffix}")
+    current = (Path("prompts.v2.default") / relative_path).read_bytes()
+    _write_template(default_dir / relative_path, current)
+    _write_template(runtime_dir / relative_path, current)
+    store.adopt_in_sync(
+        template_key,
+        baseline_version="current",
+        modified_by="test",
+    )
+
+    if template_key == "chat/flow":
+        legacy_flow = json.loads(current.decode("utf-8"))
+        private_edge = next(
+            edge
+            for edge in legacy_flow["edges"]
+            if edge["from"] == "base_contract"
+            and edge["to"] == "private_policy"
+        )
+        private_edge["platforms"].remove("external_private")
+        legacy = (
+            json.dumps(
+                legacy_flow,
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        ).encode("utf-8")
+    else:
+        legacy = current.replace(
+            "输入是否带附件：{{ has_files }}\n\n".encode(),
+            b"",
+        )
+
+    baseline_sha256 = store.install_blob_once(legacy)
+    manifest = store.manifest_snapshot()
+    entry = manifest["templates"][template_key]
+    entry["baseline_version"] = "legacy"
+    entry["baseline_sha256"] = baseline_sha256
+    entry["baseline_blob_sha256"] = baseline_sha256
+    store.write_manifest_snapshot(manifest)
+
+    report = store.audit(template_key)
+
+    assert report.drift_status == "in_sync"
+    assert report.invalid_component is None
+
+
+@pytest.mark.parametrize(
     "mutate",
     [
         lambda manifest: manifest.update({"unexpected": True}),

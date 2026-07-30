@@ -552,7 +552,11 @@ class TemplateBaselineStore:
                         f"模板基线记录 {key} 缺少 baseline_version"
                     )
                 baseline_bytes = self.read_baseline_bytes(key)
-                validate_template_bytes(key, baseline_bytes)
+                validate_template_bytes(
+                    key,
+                    baseline_bytes,
+                    require_runtime_contract=False,
+                )
             except (
                 TemplateBaselineError,
                 FileNotFoundError,

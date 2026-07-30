@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -179,3 +180,31 @@ def test_developer_prompt_explains_lease_shell_storage_and_termination(
         "sandbox_terminate",
         "workspace_edit",
     } <= plan.sent_tool_names
+
+
+def test_default_and_runtime_prompts_are_in_sync():
+    """受版本管理的 Prompt 契约必须同时进入 canonical 与宿主 Runtime。"""
+
+    relative_paths = (
+        Path("chat/main.md"),
+        Path("tasks/group_memory_learning.md"),
+        Path("tasks/outreach_generate.md"),
+        Path("tasks/outreach_judge.md"),
+        Path("tasks/private_decision.md"),
+        Path("tools/group_analysis/usage.md"),
+        Path("tools/sandbox_exec/usage.md"),
+        Path("tools/sql_analysis/usage.md"),
+        Path("tools/workspace_read/usage.md"),
+        Path("tools/workspace_search/usage.md"),
+        Path("tools/workspace_write/usage.md"),
+        Path("tools/workspace_edit/usage.md"),
+        Path("tools/workspace_list/usage.md"),
+    )
+    for relative_path in relative_paths:
+        default_content = (
+            Path("prompts.v2.default") / relative_path
+        ).read_text(encoding="utf-8")
+        runtime_content = (
+            Path("data/prompts_v2") / relative_path
+        ).read_text(encoding="utf-8")
+        assert runtime_content == default_content, relative_path

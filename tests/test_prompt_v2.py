@@ -277,7 +277,7 @@ async def test_prompt_template_resolution_metadata_does_not_change_wire_request_
     default_dir = tmp_path / "defaults"
     runtime_dir = tmp_path / "runtime"
     shutil.copytree(repo_root / "prompts.v2.default", default_dir)
-    shutil.copytree(repo_root / "data" / "prompts_v2", runtime_dir)
+    shutil.copytree(default_dir, runtime_dir)
     monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
     original_build_template_values = compiler.build_template_values
