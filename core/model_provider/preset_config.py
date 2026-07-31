@@ -60,6 +60,13 @@ def _finite_float(value: object, default: float) -> float:
     return parsed if math.isfinite(parsed) else default
 
 
+def _optional_non_negative_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    parsed = _finite_float(value, -1.0)
+    return parsed if parsed >= 0 else None
+
+
 def _positive_int(value: object, default: int) -> int:
     try:
         parsed = int(value)
@@ -95,9 +102,11 @@ class ModelPreset:
     enabled: bool = True
     max_context: int = 128000
     max_output: int = 16384
-    temperature: float | None = None
+    temperature: float | None = 1.0
     reasoning_effort: str = ""
     service_tier: str = ""
+    cost_input_1m: float | None = None
+    cost_output_1m: float | None = None
     timeout: float = 120.0
     enable_thinking: str = "auto"
     capabilities: dict[str, bool] = field(default_factory=lambda: {
@@ -125,6 +134,8 @@ class ModelPreset:
             "temperature": self.temperature,
             "reasoning_effort": self.reasoning_effort,
             "service_tier": self.service_tier,
+            "cost_input_1m": self.cost_input_1m,
+            "cost_output_1m": self.cost_output_1m,
             "timeout": self.timeout,
             "enable_thinking": self.enable_thinking,
             "capabilities": dict(self.capabilities),
@@ -141,9 +152,16 @@ class ModelPreset:
         credential_configured = bool(
             getattr(provider, "credential_configured", False)
         )
+        if self.cost_input_1m == 0 and self.cost_output_1m == 0:
+            price_tags = ["free"]
+        elif self.cost_input_1m is not None or self.cost_output_1m is not None:
+            price_tags = ["paid"]
+        else:
+            price_tags = ["price_unknown"]
         return {
             "id": self.id,
             **self.to_storage(),
+            "price_tags": price_tags,
             "driver_type": driver_type,
             "provider_enabled": provider_enabled,
             "credential_configured": credential_configured,
@@ -158,11 +176,11 @@ class ModelPreset:
         *,
         updated_at: str = "",
     ) -> "ModelPreset":
-        temperature_raw = data.get("temperature")
+        temperature_raw = data.get("temperature", 1.0)
         temperature = (
             None
             if temperature_raw in (None, "")
-            else _finite_float(temperature_raw, 0.7)
+            else _finite_float(temperature_raw, 1.0)
         )
         thinking = str(data.get("enable_thinking") or "auto").strip().lower()
         if thinking not in {"auto", "true", "false"}:
@@ -179,6 +197,12 @@ class ModelPreset:
             temperature=temperature,
             reasoning_effort=str(data.get("reasoning_effort") or "").strip(),
             service_tier=str(data.get("service_tier") or "").strip(),
+            cost_input_1m=_optional_non_negative_float(
+                data.get("cost_input_1m")
+            ),
+            cost_output_1m=_optional_non_negative_float(
+                data.get("cost_output_1m")
+            ),
             timeout=max(0.1, _finite_float(data.get("timeout"), 120.0)),
             enable_thinking=thinking,
             capabilities={
@@ -535,6 +559,12 @@ def build_request_preview(
         "runtime": {
             "max_context": preset.max_context,
             "timeout": preset.timeout,
+            "pricing": {
+                "currency": "USD",
+                "unit": "1M tokens",
+                "input": preset.cost_input_1m,
+                "output": preset.cost_output_1m,
+            },
             "retry_policy": dict(preset.retry_policy),
             "driver_options": dict(preset.driver_options),
             "selected_variations": dict(resolved.selected_variations),
@@ -550,6 +580,8 @@ def model_driver_schemas() -> list[dict[str, Any]]:
     common = [
         "max_context",
         "max_output",
+        "cost_input_1m",
+        "cost_output_1m",
         "timeout",
         "retry_policy",
         "variation_groups",
@@ -569,7 +601,16 @@ def model_driver_schemas() -> list[dict[str, Any]]:
                 "extra_body",
                 "echo_reasoning",
             ],
-            "reasoning_efforts": ["", "none", "minimal", "low", "medium", "high", "xhigh"],
+            "reasoning_efforts": [
+                "",
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+            ],
             "service_tiers": ["", "auto", "default", "flex", "priority"],
             "route_support": {"kt_agent": True, "sync_completion": True},
         },
@@ -594,7 +635,7 @@ def model_driver_schemas() -> list[dict[str, Any]]:
             "label": "Codex OAuth",
             "transport": "Responses API",
             "fields": common + ["reasoning_effort", "service_tier"],
-            "reasoning_efforts": ["none", "minimal", "low", "medium", "high", "xhigh"],
+            "reasoning_efforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
             "service_tiers": ["", "auto", "default", "flex", "priority"],
             "route_support": {"kt_agent": True, "sync_completion": False},
         },

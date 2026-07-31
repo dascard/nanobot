@@ -37,9 +37,11 @@ class ModelPresetWriteBody(BaseModel):
     enabled: bool = True
     max_context: int = Field(default=128000, ge=1024, le=4_000_000)
     max_output: int = Field(default=16384, ge=1, le=1_000_000)
-    temperature: float | None = Field(default=None, ge=0, le=2)
+    temperature: float | None = Field(default=1.0, ge=0, le=2)
     reasoning_effort: str = Field(default="", max_length=32)
     service_tier: str = Field(default="", max_length=64)
+    cost_input_1m: float | None = Field(default=None, ge=0)
+    cost_output_1m: float | None = Field(default=None, ge=0)
     timeout: float = Field(default=120.0, ge=1, le=900)
     enable_thinking: Literal["auto", "true", "false"] = "auto"
     capabilities: dict[str, bool] = Field(default_factory=lambda: {
@@ -215,6 +217,7 @@ def _preset_from_body(
             "medium",
             "high",
             "xhigh",
+            "max",
         }:
             raise HTTPException(422, "Codex reasoning_effort 无效")
     if provider.driver_type != "openai" and body.enable_thinking != "auto":
@@ -252,6 +255,8 @@ def _preset_from_body(
         temperature=body.temperature,
         reasoning_effort=reasoning_effort,
         service_tier=str(body.service_tier or "").strip(),
+        cost_input_1m=body.cost_input_1m,
+        cost_output_1m=body.cost_output_1m,
         timeout=body.timeout,
         enable_thinking=body.enable_thinking,
         capabilities=capabilities,
@@ -435,6 +440,8 @@ def _runtime_plan(preset: object, provider: object):
         temperature=preset.temperature,
         max_tokens=preset.max_output,
         max_context=preset.max_context,
+        cost_input_1m=preset.cost_input_1m,
+        cost_output_1m=preset.cost_output_1m,
         reasoning_effort=preset.reasoning_effort,
         service_tier=preset.service_tier,
         enable_thinking=preset.enable_thinking,
@@ -736,6 +743,8 @@ def migrate_route_to_preset(
         max_context=int(model_info.get("context_window") or 128000),
         max_output=max(1, int(route.get("max_tokens") or 16384)),
         temperature=route.get("temperature"),
+        cost_input_1m=model_info.get("cost_input_1m"),
+        cost_output_1m=model_info.get("cost_output_1m"),
         timeout=float(route.get("timeout") or 120),
         enable_thinking=str(route.get("enable_thinking") or "auto"),
         capabilities={

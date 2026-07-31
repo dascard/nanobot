@@ -20,6 +20,7 @@ import {
   EmptyEditor,
   FormField,
   InlineNotice,
+  PricingPills,
   RailItem,
   StatePill,
   Toggle,
@@ -37,8 +38,9 @@ function emptyPreset(provider) {
   const driver = provider?.driver_type || 'openai'
   return {
     id: '', display_name: '', provider_id: provider?.id || '', model: '', enabled: true,
-    max_context: 128000, max_output: 16384, temperature: driver === 'codex' ? null : 0.7,
+    max_context: 128000, max_output: 16384, temperature: driver === 'codex' ? null : 1,
     reasoning_effort: driver === 'codex' ? 'medium' : '', service_tier: '', timeout: driver === 'codex' ? 300 : 120,
+    cost_input_1m: null, cost_output_1m: null,
     enable_thinking: 'auto', capabilities: { supports_stream: true, supports_tools: true, supports_image: false },
     retry_policy: defaultRetryPolicy(), driver_options: driver === 'openai' ? { echo_reasoning: true } : {},
     extra_headers: {}, extra_body: {}, variation_groups: {}, creating: true,
@@ -69,6 +71,10 @@ function parseObject(text, label) {
 
 function copyJson(value) {
   navigator.clipboard?.writeText(JSON.stringify(value || {}, null, 2)).catch(() => {})
+}
+
+function optionalNumber(value) {
+  return value === '' || value == null ? null : Number(value)
 }
 
 export function ModelPresetsPanel({ presets, providers, driverSchemas, codexStatus, onChanged, onOpenKt }) {
@@ -149,7 +155,7 @@ export function ModelPresetsPanel({ presets, providers, driverSchemas, codexStat
     update({
       provider_id: providerId,
       driver_type: nextDriver,
-      temperature: nextDriver === 'codex' ? null : (draft.temperature ?? 0.7),
+      temperature: nextDriver === 'codex' ? null : (draft.temperature ?? 1),
       reasoning_effort: nextDriver === 'codex' ? (draft.reasoning_effort || 'medium') : nextDriver === 'anthropic' ? '' : draft.reasoning_effort,
       enable_thinking: nextDriver === 'openai' ? draft.enable_thinking : 'auto',
       timeout: nextDriver === 'codex' && draft.timeout === 120 ? 300 : draft.timeout,
@@ -169,6 +175,8 @@ export function ModelPresetsPanel({ presets, providers, driverSchemas, codexStat
     temperature: draft.temperature === '' || draft.temperature == null ? null : Number(draft.temperature),
     reasoning_effort: draft.reasoning_effort || '',
     service_tier: draft.service_tier || '',
+    cost_input_1m: optionalNumber(draft.cost_input_1m),
+    cost_output_1m: optionalNumber(draft.cost_output_1m),
     timeout: Number(draft.timeout),
     enable_thinking: draft.enable_thinking,
     capabilities: draft.capabilities,
@@ -249,14 +257,14 @@ export function ModelPresetsPanel({ presets, providers, driverSchemas, codexStat
     <div className="grid overflow-hidden rounded-lg border border-slate-800 bg-slate-900 lg:h-[calc(100dvh-15.5rem)] lg:min-h-[38rem] lg:grid-cols-[18rem_minmax(0,1fr)]">
       <ConsoleRail title="Model Presets" count={presets.length} query={query} onQuery={setQuery} action={<button type="button" onClick={startCreate} className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md bg-indigo-500/15 text-indigo-300 transition-colors hover:bg-indigo-500/25" aria-label="新增 Model Preset" title="新增 Model Preset"><Plus className="h-3.5 w-3.5" aria-hidden="true" /></button>}>
         {filtered.map(item => (
-          <RailItem key={item.id} active={!draft?.creating && selectedId === item.id} icon={SlidersHorizontal} title={item.display_name || item.id} subtitle={`${item.provider_id}/${item.model}`} meta={`${item.max_context?.toLocaleString()} ctx · ${item.max_output?.toLocaleString()} out`} onClick={() => choosePreset(item)} badges={<><DriverBadge driver={item.driver_type} />{item.route_references?.length > 0 && <StatePill neutral>{item.route_references.length} Route</StatePill>}{!item.enabled && <StatePill ok={false}>停用</StatePill>}</>} />
+          <RailItem key={item.id} active={!draft?.creating && selectedId === item.id} icon={SlidersHorizontal} title={item.display_name || item.id} subtitle={`${item.provider_id}/${item.model}`} meta={`${item.max_context?.toLocaleString()} ctx · ${item.max_output?.toLocaleString()} out`} onClick={() => choosePreset(item)} badges={<><DriverBadge driver={item.driver_type} /><PricingPills inputCost={item.cost_input_1m} outputCost={item.cost_output_1m} />{item.route_references?.length > 0 && <StatePill neutral>{item.route_references.length} Route</StatePill>}{!item.enabled && <StatePill ok={false}>停用</StatePill>}</>} />
         ))}
       </ConsoleRail>
 
       {!draft ? <EmptyEditor title="选择一个 Model Preset" description="Preset 是可复用的完整模型请求配置；Route 只绑定 Preset，不再重复编辑模型参数。" action={<ActionButton tone="blue" onClick={startCreate}>新增 Preset</ActionButton>} /> : (
         <form onSubmit={save} className="min-w-0 overflow-y-auto">
           <header className="sticky top-0 z-10 flex flex-col gap-3 border-b border-slate-800 bg-slate-900/95 px-4 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-sm font-semibold text-white">{draft.creating ? '新增 Model Preset' : draft.display_name || draft.id}</h2><DriverBadge driver={driver} />{!draft.creating && <span className="font-mono text-[10px] text-slate-500">{draft.id}</span>}</div><p className="mt-1 text-[11px] text-slate-500">所有参数由 KT Driver 消费；右侧显示 variation 解析后的最终请求。</p></div>
+            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-sm font-semibold text-white">{draft.creating ? '新增 Model Preset' : draft.display_name || draft.id}</h2><DriverBadge driver={driver} /><PricingPills inputCost={draft.cost_input_1m} outputCost={draft.cost_output_1m} />{!draft.creating && <span className="font-mono text-[10px] text-slate-500">{draft.id}</span>}</div><p className="mt-1 text-[11px] text-slate-500">所有参数由 KT Driver 消费；右侧显示 variation 解析后的最终请求。</p></div>
             <div className="flex shrink-0 flex-wrap gap-2"><ActionButton type="button" onClick={resolveNow} disabled={previewLoading}>解析请求</ActionButton><ActionButton type="button" tone="blue" onClick={testPreset} disabled={testResult?.loading} className="gap-1.5"><Beaker className="h-3.5 w-3.5" aria-hidden="true" />{testResult?.loading ? '测试中...' : '真实测试'}</ActionButton><ActionButton type="submit" tone="emerald" disabled={saving} className="gap-1.5"><Save className="h-3.5 w-3.5" aria-hidden="true" />{saving ? '保存中...' : '保存'}</ActionButton></div>
           </header>
 
@@ -273,6 +281,13 @@ export function ModelPresetsPanel({ presets, providers, driverSchemas, codexStat
                 <div className="mt-3"><Toggle id="model-preset-enabled" checked={Boolean(draft.enabled)} onChange={enabled => update({ enabled })} label="启用此 Preset" /></div>
               </EditorSection>
 
+              <EditorSection title="价格与路由成本" description="单位为 USD / 1M tokens；留空表示价格未知，0 表示免费。价格用于列表标签、预算判断和 Preset fallback 候选元数据，不会发送给模型 Provider。">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FormField id="model-preset-cost-input" label="输入价格"><input id="model-preset-cost-input" type="number" min="0" step="0.000001" value={draft.cost_input_1m ?? ''} onChange={event => update({ cost_input_1m: event.target.value })} placeholder="例如 2.5" className={inputClass} /></FormField>
+                  <FormField id="model-preset-cost-output" label="输出价格"><input id="model-preset-cost-output" type="number" min="0" step="0.000001" value={draft.cost_output_1m ?? ''} onChange={event => update({ cost_output_1m: event.target.value })} placeholder="例如 10" className={inputClass} /></FormField>
+                </div>
+              </EditorSection>
+
               <EditorSection title="上下文、输出与能力" description="上下文窗口参与预算判断；能力声明决定 Route 候选是否满足图片、工具和流式请求。">
                 <div className="grid gap-3 sm:grid-cols-3">
                   <FormField id="model-preset-max-context" label="Max Context" required><input id="model-preset-max-context" type="number" min="1024" value={draft.max_context} onChange={event => update({ max_context: event.target.value })} className={inputClass} /></FormField>
@@ -285,7 +300,7 @@ export function ModelPresetsPanel({ presets, providers, driverSchemas, codexStat
               <EditorSection title="采样、推理与服务层级" description={`${schema.label || driver} 只显示实际支持的字段，避免保存后被 Driver 静默忽略。`}>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {driver !== 'codex' && <FormField id="model-preset-temperature" label="Temperature"><input id="model-preset-temperature" type="number" min="0" max="2" step="0.05" value={draft.temperature ?? ''} onChange={event => update({ temperature: event.target.value === '' ? null : event.target.value })} className={inputClass} /></FormField>}
-                  {driver !== 'anthropic' && <FormField id="model-preset-reasoning" label="Reasoning Effort"><select id="model-preset-reasoning" value={draft.reasoning_effort || ''} onChange={event => update({ reasoning_effort: event.target.value })} className={inputClass}>{(schema.reasoning_efforts || ['', 'none', 'low', 'medium', 'high']).map(value => <option key={value || 'default'} value={value}>{value || '默认'}</option>)}</select></FormField>}
+                  {driver !== 'anthropic' && <FormField id="model-preset-reasoning" label="Reasoning Effort"><select id="model-preset-reasoning" value={draft.reasoning_effort || ''} onChange={event => update({ reasoning_effort: event.target.value })} className={inputClass}>{(schema.reasoning_efforts || ['', 'none', 'low', 'medium', 'high', 'xhigh', 'max']).map(value => <option key={value || 'default'} value={value}>{value || '默认'}</option>)}</select></FormField>}
                   <FormField id="model-preset-service-tier" label="Service Tier"><select id="model-preset-service-tier" value={draft.service_tier || ''} onChange={event => update({ service_tier: event.target.value })} className={inputClass}>{(schema.service_tiers || ['']).map(value => <option key={value || 'default'} value={value}>{value || '默认'}</option>)}</select></FormField>
                   {driver === 'openai' && <FormField id="model-preset-thinking" label="Enable Thinking"><select id="model-preset-thinking" value={draft.enable_thinking} onChange={event => update({ enable_thinking: event.target.value })} className={inputClass}><option value="auto">自动</option><option value="true">启用</option><option value="false">禁用</option></select></FormField>}
                 </div>

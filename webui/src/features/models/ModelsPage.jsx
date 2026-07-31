@@ -231,7 +231,7 @@ export function ModelsPage() {
             onChanged={reload}
           />
         )}
-        {workspace === 'catalog' && <ModelCatalogPanel providers={providers} onChanged={reload} />}
+        {workspace === 'catalog' && <ModelCatalogPanel providers={providers} presets={presets} onChanged={reload} />}
         {workspace === 'local' && <LocalComponentsPanel components={status?.local_components || {}} />}
       </div>
     </div>

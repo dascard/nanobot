@@ -81,6 +81,8 @@ def _preset_payload(preset_id: str, model: str) -> dict:
         "temperature": 0.2,
         "reasoning_effort": "medium",
         "service_tier": "priority",
+        "cost_input_1m": 2.5,
+        "cost_output_1m": 10.0,
         "timeout": 90,
         "enable_thinking": "auto",
         "capabilities": {
@@ -137,6 +139,9 @@ def test_preset_binding_crud_preserves_fallback_order_and_hides_secret(
         )
         assert response.status_code == 201, response.text
         assert secret not in response.text
+        assert response.json()["preset"]["cost_input_1m"] == 2.5
+        assert response.json()["preset"]["cost_output_1m"] == 10.0
+        assert response.json()["preset"]["price_tags"] == ["paid"]
 
     resolve_response = admin_client.post(
         "/api/v1/admin/models/presets/reasoning-main/resolve",
@@ -149,6 +154,12 @@ def test_preset_binding_crud_preserves_fallback_order_and_hides_secret(
     assert resolved["resolved"]["max_output"] == 12_000
     assert resolved["request_preview"]["body"]["reasoning_effort"] == "high"
     assert resolved["request_preview"]["headers"] == ["X-Nanobot-Trace"]
+    assert resolved["request_preview"]["runtime"]["pricing"] == {
+        "currency": "USD",
+        "unit": "1M tokens",
+        "input": 2.5,
+        "output": 10.0,
+    }
     assert secret not in resolve_response.text
 
     candidates = [
@@ -245,7 +256,7 @@ def test_driver_specific_validation_and_reply_only_codex_binding(
         "max_context": 400_000,
         "max_output": 32_000,
         "temperature": None,
-        "reasoning_effort": "high",
+        "reasoning_effort": "max",
         "service_tier": "priority",
         "timeout": 300,
         "retry_policy": {
@@ -262,6 +273,7 @@ def test_driver_specific_validation_and_reply_only_codex_binding(
         headers=auth_header,
     )
     assert create_codex.status_code == 201, create_codex.text
+    assert create_codex.json()["preset"]["reasoning_effort"] == "max"
 
     reply_binding = admin_client.put(
         "/api/v1/admin/models/bindings/reply",
@@ -276,6 +288,72 @@ def test_driver_specific_validation_and_reply_only_codex_binding(
     )
     assert sync_binding.status_code == 422
     assert "只支持 OpenAI-compatible" in sync_binding.text
+
+
+def test_preset_defaults_temperature_and_exposes_reasoning_max(
+    admin_client,
+    auth_header,
+):
+    provider_response = admin_client.post(
+        "/api/v1/admin/models/providers",
+        json=_provider_payload(),
+        headers=auth_header,
+    )
+    assert provider_response.status_code == 201, provider_response.text
+
+    create_response = admin_client.post(
+        "/api/v1/admin/models/presets",
+        json={
+            "id": "default-temperature",
+            "provider_id": "team_gateway",
+            "model": "gpt-default",
+            "cost_input_1m": 0,
+            "cost_output_1m": 0,
+        },
+        headers=auth_header,
+    )
+    assert create_response.status_code == 201, create_response.text
+    preset = create_response.json()["preset"]
+    assert preset["temperature"] == 1.0
+    assert preset["price_tags"] == ["free"]
+
+    list_response = admin_client.get(
+        "/api/v1/admin/models/presets",
+        headers=auth_header,
+    )
+    assert list_response.status_code == 200, list_response.text
+    schemas = {
+        item["id"]: item
+        for item in list_response.json()["driver_schemas"]
+    }
+    assert "max" in schemas["openai"]["reasoning_efforts"]
+    assert "max" in schemas["codex"]["reasoning_efforts"]
+
+
+def test_stored_preset_temperature_and_price_defaults():
+    from core.model_provider.preset_config import ModelPreset
+
+    legacy = ModelPreset.from_storage(
+        "legacy-preset",
+        {"provider_id": "team_gateway", "model": "legacy-model"},
+    )
+    explicit_null = ModelPreset.from_storage(
+        "codex-preset",
+        {
+            "provider_id": "codex",
+            "model": "gpt-5.4",
+            "temperature": None,
+            "cost_input_1m": -1,
+            "cost_output_1m": "invalid",
+        },
+    )
+
+    assert legacy.temperature == 1.0
+    assert legacy.cost_input_1m is None
+    assert legacy.cost_output_1m is None
+    assert explicit_null.temperature is None
+    assert explicit_null.cost_input_1m is None
+    assert explicit_null.cost_output_1m is None
 
 
 def test_kt_management_endpoints_return_public_metadata(

@@ -194,6 +194,8 @@ def test_preset_route_client_keeps_binding_order_and_capability_filter(
             timeout=300,
             profile_id="codex-high",
             model="gpt-5.4",
+            cost_input_1m=0,
+            cost_output_1m=0,
             capabilities={"supports_tools": True, "supports_image": True},
         ),
         ReplyRoutePlan(
@@ -204,6 +206,18 @@ def test_preset_route_client_keeps_binding_order_and_capability_filter(
             timeout=120,
             profile_id="openai-balanced",
             model="demo-reasoner",
+            cost_input_1m=2.5,
+            cost_output_1m=10.0,
+            capabilities={"supports_tools": True, "supports_image": False},
+        ),
+        ReplyRoutePlan(
+            provider_id="newapi",
+            registry_provider="new-api",
+            base_url="https://gateway.example.com/v1",
+            api_key="secret",
+            timeout=120,
+            profile_id="openai-unknown-price",
+            model="demo-unknown-price",
             capabilities={"supports_tools": True, "supports_image": False},
         ),
     ]
@@ -218,13 +232,38 @@ def test_preset_route_client_keeps_binding_order_and_capability_filter(
         0,
         required_capabilities={"supports_image": True},
     )
+    budget_candidates = PresetRouteClient(plans).get_ordered_candidates(
+        "ignored",
+        0,
+        max_cost=1.0,
+    )
+    paid_candidates = PresetRouteClient(plans).get_ordered_candidates(
+        "ignored",
+        0,
+        avoid_tags=["free", "price_unknown"],
+    )
 
     assert [item["_preset_id"] for item in candidates] == [
         "codex-high",
         "openai-balanced",
+        "openai-unknown-price",
     ]
+    assert candidates[0]["cost_input_1m"] == 0
+    assert candidates[0]["cost_output_1m"] == 0
+    assert candidates[0]["tags"] == ["free"]
+    assert candidates[1]["cost_input_1m"] == 2.5
+    assert candidates[1]["cost_output_1m"] == 10.0
+    assert candidates[1]["tags"] == ["paid"]
+    assert candidates[2]["tags"] == ["price_unknown"]
     assert [item["_preset_id"] for item in image_candidates] == [
         "codex-high"
+    ]
+    assert [item["_preset_id"] for item in budget_candidates] == [
+        "codex-high",
+        "openai-unknown-price",
+    ]
+    assert [item["_preset_id"] for item in paid_candidates] == [
+        "openai-balanced"
     ]
 
 

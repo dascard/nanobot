@@ -5173,6 +5173,30 @@
             "title": "Capabilities",
             "type": "object"
           },
+          "cost_input_1m": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Input 1M"
+          },
+          "cost_output_1m": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Output 1M"
+          },
           "display_name": {
             "default": "",
             "maxLength": 100,
@@ -5269,6 +5293,7 @@
                 "type": "null"
               }
             ],
+            "default": 1.0,
             "title": "Temperature"
           },
           "timeout": {
@@ -5306,6 +5331,30 @@
             },
             "title": "Capabilities",
             "type": "object"
+          },
+          "cost_input_1m": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Input 1M"
+          },
+          "cost_output_1m": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Output 1M"
           },
           "display_name": {
             "default": "",
@@ -5397,6 +5446,7 @@
                 "type": "null"
               }
             ],
+            "default": 1.0,
             "title": "Temperature"
           },
           "timeout": {

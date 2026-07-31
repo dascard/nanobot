@@ -48,6 +48,24 @@ export function StatePill({ ok, children, neutral = false }) {
   )
 }
 
+export function formatPricePerMillion(value) {
+  if (value == null || value === '') return '未配置'
+  const price = Number(value)
+  if (!Number.isFinite(price) || price < 0) return '未配置'
+  if (price === 0) return '免费'
+  return `$${price.toLocaleString('en-US', { maximumFractionDigits: 6 })}/M`
+}
+
+export function PricingPills({ inputCost, outputCost }) {
+  const pillClass = 'inline-flex rounded-md border border-slate-700 bg-slate-800/70 px-1.5 py-0.5 text-[10px] text-slate-300'
+  return (
+    <>
+      <span className={pillClass} title="输入价格，USD / 1M tokens">输入 {formatPricePerMillion(inputCost)}</span>
+      <span className={pillClass} title="输出价格，USD / 1M tokens">输出 {formatPricePerMillion(outputCost)}</span>
+    </>
+  )
+}
+
 export function FormField({ id, label, hint, required, children, className = '' }) {
   return (
     <div className={className}>

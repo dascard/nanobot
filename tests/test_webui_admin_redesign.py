@@ -149,6 +149,15 @@ def test_model_console_exposes_presets_bindings_and_operable_kt_workspace():
     assert "max_output" in source
     assert "reasoning_effort" in source
     assert "service_tier" in source
+    assert "cost_input_1m" in source
+    assert "cost_output_1m" in source
+    assert "价格与路由成本" in source
+    assert "Preset 价格" in source
+    assert "PricingPills" in source
+    assert "model-preset-cost-input" in source
+    assert "model-preset-cost-output" in source
+    assert "driver === 'codex' ? null : 1" in source
+    assert "'xhigh', 'max'" in source
     assert "retry_policy" in source
     assert "Extra Body JSON" in source
     assert "Variation Groups" in source

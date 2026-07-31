@@ -23,6 +23,8 @@ class ReplyRoutePlan:
     temperature: object = None
     max_tokens: int | None = None
     max_context: int = 128000
+    cost_input_1m: float | None = None
+    cost_output_1m: float | None = None
     reasoning_effort: str = ""
     service_tier: str = ""
     enable_thinking: object = "auto"
@@ -109,6 +111,8 @@ def resolve_reply_route_plans(
             temperature=preset.temperature,
             max_tokens=preset.max_output,
             max_context=preset.max_context,
+            cost_input_1m=getattr(preset, "cost_input_1m", None),
+            cost_output_1m=getattr(preset, "cost_output_1m", None),
             reasoning_effort=preset.reasoning_effort,
             service_tier=preset.service_tier,
             enable_thinking=preset.enable_thinking,
@@ -206,8 +210,9 @@ class PresetRouteClient:
         avoid_tags: list[str] | None = None,
         required_capabilities: dict[str, bool] | None = None,
     ) -> list[dict[str, Any]]:
-        del provider, intel_floor, max_cost, avoid_tags
+        del provider, intel_floor
         excluded = set(exclude_models or ())
+        avoided = {str(tag).strip().lower() for tag in (avoid_tags or ())}
         tracker = None
         try:
             from clients.new_api_client import NewAPIClient
@@ -218,6 +223,23 @@ class PresetRouteClient:
         candidates: list[dict[str, Any]] = []
         for index, plan in enumerate(self.plans):
             if plan.model in excluded:
+                continue
+            if plan.cost_input_1m == 0 and plan.cost_output_1m == 0:
+                pricing_tags = ["free"]
+            elif (
+                plan.cost_input_1m is not None
+                or plan.cost_output_1m is not None
+            ):
+                pricing_tags = ["paid"]
+            else:
+                pricing_tags = ["price_unknown"]
+            if avoided.intersection(pricing_tags):
+                continue
+            if (
+                max_cost is not None
+                and plan.cost_input_1m is not None
+                and plan.cost_input_1m > max_cost
+            ):
                 continue
             if tracker is not None and tracker.sync_is_disabled(plan.model):
                 continue
@@ -232,8 +254,9 @@ class PresetRouteClient:
                 "id": plan.model,
                 "provider": plan.registry_provider,
                 "intelligence": 15 - index,
-                "cost_input_1m": 0,
-                "cost_output_1m": 0,
+                "cost_input_1m": plan.cost_input_1m,
+                "cost_output_1m": plan.cost_output_1m,
+                "tags": pricing_tags,
                 "context_window": plan.max_context,
                 **capabilities,
                 "_route_plan": plan,
