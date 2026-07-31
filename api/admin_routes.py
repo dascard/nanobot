@@ -70,6 +70,7 @@ from api.admin.model_routes import (
     ModelCatalogPatch as ModelCatalogPatch,
     ModelRouteEditBody as ModelRouteEditBody,
     ModelRoutePatch as ModelRoutePatch,
+    ProviderCreateBody as ProviderCreateBody,
     ProviderUpdateBody as ProviderUpdateBody,
     TimingGateStabilityRequest as TimingGateStabilityRequest,
     _ALLOWED_TIERS as _ALLOWED_TIERS,
@@ -84,6 +85,8 @@ from api.admin.model_routes import (
     _resolve_route_value as _resolve_route_value,
     _test_nli_contradiction as _test_nli_contradiction,
     chat_model_test as chat_model_test,
+    create_model_provider as create_model_provider,
+    delete_model_provider as delete_model_provider,
     edit_model_route as edit_model_route,
     get_model_catalog as get_model_catalog,
     get_model_catalog_v2 as get_model_catalog_v2,
@@ -97,13 +100,16 @@ from api.admin.model_routes import (
     patch_model_catalog as patch_model_catalog,
     patch_model_route as patch_model_route,
     refresh_model_catalog as refresh_model_catalog,
+    refresh_model_provider_catalog as refresh_model_provider_catalog,
     router as model_router,
     test_local_component as test_local_component,
+    test_model_provider as test_model_provider,
     test_model_route as test_model_route,
     timing_gate_stability_test as timing_gate_stability_test,
     update_model_provider as update_model_provider,
     warmup_local_component as warmup_local_component,
 )
+from api.admin.model_preset_routes import router as model_preset_router
 from api.admin.reply_routes import (
     ReplyEvalCaseIn as ReplyEvalCaseIn,
     ReplyEvalCasePatch as ReplyEvalCasePatch,
@@ -308,6 +314,7 @@ router.include_router(runtime_router)
 router.include_router(runtime_module_router)
 router.include_router(tool_router)
 router.include_router(model_router)
+router.include_router(model_preset_router)
 router.include_router(web_search_router)
 router.include_router(proactive_outreach_router)
 router.include_router(outbound_delivery_router)

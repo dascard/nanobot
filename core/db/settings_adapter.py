@@ -94,6 +94,24 @@ class SqlAlchemySystemSettingRepository:
         self._session.flush()
         return tuple(_setting_record(row) for row in rows)
 
+    def delete_many(self, keys: Sequence[str]) -> int:
+        normalized = tuple(
+            dict.fromkeys(
+                str(key or "").strip()
+                for key in keys
+                if str(key or "").strip()
+            )
+        )
+        if not normalized:
+            return 0
+        deleted = (
+            self._session.query(SystemSetting)
+            .filter(SystemSetting.key.in_(normalized))
+            .delete(synchronize_session=False)
+        )
+        self._session.flush()
+        return int(deleted or 0)
+
     def commit(self) -> None:
         self._session.commit()
 

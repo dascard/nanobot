@@ -48,6 +48,18 @@ class ModelRouteProviderUnavailableError(RuntimeError):
         )
 
 
+class ModelRouteProviderUnsupportedError(RuntimeError):
+    """Provider 驱动尚未接入当前 Nanobot 业务 Route。"""
+
+    def __init__(self, provider_id: str, driver_type: str) -> None:
+        self.provider_id = str(provider_id or "").strip()
+        self.driver_type = str(driver_type or "").strip()
+        super().__init__(
+            "模型路由 Provider 驱动尚未接入"
+            f"（provider={self.provider_id}, driver={self.driver_type}）"
+        )
+
+
 def _get_db_setting_value(key: str) -> tuple[bool, str | None]:
     """读取单个 SystemSetting，兼容尚未进入 SETTING_DEFS 的旧/实验键。"""
     try:
@@ -209,6 +221,9 @@ def _resolve_classifier_route(route_key: str) -> dict:
     )
 
     if provider_id:
+        # 即使 Provider 配置暂时不可见，也保留 Route 的显式引用，避免诊断和
+        # 删除保护把它错误回退成父 Route 的 Provider。
+        base["provider_id"] = provider_id
         provider = _get_provider_config(provider_id)
         if provider:
             if explicit_base_url:
@@ -229,7 +244,6 @@ def _resolve_classifier_route(route_key: str) -> dict:
             else:
                 base["api_key"] = base.get("api_key") or provider.get("api_key", "")
                 base["api_key_source"] = "inherited"
-            base["provider_id"] = provider_id
             base["provider_enabled"] = _as_bool(provider.get("enabled", True), default=True)
 
     return base
@@ -241,6 +255,11 @@ def ensure_model_route_enabled(route_key: str, route: dict | None = None) -> dic
     provider_id = str(route.get("provider_id") or "").strip()
     if provider_id and route.get("provider_enabled") is False:
         raise ModelRouteProviderUnavailableError(provider_id)
+    if provider_id and route.get("route_completion_supported") is False:
+        raise ModelRouteProviderUnsupportedError(
+            provider_id,
+            str(route.get("driver_type") or "unknown"),
+        )
     return route
 
 
@@ -368,151 +387,76 @@ def call_model_route(
 # ── 模型路由解析（provider + model）──
 
 def _get_provider_config(provider_id: str) -> dict | None:
-    """读取 provider 内部配置（含 api_key，仅内部使用）。
+    """兼容入口：由 Provider 控制面返回包含凭据的内部配置。"""
 
-    对已知 provider 使用 config 常量作为 fallback，避免 settings 空值覆盖 env。
-    旧 provider 名通过 canonical_provider_id 映射到 canonical 名。
-    优先读 DB 中实际存在的 key（canonical 或旧 alias），再回退到 settings 默认值。
-    """
-    from core.settings_service import settings
-    from core.database import SessionLocal, SystemSetting
-    from config import NEW_API_BASE_URL, NEW_API_KEY, CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
-    from core.route_metadata import canonical_provider_id, PROVIDER_ALIASES
+    from core.model_provider.provider_config import get_provider_instance
 
-    raw_id = provider_id
-    provider_id = canonical_provider_id(provider_id)
-
-    # 找到此 canonical 名对应的旧 alias
-    alias_key = None
-    for old, new in PROVIDER_ALIASES.items():
-        if new == provider_id and old != raw_id:
-            alias_key = old
-            break
-    if not alias_key and provider_id == "local_llama":
-        alias_key = "local_qwen"
-    if not alias_key and provider_id == "local_vision":
-        alias_key = "vision_qwen"
-
-    # 一次性查询 DB，判断哪些 key 实际存在
-    db_keys: set[str] = set()
-    db = SessionLocal()
-    try:
-        rows = db.query(SystemSetting.key).filter(
-            SystemSetting.key.like("model.providers.%")
-        ).all()
-        db_keys = {r.key for r in rows}
-    except Exception:
-        pass
-    finally:
-        db.close()
-
-    def _get_with_fallback(field: str):
-        """读取配置：DB 中有 canonical key → 用 canonical；
-        DB 中只有 alias key → 用 alias；否则用 settings 默认值。"""
-        ck = f"model.providers.{provider_id}.{field}"
-        if ck in db_keys:
-            return settings.get(ck, None)
-        if alias_key:
-            ak = f"model.providers.{alias_key}.{field}"
-            if ak in db_keys:
-                return settings.get(ak, None)
-            alias_value = settings.get(ak, None)
-            if alias_value is not None and alias_value != "":
-                return alias_value
-        v = settings.get(ck, None)
-        return v
-
-    base_url = str(_get_with_fallback("base_url") or "")
-    api_key = str(_get_with_fallback("api_key") or "")
-
-    if provider_id == "newapi":
-        base_url = base_url or str(NEW_API_BASE_URL or "")
-        api_key = api_key or str(NEW_API_KEY or "")
-    elif provider_id == "local_llama":
-        base_url = base_url or str(CLASSIFIER_API_URL or "")
-    elif provider_id == "local_vision":
-        base_url = base_url or str(IMAGE_SUMMARY_API_URL or "")
-
-    if not base_url:
-        return None
-    enabled = _get_with_fallback("enabled")
-    if enabled is None or enabled == "":
-        enabled = True
-    registry_provider = str(_get_with_fallback("registry_provider") or "").strip()
-    return {
-        "id": provider_id,
-        "base_url": base_url,
-        "api_key": api_key,
-        "enabled": _as_bool(enabled, default=True),
-        "registry_provider": registry_provider or None,
-    }
+    provider = get_provider_instance(provider_id)
+    return provider.internal_view() if provider is not None else None
 
 
 def provider_public(p: dict) -> dict:
     """脱敏返回：不暴露 api_key 明文。"""
     return {
         "id": p["id"],
+        "display_name": p.get("display_name") or p["id"],
+        "driver_type": p.get("driver_type") or "openai",
         "base_url": p.get("base_url", ""),
         "api_key_configured": bool(p.get("api_key")),
+        "credential_configured": bool(
+            p.get("credential_configured", p.get("api_key"))
+        ),
+        "credential_source": p.get("credential_source") or (
+            "configured" if p.get("api_key") else "none"
+        ),
+        "credential_mode": p.get("credential_mode") or (
+            "oauth" if p.get("driver_type") == "codex" else "api_key"
+        ),
         "enabled": bool(p.get("enabled")),
+        "builtin": bool(p.get("builtin")),
         "legacy_aliases": p.get("legacy_aliases", []),
         "registry_provider": p.get("registry_provider") or None,
+        "model_discovery_enabled": bool(
+            p.get("model_discovery_enabled", True)
+        ),
+        "kt_driver_available": p.get("driver_type", "openai")
+        in {"openai", "anthropic", "codex"},
+        "route_completion_supported": bool(
+            p.get("route_completion_supported", p.get("driver_type", "openai") == "openai")
+        ),
+        "agent_runtime_supported": bool(
+            p.get("agent_runtime_supported", p.get("driver_type", "openai") == "openai")
+        ),
+        "model_discovery_supported": bool(
+            p.get("model_discovery_supported", p.get("driver_type", "openai") == "openai")
+        ),
+        "catalog": dict(p.get("catalog") or {}),
     }
 
 
-def list_providers() -> list[dict]:
-    """列出所有已配置的 provider（仅返回 canonical 名，跳过 deprecated alias）。"""
-    from core.config_registry import SETTING_DEFS
-    from core.route_metadata import (
-        is_deprecated_provider, canonical_provider_id, normalize_base_url, PROVIDER_ALIASES,
-    )
-    from config import CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
+def list_providers(db=None) -> list[dict]:
+    """兼容入口：列出所有 canonical Provider 的内部配置。"""
 
-    providers: list[dict] = []
-    seen_canonical: set[str] = set()
-    deprecated_pids: list[str] = []
-    for key in SETTING_DEFS:
-        if not key.startswith("model.providers.") or not key.endswith(".base_url"):
-            continue
-        pid = key.removeprefix("model.providers.").removesuffix(".base_url")
-        if is_deprecated_provider(pid):
-            deprecated_pids.append(pid)
-            continue
-        # local_vision 仅在 endpoint 不同时条件性添加，不在此处扫描
-        if pid == "local_vision":
-            continue
-        canonical = canonical_provider_id(pid)
-        if canonical in seen_canonical:
-            continue
-        seen_canonical.add(canonical)
-        cfg = _get_provider_config(canonical)
-        if cfg:
-            # 附上此 canonical 名对应的旧别名
-            aliases = [old for old, new in PROVIDER_ALIASES.items() if new == canonical]
-            if aliases:
-                cfg["legacy_aliases"] = aliases
-            providers.append(cfg)
+    from core.model_provider.provider_config import list_provider_instances
 
-    # local_vision 仅在 IMAGE_SUMMARY_API_URL != CLASSIFIER_API_URL 时出现
-    normalized_classifier = normalize_base_url(str(CLASSIFIER_API_URL or ""))
-    normalized_vision = normalize_base_url(str(IMAGE_SUMMARY_API_URL or ""))
-    if normalized_vision and normalized_vision != normalized_classifier:
-        if "local_vision" not in seen_canonical:
-            cfg = _get_provider_config("local_vision")
-            if cfg:
-                cfg["legacy_aliases"] = ["vision_qwen"]
-                providers.append(cfg)
-
-    # 将兼容配置目录投影为类型化 Registry：重复 canonical id、alias 冲突或
-    # 非法 capability 描述会在控制面列举/启动校验时立即失败。
-    registry_from_provider_configs(providers)
+    providers = [provider.internal_view() for provider in list_provider_instances(db)]
+    # 同步业务 Route 仍只注册已经接入的 OpenAI-compatible Adapter。
+    registry_from_provider_configs([
+        provider
+        for provider in providers
+        if provider.get("route_completion_supported")
+    ])
     return providers
 
 
 def provider_registry_introspection() -> tuple[dict[str, object], ...]:
     """返回当前 Provider Registry 的无密钥、无 endpoint 状态快照。"""
 
-    registry = registry_from_provider_configs(list_providers())
+    registry = registry_from_provider_configs([
+        provider
+        for provider in list_providers()
+        if provider.get("route_completion_supported")
+    ])
     return tuple(dict(item) for item in registry.introspect())
 
 
@@ -524,14 +468,14 @@ def resolve_model_route(route_key: str) -> dict:
           overridden_fields}
     """
     from core.settings_service import settings
-    from core.route_metadata import canonical_provider_id
+    from core.model_provider.provider_config import canonical_provider_instance_id
 
     descriptor = require_model_route_descriptor(route_key)
     route_key = descriptor.route_key
     route = _resolve_classifier_route(route_key)
 
     # 确定 provider（使用 canonical 名）
-    provider_id = canonical_provider_id(
+    provider_id = canonical_provider_instance_id(
         str(route.get("provider_id") or settings.get(f"model.route.{route_key}.provider") or "")
     )
     if not provider_id:
@@ -564,6 +508,10 @@ def resolve_model_route(route_key: str) -> dict:
         "api_key_configured": bool(route.get("api_key") or provider.get("api_key")),
         "route_api_key_configured": route.get("api_key_source") == "route",
         "provider_enabled": _as_bool(provider.get("enabled", True), default=True),
+        "driver_type": provider.get("driver_type", "openai"),
+        "route_completion_supported": bool(
+            provider.get("route_completion_supported", True)
+        ),
         "model": model or "未指定",
         "timeout": route.get("timeout", 15),
         "temperature": route.get("temperature", 0),
@@ -573,6 +521,73 @@ def resolve_model_route(route_key: str) -> dict:
         "route_registry_generation": route_registry_snapshot.generation,
         "route_registry_sha256": route_registry_snapshot.sha256,
     }
+
+    # 新控制面：Route 优先绑定 Model Preset；未绑定时完整保留旧配置解析。
+    binding_applied = False
+    try:
+        from core.model_provider.preset_config import (
+            get_effective_route_binding,
+            resolve_route_binding_candidates,
+        )
+
+        binding = get_effective_route_binding(route_key)
+        bound_candidates = resolve_route_binding_candidates(route_key)
+        if binding is not None and bound_candidates:
+            _candidate, resolved_preset = bound_candidates[0]
+            preset = resolved_preset.preset
+            bound_provider = _get_provider_config(preset.provider_id)
+            if bound_provider is None:
+                raise ValueError(
+                    f"Preset {preset.id} 引用的 Provider 不存在: {preset.provider_id}"
+                )
+            binding_applied = True
+            runtime_supported = (
+                bool(bound_provider.get("agent_runtime_supported"))
+                if route_key == "reply"
+                else bool(bound_provider.get("route_completion_supported"))
+            )
+            result.update({
+                "profile_id": preset.id,
+                "provider_id": preset.provider_id,
+                "base_url": bound_provider.get("base_url", ""),
+                "api_key": bound_provider.get("api_key", ""),
+                "api_key_configured": bool(
+                    bound_provider.get("credential_configured")
+                ),
+                "route_api_key_configured": False,
+                "provider_enabled": bool(bound_provider.get("enabled", True)),
+                "driver_type": bound_provider.get("driver_type", "openai"),
+                "route_completion_supported": runtime_supported,
+                "model": preset.model,
+                "max_context": preset.max_context,
+                "max_tokens": preset.max_output,
+                "temperature": preset.temperature,
+                "timeout": preset.timeout,
+                "enable_thinking": preset.enable_thinking,
+                "reasoning_effort": preset.reasoning_effort,
+                "service_tier": preset.service_tier,
+                "selected_variations": dict(
+                    resolved_preset.selected_variations
+                ),
+                "binding_candidates": [
+                    {
+                        "preset_id": item.preset.id,
+                        "provider_id": item.preset.provider_id,
+                        "model": item.preset.model,
+                        "driver_type": (
+                            (_get_provider_config(item.preset.provider_id) or {}).get(
+                                "driver_type", "openai"
+                            )
+                        ),
+                        "selected_variations": dict(item.selected_variations),
+                    }
+                    for _entry, item in bound_candidates
+                ],
+                "binding_inherited_from": binding.inherited_from or None,
+                "source": "model_preset",
+            })
+    except ValueError as exc:
+        result["binding_error"] = str(exc)
 
     # 继承信息完全来自 Descriptor。
     if descriptor.inherits_from is not None:
@@ -584,7 +599,8 @@ def resolve_model_route(route_key: str) -> dict:
                 overrides[k] = result[k]
         result["inherited_from"] = inherited_from
         result["overridden_fields"] = overrides
-        result["source"] = f"inherited_from_{inherited_from}"
+        if not binding_applied:
+            result["source"] = f"inherited_from_{inherited_from}"
 
     result.update({
         "domain": descriptor.domain,
@@ -650,6 +666,9 @@ def build_provider_catalog(db=None) -> list[dict]:
                     "model": m,
                     "capabilities": ["vision"] if ("vl" in m.lower() or "vision" in m.lower()) else [],
                     "stale": not data.get("last_refresh_ok", True),
+                    "updated_at": str(data.get("updated_at") or ""),
+                    "last_refresh_ok": data.get("last_refresh_ok", True),
+                    "last_error": str(data.get("last_error") or ""),
                     "source": "provider_catalog",
                     "verified": True,
                 })

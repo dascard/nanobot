@@ -171,6 +171,7 @@ def prompt_runtime_sdk_harness(monkeypatch, db_session):
     from core.settings_service import settings
     from kohakuterrarium.llm.openai import OpenAIProvider
     from nanobot_kt.bridge import NanobotBridge
+    from nanobot_kt.model_runtime import ReplyRoutePlan
     from nanobot_kt.output import BufferedOutput
     from nanobot_kt.tool_runtime import install_tool_plan_native_schema_filter
 
@@ -257,17 +258,19 @@ def prompt_runtime_sdk_harness(monkeypatch, db_session):
     bridge._last_prompt_render_meta = {}
 
     monkeypatch.setattr(
-        "nanobot_kt.model_runtime.resolve_reply_route_plan",
-        lambda **_kwargs: SimpleNamespace(
-            provider_id="fixture-provider",
-            registry_provider="fixture-provider",
-            timeout=1.0,
-            temperature=0.0,
-            max_tokens=None,
-            enable_thinking="auto",
-            base_url=_BASE_URL,
-            api_key=_API_KEY,
-        ),
+        "nanobot_kt.model_runtime.resolve_reply_route_plans",
+        lambda **_kwargs: [
+            ReplyRoutePlan(
+                provider_id="fixture-provider",
+                registry_provider="fixture-provider",
+                timeout=1.0,
+                temperature=0.0,
+                max_tokens=None,
+                enable_thinking="auto",
+                base_url=_BASE_URL,
+                api_key=_API_KEY,
+            )
+        ],
     )
     monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient", _FakeRouteClient)
     monkeypatch.setattr(

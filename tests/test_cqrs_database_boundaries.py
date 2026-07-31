@@ -309,6 +309,13 @@ def test_system_setting_services_use_dto_and_atomic_repository_boundary():
                 )
             return tuple(self.rows[write.key] for write in writes)
 
+        def delete_many(self, keys):
+            deleted = 0
+            for key in keys:
+                if self.rows.pop(key, None) is not None:
+                    deleted += 1
+            return deleted
+
         def commit(self):
             self.commits += 1
 
@@ -338,7 +345,9 @@ def test_system_setting_services_use_dto_and_atomic_repository_boundary():
     ))
 
     assert [row.value for row in rows] == ["new-model", "fast-model"]
-    assert repository.commits == 1
+    assert command.delete_many(("model.fast", "missing")) == 1
+    assert query.get("model.fast") is None
+    assert repository.commits == 2
     assert repository.rollbacks == 0
 
 

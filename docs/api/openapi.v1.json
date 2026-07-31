@@ -5164,6 +5164,267 @@
         "title": "ModelCatalogPatch",
         "type": "object"
       },
+      "ModelPresetCreateBody": {
+        "properties": {
+          "capabilities": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Capabilities",
+            "type": "object"
+          },
+          "display_name": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "driver_options": {
+            "additionalProperties": true,
+            "title": "Driver Options",
+            "type": "object"
+          },
+          "enable_thinking": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "true",
+              "false"
+            ],
+            "title": "Enable Thinking",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "extra_body": {
+            "additionalProperties": true,
+            "title": "Extra Body",
+            "type": "object"
+          },
+          "extra_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Extra Headers",
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "max_context": {
+            "default": 128000,
+            "maximum": 4000000.0,
+            "minimum": 1024.0,
+            "title": "Max Context",
+            "type": "integer"
+          },
+          "max_output": {
+            "default": 16384,
+            "maximum": 1000000.0,
+            "minimum": 1.0,
+            "title": "Max Output",
+            "type": "integer"
+          },
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "provider_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "default": "",
+            "maxLength": 32,
+            "title": "Reasoning Effort",
+            "type": "string"
+          },
+          "retry_policy": {
+            "$ref": "#/components/schemas/RetryPolicyBody"
+          },
+          "service_tier": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Service Tier",
+            "type": "string"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "timeout": {
+            "default": 120.0,
+            "maximum": 900.0,
+            "minimum": 1.0,
+            "title": "Timeout",
+            "type": "number"
+          },
+          "variation_groups": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "title": "Variation Groups",
+            "type": "object"
+          }
+        },
+        "required": [
+          "provider_id",
+          "model",
+          "id"
+        ],
+        "title": "ModelPresetCreateBody",
+        "type": "object"
+      },
+      "ModelPresetWriteBody": {
+        "properties": {
+          "capabilities": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Capabilities",
+            "type": "object"
+          },
+          "display_name": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "driver_options": {
+            "additionalProperties": true,
+            "title": "Driver Options",
+            "type": "object"
+          },
+          "enable_thinking": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "true",
+              "false"
+            ],
+            "title": "Enable Thinking",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "extra_body": {
+            "additionalProperties": true,
+            "title": "Extra Body",
+            "type": "object"
+          },
+          "extra_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Extra Headers",
+            "type": "object"
+          },
+          "max_context": {
+            "default": 128000,
+            "maximum": 4000000.0,
+            "minimum": 1024.0,
+            "title": "Max Context",
+            "type": "integer"
+          },
+          "max_output": {
+            "default": 16384,
+            "maximum": 1000000.0,
+            "minimum": 1.0,
+            "title": "Max Output",
+            "type": "integer"
+          },
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "provider_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "default": "",
+            "maxLength": 32,
+            "title": "Reasoning Effort",
+            "type": "string"
+          },
+          "retry_policy": {
+            "$ref": "#/components/schemas/RetryPolicyBody"
+          },
+          "service_tier": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Service Tier",
+            "type": "string"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "timeout": {
+            "default": 120.0,
+            "maximum": 900.0,
+            "minimum": 1.0,
+            "title": "Timeout",
+            "type": "number"
+          },
+          "variation_groups": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "title": "Variation Groups",
+            "type": "object"
+          }
+        },
+        "required": [
+          "provider_id",
+          "model"
+        ],
+        "title": "ModelPresetWriteBody",
+        "type": "object"
+      },
       "ModelRouteEditBody": {
         "properties": {
           "api_key": {
@@ -5428,6 +5689,39 @@
         "title": "PersonaInjectionPreviewRequest",
         "type": "object"
       },
+      "PresetResolveBody": {
+        "properties": {
+          "selected_variations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Selected Variations",
+            "type": "object"
+          }
+        },
+        "title": "PresetResolveBody",
+        "type": "object"
+      },
+      "PresetTestBody": {
+        "properties": {
+          "prompt": {
+            "default": "请只回复：Nanobot Preset 连接正常",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "selected_variations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Selected Variations",
+            "type": "object"
+          }
+        },
+        "title": "PresetTestBody",
+        "type": "object"
+      },
       "ProactiveRunOnceRequest": {
         "properties": {
           "mode": {
@@ -5553,6 +5847,96 @@
         "title": "PromptV2TemplateSaveRequest",
         "type": "object"
       },
+      "ProviderCreateBody": {
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "credential_action": {
+            "default": "keep",
+            "enum": [
+              "keep",
+              "replace",
+              "clear"
+            ],
+            "title": "Credential Action",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "driver_type": {
+            "default": "openai",
+            "enum": [
+              "openai",
+              "anthropic",
+              "codex"
+            ],
+            "title": "Driver Type",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "model_discovery_enabled": {
+            "default": true,
+            "title": "Model Discovery Enabled",
+            "type": "boolean"
+          },
+          "provider_name": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Provider Name",
+            "type": "string"
+          },
+          "provider_native_tools": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Provider Native Tools",
+            "type": "array"
+          },
+          "registry_provider": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Registry Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ProviderCreateBody",
+        "type": "object"
+      },
       "ProviderPreviewRequest": {
         "properties": {
           "limit": {
@@ -5592,7 +5976,9 @@
           "api_key": {
             "anyOf": [
               {
-                "type": "string"
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
               },
               {
                 "type": "null"
@@ -5603,6 +5989,7 @@
           "base_url": {
             "anyOf": [
               {
+                "maxLength": 2048,
                 "type": "string"
               },
               {
@@ -5610,6 +5997,44 @@
               }
             ],
             "title": "Base Url"
+          },
+          "credential_action": {
+            "default": "keep",
+            "enum": [
+              "keep",
+              "replace",
+              "clear"
+            ],
+            "title": "Credential Action",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "driver_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "openai",
+                  "anthropic",
+                  "codex"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Type"
           },
           "enabled": {
             "anyOf": [
@@ -5622,9 +6047,48 @@
             ],
             "title": "Enabled"
           },
+          "model_discovery_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Discovery Enabled"
+          },
+          "provider_name": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Name"
+          },
+          "provider_native_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Native Tools"
+          },
           "registry_provider": {
             "anyOf": [
               {
+                "maxLength": 64,
                 "type": "string"
               },
               {
@@ -6127,6 +6591,53 @@
         "title": "ReplyTestRunRequest",
         "type": "object"
       },
+      "RetryPolicyBody": {
+        "properties": {
+          "base_delay": {
+            "default": 1.0,
+            "maximum": 60.0,
+            "minimum": 0.0,
+            "title": "Base Delay",
+            "type": "number"
+          },
+          "jitter": {
+            "default": 0.25,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Jitter",
+            "type": "number"
+          },
+          "max_delay": {
+            "default": 30.0,
+            "maximum": 300.0,
+            "minimum": 0.0,
+            "title": "Max Delay",
+            "type": "number"
+          },
+          "max_retries": {
+            "default": 3,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Max Retries",
+            "type": "integer"
+          },
+          "retry_classes": {
+            "items": {
+              "enum": [
+                "rate_limit",
+                "server",
+                "transient",
+                "overflow"
+              ],
+              "type": "string"
+            },
+            "title": "Retry Classes",
+            "type": "array"
+          }
+        },
+        "title": "RetryPolicyBody",
+        "type": "object"
+      },
       "RollingSummaryEnqueueRequest": {
         "properties": {
           "chat_type": {
@@ -6196,6 +6707,64 @@
           }
         },
         "title": "RollingSummaryRunRequest",
+        "type": "object"
+      },
+      "RouteBindingBody": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/RouteBindingCandidateBody"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Candidates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidates"
+        ],
+        "title": "RouteBindingBody",
+        "type": "object"
+      },
+      "RouteBindingCandidateBody": {
+        "properties": {
+          "preset_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Preset Id",
+            "type": "string"
+          },
+          "selected_variations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Selected Variations",
+            "type": "object"
+          }
+        },
+        "required": [
+          "preset_id"
+        ],
+        "title": "RouteBindingCandidateBody",
+        "type": "object"
+      },
+      "RouteMigrationBody": {
+        "properties": {
+          "display_name": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "preset_id": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Preset Id",
+            "type": "string"
+          }
+        },
+        "title": "RouteMigrationBody",
         "type": "object"
       },
       "RuntimeModuleContributionResponse": {
@@ -14443,6 +15012,197 @@
         "x-nanobot-pagination": "none"
       }
     },
+    "/api/v1/admin/models/bindings": {
+      "get": {
+        "operationId": "get_api_v1_admin_models_bindings",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Model Bindings",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/bindings/{route_key}": {
+      "delete": {
+        "operationId": "delete_api_v1_admin_models_bindings_route_key",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "route_key",
+            "required": true,
+            "schema": {
+              "title": "Route Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Delete Model Binding",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "put": {
+        "operationId": "put_api_v1_admin_models_bindings_route_key",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "route_key",
+            "required": true,
+            "schema": {
+              "title": "Route Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteBindingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Update Model Binding",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
     "/api/v1/admin/models/catalog": {
       "get": {
         "description": "增强版模型目录：支持 provider/q/limit/offset 过滤。",
@@ -14541,7 +15301,7 @@
     },
     "/api/v1/admin/models/catalog/refresh": {
       "post": {
-        "description": "从各 provider 的 /models 端点刷新模型列表，持久化到 SystemSetting。",
+        "description": "刷新所有启用且支持目录发现的 Provider。",
         "operationId": "post_api_v1_admin_models_catalog_refresh",
         "parameters": [
           {
@@ -14660,6 +15420,235 @@
         "x-nanobot-pagination": "none"
       }
     },
+    "/api/v1/admin/models/codex/device-login": {
+      "post": {
+        "operationId": "post_api_v1_admin_models_codex_device_login",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Start Codex Device Login",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/codex/device-login/{login_id}": {
+      "get": {
+        "operationId": "get_api_v1_admin_models_codex_device_login_login_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "login_id",
+            "required": true,
+            "schema": {
+              "title": "Login Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Codex Device Login",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/codex/status": {
+      "get": {
+        "operationId": "get_api_v1_admin_models_codex_status",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Codex Status",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/codex/usage": {
+      "get": {
+        "operationId": "get_api_v1_admin_models_codex_usage",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Codex Usage",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
     "/api/v1/admin/models/health-check": {
       "post": {
         "description": "探测三个实际模型路由，返回结构化可达性与可用性。",
@@ -14711,6 +15700,61 @@
         "summary": "Model Health Check",
         "tags": [
           "admin-models"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/kt/native-tools": {
+      "get": {
+        "operationId": "get_api_v1_admin_models_kt_native_tools",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Kt Native Tools",
+        "tags": [
+          "admin-model-presets"
         ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"
@@ -14846,9 +15890,411 @@
         "x-nanobot-pagination": "none"
       }
     },
+    "/api/v1/admin/models/presets": {
+      "get": {
+        "operationId": "get_api_v1_admin_models_presets",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Model Presets Api",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "post": {
+        "operationId": "post_api_v1_admin_models_presets",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelPresetCreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Create Model Preset",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/presets/{preset_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_admin_models_presets_preset_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Delete Model Preset",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "put": {
+        "operationId": "put_api_v1_admin_models_presets_preset_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelPresetWriteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Update Model Preset",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/presets/{preset_id}/resolve": {
+      "post": {
+        "operationId": "post_api_v1_admin_models_presets_preset_id_resolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresetResolveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Resolve Model Preset Api",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/presets/{preset_id}/test": {
+      "post": {
+        "operationId": "post_api_v1_admin_models_presets_preset_id_test",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresetTestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Test Model Preset",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
     "/api/v1/admin/models/providers": {
       "get": {
-        "description": "列出所有已配置的供应商（api_key 脱敏）。",
+        "description": "列出 Provider 实例和驱动能力（不返回原始凭据）。",
         "operationId": "get_api_v1_admin_models_providers",
         "parameters": [
           {
@@ -14900,11 +16346,138 @@
         ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"
+      },
+      "post": {
+        "description": "创建自定义 Provider 实例。",
+        "operationId": "post_api_v1_admin_models_providers",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderCreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Create Model Provider",
+        "tags": [
+          "admin-models"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
       }
     },
     "/api/v1/admin/models/providers/{provider_id}": {
+      "delete": {
+        "description": "删除未被 Route 引用的自定义 Provider，并清理其目录与凭据。",
+        "operationId": "delete_api_v1_admin_models_providers_provider_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "title": "Provider Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Delete Model Provider",
+        "tags": [
+          "admin-models"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
       "put": {
-        "description": "更新供应商配置——写入 SystemSetting。旧 provider 名自动 canonicalize。",
+        "description": "更新 Provider；凭据必须明确选择 keep/replace/clear。",
         "operationId": "put_api_v1_admin_models_providers_provider_id",
         "parameters": [
           {
@@ -14970,6 +16543,136 @@
           }
         },
         "summary": "Update Model Provider",
+        "tags": [
+          "admin-models"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/providers/{provider_id}/catalog/refresh": {
+      "post": {
+        "description": "只刷新指定 Provider 的模型目录。",
+        "operationId": "post_api_v1_admin_models_providers_provider_id_catalog_refresh",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "title": "Provider Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Refresh Model Provider Catalog",
+        "tags": [
+          "admin-models"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/providers/{provider_id}/test": {
+      "post": {
+        "description": "通过模型目录端点测试单个 Provider 的认证与连通性。",
+        "operationId": "post_api_v1_admin_models_providers_provider_id_test",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "title": "Provider Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Test Model Provider",
         "tags": [
           "admin-models"
         ],
@@ -15103,6 +16806,80 @@
         "summary": "Edit Model Route",
         "tags": [
           "admin-models"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/routes/{route_key}/migrate-to-preset": {
+      "post": {
+        "operationId": "post_api_v1_admin_models_routes_route_key_migrate_to_preset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "route_key",
+            "required": true,
+            "schema": {
+              "title": "Route Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteMigrationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Migrate Route To Preset",
+        "tags": [
+          "admin-model-presets"
         ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"

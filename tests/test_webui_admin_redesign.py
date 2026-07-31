@@ -6,6 +6,7 @@ UI_JS = Path("webui/src/components/ui.jsx")
 CSS = Path("webui/src/index.css")
 LLM_LOGS_JS = Path("webui/src/features/agent-runs/LLMApiLogsPage.jsx")
 MODELS_JS = Path("webui/src/features/models/ModelsPage.jsx")
+MODELS_DIR = Path("webui/src/features/models")
 PROMPT_JS = Path("webui/src/features/prompt/PromptPages.jsx")
 SESSION_CONFIG_JS = Path(
     "webui/src/features/session-config/SessionConfigsPage.jsx"
@@ -29,12 +30,18 @@ def read_ui_sources() -> str:
     paths = [
         APP_JS,
         LLM_LOGS_JS,
-        MODELS_JS,
         PROMPT_JS,
         REPLY_EVAL_JS,
         SESSION_CONFIG_JS,
     ]
-    return "\n".join(path.read_text(encoding="utf-8") for path in paths if path.exists())
+    return "\n".join(path.read_text(encoding="utf-8") for path in paths if path.exists()) + "\n" + read_models_sources()
+
+
+def read_models_sources() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(MODELS_DIR.glob("*.jsx"))
+    )
 
 
 def test_admin_layout_uses_grouped_responsive_navigation():
@@ -94,19 +101,105 @@ def test_key_filters_have_labels_or_aria_labels():
     assert "id=\"llm-log-run-filter\"" in source
     assert "Field id=\"llm-log-status-filter\"" in source
     assert "id=\"model-catalog-query\"" in source
-    assert "Field id=\"model-catalog-provider\"" in source
+    assert "htmlFor=\"model-catalog-provider\"" in source
     assert "Field id=\"session-config-platform-filter\"" in source
     assert "Field id=\"session-config-chat-type-filter\"" in source
     assert "Field id=\"session-config-guidance-filter\"" in source
 
 
 def test_model_routes_page_links_task_and_output_contracts():
-    source = MODELS_JS.read_text(encoding="utf-8")
+    source = read_models_sources()
 
-    assert "r.task_contracts" in source
+    assert "routeStatus?.task_contracts" in source
     assert "Task / Output Contract" in source
-    assert "contract.output_schema" in source
+    assert "contract.task_key" in source
     assert "contract.output_failure_policy" in source
+
+
+def test_model_provider_page_exposes_control_plane_lifecycle_and_key_actions():
+    source = read_models_sources()
+
+    assert "Provider Connections" in source
+    assert "新增 Provider" in source
+    assert "内置连接" in source
+    assert "KT Provider Driver" in source
+    assert "OpenAI-compatible" in source
+    assert "Anthropic Messages" in source
+    assert "Codex OAuth" in source
+    assert "credential_action" in source
+    assert '<option value="keep">保持不变</option>' in source
+    assert '<option value="replace">替换</option>' in source
+    assert '<option value="clear">清除</option>' in source
+    assert "api.post('/models/providers', { id: draft.id, ...payload })" in source
+    assert "api.put(`/models/providers/${encodeURIComponent(draft.id)}`" in source
+    assert "api.delete(`/models/providers/${encodeURIComponent(draft.id)}`" in source
+    assert "/catalog/refresh" in source
+    assert "/test`" in source
+    assert "api_key_configured" in source
+    assert "route_completion_supported" in source
+    assert "draft.catalog?.stale" in source
+
+
+def test_model_console_exposes_presets_bindings_and_operable_kt_workspace():
+    source = read_models_sources()
+
+    assert "Model Presets" in source
+    assert "Route Binding" in source
+    assert "max_context" in source
+    assert "max_output" in source
+    assert "reasoning_effort" in source
+    assert "service_tier" in source
+    assert "retry_policy" in source
+    assert "Extra Body JSON" in source
+    assert "Variation Groups" in source
+    assert "Resolved Request" in source
+    assert "request_preview" in source
+    assert "真实 KT Driver 测试" in source
+    assert "/models/codex/device-login" in source
+    assert "/models/codex/usage" in source
+    assert "Device Code" in source
+    assert "Provider Native Tools" in source
+    assert "Provider Connection" in source
+    assert "Ordered Fallback" in source
+
+
+def test_model_provider_forms_are_labelled_and_report_async_states():
+    source = read_models_sources()
+
+    for control_id in (
+        "model-provider-id",
+        "model-provider-display-name",
+        "model-provider-driver",
+        "model-provider-base-url",
+        "model-provider-registry",
+        "model-provider-enabled",
+        "model-provider-discovery",
+        "model-provider-api-key",
+    ):
+        assert f'id="{control_id}"' in source
+        assert f'htmlFor="{control_id}"' in source or (
+            f'Field id="{control_id}"' in source
+        ) or (
+            f'Toggle id="{control_id}"' in source
+        )
+    assert "保存中..." in source
+    assert "同步中..." in source
+    assert "测试中..." in source
+    assert 'role="alert"' in source
+    assert 'aria-live="polite"' in source
+    assert "useDeferredValue" in source
+    assert "sm:grid-cols-3" in source
+    assert "focus-visible:ring-2" in source
+
+
+def test_model_console_uses_icons_instead_of_status_emoji():
+    source = read_models_sources()
+
+    assert "CheckCircle2" in source
+    assert "CircleAlert" in source
+    assert "RefreshCw" in source
+    assert "✅" not in source
+    assert "❌" not in source
 
 
 def test_reply_eval_case_editor_controls_are_labelled():

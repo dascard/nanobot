@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+from typing import Literal
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy.orm import Session
 
 from api.admin.common import audit, audit_request, client_ip, verify_admin
@@ -69,26 +72,11 @@ def _task_contract_views(
 
 @router.get("/models/status")
 def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    from clients.classifier_client import (
-        Guardrail, resolve_model_route, list_providers,
-    )
-    from config import NEW_API_BASE_URL, NEW_API_KEY, CLASSIFIER_API_URL
+    from clients.classifier_client import Guardrail, resolve_model_route
+    from core.model_provider.provider_config import list_provider_instances
 
     # ── Providers (脱敏) ──
-    from clients.classifier_client import provider_public
-    raw_providers = list_providers()
-    # 确保内置 provider 始终存在（即使无 DB 配置时通过 env fallback 出现）
-    if not any(p["id"] == "newapi" for p in raw_providers):
-        raw_providers.append({
-            "id": "newapi", "base_url": str(NEW_API_BASE_URL or ""),
-            "api_key": str(NEW_API_KEY or ""), "enabled": bool(NEW_API_BASE_URL),
-        })
-    if not any(p["id"] in ("local_llama", "local_qwen") for p in raw_providers):
-        raw_providers.append({
-            "id": "local_llama", "base_url": str(CLASSIFIER_API_URL or ""),
-            "api_key": "", "enabled": bool(CLASSIFIER_API_URL),
-        })
-    providers = [provider_public(p) for p in raw_providers]
+    providers = [provider.public_view() for provider in list_provider_instances(db)]
 
     # ── Routes ──
     routes = {}
@@ -123,13 +111,24 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
             "lifecycle": descriptor.lifecycle.value,
             "slo": descriptor.slo.metadata(),
             "provider_id": r["provider_id"],
+            "profile_id": r.get("profile_id", ""),
             "model": r["model"],
             "api_key_configured": r["api_key_configured"],
             "route_api_key_configured": r.get("route_api_key_configured", False),
             "provider_enabled": r.get("provider_enabled", True),
+            "driver_type": r.get("driver_type", "openai"),
+            "route_completion_supported": r.get(
+                "route_completion_supported",
+                True,
+            ),
             "timeout": r["timeout"], "temperature": r["temperature"],
             "max_tokens": r["max_tokens"],
+            "max_context": r.get("max_context"),
+            "reasoning_effort": r.get("reasoning_effort", ""),
+            "service_tier": r.get("service_tier", ""),
             "enable_thinking": r.get("enable_thinking", "auto"),
+            "binding_candidates": r.get("binding_candidates", []),
+            "binding_error": r.get("binding_error", ""),
             "source": r.get("source", "provider"),
             "editable": True,
         }
@@ -306,17 +305,298 @@ def get_model_catalog(_auth=Depends(verify_admin)):
 # ── Provider 管理 ──
 
 @router.get("/models/providers")
-def list_model_providers(_auth=Depends(verify_admin)):
-    """列出所有已配置的供应商（api_key 脱敏）。"""
-    from clients.classifier_client import list_providers, provider_public
-    return {"providers": [provider_public(p) for p in list_providers()]}
+def list_model_providers(
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """列出 Provider 实例和驱动能力（不返回原始凭据）。"""
+
+    from core.model_provider.provider_config import (
+        list_provider_instances,
+        provider_driver_catalog,
+    )
+
+    return {
+        "providers": [
+            provider.public_view()
+            for provider in list_provider_instances(db)
+        ],
+        "driver_types": provider_driver_catalog(),
+    }
+
+
+class ProviderCreateBody(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(default="", max_length=100)
+    driver_type: Literal["openai", "anthropic", "codex"] = "openai"
+    base_url: str = Field(default="", max_length=2048)
+    enabled: bool = True
+    registry_provider: str = Field(default="", max_length=64)
+    model_discovery_enabled: bool = True
+    provider_name: str = Field(default="", max_length=64)
+    provider_native_tools: list[str] = Field(default_factory=list, max_length=32)
+    credential_action: Literal["keep", "replace", "clear"] = "keep"
+    api_key: SecretStr | None = None
 
 
 class ProviderUpdateBody(BaseModel):
-    base_url: str | None = None
-    api_key: str | None = None
+    display_name: str | None = Field(default=None, max_length=100)
+    driver_type: Literal["openai", "anthropic", "codex"] | None = None
+    base_url: str | None = Field(default=None, max_length=2048)
+    api_key: SecretStr | None = None
     enabled: bool | None = None
-    registry_provider: str | None = None
+    registry_provider: str | None = Field(default=None, max_length=64)
+    model_discovery_enabled: bool | None = None
+    provider_name: str | None = Field(default=None, max_length=64)
+    provider_native_tools: list[str] | None = Field(default=None, max_length=32)
+    credential_action: Literal["keep", "replace", "clear"] = "keep"
+
+
+def _validated_provider_url(value: object) -> str:
+    url = str(value or "").strip().rstrip("/")
+    if not url:
+        return ""
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise HTTPException(422, "Base URL 格式无效") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(422, "Base URL 必须是完整的 http/https 地址")
+    if parsed.username or parsed.password:
+        raise HTTPException(422, "Base URL 不允许包含用户名或密码")
+    if parsed.query or parsed.fragment:
+        raise HTTPException(422, "Base URL 不允许包含查询参数或 fragment")
+    return url
+
+
+def _validated_registry_provider(value: object) -> str:
+    registry_provider = str(value or "").strip()
+    if not registry_provider:
+        return ""
+    from core.model_provider.contracts import (
+        ProviderCapability,
+        ProviderDescriptor,
+    )
+
+    try:
+        ProviderDescriptor(
+            id=registry_provider,
+            display_name=registry_provider,
+            capabilities=frozenset({ProviderCapability.CHAT_COMPLETION}),
+        )
+    except ValueError as exc:
+        raise HTTPException(422, "Registry Provider 名称格式无效") from exc
+    return registry_provider
+
+
+def _validated_provider_name(value: object, fallback: str) -> str:
+    provider_name = str(value or fallback).strip()
+    if not provider_name or len(provider_name) > 64:
+        raise HTTPException(422, "KT Provider Name 无效")
+    if not all(char.isalnum() or char in {"_", "-"} for char in provider_name):
+        raise HTTPException(
+            422,
+            "KT Provider Name 只能包含字母、数字、_、-",
+        )
+    return provider_name
+
+
+def _validated_native_tools(values: list[str] | None) -> list[str]:
+    normalized = list(dict.fromkeys(
+        str(value or "").strip()
+        for value in (values or [])
+        if str(value or "").strip()
+    ))
+    try:
+        from kohakuterrarium.studio.identity.llm_native_tools import (
+            list_native_tools,
+        )
+
+        known = {
+            str(item.get("name") or "")
+            for item in list_native_tools()
+            if isinstance(item, dict)
+        }
+    except Exception:
+        known = {"image_gen"}
+    unknown = sorted(set(normalized) - known)
+    if unknown:
+        raise HTTPException(
+            422,
+            f"未知 KT Provider Native Tool: {', '.join(unknown)}",
+        )
+    return normalized
+
+
+def _credential_write(
+    *,
+    provider_id: str,
+    driver_type: str,
+    credential_action: str,
+    api_key: SecretStr | None,
+) -> SystemSettingWrite | None:
+    from core.model_provider.provider_config import provider_setting_key
+
+    raw_key = api_key.get_secret_value() if api_key is not None else ""
+    if len(raw_key) > 8192:
+        raise HTTPException(422, "API Key 超过长度上限")
+    if credential_action == "keep":
+        if raw_key:
+            raise HTTPException(
+                422,
+                "提交 API Key 时必须显式设置 credential_action=replace",
+            )
+        return None
+    if driver_type == "codex" and credential_action == "replace":
+        raise HTTPException(
+            422,
+            "Codex 驱动使用 KT OAuth，不接受 Nanobot API Key",
+        )
+    if credential_action == "replace":
+        value = raw_key.strip()
+        if not value:
+            raise HTTPException(422, "replace 操作必须提供非空 API Key")
+    else:
+        value = ""
+    return SystemSettingWrite(
+        key=provider_setting_key(provider_id, "api_key"),
+        value=value,
+        description=f"provider {provider_id} api_key",
+    )
+
+
+def _provider_public_or_404(provider_id: str, db: Session) -> dict:
+    from core.model_provider.provider_config import get_provider_instance
+
+    provider = get_provider_instance(provider_id, db)
+    if provider is None:
+        raise HTTPException(404, f"unknown provider: {provider_id}")
+    return provider.public_view()
+
+
+@router.post("/models/providers", status_code=201)
+def create_model_provider(
+    body: ProviderCreateBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """创建自定义 Provider 实例。"""
+
+    from core.model_provider.provider_config import (
+        get_provider_instance,
+        provider_setting_key,
+        validate_driver_type,
+        validate_provider_id,
+    )
+    from core.settings_service import settings
+
+    try:
+        provider_id = validate_provider_id(body.id)
+        driver_type = validate_driver_type(body.driver_type)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if get_provider_instance(provider_id, db) is not None:
+        raise HTTPException(409, f"Provider 已存在: {provider_id}")
+    if driver_type != "openai":
+        references = _provider_route_references(provider_id)
+        if references:
+            raise HTTPException(
+                409,
+                detail={
+                    "message": (
+                        "已有模型 Route 引用该 Provider ID，"
+                        "不能创建为尚未接入的驱动"
+                    ),
+                    "route_references": references,
+                },
+            )
+
+    display_name = str(body.display_name or provider_id).strip()
+    if not display_name:
+        raise HTTPException(422, "Provider 显示名称不能为空")
+    base_url = (
+        "" if driver_type == "codex" else _validated_provider_url(body.base_url)
+    )
+    discovery_enabled = (
+        body.model_discovery_enabled and driver_type == "openai"
+    )
+    registry_provider = _validated_registry_provider(
+        body.registry_provider or provider_id
+    )
+    provider_name = _validated_provider_name(
+        body.provider_name,
+        "codex" if driver_type == "codex" else provider_id,
+    )
+    provider_native_tools = _validated_native_tools(body.provider_native_tools)
+    prepared = [
+        SystemSettingWrite(
+            key=provider_setting_key(provider_id, "display_name"),
+            value=display_name,
+            description=f"provider {provider_id} display_name",
+        ),
+        SystemSettingWrite(
+            key=provider_setting_key(provider_id, "driver_type"),
+            value=driver_type,
+            description=f"provider {provider_id} driver_type",
+        ),
+        SystemSettingWrite(
+            key=provider_setting_key(provider_id, "base_url"),
+            value=base_url,
+            description=f"provider {provider_id} base_url",
+        ),
+        SystemSettingWrite(
+            key=provider_setting_key(provider_id, "enabled"),
+            value="1" if body.enabled else "0",
+            description=f"provider {provider_id} enabled",
+        ),
+        SystemSettingWrite(
+            key=provider_setting_key(provider_id, "registry_provider"),
+            value=registry_provider,
+            description=f"provider {provider_id} registry_provider",
+        ),
+        SystemSettingWrite(
+            key=provider_setting_key(provider_id, "model_discovery_enabled"),
+            value="1" if discovery_enabled else "0",
+            description=f"provider {provider_id} model_discovery_enabled",
+        ),
+        SystemSettingWrite(
+            key=provider_setting_key(provider_id, "provider_name"),
+            value=provider_name,
+            description=f"provider {provider_id} provider_name",
+        ),
+        SystemSettingWrite(
+            key=provider_setting_key(provider_id, "provider_native_tools"),
+            value=json.dumps(provider_native_tools, ensure_ascii=False),
+            description=f"provider {provider_id} provider_native_tools",
+        ),
+    ]
+    credential = _credential_write(
+        provider_id=provider_id,
+        driver_type=driver_type,
+        credential_action=body.credential_action,
+        api_key=body.api_key,
+    )
+    if credential is not None:
+        prepared.append(credential)
+    _setting_command(db).upsert_many(prepared)
+    settings.invalidate()
+    audit(
+        db,
+        "create_provider",
+        "provider",
+        provider_id,
+        {
+            "fields": [write.key.rsplit(".", 1)[-1] for write in prepared],
+            "credential_action": body.credential_action,
+        },
+        ip_address=client_ip(request),
+    )
+    return {
+        "ok": True,
+        "provider": _provider_public_or_404(provider_id, db),
+        "version": settings.version,
+    }
 
 
 @router.put("/models/providers/{provider_id}")
@@ -325,59 +605,281 @@ def update_model_provider(
     request: Request, db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    """更新供应商配置——写入 SystemSetting。旧 provider 名自动 canonicalize。"""
-    _ALLOWED_PROVIDERS = {"newapi", "local_llama", "local_vision", "local_qwen", "vision_qwen"}
-    if provider_id not in _ALLOWED_PROVIDERS:
-        raise HTTPException(404, f"unknown provider: {provider_id}")
+    """更新 Provider；凭据必须明确选择 keep/replace/clear。"""
+
+    from core.model_provider.provider_config import (
+        canonical_provider_instance_id,
+        get_provider_instance,
+        provider_setting_key,
+        validate_driver_type,
+    )
     from core.settings_service import settings
-    from core.route_metadata import canonical_provider_id
 
     raw_provider_id = provider_id
-    provider_id = canonical_provider_id(provider_id)
+    provider_id = canonical_provider_instance_id(provider_id)
+    current = get_provider_instance(provider_id, db)
+    if current is None:
+        raise HTTPException(404, f"unknown provider: {raw_provider_id}")
 
-    prefix = f"model.providers.{provider_id}"
-    written = {}
+    driver_type = (
+        validate_driver_type(body.driver_type)
+        if body.driver_type is not None
+        else current.driver_type
+    )
+    if (
+        body.driver_type is not None
+        and driver_type != current.driver_type
+        and driver_type != "openai"
+    ):
+        references = _provider_route_references(provider_id)
+        if references:
+            raise HTTPException(
+                409,
+                detail={
+                    "message": (
+                        "Provider 正被模型 Route 引用，不能切换为尚未接入的驱动"
+                    ),
+                    "route_references": references,
+                },
+            )
     prepared: list[SystemSettingWrite] = []
-    fields = {"base_url": body.base_url, "api_key": body.api_key}
-    for field, value in fields.items():
-        if value is None:
-            continue
-        key = f"{prefix}.{field}"
+    if body.display_name is not None:
+        display_name = str(body.display_name).strip()
+        if not display_name:
+            raise HTTPException(422, "Provider 显示名称不能为空")
         prepared.append(SystemSettingWrite(
-            key=key,
-            value=str(value),
-            description=f"provider {provider_id} {field}",
+            key=provider_setting_key(provider_id, "display_name"),
+            value=display_name,
+            description=f"provider {provider_id} display_name",
         ))
-        written[key] = str(value)
-    if body.enabled is not None:
-        key = f"{prefix}.enabled"
-        val = "1" if body.enabled else "0"
+    if body.driver_type is not None:
         prepared.append(SystemSettingWrite(
-            key=key,
-            value=val,
+            key=provider_setting_key(provider_id, "driver_type"),
+            value=driver_type,
+            description=f"provider {provider_id} driver_type",
+        ))
+        if driver_type == "codex" and current.api_key:
+            prepared.append(SystemSettingWrite(
+                key=provider_setting_key(provider_id, "api_key"),
+                value="",
+                description=f"provider {provider_id} api_key",
+            ))
+    if body.base_url is not None or (
+        body.driver_type is not None and driver_type == "codex"
+    ):
+        prepared.append(SystemSettingWrite(
+            key=provider_setting_key(provider_id, "base_url"),
+            value=(
+                ""
+                if driver_type == "codex"
+                else _validated_provider_url(body.base_url)
+            ),
+            description=f"provider {provider_id} base_url",
+        ))
+    if body.enabled is not None:
+        prepared.append(SystemSettingWrite(
+            key=provider_setting_key(provider_id, "enabled"),
+            value="1" if body.enabled else "0",
             description=f"provider {provider_id} enabled",
         ))
-        written[key] = val
     if body.registry_provider is not None:
-        key = f"{prefix}.registry_provider"
-        val = str(body.registry_provider).strip()
         prepared.append(SystemSettingWrite(
-            key=key,
-            value=val,
-            description=(
-                f"provider {provider_id} registry_provider"
-            ),
+            key=provider_setting_key(provider_id, "registry_provider"),
+            value=_validated_registry_provider(body.registry_provider),
+            description=f"provider {provider_id} registry_provider",
         ))
-        written[key] = val
+    if body.model_discovery_enabled is not None or body.driver_type is not None:
+        discovery_enabled = bool(
+            (
+                body.model_discovery_enabled
+                if body.model_discovery_enabled is not None
+                else current.model_discovery_enabled
+            )
+            and driver_type == "openai"
+        )
+        prepared.append(SystemSettingWrite(
+            key=provider_setting_key(provider_id, "model_discovery_enabled"),
+            value="1" if discovery_enabled else "0",
+            description=f"provider {provider_id} model_discovery_enabled",
+        ))
+    if body.provider_name is not None or body.driver_type is not None:
+        provider_name = _validated_provider_name(
+            body.provider_name,
+            (
+                "codex"
+                if driver_type == "codex"
+                else current.provider_name or provider_id
+            ),
+        )
+        prepared.append(SystemSettingWrite(
+            key=provider_setting_key(provider_id, "provider_name"),
+            value=provider_name,
+            description=f"provider {provider_id} provider_name",
+        ))
+    if body.provider_native_tools is not None:
+        prepared.append(SystemSettingWrite(
+            key=provider_setting_key(provider_id, "provider_native_tools"),
+            value=json.dumps(
+                _validated_native_tools(body.provider_native_tools),
+                ensure_ascii=False,
+            ),
+            description=f"provider {provider_id} provider_native_tools",
+        ))
+    credential = _credential_write(
+        provider_id=provider_id,
+        driver_type=driver_type,
+        credential_action=body.credential_action,
+        api_key=body.api_key,
+    )
+    if credential is not None:
+        # 驱动切换到 Codex 时可能已添加同一个清理键，保持事务键唯一。
+        prepared = [write for write in prepared if write.key != credential.key]
+        prepared.append(credential)
     _setting_command(db).upsert_many(prepared)
-    audit(db, "update_provider", "provider", provider_id, _redact(written), ip_address=client_ip(request))
     settings.invalidate()
+    audit(
+        db,
+        "update_provider",
+        "provider",
+        provider_id,
+        {
+            "fields": [write.key.rsplit(".", 1)[-1] for write in prepared],
+            "credential_action": body.credential_action,
+        },
+        ip_address=client_ip(request),
+    )
     return {
         "ok": True,
         "provider_id": provider_id,
         "input_provider_id": raw_provider_id if raw_provider_id != provider_id else None,
+        "provider": _provider_public_or_404(provider_id, db),
         "version": settings.version,
     }
+
+
+def _provider_route_references(provider_id: str) -> list[str]:
+    from clients.classifier_client import resolve_model_route
+    from core.model_provider.provider_config import canonical_provider_instance_id
+
+    references: list[str] = []
+    for descriptor in list_model_route_descriptors():
+        route = resolve_model_route(descriptor.route_key)
+        if canonical_provider_instance_id(route.get("provider_id", "")) == provider_id:
+            references.append(descriptor.route_key)
+    return references
+
+
+@router.delete("/models/providers/{provider_id}")
+def delete_model_provider(
+    provider_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """删除未被 Route 引用的自定义 Provider，并清理其目录与凭据。"""
+
+    from core.model_provider.provider_config import (
+        canonical_provider_instance_id,
+        get_provider_instance,
+        provider_config_keys,
+    )
+    from core.settings_service import settings
+
+    provider_id = canonical_provider_instance_id(provider_id)
+    provider = get_provider_instance(provider_id, db)
+    if provider is None:
+        raise HTTPException(404, f"unknown provider: {provider_id}")
+    if provider.builtin:
+        raise HTTPException(409, "内置 Provider 不允许删除，可以将其禁用")
+    references = _provider_route_references(provider_id)
+    from core.model_provider.preset_config import list_model_presets
+
+    preset_references = [
+        preset.id
+        for preset in list_model_presets(db)
+        if preset.provider_id == provider_id
+    ]
+    if references or preset_references:
+        raise HTTPException(
+            409,
+            detail={
+                "message": "Provider 正被 Model Preset 或 Route 引用，不能删除",
+                "route_references": references,
+                "preset_references": preset_references,
+            },
+        )
+    keys = provider_config_keys(provider_id, db)
+    deleted = _setting_command(db).delete_many(keys)
+    settings.invalidate()
+    audit(
+        db,
+        "delete_provider",
+        "provider",
+        provider_id,
+        {
+            "deleted_setting_count": deleted,
+            "catalog_deleted": any(
+                key == f"model.catalog.{provider_id}" for key in keys
+            ),
+        },
+        ip_address=client_ip(request),
+    )
+    return {"ok": True, "provider_id": provider_id, "deleted": deleted}
+
+
+@router.post("/models/providers/{provider_id}/test")
+async def test_model_provider(
+    provider_id: str,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """通过模型目录端点测试单个 Provider 的认证与连通性。"""
+
+    from clients.provider_catalog import (
+        ProviderDiscoveryUnsupportedError,
+        discover_provider_models,
+    )
+    from core.model_provider.provider_config import get_provider_instance
+    from foundation.llm.safe_diagnostics import safe_response_summary
+
+    provider = get_provider_instance(provider_id, db)
+    if provider is None:
+        raise HTTPException(404, f"unknown provider: {provider_id}")
+    if not provider.enabled:
+        return {
+            "ok": False,
+            "provider_id": provider.id,
+            "status": "disabled",
+            "error": "Provider 已禁用",
+        }
+    started = time.monotonic()
+    try:
+        models = await asyncio.to_thread(
+            discover_provider_models,
+            provider.internal_view(),
+        )
+        return {
+            "ok": True,
+            "provider_id": provider.id,
+            "status": "ready",
+            "model_count": len(models),
+            "latency_ms": int((time.monotonic() - started) * 1000),
+        }
+    except ProviderDiscoveryUnsupportedError as exc:
+        return {
+            "ok": False,
+            "provider_id": provider.id,
+            "status": "unsupported",
+            "error": str(exc),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "provider_id": provider.id,
+            "status": "failed",
+            "error": safe_response_summary(exc, max_chars=300),
+            "latency_ms": int((time.monotonic() - started) * 1000),
+        }
 
 
 # ── 模型目录 ──
@@ -409,64 +911,116 @@ def get_route_references(_auth=Depends(verify_admin)):
 
 @router.post("/models/catalog/refresh")
 def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    """从各 provider 的 /models 端点刷新模型列表，持久化到 SystemSetting。"""
-    import urllib.request as _ur
-    from datetime import datetime, timezone
-    from clients.classifier_client import list_providers, build_provider_catalog
+    """刷新所有启用且支持目录发现的 Provider。"""
 
-    results = []
+    return _refresh_provider_catalogs(db)
+
+
+def _previous_catalog_models(db: Session, provider_id: str) -> list[str]:
+    row = _setting_query(db).get(f"model.catalog.{provider_id}")
+    if row is None:
+        return []
+    try:
+        data = json.loads(row.value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    models = data.get("models", []) if isinstance(data, dict) else []
+    if not isinstance(models, list):
+        return []
+    return [str(model) for model in models if str(model or "").strip()]
+
+
+def _refresh_provider_catalogs(
+    db: Session,
+    provider_id: str | None = None,
+) -> dict:
+    """执行目录同步；失败时保留最后一次成功或已知的模型集合。"""
+
+    from datetime import datetime, timezone
+    from clients.classifier_client import build_provider_catalog
+    from clients.provider_catalog import discover_provider_models
+    from core.model_provider.provider_config import (
+        canonical_provider_instance_id,
+        list_provider_instances,
+    )
+    from foundation.llm.safe_diagnostics import safe_response_summary
+
+    providers = list_provider_instances(db)
+    if provider_id is not None:
+        canonical = canonical_provider_instance_id(provider_id)
+        providers = [provider for provider in providers if provider.id == canonical]
+        if not providers:
+            raise HTTPException(404, f"unknown provider: {provider_id}")
+    else:
+        providers = [
+            provider
+            for provider in providers
+            if provider.enabled
+            and provider.model_discovery_enabled
+            and provider.model_discovery_supported
+        ]
+
+    results: list[dict] = []
     writes: list[SystemSettingWrite] = []
-    setting_query = _setting_query(db)
-    for p in list_providers():
-        base_url = p["base_url"].rstrip("/")
-        if not base_url:
-            continue
-        if p.get("enabled") is False:
-            results.append({"provider": p["id"], "models": [], "ok": False, "error": "provider disabled"})
-            continue
-        headers = {"Content-Type": "application/json"}
-        if p.get("api_key"):
-            headers["Authorization"] = f"Bearer {p['api_key']}"
+    for provider in providers:
+        previous_models = _previous_catalog_models(db, provider.id)
+        updated_at = datetime.now(timezone.utc).isoformat()
         try:
-            req = _ur.Request(f"{base_url}/models", headers=headers, method="GET")
-            proxy_handler = _ur.ProxyHandler({})
-            opener = _ur.build_opener(proxy_handler)
-            with opener.open(req, timeout=10) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-            items = body.get("data", []) if isinstance(body, dict) else []
-            models = sorted(set(m["id"] for m in items if isinstance(m, dict) and m.get("id")))
-            key = f"model.catalog.{p['id']}"
-            val = json.dumps({
-                "models": models, "updated_at": datetime.now(timezone.utc).isoformat(),
-                "last_refresh_ok": True, "last_error": "",
-            }, ensure_ascii=False)
-            writes.append(SystemSettingWrite(
-                key=key,
-                value=val,
-                description=f"model catalog for {p['id']}",
-            ))
-            results.append({"provider": p["id"], "models": models, "ok": True})
-        except Exception as e:
-            key = f"model.catalog.{p['id']}"
-            old_models = []
-            old_row = setting_query.get(key)
-            if old_row:
-                try:
-                    old_models = json.loads(old_row.value or "{}").get("models", [])
-                except Exception:
-                    pass
-            val = json.dumps({
-                "models": old_models, "updated_at": datetime.now(timezone.utc).isoformat(),
-                "last_refresh_ok": False, "last_error": str(e)[:300],
-            }, ensure_ascii=False)
-            writes.append(SystemSettingWrite(
-                key=key,
-                value=val,
-                description=f"model catalog for {p['id']}",
-            ))
-            results.append({"provider": p["id"], "models": old_models, "ok": False, "error": str(e)[:300]})
+            if not provider.enabled:
+                raise RuntimeError("Provider 已禁用")
+            if not provider.model_discovery_enabled:
+                raise RuntimeError("Provider 模型目录同步已关闭")
+            if not provider.model_discovery_supported:
+                raise RuntimeError(
+                    f"{provider.driver_type} 驱动尚未接入 Nanobot 模型目录发现"
+                )
+            models = discover_provider_models(provider.internal_view())
+            ok = True
+            error = ""
+        except Exception as exc:
+            models = previous_models
+            ok = False
+            error = safe_response_summary(exc, max_chars=300)
+
+        payload = {
+            "models": models,
+            "updated_at": updated_at,
+            "last_refresh_ok": ok,
+            "last_error": error,
+        }
+        writes.append(SystemSettingWrite(
+            key=f"model.catalog.{provider.id}",
+            value=json.dumps(payload, ensure_ascii=False),
+            description=f"model catalog for {provider.id}",
+        ))
+        result = {
+            "provider": provider.id,
+            "models": models,
+            "model_count": len(models),
+            "updated_at": updated_at,
+            "ok": ok,
+            "stale": not ok,
+        }
+        if error:
+            result["error"] = error
+        results.append(result)
+
     _setting_command(db).upsert_many(writes)
-    return {"results": results, "catalog": build_provider_catalog(db)}
+    return {
+        "results": results,
+        "catalog": build_provider_catalog(db),
+    }
+
+
+@router.post("/models/providers/{provider_id}/catalog/refresh")
+def refresh_model_provider_catalog(
+    provider_id: str,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """只刷新指定 Provider 的模型目录。"""
+
+    return _refresh_provider_catalogs(db, provider_id)
 
 
 _ALLOWED_TIERS = {"fast", "smart", "reasoning", "unknown"}
@@ -695,9 +1249,27 @@ def edit_model_route(
     if not is_classifier and prefix not in SETTING_DEFS:
         raise HTTPException(404, f"unknown route: {route_key}")
 
+    normalized_provider = body.provider
+    if body.provider is not None and str(body.provider).strip():
+        from core.model_provider.provider_config import (
+            canonical_provider_instance_id,
+            get_provider_instance,
+        )
+
+        normalized_provider = canonical_provider_instance_id(body.provider)
+        provider_instance = get_provider_instance(normalized_provider, db)
+        if provider_instance is None:
+            raise HTTPException(422, f"unknown provider: {body.provider}")
+        if not provider_instance.route_completion_supported:
+            raise HTTPException(
+                422,
+                f"Provider {provider_instance.id} 使用 {provider_instance.driver_type} "
+                "驱动，尚不能绑定当前 Nanobot 业务 Route",
+            )
+
     written = {}
     fields = {
-        "provider": body.provider,
+        "provider": normalized_provider,
         "model": body.model,
         "api_key": body.api_key,
         "timeout": body.timeout,
@@ -942,6 +1514,11 @@ def get_resolved_route(route_key: str, _auth=Depends(verify_admin)):
         "lifecycle": descriptor.lifecycle.value,
         "slo": descriptor.slo.metadata(),
         "provider_id": route.get("provider_id", ""),
+        "driver_type": route.get("driver_type", "openai"),
+        "route_completion_supported": route.get(
+            "route_completion_supported",
+            True,
+        ),
         "registry_provider": _registry_provider_for_route(route.get("provider_id", "")),
         "base_url": route.get("base_url", ""),
         "model": route.get("model", ""),

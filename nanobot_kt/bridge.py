@@ -237,13 +237,18 @@ class NanobotBridge(MessageContractBridgeMixin):
         transport = self._active_route_plan
         if transport is None:
             raise RuntimeError("模型传输计划尚未绑定")
+        from nanobot_kt.model_provider_adapter import apply_kt_preset_model_route
         from nanobot_kt.runtime_adapter import apply_kt_openai_model_route
 
-        apply_kt_openai_model_route(
+        apply_kt_preset_model_route(
             agent,
             route,
             transport,
-            client_factory=AsyncOpenAI,
+            legacy_openai_applier=lambda *args, **kwargs: apply_kt_openai_model_route(
+                *args,
+                client_factory=AsyncOpenAI,
+                **kwargs,
+            ),
             tracer_installer=install_openai_chat_completion_tracer,
         )
 
@@ -1105,6 +1110,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 route_id="reply/current",
                 model_id=target_model,
                 provider_id=provider_id,
+                profile_id=str(getattr(route_plan, "profile_id", "") or ""),
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout_seconds=float(getattr(route_plan, "timeout", 120.0) or 120.0),
@@ -1157,7 +1163,8 @@ class NanobotBridge(MessageContractBridgeMixin):
             attempts = attempt + 1
             health_status = "pending"
 
-            self._set_runtime_model_route(target_model, route_plan)
+            candidate_route_plan = candidate.get("_route_plan") or route_plan
+            self._set_runtime_model_route(target_model, candidate_route_plan)
             logger.info(
                 f"[Model Router] Attempt {attempt + 1}: {target_model} "
                 f"(intel={candidate.get('intelligence')}, "
@@ -2034,12 +2041,13 @@ class NanobotBridge(MessageContractBridgeMixin):
 
             # 从 WebUI route 读取 provider 配置，让 route provider 控制实际 API 调用
             try:
-                from nanobot_kt.model_runtime import resolve_reply_route_plan
+                from nanobot_kt.model_runtime import resolve_reply_route_plans
 
-                route_plan = resolve_reply_route_plan(
+                route_plans = resolve_reply_route_plans(
                     default_base_url=NEW_API_BASE_URL,
                     default_api_key=NEW_API_KEY,
                 )
+                route_plan = route_plans[0]
             except RuntimeError as e:
                 # 内部错误文本绝不能当作正常回复出站(会绕过 reply contract
                 # 且写入 ConversationTurn),与"无候选模型"路径一致静默返回。
@@ -2055,8 +2063,10 @@ class NanobotBridge(MessageContractBridgeMixin):
             _client_base_url = route_plan.base_url
             _client_api_key = route_plan.api_key
             logger.info(
-                "[Model Router] route provider=%s registry_provider=%s base_url=%s timeout=%s temperature=%s max_tokens=%s enable_thinking=%s",
+                "[Model Router] route provider=%s driver=%s preset=%s registry_provider=%s base_url=%s timeout=%s temperature=%s max_tokens=%s enable_thinking=%s",
                 _route_provider_id,
+                route_plan.driver_type,
+                route_plan.profile_id or "(legacy)",
                 _route_registry_provider,
                 _client_base_url[:80] if _client_base_url else "(empty)",
                 _route_timeout,
@@ -2066,11 +2076,16 @@ class NanobotBridge(MessageContractBridgeMixin):
             )
 
             try:
-                route_client = NewAPIClient(
-                    api_key=_client_api_key,
-                    base_url=_client_base_url,
-                    registry_provider=_route_registry_provider,
-                )
+                if route_plan.profile_id:
+                    from nanobot_kt.model_runtime import PresetRouteClient
+
+                    route_client = PresetRouteClient(route_plans)
+                else:
+                    route_client = NewAPIClient(
+                        api_key=_client_api_key,
+                        base_url=_client_base_url,
+                        registry_provider=_route_registry_provider,
+                    )
                 existing = registry.get_models_by_provider(_route_registry_provider)
                 if not existing:
                     logger.info("[Model Router] Registry empty, forcing model sync...")
@@ -2115,11 +2130,15 @@ class NanobotBridge(MessageContractBridgeMixin):
                     required_capabilities=required_capabilities,
                 )
 
-                manual_reply_model = str(
-                    meta.get("reply_model")
-                    or settings.get("model.reply")
-                    or ""
-                ).strip()
+                manual_reply_model = (
+                    ""
+                    if route_plan.profile_id
+                    else str(
+                        meta.get("reply_model")
+                        or settings.get("model.reply")
+                        or ""
+                    ).strip()
+                )
                 preferred_candidate = None
                 if manual_reply_model:
                     info = registry.get_model_info(manual_reply_model)

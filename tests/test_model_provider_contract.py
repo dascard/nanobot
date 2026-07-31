@@ -241,3 +241,95 @@ async def test_new_api_client_implements_async_compatibility_port(monkeypatch):
     introspection = json.dumps(client.introspect(), ensure_ascii=False)
     assert "new-api-secret" not in introspection
     assert "new-api.internal" not in introspection
+
+
+def test_dynamic_provider_instance_is_discovered_and_public_view_redacts_key(
+    db_session,
+):
+    from clients.classifier_client import _get_provider_config, list_providers
+    from core.database import SystemSetting
+    from core.model_provider.provider_config import get_provider_instance
+
+    values = {
+        "model.providers.team_gateway.display_name": "团队网关",
+        "model.providers.team_gateway.driver_type": "openai",
+        "model.providers.team_gateway.base_url": "http://team-gateway.test/v1",
+        "model.providers.team_gateway.api_key": "dynamic-provider-secret",
+        "model.providers.team_gateway.enabled": "1",
+        "model.providers.team_gateway.registry_provider": "team-gateway",
+        "model.providers.team_gateway.model_discovery_enabled": "1",
+    }
+    db_session.add_all([
+        SystemSetting(key=key, value=value)
+        for key, value in values.items()
+    ])
+    db_session.commit()
+
+    instance = get_provider_instance("team_gateway", db_session)
+    assert instance is not None
+    assert instance.api_key == "dynamic-provider-secret"
+    assert instance.route_completion_supported is True
+    assert instance.public_view()["api_key_configured"] is True
+    assert "dynamic-provider-secret" not in json.dumps(
+        instance.public_view(),
+        ensure_ascii=False,
+    )
+
+    runtime = _get_provider_config("team_gateway")
+    assert runtime is not None
+    assert runtime["api_key"] == "dynamic-provider-secret"
+    assert any(
+        provider["id"] == "team_gateway"
+        for provider in list_providers(db_session)
+    )
+
+
+def test_provider_driver_capabilities_do_not_overpromise_route_support(
+    db_session,
+):
+    from core.database import SystemSetting
+    from core.model_provider.provider_config import get_provider_instance
+
+    db_session.add_all([
+        SystemSetting(
+            key="model.providers.anthropic_native.driver_type",
+            value="anthropic",
+        ),
+        SystemSetting(
+            key="model.providers.anthropic_native.base_url",
+            value="https://api.anthropic.com",
+        ),
+    ])
+    db_session.commit()
+
+    provider = get_provider_instance("anthropic_native", db_session)
+    assert provider is not None
+    public = provider.public_view()
+    assert public["kt_driver_available"] is True
+    assert public["route_completion_supported"] is False
+    assert public["agent_runtime_supported"] is True
+    assert isinstance(public["runtime_available"], bool)
+    assert isinstance(public["runtime_unavailable_reason"], str)
+    assert public["model_discovery_supported"] is False
+
+
+def test_provider_catalog_error_does_not_echo_configured_api_key():
+    from clients.provider_catalog import discover_provider_models
+
+    class _FailingOpener:
+        def open(self, _request, timeout=None):
+            assert timeout == 10
+            raise RuntimeError("上游错误回显 catalog-secret")
+
+    with pytest.raises(RuntimeError) as captured:
+        discover_provider_models(
+            {
+                "driver_type": "openai",
+                "base_url": "http://provider.test/v1",
+                "api_key": "catalog-secret",
+            },
+            opener_factory=lambda *_args: _FailingOpener(),
+        )
+
+    assert "catalog-secret" not in str(captured.value)
+    assert "[REDACTED]" in str(captured.value)

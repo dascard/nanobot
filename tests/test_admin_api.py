@@ -2163,6 +2163,412 @@ class TestModelHealthCheck:
         assert "error" not in data["endpoints"]["new_api"]
 
 
+class TestModelProviderControlPlane:
+    def test_custom_provider_crud_and_credential_actions_are_redacted(
+        self,
+        client,
+        auth_header,
+    ):
+        from core.database import AdminAuditLog
+
+        created = client.post(
+            "/api/v1/admin/models/providers",
+            json={
+                "id": "team_gateway",
+                "display_name": "团队网关",
+                "driver_type": "openai",
+                "base_url": "http://provider.test/v1/",
+                "enabled": True,
+                "registry_provider": "team-gateway",
+                "credential_action": "replace",
+                "api_key": "provider-secret-one",
+            },
+            headers=auth_header,
+        )
+
+        assert created.status_code == 201, created.text
+        created_text = created.text
+        provider = created.json()["provider"]
+        assert provider["id"] == "team_gateway"
+        assert provider["base_url"] == "http://provider.test/v1"
+        assert provider["api_key_configured"] is True
+        assert provider["credential_source"] == "database"
+        assert provider["builtin"] is False
+        assert "provider-secret-one" not in created_text
+
+        kept = client.put(
+            "/api/v1/admin/models/providers/team_gateway",
+            json={
+                "display_name": "团队模型网关",
+                "credential_action": "keep",
+            },
+            headers=auth_header,
+        )
+        assert kept.status_code == 200, kept.text
+        assert kept.json()["provider"]["api_key_configured"] is True
+
+        replaced = client.put(
+            "/api/v1/admin/models/providers/team_gateway",
+            json={
+                "credential_action": "replace",
+                "api_key": "provider-secret-two",
+            },
+            headers=auth_header,
+        )
+        assert replaced.status_code == 200, replaced.text
+        assert "provider-secret-two" not in replaced.text
+
+        cleared = client.put(
+            "/api/v1/admin/models/providers/team_gateway",
+            json={"credential_action": "clear"},
+            headers=auth_header,
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["provider"]["api_key_configured"] is False
+
+        with next(app.dependency_overrides[get_db]()) as db:
+            audit_rows = (
+                db.query(AdminAuditLog)
+                .filter(AdminAuditLog.target_id == "team_gateway")
+                .all()
+            )
+            serialized_audit = "\n".join(row.detail_json for row in audit_rows)
+        assert "provider-secret-one" not in serialized_audit
+        assert "provider-secret-two" not in serialized_audit
+
+        deleted = client.delete(
+            "/api/v1/admin/models/providers/team_gateway",
+            headers=auth_header,
+        )
+        assert deleted.status_code == 200, deleted.text
+        providers = client.get(
+            "/api/v1/admin/models/providers",
+            headers=auth_header,
+        ).json()["providers"]
+        assert all(item["id"] != "team_gateway" for item in providers)
+
+    def test_provider_validation_builtin_delete_and_explicit_key_action(
+        self,
+        client,
+        auth_header,
+    ):
+        invalid = client.post(
+            "/api/v1/admin/models/providers",
+            json={"id": "Bad Provider"},
+            headers=auth_header,
+        )
+        assert invalid.status_code == 422
+        uppercase = client.post(
+            "/api/v1/admin/models/providers",
+            json={"id": "Uppercase"},
+            headers=auth_header,
+        )
+        assert uppercase.status_code == 422
+
+        implicit_replace = client.put(
+            "/api/v1/admin/models/providers/newapi",
+            json={"api_key": "must-declare-action"},
+            headers=auth_header,
+        )
+        assert implicit_replace.status_code == 422
+
+        clear_builtin_key = client.put(
+            "/api/v1/admin/models/providers/newapi",
+            json={"credential_action": "clear"},
+            headers=auth_header,
+        )
+        assert clear_builtin_key.status_code == 200, clear_builtin_key.text
+        assert clear_builtin_key.json()["provider"]["api_key_configured"] is False
+
+        builtin_delete = client.delete(
+            "/api/v1/admin/models/providers/newapi",
+            headers=auth_header,
+        )
+        assert builtin_delete.status_code == 409
+
+    def test_provider_delete_is_blocked_by_route_reference(
+        self,
+        client,
+        auth_header,
+    ):
+        created = client.post(
+            "/api/v1/admin/models/providers",
+            json={
+                "id": "route_gateway",
+                "driver_type": "openai",
+                "base_url": "http://route-provider.test/v1",
+            },
+            headers=auth_header,
+        )
+        assert created.status_code == 201, created.text
+        routed = client.put(
+            "/api/v1/admin/models/routes/timing_gate",
+            json={"provider": "route_gateway", "model": "route-model"},
+            headers=auth_header,
+        )
+        assert routed.status_code == 200, routed.text
+
+        deleted = client.delete(
+            "/api/v1/admin/models/providers/route_gateway",
+            headers=auth_header,
+        )
+
+        assert deleted.status_code == 409, deleted.text
+        detail = deleted.json()["detail"]
+        assert "timing_gate" in detail["route_references"]
+
+    def test_non_openai_provider_cannot_bind_unsupported_business_route(
+        self,
+        client,
+        auth_header,
+    ):
+        created = client.post(
+            "/api/v1/admin/models/providers",
+            json={
+                "id": "anthropic_native",
+                "driver_type": "anthropic",
+                "base_url": "https://api.anthropic.com",
+                "credential_action": "replace",
+                "api_key": "anthropic-test-key",
+            },
+            headers=auth_header,
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["provider"]["kt_driver_available"] is True
+        assert created.json()["provider"]["route_completion_supported"] is False
+
+        routed = client.put(
+            "/api/v1/admin/models/routes/reply",
+            json={"provider": "anthropic_native", "model": "claude-test"},
+            headers=auth_header,
+        )
+        assert routed.status_code == 422
+        assert "尚不能绑定" in routed.text
+
+    def test_referenced_provider_cannot_switch_to_unsupported_driver(
+        self,
+        client,
+        auth_header,
+    ):
+        created = client.post(
+            "/api/v1/admin/models/providers",
+            json={
+                "id": "bound_gateway",
+                "driver_type": "openai",
+                "base_url": "http://bound-provider.test/v1",
+            },
+            headers=auth_header,
+        )
+        assert created.status_code == 201, created.text
+        routed = client.put(
+            "/api/v1/admin/models/routes/timing_gate",
+            json={"provider": "bound_gateway", "model": "route-model"},
+            headers=auth_header,
+        )
+        assert routed.status_code == 200, routed.text
+
+        switched = client.put(
+            "/api/v1/admin/models/providers/bound_gateway",
+            json={"driver_type": "anthropic"},
+            headers=auth_header,
+        )
+
+        assert switched.status_code == 409, switched.text
+        assert "timing_gate" in switched.json()["detail"]["route_references"]
+        providers = client.get(
+            "/api/v1/admin/models/providers",
+            headers=auth_header,
+        ).json()["providers"]
+        provider = next(item for item in providers if item["id"] == "bound_gateway")
+        assert provider["driver_type"] == "openai"
+
+    def test_unknown_route_reference_blocks_native_provider_creation(
+        self,
+        client,
+        auth_header,
+    ):
+        from core.database import SystemSetting
+
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(SystemSetting(
+                key="model.route.timing_gate.provider",
+                value="reserved_native",
+            ))
+            db.commit()
+
+        created = client.post(
+            "/api/v1/admin/models/providers",
+            json={
+                "id": "reserved_native",
+                "driver_type": "anthropic",
+                "base_url": "https://api.anthropic.com",
+            },
+            headers=auth_header,
+        )
+
+        assert created.status_code == 409, created.text
+        assert "timing_gate" in created.json()["detail"]["route_references"]
+
+    def test_single_provider_test_and_catalog_refresh_report_status(
+        self,
+        client,
+        auth_header,
+        monkeypatch,
+    ):
+        captured = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, *_args):
+                return b'{"data":[{"id":"model-b"},{"id":"model-a"}]}'
+
+        class FakeOpener:
+            def open(self, request, timeout):
+                captured.append((request.full_url, request.headers, timeout))
+                return FakeResponse()
+
+        monkeypatch.setattr(
+            "urllib.request.build_opener",
+            lambda *_args: FakeOpener(),
+        )
+        created = client.post(
+            "/api/v1/admin/models/providers",
+            json={
+                "id": "catalog_gateway",
+                "base_url": "http://catalog-provider.test/v1",
+                "credential_action": "replace",
+                "api_key": "catalog-secret",
+            },
+            headers=auth_header,
+        )
+        assert created.status_code == 201, created.text
+
+        tested = client.post(
+            "/api/v1/admin/models/providers/catalog_gateway/test",
+            headers=auth_header,
+        )
+        assert tested.status_code == 200, tested.text
+        assert tested.json()["ok"] is True
+        assert tested.json()["model_count"] == 2
+
+        refreshed = client.post(
+            "/api/v1/admin/models/providers/catalog_gateway/catalog/refresh",
+            headers=auth_header,
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        result = refreshed.json()["results"][0]
+        assert result["ok"] is True
+        assert result["models"] == ["model-a", "model-b"]
+        assert captured[-1][0] == "http://catalog-provider.test/v1/models"
+        assert captured[-1][1]["Authorization"] == "Bearer catalog-secret"
+
+        providers = client.get(
+            "/api/v1/admin/models/providers",
+            headers=auth_header,
+        ).json()["providers"]
+        provider = next(item for item in providers if item["id"] == "catalog_gateway")
+        assert provider["catalog"]["model_count"] == 2
+        assert provider["catalog"]["last_refresh_ok"] is True
+
+    def test_disabled_provider_never_executes_network_probe(
+        self,
+        client,
+        auth_header,
+        monkeypatch,
+    ):
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("disabled Provider 不应发起网络请求")
+
+        monkeypatch.setattr("urllib.request.build_opener", fail_if_called)
+        created = client.post(
+            "/api/v1/admin/models/providers",
+            json={
+                "id": "disabled_gateway",
+                "base_url": "http://disabled-provider.test/v1",
+                "enabled": False,
+            },
+            headers=auth_header,
+        )
+        assert created.status_code == 201, created.text
+
+        tested = client.post(
+            "/api/v1/admin/models/providers/disabled_gateway/test",
+            headers=auth_header,
+        )
+        assert tested.status_code == 200, tested.text
+        assert tested.json()["status"] == "disabled"
+
+        refreshed = client.post(
+            "/api/v1/admin/models/providers/disabled_gateway/catalog/refresh",
+            headers=auth_header,
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        result = refreshed.json()["results"][0]
+        assert result["ok"] is False
+        assert result["stale"] is True
+        assert "已禁用" in result["error"]
+
+    def test_bulk_catalog_refresh_skips_ineligible_providers(
+        self,
+        client,
+        auth_header,
+        monkeypatch,
+    ):
+        class _Provider:
+            def __init__(
+                self,
+                provider_id,
+                *,
+                enabled=True,
+                discovery_enabled=True,
+                discovery_supported=True,
+            ):
+                self.id = provider_id
+                self.enabled = enabled
+                self.model_discovery_enabled = discovery_enabled
+                self.model_discovery_supported = discovery_supported
+                self.driver_type = "openai"
+
+            def internal_view(self):
+                return {"id": self.id, "driver_type": "openai"}
+
+        providers = [
+            _Provider("ready"),
+            _Provider("disabled", enabled=False),
+            _Provider("manual", discovery_enabled=False),
+            _Provider("native", discovery_supported=False),
+        ]
+        calls = []
+        monkeypatch.setattr(
+            "core.model_provider.provider_config.list_provider_instances",
+            lambda _db: providers,
+        )
+        monkeypatch.setattr(
+            "clients.provider_catalog.discover_provider_models",
+            lambda provider: calls.append(provider["id"]) or ["model-a"],
+        )
+        monkeypatch.setattr(
+            "clients.classifier_client.build_provider_catalog",
+            lambda _db: [],
+        )
+
+        refreshed = client.post(
+            "/api/v1/admin/models/catalog/refresh",
+            headers=auth_header,
+        )
+
+        assert refreshed.status_code == 200, refreshed.text
+        assert calls == ["ready"]
+        assert [
+            result["provider"] for result in refreshed.json()["results"]
+        ] == ["ready"]
+
+
 class TestModelRouteV2:
     def test_summary_route_rejects_out_of_range_parameters_atomically(
         self, client, auth_header, db_session

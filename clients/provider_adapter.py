@@ -422,7 +422,11 @@ def registry_from_provider_configs(
         )
         descriptor = ProviderDescriptor(
             id=provider_id,
-            display_name=str(config.get("name") or provider_id),
+            display_name=str(
+                config.get("display_name")
+                or config.get("name")
+                or provider_id
+            ),
             capabilities=frozenset(
                 {
                     ProviderCapability.CHAT_COMPLETION,
@@ -431,7 +435,12 @@ def registry_from_provider_configs(
             ),
             aliases=aliases,
             implementation="openai_compatible",
-            built_in=provider_id in {"newapi", "local_llama", "local_vision"},
+            built_in=bool(
+                config.get(
+                    "builtin",
+                    provider_id in {"newapi", "local_llama", "local_vision"},
+                )
+            ),
         )
         registry.register(
             OpenAICompatibleProviderAdapter(

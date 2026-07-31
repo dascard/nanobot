@@ -110,6 +110,24 @@ class SystemSettingCommandService:
             self.repository.rollback()
             raise
 
+    def delete_many(self, keys: Iterable[str]) -> int:
+        normalized = tuple(
+            dict.fromkeys(
+                str(key or "").strip()
+                for key in keys
+                if str(key or "").strip()
+            )
+        )
+        if not normalized:
+            return 0
+        try:
+            deleted = self.repository.delete_many(normalized)
+            self.repository.commit()
+            return int(deleted)
+        except BaseException:
+            self.repository.rollback()
+            raise
+
 
 __all__ = [
     "SystemSettingCommandService",

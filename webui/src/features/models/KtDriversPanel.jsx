@@ -1,0 +1,109 @@
+import { useEffect, useState } from 'react'
+import {
+  CheckCircle2,
+  Clipboard,
+  ExternalLink,
+  KeyRound,
+  RefreshCw,
+  ShieldCheck,
+  TimerReset,
+  Wrench,
+} from 'lucide-react'
+
+import { api } from '../../api'
+import { ActionButton } from '../../components/ui'
+import {
+  DriverBadge,
+  InlineNotice,
+  StatePill,
+  formatApiError,
+  formatTime,
+} from './modelConsoleUi'
+
+function formatEpoch(value) {
+  if (!value) return '未知'
+  return new Date(Number(value) * 1000).toLocaleString('zh-CN', { hour12: false })
+}
+
+export function KtDriversPanel({ driverSchemas, nativeTools, codexStatus, onChanged }) {
+  const [login, setLogin] = useState(null)
+  const [loginError, setLoginError] = useState('')
+  const [usage, setUsage] = useState(null)
+  const [usageLoading, setUsageLoading] = useState(false)
+
+  useEffect(() => {
+    if (!login?.login_id || login.status !== 'pending') return undefined
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await api.get(`/models/codex/device-login/${encodeURIComponent(login.login_id)}`)
+        setLogin(response.data)
+        if (response.data.status === 'authenticated') await onChanged?.()
+      } catch (error) {
+        setLoginError(formatApiError(error, 'Codex 登录状态查询失败'))
+        window.clearInterval(timer)
+      }
+    }, Math.max(2000, Number(login.poll_after_seconds || 3) * 1000))
+    return () => window.clearInterval(timer)
+  }, [login?.login_id, login?.status, login?.poll_after_seconds, onChanged])
+
+  const startLogin = async () => {
+    setLoginError('')
+    setLogin({ status: 'starting' })
+    try {
+      const response = await api.post('/models/codex/device-login')
+      setLogin(response.data)
+      window.open(response.data.verification_url, '_blank', 'noopener,noreferrer')
+    } catch (error) {
+      setLogin(null)
+      setLoginError(formatApiError(error, 'Codex Device OAuth 启动失败'))
+    }
+  }
+
+  const loadUsage = async () => {
+    setUsageLoading(true)
+    try {
+      const response = await api.get('/models/codex/usage')
+      setUsage(response.data)
+    } catch (error) {
+      setUsage({ error: formatApiError(error, 'Codex Usage 获取失败') })
+    } finally { setUsageLoading(false) }
+  }
+
+  const copyCode = () => navigator.clipboard?.writeText(login?.user_code || '').catch(() => {})
+
+  return (
+    <div className="space-y-4">
+      <section className="overflow-hidden rounded-lg border border-slate-800 bg-slate-900">
+        <header className="border-b border-slate-800 px-4 py-3 sm:px-5"><h2 className="text-sm font-semibold text-slate-100">KT Provider Drivers</h2><p className="mt-1 text-[11px] leading-4 text-slate-500">这里展示 Nanobot 实际接入的 KT Driver 能力，不再用一个“可用”布尔标签代替操作入口。</p></header>
+        <div className="overflow-x-auto">
+          <table className="min-w-[760px] w-full text-left text-xs">
+            <thead className="border-b border-slate-800 bg-slate-950/50 text-[10px] uppercase tracking-wide text-slate-600"><tr><th className="px-4 py-2.5">Driver</th><th className="px-4 py-2.5">协议</th><th className="px-4 py-2.5">KT Agent</th><th className="px-4 py-2.5">同步 Completion Route</th><th className="px-4 py-2.5">关键参数</th></tr></thead>
+            <tbody>{driverSchemas.map(schema => <tr key={schema.id} className="border-b border-slate-800/70 last:border-b-0"><td className="px-4 py-3"><div className="flex items-center gap-2"><DriverBadge driver={schema.id} /><span className="text-slate-300">{schema.label}</span></div></td><td className="px-4 py-3 text-slate-400">{schema.transport}</td><td className="px-4 py-3"><StatePill ok={schema.route_support?.kt_agent && schema.runtime_available}>{!schema.route_support?.kt_agent ? '未接入' : schema.runtime_available ? '运行时就绪' : '依赖缺失'}</StatePill>{schema.runtime_unavailable_reason && <div className="mt-1 text-[10px] text-amber-300">{schema.runtime_unavailable_reason}</div>}</td><td className="px-4 py-3"><StatePill ok={schema.route_support?.sync_completion}>{schema.route_support?.sync_completion ? '已接入' : '仅 KT Agent'}</StatePill></td><td className="max-w-md px-4 py-3 text-[10px] leading-4 text-slate-500">{schema.fields?.join(' · ')}</td></tr>)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
+        <section className="rounded-lg border border-slate-800 bg-slate-900">
+          <header className="flex flex-col gap-3 border-b border-slate-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5"><div><div className="flex items-center gap-2"><KeyRound className="h-4 w-4 text-violet-300" aria-hidden="true" /><h2 className="text-sm font-semibold text-slate-100">Codex OAuth Account</h2>{codexStatus?.authenticated && !codexStatus?.expired ? <StatePill ok>已登录</StatePill> : <StatePill ok={false}>{codexStatus?.expired ? 'Token 过期' : '未登录'}</StatePill>}</div><p className="mt-1 text-[11px] text-slate-500">使用 KT Codex Driver 的 Device OAuth；验证码直接显示在浏览器，不依赖服务端终端。</p></div><div className="flex gap-2"><ActionButton tone="blue" onClick={startLogin} disabled={login?.status === 'starting' || login?.status === 'pending'}>{codexStatus?.authenticated ? '重新登录' : '开始登录'}</ActionButton><ActionButton onClick={loadUsage} disabled={usageLoading || !codexStatus?.authenticated}>{usageLoading ? '读取中...' : '刷新用量'}</ActionButton></div></header>
+          <div className="p-4 sm:p-5">
+            <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">认证状态</div><div className="mt-1 flex items-center gap-2 text-xs text-slate-300">{codexStatus?.authenticated ? <ShieldCheck className="h-3.5 w-3.5 text-emerald-300" /> : <TimerReset className="h-3.5 w-3.5 text-amber-300" />}{codexStatus?.authenticated ? 'Token 已保存' : '等待 Device OAuth'}</div></div><div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">Token 到期</div><div className="mt-1 text-xs text-slate-300">{formatEpoch(codexStatus?.expires_at)}</div></div><div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">Account ID</div><div className="mt-1 text-xs text-slate-300">{codexStatus?.account_configured ? '已绑定' : '未提供'}</div></div></div>
+
+            {login?.status === 'starting' && <div className="mt-4"><InlineNotice tone="blue"><RefreshCw className="mr-1 inline h-3.5 w-3.5 animate-spin" />正在向 OpenAI 申请 Device Code...</InlineNotice></div>}
+            {login?.user_code && login.status === 'pending' && <div className="mt-4 rounded-lg border border-violet-500/20 bg-violet-500/5 p-4"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-[10px] uppercase tracking-wide text-violet-300">Device Code</div><div className="mt-1 font-mono text-2xl font-semibold tracking-[0.18em] text-white">{login.user_code}</div><div className="mt-2 text-[11px] text-slate-500">有效至 {formatEpoch(login.expires_at)}，页面会自动轮询登录结果。</div></div><div className="flex flex-wrap gap-2"><ActionButton onClick={copyCode} className="gap-1.5"><Clipboard className="h-3.5 w-3.5" />复制代码</ActionButton><a href={login.verification_url} target="_blank" rel="noreferrer" className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-500">打开验证页<ExternalLink className="h-3.5 w-3.5" /></a></div></div></div>}
+            {login?.status === 'authenticated' && <div className="mt-4"><InlineNotice tone="emerald"><CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />Codex OAuth 登录完成。现在可以启用 Codex Provider，并测试绑定的 Model Preset。</InlineNotice></div>}
+            {login && ['failed', 'expired', 'denied', 'cancelled'].includes(login.status) && <div className="mt-4"><InlineNotice tone="red">{login.error || `登录状态：${login.status}`}</InlineNotice></div>}
+            {loginError && <div className="mt-4"><InlineNotice tone="red" role="alert">{loginError}</InlineNotice></div>}
+
+            {usage && <div className="mt-4"><h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Rate Limit / Credits Snapshot</h3>{usage.error ? <InlineNotice tone="red">{usage.error}</InlineNotice> : usage.status !== 'ok' ? <InlineNotice>{usage.status === 'no_data_yet' ? '尚无用量快照。完成一次 Codex 请求后，KT 会从响应 Header 捕获配额。' : usage.status === 'not_logged_in' ? 'Codex 尚未登录。' : usage.status}</InlineNotice> : <div className="space-y-2"><div className="text-[10px] text-slate-600">捕获时间：{formatTime(usage.captured_at)}</div>{usage.snapshots?.map((snapshot, index) => <pre key={snapshot.name || index} className="overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-[10px] leading-5 text-slate-300">{JSON.stringify(snapshot, null, 2)}</pre>)}</div>}</div>}
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-800 bg-slate-900">
+          <header className="border-b border-slate-800 px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4 text-indigo-300" aria-hidden="true" /><h2 className="text-sm font-semibold text-slate-100">Provider Native Tools</h2></div><p className="mt-1 text-[11px] text-slate-500">由 KT 工具目录实时返回；在 Provider Connection 中选择后，运行时按 Provider 身份注入。</p></header>
+          <div className="space-y-3 p-4">{nativeTools.length === 0 ? <InlineNotice>KT 当前没有登记 Provider Native Tool。</InlineNotice> : nativeTools.map(tool => <article key={tool.name} className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="flex items-center justify-between gap-2"><span className="font-mono text-xs text-slate-200">{tool.name}</span><div className="flex gap-1">{tool.provider_support?.map(driver => <DriverBadge key={driver} driver={driver} />)}</div></div><p className="mt-2 text-[10px] leading-4 text-slate-500">{tool.description}</p>{tool.option_schema && <div className="mt-3 space-y-1.5">{Object.entries(tool.option_schema).map(([name, option]) => <div key={name} className="grid grid-cols-[6rem_minmax(0,1fr)] gap-2 border-t border-slate-800 pt-1.5 text-[10px]"><span className="font-mono text-slate-400">{name}</span><span className="text-slate-600">{option.label || option.type} · 默认 {String(option.default ?? '-')}</span></div>)}</div>}</article>)}</div>
+        </section>
+      </div>
+    </div>
+  )
+}
