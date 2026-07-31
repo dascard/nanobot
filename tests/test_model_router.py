@@ -15,6 +15,33 @@ def _isolate_model_failure_state(monkeypatch, tmp_path):
 
 
 class TestClassifierRouteProviderResolution:
+    def test_provider_setting_base_url_precedes_builtin_fallback_without_env_url(
+        self,
+        monkeypatch,
+    ):
+        from clients.classifier_client import _get_provider_config
+
+        configured_url = "http://newapi:9000/v1"
+        values = {
+            "model.providers.newapi.base_url": configured_url,
+            "model.providers.newapi.api_key": "provider-key",
+            "model.providers.newapi.enabled": True,
+        }
+        monkeypatch.delenv("NEW_API_BASE_URL", raising=False)
+        monkeypatch.setattr(
+            "config.NEW_API_BASE_URL",
+            "https://api.new-api.com/v1",
+        )
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        provider = _get_provider_config("newapi")
+
+        assert provider is not None
+        assert provider["base_url"] == configured_url
+
     def test_provider_enabled_string_false_is_disabled(self, monkeypatch):
         from clients.classifier_client import _get_provider_config
 

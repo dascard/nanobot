@@ -21,7 +21,7 @@
         "category": "compatibility"
       },
       "expected_count": 141,
-      "expected_rule_ids_sha256": "151ca82aae3b976e4155d6f3d687a55c64bd36fcea82221a7e02ae19e6b34b07",
+      "expected_rule_ids_sha256": "c63542ec137fffb80008a9183f24c5e3b02a9c510615c9527bf1929d4b1415cd",
       "override": {
         "category": "compatibility",
         "disposition": "compatibility_migration",

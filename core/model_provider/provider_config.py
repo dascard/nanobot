@@ -323,6 +323,26 @@ def _setting_fallback(key: str, default: object = "") -> object:
     return settings.get(key, default)
 
 
+def _setting_value_source(
+    key: str,
+    value: object,
+    *,
+    configured_source: str,
+    default_source: str,
+) -> str:
+    try:
+        from core.config_registry import SETTING_DEFS
+
+        definition = SETTING_DEFS[key]
+    except (KeyError, AttributeError):
+        return configured_source
+    if definition.env_name and os.environ.get(definition.env_name):
+        return "environment"
+    if str(value).strip() != str(definition.default).strip():
+        return configured_source
+    return default_source
+
+
 def _resolved_field(
     provider_id: str,
     field: str,
@@ -343,20 +363,23 @@ def _resolved_field(
 
     value = _setting_fallback(key, None)
     if value not in (None, ""):
-        try:
-            from core.config_registry import SETTING_DEFS
-
-            env_name = SETTING_DEFS[key].env_name
-        except (KeyError, AttributeError):
-            env_name = ""
-        source = "environment" if env_name and os.environ.get(env_name) else "default"
-        return value, source
+        return value, _setting_value_source(
+            key,
+            value,
+            configured_source="settings",
+            default_source="default",
+        )
 
     for alias in aliases:
         alias_key = f"{PROVIDER_SETTING_PREFIX}{alias}.{field}"
         value = _setting_fallback(alias_key, None)
         if value not in (None, ""):
-            return value, "legacy_default"
+            return value, _setting_value_source(
+                alias_key,
+                value,
+                configured_source="legacy_settings",
+                default_source="legacy_default",
+            )
     return default, "default"
 
 
@@ -470,21 +493,23 @@ def _build_instance(provider_id: str, row_map: dict[str, Any]) -> ProviderInstan
     )
 
     fallback_base_url, fallback_api_key = _builtin_transport_fallback(provider_id)
-    explicit_sources = {"database", "legacy_database"}
-    effective_base_url = base_url
-    if base_url_source not in explicit_sources:
-        effective_base_url = (
-            base_url
-            if base_url_source == "environment"
-            else (fallback_base_url or base_url)
-        )
-    effective_api_key = api_key
-    if key_source not in explicit_sources:
-        effective_api_key = (
-            api_key
-            if key_source == "environment"
-            else (fallback_api_key or api_key)
-        )
+    explicit_sources = {
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_settings",
+        "settings",
+    }
+    effective_base_url = (
+        base_url
+        if base_url_source in explicit_sources
+        else (fallback_base_url or base_url)
+    )
+    effective_api_key = (
+        api_key
+        if key_source in explicit_sources
+        else (fallback_api_key or api_key)
+    )
     base_url_text = str(effective_base_url or "").strip().rstrip("/")
     api_key_text = str(effective_api_key or "")
     if not api_key_text:

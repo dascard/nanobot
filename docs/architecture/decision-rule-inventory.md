@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`b8b1f0c59ede029e995908f272b1060347048a08`
-- 规则总数：7150
+- 源提交：`a5d78d8ee8d4c0b09826a953fec3466a64206007`
+- 规则总数：7148
 - 扫描错误：0
 - 人工复核队列：695
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -16,7 +16,7 @@
 | `data_consistency` | 448 |
 | `natural_language_semantic` | 32 |
 | `presentation` | 5 |
-| `protocol_syntax` | 3816 |
+| `protocol_syntax` | 3814 |
 | `security_invariant` | 1461 |
 
 ## 文件汇总
@@ -111,7 +111,6 @@
 | `core/agent_link/runtime.py` | 23 |
 | `core/outbound_delivery_service.py` | 23 |
 | `sandboxd/lease_store.py` | 23 |
-| `core/model_provider/provider_config.py` | 22 |
 | `core/sandbox/access_policy.py` | 22 |
 | `api/admin/proactive_outreach_routes.py` | 21 |
 | `core/db/group_learning_command_adapter.py` | 21 |
@@ -121,6 +120,7 @@
 | `api/endpoint_contracts.py` | 20 |
 | `app/session_memory/rolling_summary.py` | 20 |
 | `core/admin/table_views.py` | 20 |
+| `core/model_provider/provider_config.py` | 20 |
 | `core/semantic/jobs.py` | 20 |
 | `core/web_search/relevance.py` | 20 |
 | `nanobot_kt/tools/memory_query.py` | 20 |
@@ -1553,10 +1553,10 @@
 | `decision.69b5aef477f096f198ab` | `core/llm_request_linter.py:216` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 8 | `reviewed` |
 |  | 摘要：src["source"] == "legacy_runtime_tool_prompt" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.1de2bb1a769188d9cbcf` | `core/model_provider/provider_config.py:473` | `python.literal_collection` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
-|  | 摘要：explicit_sources = {"database", "legacy_database"} |  |  |  |  |  |
+| `decision.7c906ddab2af1566ebc6` | `core/model_provider/provider_config.py:496` | `python.literal_collection` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+|  | 摘要：explicit_sources = { "database", "environment", "legacy_database", "legacy_settings", "settings", } |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.7d02bb991466f2c7da64` | `core/model_provider/provider_config.py:492` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.7d02bb991466f2c7da64` | `core/model_provider/provider_config.py:517` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：key_source not in { "database", "legacy_database", "environment", } |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.74f85ea7d0aa0c1bff47` | `core/model_route_health.py:160` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
