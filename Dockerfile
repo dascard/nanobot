@@ -21,9 +21,7 @@ RUN cd vendor/KohakuTerrarium \
 # ── 第一阶段：构建 React 前端 ──
 FROM ${NODE_IMAGE} AS webui-builder
 WORKDIR /webui
-RUN sed -i 's|http://deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g' \
-		/etc/apt/sources.list.d/debian.sources \
-	&& apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
 	ca-certificates \
 	&& rm -rf /var/lib/apt/lists/*
 COPY webui/package.json webui/package-lock.json ./
@@ -36,9 +34,7 @@ FROM ${PYTHON_IMAGE} AS runtime
 ARG NANOBOT_UID=10001
 ARG NANOBOT_GID=10001
 WORKDIR /app
-RUN sed -i 's|http://deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g' \
-		/etc/apt/sources.list.d/debian.sources \
-	&& apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
 	ca-certificates \
 	tzdata \
 	sqlite3 \

@@ -191,6 +191,12 @@ def test_runtime_image_uses_python_311():
     assert "FROM python:3.10" not in dockerfile
 
 
+def test_runtime_image_does_not_force_regional_debian_mirror():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "mirrors.tuna.tsinghua.edu.cn/debian" not in dockerfile
+
+
 def test_timing_gate_uses_python_311():
     workflow = Path(".github/workflows/timing-gate-eval.yml").read_text(
         encoding="utf-8"
