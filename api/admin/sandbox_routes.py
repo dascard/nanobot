@@ -47,6 +47,7 @@ from core.sandbox.diagnostics import (
     sandbox_session_access_diagnostic,
 )
 from core.sandbox.tool_service import resolve_sandbox_setting
+from core.sandbox.workspace_service import WorkspaceService
 from core.settings_service import settings
 from core.time_utils import db_now_naive
 
@@ -115,6 +116,19 @@ class SandboxLeaseActionRequest(BaseModel):
     reason: str = Field(default="", max_length=255)
 
 
+class SandboxFileWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=4096)
+    content: str = Field(max_length=256 * 1024)
+    expected_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
 def _sandbox_backend(db: Session) -> HttpSandboxdBackend:
     return HttpSandboxdBackend(
         socket_path=str(resolve_sandbox_setting(db, "sandbox.sandboxd_socket")),
@@ -157,6 +171,41 @@ def _safe_probe_error(error: SandboxServiceError) -> dict[str, object]:
             "retryable": error.retryable,
         },
     }
+
+
+def _sandbox_file_error(error: SandboxServiceError) -> HTTPException:
+    status_code = {
+        SandboxErrorCode.INVALID_PATH: 400,
+        SandboxErrorCode.UNSUPPORTED_FILE_TYPE: 415,
+        SandboxErrorCode.OUTPUT_LIMIT_EXCEEDED: 413,
+        SandboxErrorCode.WORKSPACE_QUOTA_EXCEEDED: 413,
+        SandboxErrorCode.EDIT_CONFLICT: 409,
+    }.get(error.code, 503)
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "code": error.code.value,
+            "message": error.summary,
+            "hint": error.hint,
+            "retryable": error.retryable,
+        },
+    )
+
+
+def _sandbox_result_data(result: Mapping[str, object]) -> dict[str, object]:
+    data = result.get("data")
+    if not isinstance(data, Mapping):
+        raise HTTPException(503, "Sandbox 文件服务返回了无效响应")
+    return dict(data)
+
+
+def _active_workspace_or_404(db: Session, workspace_id: str) -> Workspace:
+    workspace = db.get(Workspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(404, "Workspace 不存在")
+    if str(workspace.status) != "active":
+        raise HTTPException(409, "Workspace 当前不可用")
+    return workspace
 
 
 def _controller_status(db: Session) -> dict[str, object]:
@@ -1135,6 +1184,129 @@ def list_sandbox_workspaces(
             "updated_at": _iso(workspace.updated_at),
         })
     return {"items": items}
+
+
+@router.get("/workspaces/{workspace_id}/files")
+def list_workspace_files(
+    workspace_id: str = Path(min_length=36, max_length=36),
+    path: str = Query(default="", max_length=4096),
+    cursor: str = Query(default="", max_length=64),
+    limit: int = Query(default=200, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    _active_workspace_or_404(db, workspace_id)
+    backend = _sandbox_backend(db)
+    try:
+        result = backend.list_files({
+            "workspace_id": workspace_id,
+            "path": path,
+            "cwd": "",
+            "cursor": cursor,
+            "limit": limit,
+        })
+        data = _sandbox_result_data(result)
+    except SandboxServiceError as exc:
+        raise _sandbox_file_error(exc) from exc
+    finally:
+        backend.close()
+    return data
+
+
+@router.get("/workspaces/{workspace_id}/files/content")
+def read_workspace_file(
+    request: Request,
+    workspace_id: str = Path(min_length=36, max_length=36),
+    path: str = Query(min_length=1, max_length=4096),
+    db: Session = Depends(get_db),
+    admin_user: str = Depends(verify_admin),
+):
+    _active_workspace_or_404(db, workspace_id)
+    backend = _sandbox_backend(db)
+    try:
+        result = backend.read_text_file({
+            "workspace_id": workspace_id,
+            "path": path,
+            "cwd": "",
+        })
+        data = _sandbox_result_data(result)
+    except SandboxServiceError as exc:
+        raise _sandbox_file_error(exc) from exc
+    finally:
+        backend.close()
+    audit_request(
+        db,
+        request,
+        "sandbox_file_read",
+        "workspace_file",
+        workspace_id,
+        {
+            "workspace_id": workspace_id,
+            "path": str(data.get("path") or path),
+            "size_bytes": int(data.get("size_bytes") or 0),
+            "actor": admin_user,
+        },
+    )
+    return data
+
+
+@router.put("/workspaces/{workspace_id}/files/content")
+def write_workspace_file(
+    body: SandboxFileWriteRequest,
+    request: Request,
+    workspace_id: str = Path(min_length=36, max_length=36),
+    db: Session = Depends(get_db),
+    admin_user: str = Depends(verify_admin),
+):
+    workspace = _active_workspace_or_404(db, workspace_id)
+    backend = _sandbox_backend(db)
+    try:
+        result = backend.write_file({
+            "workspace_id": workspace_id,
+            "path": body.path,
+            "cwd": "",
+            "content": body.content,
+            "overwrite": body.expected_sha256 is not None,
+            "expected_sha256": body.expected_sha256,
+            "quota_bytes": int(workspace.quota_bytes),
+        })
+        data = _sandbox_result_data(result)
+        used_bytes = data.get("used_bytes")
+        usage_delta_bytes = data.get("usage_delta_bytes")
+        if used_bytes is None or usage_delta_bytes is None:
+            raise HTTPException(503, "Sandbox 文件服务缺少空间核算结果")
+        data["sha256"] = hashlib.sha256(
+            body.content.encode("utf-8")
+        ).hexdigest()
+        WorkspaceService(db).record_usage_delta(
+            workspace_id,
+            delta_bytes=int(usage_delta_bytes),
+            observed_used_bytes=int(used_bytes),
+        )
+        db.commit()
+    except SandboxServiceError as exc:
+        db.rollback()
+        raise _sandbox_file_error(exc) from exc
+    except HTTPException:
+        db.rollback()
+        raise
+    finally:
+        backend.close()
+    audit_request(
+        db,
+        request,
+        "sandbox_file_write",
+        "workspace_file",
+        workspace_id,
+        {
+            "workspace_id": workspace_id,
+            "path": body.path,
+            "size_bytes": int(data.get("size_bytes") or 0),
+            "created": body.expected_sha256 is None,
+            "actor": admin_user,
+        },
+    )
+    return data
 
 
 @router.post(

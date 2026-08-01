@@ -98,6 +98,11 @@ class FileReadRequest(WorkspaceRequest):
     limit: int = Field(default=200, ge=1, le=2000)
 
 
+class FileReadTextRequest(WorkspaceRequest):
+    path: str = Field(min_length=1, max_length=4096)
+    cwd: str = Field(default="", max_length=4096)
+
+
 class FileSearchRequest(WorkspaceRequest):
     mode: Literal["content", "files", "tree"] = "content"
     pattern: str = Field(default="", max_length=1024)
@@ -117,6 +122,12 @@ class FileWriteRequest(WorkspaceRequest):
     cwd: str = Field(default="", max_length=4096)
     content: str = Field(max_length=256 * 1024)
     overwrite: bool = False
+    expected_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     quota_bytes: int = Field(gt=0, le=1024 * 1024 * 1024 * 1024)
 
 
@@ -1176,6 +1187,15 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
         )
         return success_result("文件读取完成", data=data)
 
+    @app.post("/v1/files/read-text")
+    def read_text_file(body: FileReadTextRequest, current: RuntimeDependency):
+        data = current.workspace_files.read_text_file(
+            body.workspace_id,
+            path=body.path,
+            cwd=body.cwd,
+        )
+        return success_result("文本文件读取完成", data=data)
+
     @app.post("/v1/files/search")
     def search_files(body: FileSearchRequest, current: RuntimeDependency):
         data = current.workspace_files.search_files(
@@ -1200,6 +1220,7 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
             cwd=body.cwd,
             content=body.content,
             overwrite=body.overwrite,
+            expected_sha256=body.expected_sha256,
             quota_bytes=body.quota_bytes,
         )
         return success_result(

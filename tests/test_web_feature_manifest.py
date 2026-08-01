@@ -47,6 +47,8 @@ def test_static_manifest_owns_first_feature_routes_and_metadata():
         "model.routes",
         "tool.management",
         "sandbox.management",
+        "sandbox.filesystem",
+        "trigger.management",
         "group.learning",
         "runtime.module-diagnostics",
     ):

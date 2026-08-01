@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime
 
 from fastapi import FastAPI
@@ -19,7 +20,11 @@ from core.database import (
     WorkspaceQuotaBinding,
     get_db,
 )
-from core.sandbox.contracts import success_result
+from core.sandbox.contracts import (
+    SandboxErrorCode,
+    SandboxServiceError,
+    success_result,
+)
 from core.sandbox.paths import SandboxStorageLayout
 
 
@@ -46,6 +51,57 @@ class _FakeBackend:
                 "disk_used_percent": 21.5,
                 "disk_free_bytes": 500 * 1024 * 1024 * 1024,
                 "host_path": "/srv/nanobot/不得返回",
+            },
+        )
+
+    def list_files(self, payload):
+        return success_result(
+            "目录读取完成",
+            data={
+                "entries": [
+                    {
+                        "path": "docs",
+                        "type": "directory",
+                        "size_bytes": 0,
+                        "modified_at_ns": 1,
+                    },
+                    {
+                        "path": "README.md",
+                        "type": "file",
+                        "size_bytes": 12,
+                        "modified_at_ns": 2,
+                    },
+                ],
+                "next_cursor": "",
+                "total_visible": 2,
+                "cwd": "",
+            },
+        )
+
+    def read_text_file(self, payload):
+        content = "第一行\n第二行\n"
+        return success_result(
+            "文本文件读取完成",
+            data={
+                "path": payload["path"],
+                "size_bytes": len(content.encode("utf-8")),
+                "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                "content": content,
+            },
+        )
+
+    def write_file(self, payload):
+        content = str(payload["content"])
+        self.write_payload = dict(payload)
+        return success_result(
+            "文件写入完成",
+            data={
+                "path": payload["path"],
+                "size_bytes": len(content.encode("utf-8")),
+                "previous_size_bytes": len(content.encode("utf-8")) - 6,
+                "used_bytes": 1240,
+                "usage_delta_bytes": 6,
+                "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
             },
         )
 
@@ -726,3 +782,95 @@ def test_admin_sandbox_quota_change_is_async_and_audited(
     assert "sandbox_quota_enqueue" in {
         item["action"] for item in audit_response.json()["items"]
     }
+
+
+def test_admin_sandbox_files_can_be_listed_read_and_versioned_written(
+    db_session,
+    monkeypatch,
+):
+    _settings(db_session)
+    _business_rows(db_session)
+    backends = []
+    client = _client(db_session, monkeypatch, backends)
+
+    listed = client.get(
+        f"/api/v1/admin/sandbox/workspaces/{WORKSPACE_ID}/files",
+        params={"path": "", "limit": 200},
+    )
+    assert listed.status_code == 200
+    assert [item["path"] for item in listed.json()["entries"]] == [
+        "docs",
+        "README.md",
+    ]
+    assert "/srv/" not in listed.text
+
+    read = client.get(
+        f"/api/v1/admin/sandbox/workspaces/{WORKSPACE_ID}/files/content",
+        params={"path": "README.md"},
+    )
+    assert read.status_code == 200
+    assert read.json()["content"] == "第一行\n第二行\n"
+    assert len(read.json()["sha256"]) == 64
+
+    expected_sha256 = read.json()["sha256"]
+    written = client.put(
+        f"/api/v1/admin/sandbox/workspaces/{WORKSPACE_ID}/files/content",
+        json={
+            "path": "README.md",
+            "content": "更新后的安全正文",
+            "expected_sha256": expected_sha256,
+        },
+    )
+    assert written.status_code == 200
+    assert written.json()["path"] == "README.md"
+    assert backends[-1].write_payload["workspace_id"] == WORKSPACE_ID
+    assert backends[-1].write_payload["overwrite"] is True
+    assert backends[-1].write_payload["expected_sha256"] == expected_sha256
+    db_session.expire_all()
+    assert db_session.get(Workspace, WORKSPACE_ID).used_bytes == 1240
+    audit = db_session.query(AdminAuditLog).filter_by(
+        action="sandbox_file_write",
+    ).one()
+    assert audit.target_id == WORKSPACE_ID
+    assert "README.md" in audit.detail_json
+    assert "更新后的安全正文" not in audit.detail_json
+    read_audit = db_session.query(AdminAuditLog).filter_by(
+        action="sandbox_file_read",
+    ).one()
+    assert read_audit.target_id == WORKSPACE_ID
+    assert "第一行" not in read_audit.detail_json
+
+
+def test_admin_sandbox_file_stale_revision_returns_conflict(
+    db_session,
+    monkeypatch,
+):
+    _settings(db_session)
+    _business_rows(db_session)
+
+    def reject_stale(_self, _payload):
+        raise SandboxServiceError(
+            SandboxErrorCode.EDIT_CONFLICT,
+            "文件已被其他操作修改，请重新加载后再保存",
+        )
+
+    monkeypatch.setattr(_FakeBackend, "write_file", reject_stale)
+    client = _client(db_session, monkeypatch, [])
+
+    response = client.put(
+        f"/api/v1/admin/sandbox/workspaces/{WORKSPACE_ID}/files/content",
+        json={
+            "path": "README.md",
+            "content": "过期编辑不得覆盖",
+            "expected_sha256": "a" * 64,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "edit_conflict"
+    assert "重新加载" in response.json()["detail"]["message"]
+    db_session.expire_all()
+    assert db_session.get(Workspace, WORKSPACE_ID).used_bytes == 1234
+    assert db_session.query(AdminAuditLog).filter_by(
+        action="sandbox_file_write",
+    ).count() == 0

@@ -60,6 +60,53 @@ def test_workspace_read_uses_line_offsets_without_splitting_utf8(tmp_path):
     assert escaped.value.code is SandboxErrorCode.INVALID_PATH
 
 
+def test_workspace_text_editor_preserves_exact_content_and_rejects_stale_save(
+    tmp_path,
+):
+    service = _service(tmp_path)
+    original = "第一行\n第二行🙂\n"
+    service.write_file(
+        WORKSPACE_ID,
+        path="notes/editor.txt",
+        content=original,
+        overwrite=False,
+        quota_bytes=1024 * 1024,
+    )
+
+    snapshot = service.read_text_file(
+        WORKSPACE_ID,
+        path="notes/editor.txt",
+    )
+
+    assert snapshot["content"] == original
+    assert snapshot["sha256"] == sha256(original.encode("utf-8")).hexdigest()
+    service.write_file(
+        WORKSPACE_ID,
+        path="notes/editor.txt",
+        content="首次更新\n",
+        overwrite=True,
+        expected_sha256=snapshot["sha256"],
+        quota_bytes=1024 * 1024,
+    )
+    refreshed = service.read_text_file(
+        WORKSPACE_ID,
+        path="notes/editor.txt",
+    )
+    assert refreshed["sha256"] == sha256("首次更新\n".encode("utf-8")).hexdigest()
+
+    with pytest.raises(SandboxServiceError) as stale:
+        service.write_file(
+            WORKSPACE_ID,
+            path="notes/editor.txt",
+            content="过期编辑不得覆盖\n",
+            overwrite=True,
+            expected_sha256=snapshot["sha256"],
+            quota_bytes=1024 * 1024,
+        )
+    assert stale.value.code is SandboxErrorCode.EDIT_CONFLICT
+    assert _read_bytes(service, "notes/editor.txt") == "首次更新\n".encode("utf-8")
+
+
 def test_workspace_search_supports_regex_ignore_case_gitignore_and_modes(
     tmp_path,
 ):

@@ -23,6 +23,8 @@ class SandboxBackend(Protocol):
 
     def read_file(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
 
+    def read_text_file(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
+
     def search_files(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
 
     def write_file(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
@@ -164,6 +166,9 @@ class FakeSandboxBackend:
 
     def read_file(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._call("read_file", payload)
+
+    def read_text_file(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._call("read_text_file", payload)
 
     def search_files(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._call("search_files", payload)

@@ -3,7 +3,9 @@ import {
   Bot,
   Boxes,
   Brain,
+  CalendarClock,
   FileStack,
+  FolderTree,
   Shield,
   Wrench,
 } from 'lucide-react'
@@ -11,6 +13,23 @@ import {
 import { freezeWebFeatureManifest } from './manifestValidation'
 
 const FEATURE_DEFINITIONS = [
+  {
+    featureId: 'trigger.management',
+    route: '/triggers',
+    navGroup: 'runtime',
+    label: '触发器',
+    icon: CalendarClock,
+    component: lazy(() => import('./triggers/TriggersPage').then(module => ({
+      default: module.TriggersPage,
+    }))),
+    requiredCapability: 'admin.triggers.write',
+    lifecycle: 'active',
+    backendOperationIds: [],
+    requiredRegistryGeneration: 1,
+    featureFlag: '',
+    owner: 'scheduled.workflow',
+    order: 65,
+  },
   {
     featureId: 'prompt.runtime.preview',
     route: '/prompt-preview',
@@ -101,6 +120,23 @@ const FEATURE_DEFINITIONS = [
     featureFlag: 'sandbox.enabled',
     owner: 'sandbox.control-plane',
     order: 30,
+  },
+  {
+    featureId: 'sandbox.filesystem',
+    route: '/sandbox-files',
+    navGroup: 'models_tools',
+    label: 'Sandbox 文件',
+    icon: FolderTree,
+    component: lazy(() => import('./sandbox/SandboxFilesPage').then(module => ({
+      default: module.SandboxFilesPage,
+    }))),
+    requiredCapability: 'admin.sandbox.write',
+    lifecycle: 'active',
+    backendOperationIds: [],
+    requiredRegistryGeneration: 1,
+    featureFlag: 'sandbox.enabled',
+    owner: 'sandbox.control-plane',
+    order: 35,
   },
   {
     featureId: 'group.learning',

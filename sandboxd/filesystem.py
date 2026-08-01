@@ -991,6 +991,53 @@ class WorkspaceFileService:
             "content": "\n".join(rendered),
         }
 
+    def read_text_file(
+        self,
+        workspace_id: str,
+        *,
+        path: str,
+        cwd: str = "",
+    ) -> dict[str, Any]:
+        """为受控编辑器返回有大小上限的完整 UTF-8 文本。"""
+
+        normalized_path = _resolve_workspace_path(cwd=cwd, path=path)
+        filesystem = self.filesystem(workspace_id)
+        size_bytes = filesystem.regular_file_size(normalized_path)
+        if size_bytes > self.config.max_write_bytes:
+            raise SandboxServiceError(
+                SandboxErrorCode.OUTPUT_LIMIT_EXCEEDED,
+                "文件超过在线编辑大小上限",
+                hint="请在 Sandbox 中使用分块工具处理此文件",
+            )
+        raw = (
+            filesystem.read_bytes(
+                normalized_path,
+                offset=0,
+                limit=max(1, size_bytes),
+            )
+            if size_bytes
+            else b""
+        )
+        if _looks_binary(raw):
+            raise SandboxServiceError(
+                SandboxErrorCode.UNSUPPORTED_FILE_TYPE,
+                "在线编辑只支持 UTF-8 文本文件",
+            )
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SandboxServiceError(
+                SandboxErrorCode.UNSUPPORTED_FILE_TYPE,
+                "在线编辑只支持 UTF-8 文本文件",
+            ) from exc
+        return {
+            "protocol_version": WORKSPACE_PROTOCOL_VERSION,
+            "path": normalized_path,
+            "size_bytes": size_bytes,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "content": content,
+        }
+
     def _load_gitignore(
         self,
         filesystem: SafeWorkspaceFilesystem,
@@ -1381,6 +1428,7 @@ class WorkspaceFileService:
         cwd: str = "",
         content: str,
         overwrite: bool,
+        expected_sha256: str | None = None,
         quota_bytes: int,
     ) -> dict[str, Any]:
         workspace_id = validate_workspace_id(workspace_id)
@@ -1402,6 +1450,7 @@ class WorkspaceFileService:
                 path=normalized_path,
                 encoded=encoded,
                 overwrite=overwrite,
+                expected_sha256=expected_sha256,
                 quota_bytes=quota_bytes,
             )
         finally:
@@ -1985,6 +2034,7 @@ class WorkspaceFileService:
         path: str,
         encoded: bytes,
         overwrite: bool,
+        expected_sha256: str | None = None,
         quota_bytes: int,
     ) -> dict[str, Any]:
         """调用方已持有 Workspace 文件写锁。"""
@@ -2000,6 +2050,41 @@ class WorkspaceFileService:
             self.config.workspace_quota_bytes,
         )
         filesystem = self.filesystem(workspace_id)
+        if expected_sha256 is not None:
+            if not overwrite:
+                raise SandboxServiceError(
+                    SandboxErrorCode.EDIT_CONFLICT,
+                    "带版本保存必须使用覆盖模式",
+                )
+            try:
+                current_size = filesystem.regular_file_size(path)
+                if current_size > self.config.max_write_bytes:
+                    raise SandboxServiceError(
+                        SandboxErrorCode.OUTPUT_LIMIT_EXCEEDED,
+                        "文件超过在线编辑大小上限",
+                    )
+                current = (
+                    filesystem.read_bytes(
+                        path,
+                        offset=0,
+                        limit=max(1, current_size),
+                    )
+                    if current_size
+                    else b""
+                )
+            except SandboxServiceError as exc:
+                if exc.code is SandboxErrorCode.INVALID_PATH:
+                    raise SandboxServiceError(
+                        SandboxErrorCode.EDIT_CONFLICT,
+                        "文件已被删除，请刷新目录后重试",
+                    ) from exc
+                raise
+            current_sha256 = hashlib.sha256(current).hexdigest()
+            if not secrets.compare_digest(current_sha256, expected_sha256):
+                raise SandboxServiceError(
+                    SandboxErrorCode.EDIT_CONFLICT,
+                    "文件已被其他操作修改，请重新加载后再保存",
+                )
         with self._quota_guard:
             current_usage = self.usage_ledger.snapshot(
                 workspace_id,

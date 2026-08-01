@@ -213,6 +213,57 @@ def test_sandboxd_requires_bearer_and_supports_safe_file_round_trip(tmp_path):
         assert read.json()["data"]["eof"] is True
         assert str(tmp_path) not in str(read.json())
 
+        raw = client.post(
+            "/v1/files/read-text",
+            headers=headers,
+            json={
+                "workspace_id": WORKSPACE_ID,
+                "path": "notes/test.txt",
+            },
+        )
+        assert raw.status_code == 200
+        assert raw.json()["data"]["content"] == "安全文本"
+        revision = raw.json()["data"]["sha256"]
+
+        updated = client.post(
+            "/v1/files/write",
+            headers=headers,
+            json={
+                "workspace_id": WORKSPACE_ID,
+                "path": "notes/test.txt",
+                "content": "安全更新",
+                "overwrite": True,
+                "expected_sha256": revision,
+                "quota_bytes": 1024 * 1024,
+            },
+        )
+        assert updated.status_code == 200
+        refreshed = client.post(
+            "/v1/files/read-text",
+            headers=headers,
+            json={
+                "workspace_id": WORKSPACE_ID,
+                "path": "notes/test.txt",
+            },
+        )
+        assert refreshed.status_code == 200
+        assert refreshed.json()["data"]["sha256"] != revision
+
+        stale = client.post(
+            "/v1/files/write",
+            headers=headers,
+            json={
+                "workspace_id": WORKSPACE_ID,
+                "path": "notes/test.txt",
+                "content": "不得覆盖",
+                "overwrite": True,
+                "expected_sha256": revision,
+                "quota_bytes": 1024 * 1024,
+            },
+        )
+        assert stale.status_code == 400
+        assert stale.json()["error"]["code"] == "edit_conflict"
+
 
 def test_workspace_write_uses_exact_overwrite_delta_and_shared_mutation_lock(tmp_path):
     _token, runtime = _runtime(tmp_path)

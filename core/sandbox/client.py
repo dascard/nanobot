@@ -157,6 +157,9 @@ class HttpSandboxdBackend:
     def read_file(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/files/read", payload=payload)
 
+    def read_text_file(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/v1/files/read-text", payload=payload)
+
     def search_files(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/files/search", payload=payload)
 

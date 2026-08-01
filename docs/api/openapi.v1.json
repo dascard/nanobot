@@ -7354,6 +7354,42 @@
         "title": "SandboxFeatureRequest",
         "type": "object"
       },
+      "SandboxFileWriteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 262144,
+            "title": "Content",
+            "type": "string"
+          },
+          "expected_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Sha256"
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "title": "SandboxFileWriteRequest",
+        "type": "object"
+      },
       "SandboxKillSwitchRequest": {
         "additionalProperties": false,
         "properties": {
@@ -8273,6 +8309,131 @@
           }
         },
         "title": "ToolUpdateBody",
+        "type": "object"
+      },
+      "TriggerRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 64,
+            "minLength": 8,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_version",
+          "request_id"
+        ],
+        "title": "TriggerRunRequest",
+        "type": "object"
+      },
+      "TriggerUpsertRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "maxLength": 65536,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "program": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program"
+          },
+          "prompt_template": {
+            "anyOf": [
+              {
+                "maxLength": 16000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Template"
+          },
+          "schedule": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Schedule",
+            "type": "string"
+          },
+          "target_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_type": {
+            "default": "private",
+            "enum": [
+              "private",
+              "group"
+            ],
+            "title": "Target Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "schedule",
+          "target_id"
+        ],
+        "title": "TriggerUpsertRequest",
+        "type": "object"
+      },
+      "TriggerVersionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "TriggerVersionRequest",
         "type": "object"
       },
       "UpdateGroupNameRequest": {
@@ -23445,6 +23606,248 @@
         "x-nanobot-pagination": "none"
       }
     },
+    "/api/v1/admin/sandbox/workspaces/{workspace_id}/files": {
+      "get": {
+        "operationId": "get_api_v1_admin_sandbox_workspaces_workspace_id_files",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 4096,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 64,
+              "title": "Cursor",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Workspace Files",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "cursor_limit"
+      }
+    },
+    "/api/v1/admin/sandbox/workspaces/{workspace_id}/files/content": {
+      "get": {
+        "operationId": "get_api_v1_admin_sandbox_workspaces_workspace_id_files_content",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Read Workspace File",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "put": {
+        "operationId": "put_api_v1_admin_sandbox_workspaces_workspace_id_files_content",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxFileWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Write Workspace File",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
     "/api/v1/admin/sandbox/workspaces/{workspace_id}/quota": {
       "post": {
         "operationId": "post_api_v1_admin_sandbox_workspaces_workspace_id_quota",
@@ -27129,6 +27532,408 @@
         "summary": "Save Tool Schema Override Api",
         "tags": [
           "admin-tools"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/triggers": {
+      "get": {
+        "operationId": "get_api_v1_admin_triggers",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Triggers",
+        "tags": [
+          "admin-triggers"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "post": {
+        "operationId": "post_api_v1_admin_triggers",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Create Trigger",
+        "tags": [
+          "admin-triggers"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/triggers/{task_id}": {
+      "get": {
+        "operationId": "get_api_v1_admin_triggers_task_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Trigger",
+        "tags": [
+          "admin-triggers"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "put": {
+        "operationId": "put_api_v1_admin_triggers_task_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Update Trigger",
+        "tags": [
+          "admin-triggers"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/triggers/{task_id}/run": {
+      "post": {
+        "operationId": "post_api_v1_admin_triggers_task_id_run",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Run Trigger",
+        "tags": [
+          "admin-triggers"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/triggers/{task_id}/toggle": {
+      "post": {
+        "operationId": "post_api_v1_admin_triggers_task_id_toggle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Toggle Trigger",
+        "tags": [
+          "admin-triggers"
         ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"
