@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { api } from '../../api'
-import { Badge, Card, JsonBlock, Pagination } from '../../components/ui'
+import {
+  ActionButton,
+  Badge,
+  Card,
+  Field,
+  JsonBlock,
+  PageHeader,
+  Pagination,
+  Toolbar,
+  ViewportPage,
+} from '../../components/ui'
 import { LLMApiRequestLogsBlock } from '../../components/TraceView'
 
 // ── Agent Runs ──
@@ -43,51 +53,55 @@ export function AgentRunsPage() {
   const tone = (s) => s === 'success' ? 'emerald' : s === 'error' ? 'red' : s === 'running' ? 'blue' : s === 'no_reply' ? 'slate' : 'amber'
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h1 className="text-2xl font-bold mb-1">运行追踪</h1>
-          <p className="text-slate-500 text-sm">Agent run、Prompt render 与 Tool call 的只读审计视图</p>
-        </div>
-        <button onClick={loadRuns} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">刷新</button>
-      </div>
-      <div className="flex gap-2 mb-4">
-        <select value={status} onChange={e => { setStatus(e.target.value); setPage(1) }}
-          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm">
-          <option value="">全部状态</option>
-          <option value="success">success</option>
-          <option value="error">error</option>
-          <option value="no_reply">no_reply</option>
-          <option value="suppressed">suppressed</option>
-          <option value="empty">empty</option>
-        </select>
-        <input value={sessionFilter} onChange={e => { setSessionFilter(e.target.value); setPage(1) }}
-          placeholder="session_id" className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500" />
-      </div>
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-        <Card className="xl:col-span-5 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-3">开始</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">会话</th><th className="py-2 px-3">模型</th></tr></thead>
-            <tbody>
-              {runs.map(r => (
-                <tr key={r.run_id} onClick={() => setSelected(r.run_id)}
-                  className={`border-b border-slate-800/50 cursor-pointer ${selected === r.run_id ? 'bg-emerald-500/10' : 'hover:bg-slate-800/40'}`}>
-                  <td className="py-2 px-3 text-xs text-slate-400">{String(r.started_at || '').replace('T', ' ').slice(0, 19)}</td>
-                  <td className="py-2 px-3"><Badge tone={tone(r.status)}>{r.status}</Badge></td>
-                  <td className="py-2 px-3 text-xs text-slate-400 max-w-32 truncate">{r.session_id || '-'}</td>
-                  <td className="py-2 px-3 text-xs text-slate-500 max-w-40 truncate">{r.model || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!runs.length && (
-            loadError
-              ? <div className="py-16 text-center text-sm text-red-400">{loadError}</div>
-              : <div className="py-16 text-center text-sm text-slate-600">暂无运行记录</div>
-          )}
-          <div className="p-3"><Pagination page={page} total={total} limit={limit} onChange={setPage} /></div>
+    <ViewportPage>
+      <PageHeader
+        title="运行追踪"
+        description="Agent run、Prompt render 与 Tool call 的只读审计视图。列表和详情各自滚动，切换记录时不会丢失列表位置。"
+        actions={<ActionButton onClick={loadRuns}>刷新</ActionButton>}
+      />
+      <Toolbar className="shrink-0">
+        <Field id="agent-run-status-filter" label="状态" className="w-full sm:w-44">
+          <select id="agent-run-status-filter" value={status} onChange={e => { setStatus(e.target.value); setPage(1) }}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm">
+            <option value="">全部状态</option>
+            <option value="success">success</option>
+            <option value="error">error</option>
+            <option value="no_reply">no_reply</option>
+            <option value="suppressed">suppressed</option>
+            <option value="empty">empty</option>
+          </select>
+        </Field>
+        <Field id="agent-run-session-filter" label="session_id" className="min-w-56 flex-1">
+          <input id="agent-run-session-filter" value={sessionFilter} onChange={e => { setSessionFilter(e.target.value); setPage(1) }}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
+        </Field>
+      </Toolbar>
+      <div className="viewport-scroll grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto xl:grid-cols-12 xl:overflow-hidden">
+        <Card className="flex min-h-[28rem] flex-col overflow-hidden xl:col-span-5 xl:min-h-0">
+          <div className="viewport-scroll min-h-0 flex-1 overflow-auto">
+            <table className="min-w-[42rem] w-full text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-900"><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-3">开始</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">会话</th><th className="py-2 px-3">模型</th></tr></thead>
+              <tbody>
+                {runs.map(r => (
+                  <tr key={r.run_id} onClick={() => setSelected(r.run_id)}
+                    className={`border-b border-slate-800/50 cursor-pointer ${selected === r.run_id ? 'bg-emerald-500/10' : 'hover:bg-slate-800/40'}`}>
+                    <td className="py-2 px-3 text-xs text-slate-400">{String(r.started_at || '').replace('T', ' ').slice(0, 19)}</td>
+                    <td className="py-2 px-3"><Badge tone={tone(r.status)}>{r.status}</Badge></td>
+                    <td className="py-2 px-3 text-xs text-slate-400 max-w-32 truncate">{r.session_id || '-'}</td>
+                    <td className="py-2 px-3 text-xs text-slate-500 max-w-40 truncate">{r.model || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!runs.length && (
+              loadError
+                ? <div className="py-16 text-center text-sm text-red-400">{loadError}</div>
+                : <div className="py-16 text-center text-sm text-slate-600">暂无运行记录</div>
+            )}
+          </div>
+          <div className="shrink-0 border-t border-slate-800 p-3"><Pagination page={page} total={total} limit={limit} onChange={setPage} /></div>
         </Card>
-        <div className="xl:col-span-7 space-y-4 min-w-0">
+        <div className="viewport-scroll min-w-0 space-y-4 xl:col-span-7 xl:min-h-0 xl:overflow-y-auto xl:pr-1">
           {detail ? (<>
               <Card className="p-4">
                 <div className="flex items-center justify-between mb-3">
@@ -160,6 +174,6 @@ export function AgentRunsPage() {
           )}
         </div>
       </div>
-    </div>
+    </ViewportPage>
   )
 }

@@ -138,6 +138,34 @@ describe('Sandbox 文件系统页', () => {
     expect(await screen.findByText('文件 README.md 已保存。')).toBeInTheDocument()
   })
 
+  it('sandboxd 滚动升级期间仍提供明确的只读兼容预览', async () => {
+    const defaultGet = api.get.getMockImplementation()
+    api.get.mockImplementation((path, config) => {
+      if (path === `/sandbox/workspaces/${workspaceId}/files/content`) {
+        return response({
+          path: config.params.path,
+          content: '兼容预览正文',
+          size_bytes: 18,
+          sha256: '',
+          editable: false,
+          preview_only: true,
+          preview_truncated: false,
+          preview_notice: '宿主 sandboxd 尚未升级，当前为只读兼容预览。',
+        })
+      }
+      return defaultGet(path, config)
+    })
+    await renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: /README\.md/ }))
+
+    const preview = await screen.findByLabelText('文件内容')
+    expect(preview).toHaveValue('兼容预览正文')
+    expect(preview).toHaveAttribute('readonly')
+    expect(screen.getByRole('status')).toHaveTextContent('只读兼容预览')
+    expect(screen.queryByRole('button', { name: '保存文件' })).not.toBeInTheDocument()
+  })
+
   it('新建文本文件使用空版本，并允许填写安全相对路径', async () => {
     await renderPage()
     fireEvent.click(screen.getByRole('button', { name: '新建文本文件' }))

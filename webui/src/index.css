@@ -68,6 +68,11 @@ pre,
 .app-main-scroll {
   scrollbar-gutter: stable;
 }
+.viewport-scroll {
+  min-height: 0;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
 .prompt-v2-canvas {
   overscroll-behavior: contain;
   touch-action: none;

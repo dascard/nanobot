@@ -376,7 +376,7 @@ function PromptFlowCanvas({
       onMouseMove={handleMouseMove}
       onMouseUp={stopInteractions}
       onMouseLeave={stopInteractions}
-      className="prompt-flow-scrollbar prompt-v2-canvas relative h-full min-h-[720px] overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
+      className="prompt-flow-scrollbar prompt-v2-canvas relative h-full min-h-[32rem] overflow-hidden rounded-lg border border-slate-800 bg-slate-950 xl:min-h-0"
       style={{
         backgroundImage: 'radial-gradient(circle, rgba(148, 163, 184, 0.16) 1px, transparent 1px)',
         backgroundSize: `${28 * zoom}px ${28 * zoom}px`,
@@ -974,9 +974,9 @@ export function PromptV2TemplatesPage() {
   }
 
   return (
-    <div className="prompt-v2-page">
-      {toast && <div className="mb-3 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-lg text-sm text-emerald-400">{toast}</div>}
-      <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+    <div className="prompt-v2-page flex h-full min-h-0 flex-col">
+      {toast && <div className="mb-3 shrink-0 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-lg text-sm text-emerald-400">{toast}</div>}
+      <div className="mb-3 flex shrink-0 flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold mb-1 text-slate-50">Prompt 模板</h1>
           <p className="max-w-5xl text-slate-500 text-xs leading-5">聊天主流程用画布编排；工具提示词按工具拆分成独立模板。变量是全局白名单，当前输入仍只作为 user event 注入一次</p>
@@ -993,7 +993,7 @@ export function PromptV2TemplatesPage() {
         </div>
       </div>
 
-      <div data-testid="prompt-v2-workbench" className="grid grid-cols-1 gap-3 xl:h-[calc(100vh-170px)] xl:min-h-[760px] xl:grid-cols-[200px_minmax(0,1fr)_320px] xl:items-stretch 2xl:grid-cols-[224px_minmax(0,1fr)_360px]">
+      <div data-testid="prompt-v2-workbench" className="viewport-scroll grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto xl:grid-cols-[200px_minmax(0,1fr)_320px] xl:items-stretch xl:overflow-hidden 2xl:grid-cols-[224px_minmax(0,1fr)_360px]">
         <div data-testid="prompt-v2-left-rail" className="min-w-0 space-y-3 xl:h-full xl:overflow-y-auto xl:pr-1 prompt-flow-scrollbar">
           <Card className="p-3">
             <div className="text-xs font-medium text-slate-300 mb-2">模板工作区</div>
@@ -1016,7 +1016,7 @@ export function PromptV2TemplatesPage() {
           <Card className="p-3">
             <div className="text-xs font-medium text-slate-300 mb-1">资源树</div>
             <div className="text-[11px] text-slate-600 mb-2">按工作区筛选模板，减少左侧噪音。</div>
-            <div className="space-y-2 max-h-[360px] overflow-auto prompt-flow-scrollbar xl:max-h-[calc(100vh-390px)]">
+            <div className="space-y-2 max-h-[360px] overflow-auto prompt-flow-scrollbar xl:max-h-none">
               {templateWorkspace === 'chat' && (
                 <div>
                   <div className="mb-1 text-[11px] text-slate-500">chat</div>
@@ -1164,7 +1164,7 @@ export function PromptV2TemplatesPage() {
               />
             </>
           ) : (
-            <Card className="p-4 min-h-[680px] xl:h-full flex flex-col">
+            <Card className="flex min-h-[42rem] flex-col p-4 xl:h-full xl:min-h-0">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div className="min-w-0">
                   <div className="text-xs text-slate-500 mb-1">{templateWorkspace === 'tools' ? '工具提示词正文' : '任务提示词正文'}</div>
@@ -1190,7 +1190,7 @@ export function PromptV2TemplatesPage() {
                 {activeTemplateKey ? detail?.active_path || '' : '从左侧选择一个工具模板'}
               </div>
               <textarea aria-label="模板正文" value={content} onChange={e => setContent(e.target.value)}
-                className="prompt-flow-scrollbar flex-1 min-h-[560px] w-full rounded-lg border border-slate-800 bg-slate-950 p-4 font-mono text-sm leading-relaxed text-slate-300 outline-none resize-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+                className="prompt-flow-scrollbar min-h-[35rem] w-full flex-1 resize-none rounded-lg border border-slate-800 bg-slate-950 p-4 font-mono text-sm leading-relaxed text-slate-300 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 xl:min-h-0" />
             </Card>
           )}
         </div>

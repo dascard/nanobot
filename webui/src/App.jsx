@@ -14,6 +14,8 @@ import {
   Menu,
   MessageSquare,
   Network,
+  Pause,
+  Play,
   Radio,
   RefreshCw,
   Search,
@@ -35,6 +37,7 @@ import {
   Modal,
   Pagination,
   Spinner,
+  ViewportPage,
 } from './components/ui'
 import { AgentRunDetailPage } from './features/agent-runs/AgentRunDetailPage'
 import { AgentRunsPage } from './features/agent-runs/AgentRunsPage'
@@ -430,17 +433,17 @@ function GroupsPage() {
   }, [])
   if (loading) return <Spinner />
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
+    <ViewportPage>
+      <div className="mb-4 flex shrink-0 items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">群聊运行状态</h1>
           <p className="text-slate-500 text-sm">{data.total} 个群，按最近状态排查为什么回/不回</p>
         </div>
         <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
       </div>
-      <Card className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+      <Card className="viewport-scroll min-h-0 flex-1 overflow-auto">
+        <table className="min-w-[64rem] w-full text-sm">
+          <thead className="sticky top-0 z-10 bg-slate-900"><tr className="text-left text-slate-500 border-b border-slate-800">
             <th className="py-2 px-3 font-medium">群</th><th className="py-2 px-3 font-medium">talk</th><th className="py-2 px-3 font-medium">消息</th><th className="py-2 px-3 font-medium">pending</th><th className="py-2 px-3 font-medium">回复</th><th className="py-2 px-3 font-medium">gen</th><th className="py-2 px-3 font-medium">timer</th><th className="py-2 px-3 font-medium">最近 action</th><th className="py-2 px-3 font-medium">reason</th><th className="py-2 px-3 font-medium">latency</th></tr></thead>
           <tbody>
             {data.items.map(g => (
@@ -463,7 +466,7 @@ function GroupsPage() {
           </tbody>
         </table>
       </Card>
-    </div>
+    </ViewportPage>
   )
 }
 
@@ -588,8 +591,8 @@ function TimingGatePage() {
   }
 
   return (
-    <div>
-      <div className="flex items-start justify-between mb-4">
+    <ViewportPage>
+      <div className="mb-4 flex shrink-0 items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold">TimingGate 调试</h1>
           <p className="text-slate-500 text-sm">左右布局：列表 + 详情/复测</p>
@@ -601,7 +604,7 @@ function TimingGatePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-6 gap-3 mb-4">
+      <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-6">
         <MiniStat label="continue" value={stats.actions?.continue || 0} tone="emerald" />
         <MiniStat label="wait" value={stats.actions?.wait || 0} tone="amber" />
         <MiniStat label="no_reply" value={stats.actions?.no_reply || 0} />
@@ -611,7 +614,7 @@ function TimingGatePage() {
       </div>
 
       {(errorOnly || parseErrorOnly) && (
-        <div className="flex items-center gap-2 mb-2">
+        <div className="mb-2 flex shrink-0 items-center gap-2">
           {errorOnly && <Badge tone="red">仅显示错误</Badge>}
           {parseErrorOnly && <Badge tone="red">仅显示 parse_error</Badge>}
           <button onClick={() => { window.history.replaceState({}, '', window.location.pathname); window.location.reload() }}
@@ -619,24 +622,24 @@ function TimingGatePage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_460px] gap-4">
-        <Card className="overflow-hidden">
-          <div className="p-3 border-b border-slate-800 flex items-center gap-2 flex-wrap">
+      <div className="viewport-scroll grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_460px] lg:overflow-hidden">
+        <Card className="flex min-h-[28rem] flex-col overflow-hidden lg:min-h-0">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-800 p-3">
             <span className="text-xs text-slate-500">limit:</span>
             <select value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1) }}
               className="p-1.5 rounded bg-slate-900 border border-slate-700 text-xs">
               <option value="20">20</option><option value="30">30</option><option value="50">50</option>
             </select>
           </div>
-          <div className="max-h-[calc(100vh-320px)] overflow-auto">
+          <div className="viewport-scroll min-h-0 flex-1 overflow-auto">
             <TimingEventsTable rows={data.items || []} selectedId={selected?.id} onSelect={setSelected} />
           </div>
-          <div className="p-3 border-t border-slate-800">
+          <div className="shrink-0 border-t border-slate-800 p-3">
             <Pagination page={page} total={data.total || 0} limit={limit} onChange={(p) => { setPage(p); setSelected(null) }} />
           </div>
         </Card>
 
-        <Card className="p-4 sticky top-4 self-start max-h-[calc(100vh-120px)] overflow-auto">
+        <Card className="viewport-scroll min-h-[28rem] overflow-auto p-4 lg:min-h-0">
           <TimingEventDetail event={selected} onUseAsTest={handleUseAsTest} />
           <div className="mt-4 pt-4 border-t border-slate-800">
             <h3 className="text-sm font-medium text-slate-400 mb-2">手动测试</h3>
@@ -656,7 +659,7 @@ function TimingGatePage() {
           </div>
         </Card>
       </div>
-    </div>
+    </ViewportPage>
   )
 }
 
@@ -859,8 +862,8 @@ function StickerDedupPage() {
   const canonical = selItems.find(s => s.id === canonicalId) || selItems.find(s => s.status === 'active' && !s.duplicate_of_id)
 
   return (
-    <div>
-      <div className="flex items-start justify-between mb-4">
+    <ViewportPage>
+      <div className="mb-4 flex shrink-0 items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold">去重工作台</h1>
         </div>
@@ -874,19 +877,19 @@ function StickerDedupPage() {
           <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
         </div>
       </div>
-      <Card className="sticky top-0 z-10 p-2 mb-4 flex gap-1 flex-wrap bg-slate-950/95 backdrop-blur border border-slate-800">
+      <Card className="mb-4 flex shrink-0 flex-wrap gap-1 border border-slate-800 bg-slate-950/95 p-2 backdrop-blur">
         <button onClick={() => setDedupTab('exact')} className={`px-3 py-1 rounded text-xs ${dedupTab === 'exact' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400'}`}>精确重复</button>
         <button onClick={() => { setDedupTab('near'); loadNear() }} className={`px-3 py-1 rounded text-xs ${dedupTab === 'near' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400'}`}>疑似重复</button>
       </Card>
-      {error && <Card className="p-4 mb-4 border border-red-800 bg-red-900/20"><p className="text-sm text-red-400">{error}</p></Card>}
+      {error && <Card className="mb-4 shrink-0 border border-red-800 bg-red-900/20 p-4"><p className="text-sm text-red-400">{error}</p></Card>}
 
       {dedupTab === 'exact' && (
-        <>
+        <div className="viewport-scroll min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
           {groups.length === 0 && !error && <p className="text-slate-500 text-sm py-8 text-center">暂无重复表情包</p>}
 
           {groups.length > 0 && (
-            <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
-              <Card className="p-2 max-h-[calc(100vh-160px)] overflow-auto">
+            <div className="grid h-full min-h-0 grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
+              <Card className="viewport-scroll min-h-64 overflow-auto p-2 lg:min-h-0">
                 {groups.map(g => (
                   <button key={g.content_hash || '-'} onClick={() => setSelectedGroup(g)}
                     className={`w-full text-left p-2 rounded-lg text-xs transition-colors mb-1 ${selectedGroup?.content_hash === g.content_hash ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:bg-slate-800/50'}`}>
@@ -897,7 +900,7 @@ function StickerDedupPage() {
               </Card>
 
               {selectedGroup && (
-                <Card className="p-4 max-h-[calc(100vh-160px)] overflow-auto">
+                <Card className="viewport-scroll min-h-64 overflow-auto p-4 lg:min-h-0">
                   <div className="flex items-center justify-between mb-3">
                     <div>
                       <code className="text-xs bg-slate-950 px-2 py-0.5 rounded break-all">{selectedGroup.content_hash || '-'}</code>
@@ -959,11 +962,11 @@ function StickerDedupPage() {
               )}
             </div>
           )}
-        </>
+        </div>
       )}
 
       {dedupTab === 'near' && (
-        <Card className="p-4 max-h-[calc(100vh-160px)] overflow-auto">
+        <Card className="viewport-scroll min-h-0 flex-1 overflow-auto p-4">
           {nearError && <div className="mb-3 rounded-lg border border-red-800 bg-red-900/20 px-3 py-2 text-xs text-red-300 whitespace-pre-wrap">{nearError}</div>}
           <table className="w-full text-xs">
             <thead><tr className="text-left text-slate-500 border-b border-slate-800">
@@ -993,7 +996,7 @@ function StickerDedupPage() {
           </table>
         </Card>
       )}
-    </div>
+    </ViewportPage>
   )
 }
 
@@ -1567,9 +1570,9 @@ function DbResultTable({ data, tableName, onExpand }) {
   const cellMeta = data?.cell_meta || []
   if (!columns.length) return null
   return (
-    <div className="overflow-x-auto">
+    <div className="viewport-scroll min-h-0 flex-1 overflow-auto">
       <table className="w-full table-fixed text-xs">
-        <thead>
+        <thead className="sticky top-0 z-10 bg-slate-900 shadow-[0_1px_0_rgba(30,41,59,1)]">
           <tr>
             {columns.map(c => <th key={c} className="w-[180px] px-3 py-2 text-left font-medium text-slate-500">{c}</th>)}
           </tr>
@@ -1676,15 +1679,15 @@ function DbPage() {
   })).filter(g => g.view_ids.length)
   const limitOptions = [25, 50, 100, 200].filter(value => value <= Number(selectedMeta.max_limit || 200))
   return (
-    <div>
-      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+    <ViewportPage className="gap-4 overflow-y-auto lg:overflow-hidden">
+      <div className="flex shrink-0 flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-bold">数据库浏览</h1>
           <p className="text-sm text-slate-500">只读结构化视图；字段、过滤、排序、分页和脱敏策略均由后端 Registry 声明。</p>
         </div>
         <button onClick={backupDb} className="inline-flex items-center justify-center rounded-lg bg-slate-700 px-3 py-1.5 text-xs hover:bg-slate-600">下载备份</button>
       </div>
-      <Card className="mb-4 p-3">
+      <Card className="viewport-scroll max-h-64 shrink-0 overflow-y-auto p-3">
         <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="relative min-w-0 md:w-80">
             <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
@@ -1712,9 +1715,9 @@ function DbPage() {
         </div>
       </Card>
       {sel && (
-        <Card className="mb-4">
+        <Card className="flex min-h-[22rem] flex-1 flex-col overflow-hidden">
           {(selectedMeta.filters || []).length > 0 && (
-            <div className="border-b border-slate-800 p-3">
+            <div className="shrink-0 border-b border-slate-800 p-3">
               <div className="mb-2 text-xs font-medium text-slate-400">登记过滤器（精确匹配）</div>
               <div className="flex flex-wrap items-end gap-2">
                 {(selectedMeta.filters || []).map(filter => (
@@ -1733,7 +1736,7 @@ function DbPage() {
               </div>
             </div>
           )}
-          <div className="flex flex-col gap-3 border-b border-slate-800 p-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex shrink-0 flex-col gap-3 border-b border-slate-800 p-3 md:flex-row md:items-center md:justify-between">
             <div className="min-w-0">
               <div className="text-sm font-medium text-slate-200">{sel}</div>
               <div className="mt-0.5 text-xs text-slate-500">{selectedMeta.description || '只读数据视图'} · {rows.total || 0} rows · owner {selectedMeta.owner || '-'}</div>
@@ -1750,7 +1753,7 @@ function DbPage() {
                 className="rounded-lg bg-slate-800 px-3 py-1.5 text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-40">下一页</button>
             </div>
           </div>
-          {loadingView ? <Spinner /> : <DbResultTable data={rows} tableName={sel} onExpand={setExpandedCell} />}
+          {loadingView ? <div className="flex min-h-0 flex-1 items-center justify-center"><Spinner /></div> : <DbResultTable data={rows} tableName={sel} onExpand={setExpandedCell} />}
         </Card>
       )}
       {expandedCell && (
@@ -1765,7 +1768,7 @@ function DbPage() {
           <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words p-4 text-xs leading-relaxed text-slate-300">{expandedCell.value}</pre>
         </Modal>
       )}
-    </div>
+    </ViewportPage>
   )
 }
 
@@ -1846,8 +1849,8 @@ function LogsPage() {
   const formatSize = (s) => s < 1024 ? `${s}B` : s < 1048576 ? `${(s/1024).toFixed(1)}KB` : `${(s/1048576).toFixed(1)}MB`
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
+    <ViewportPage>
+      <div className="mb-4 flex shrink-0 items-center justify-between">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-bold">日志</h1>
           <div className="flex rounded-lg bg-slate-900 border border-slate-700 p-0.5">
@@ -1858,8 +1861,8 @@ function LogsPage() {
         {tab === 'files' && <button onClick={refreshFiles} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">刷新列表</button>}
       </div>
       {tab === 'files' ? (
-        <div className="flex gap-4" style={{ height: 'calc(100vh - 140px)' }}>
-          <div className="w-56 flex-shrink-0 space-y-1 overflow-auto">
+        <div className="viewport-scroll flex min-h-0 flex-1 flex-col gap-4 overflow-hidden md:flex-row">
+          <div className="max-h-40 w-full flex-shrink-0 space-y-1 overflow-auto md:max-h-none md:w-56">
             {files.map(f => (
               <button key={f.name} onClick={() => { setFollow(false); loadLog(f.name) }}
                 className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors ${sel === f.name ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}`}>
@@ -1868,8 +1871,8 @@ function LogsPage() {
               </button>
             ))}
           </div>
-          <div className="flex-1 flex flex-col min-w-0">
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2">
               <span className="text-sm text-slate-400">行数:</span>
               <select value={lines} onChange={e => { const n = e.target.value === 'all' ? 'all' : Number(e.target.value); setLines(n); if (sel) loadLog(sel, n) }}
                 className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
@@ -1888,8 +1891,10 @@ function LogsPage() {
               {sel && (
                 <button
                   onClick={() => follow ? setFollow(false) : startFollow(sel)}
-                  className={`px-3 py-1 rounded-lg text-xs transition-colors ${follow ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-slate-700 hover:bg-slate-600'}`}>
-                  {follow ? '⏸ 停止跟随' : '▶ 跟随'}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs transition-colors ${follow ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-slate-700 hover:bg-slate-600'}`}>
+                  {follow
+                    ? <><Pause className="h-3 w-3" aria-hidden="true" />停止跟随</>
+                    : <><Play className="h-3 w-3" aria-hidden="true" />跟随</>}
                 </button>
               )}
               {follow && <span className="text-xs text-emerald-400">实时 {formatSize(fileSize)}</span>}
@@ -1911,7 +1916,7 @@ function LogsPage() {
       ) : (
         <ModelRepliesTab />
       )}
-    </div>
+    </ViewportPage>
   )
 }
 
@@ -2029,16 +2034,16 @@ function SessionSummaryBrowser({ mode }) {
   }, [includeContent, loadDetail, selectedSession])
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-      <Card className="min-h-[560px] overflow-hidden">
-        <div className="border-b border-slate-800 p-3">
+    <div className="viewport-scroll grid h-full min-h-0 gap-4 overflow-y-auto lg:grid-cols-[360px_minmax(0,1fr)] lg:overflow-hidden">
+      <Card className="flex min-h-[35rem] flex-col overflow-hidden lg:min-h-0">
+        <div className="shrink-0 border-b border-slate-800 p-3">
           <label className="block text-[11px] font-medium text-slate-400">
             session_id
             <input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索 session_id / user_id"
               className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
           </label>
         </div>
-        <div className="max-h-[620px] overflow-y-auto">
+        <div className="viewport-scroll min-h-0 flex-1 overflow-y-auto">
           {filtered.map(s => {
             const count = isRecent ? s.summary_count : s.digest_count
             const preview = isRecent ? s.active_summary_preview : s.latest_digest_preview
@@ -2067,7 +2072,7 @@ function SessionSummaryBrowser({ mode }) {
         </div>
       </Card>
 
-      <div className="min-w-0 space-y-3">
+      <div className="viewport-scroll min-w-0 space-y-3 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
         <Card className="p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -2309,8 +2314,8 @@ function PersonaPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+    <ViewportPage className="gap-4 overflow-y-auto lg:overflow-hidden">
+      <div className="flex shrink-0 flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="text-xl font-semibold text-white">用户画像</h1>
           <p className="mt-1 text-xs text-slate-500">治理长期用户偏好，预览本轮会注入哪些画像。</p>
@@ -2322,23 +2327,23 @@ function PersonaPage() {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 md:grid-cols-4">
         <MiniStat label="用户数" value={stats.users} />
         <MiniStat label="画像项" value={stats.facts} tone="blue" />
         <MiniStat label="可注入" value={stats.injectable} tone="emerald" />
         <MiniStat label="待审核" value={stats.review} tone="amber" />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
-        <Card className="min-h-[520px] overflow-hidden">
-          <div className="border-b border-slate-800 p-3">
+      <div className="viewport-scroll grid min-h-0 flex-1 gap-4 overflow-y-auto lg:grid-cols-[340px_minmax(0,1fr)] lg:overflow-hidden">
+        <Card className="flex min-h-[32rem] flex-col overflow-hidden lg:min-h-0">
+          <div className="shrink-0 border-b border-slate-800 p-3">
             <label className="block text-[11px] font-medium text-slate-400">
               搜索或输入 user_id
               <input value={userId} onChange={e => setUserId(e.target.value)} placeholder="用户 ID"
                 className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
             </label>
           </div>
-          <div className="max-h-[620px] overflow-y-auto">
+          <div className="viewport-scroll min-h-0 flex-1 overflow-y-auto">
             {users.length === 0 ? (
               <div className="px-4 py-10 text-center text-xs text-slate-600">暂无用户画像</div>
             ) : users.map(item => (
@@ -2359,7 +2364,7 @@ function PersonaPage() {
           </div>
         </Card>
 
-        <div className="min-w-0 space-y-4">
+        <div className="viewport-scroll min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
           <Card className="p-3">
             <div className="grid gap-3 lg:grid-cols-[1fr_140px_170px_auto]">
               <label className="block text-[11px] font-medium text-slate-400">
@@ -2462,7 +2467,7 @@ function PersonaPage() {
           )}
         </div>
       </div>
-    </div>
+    </ViewportPage>
   )
 }
 
@@ -2477,15 +2482,15 @@ function AuditPage() {
   }, [page, actionFilter, typeFilter])
   useEffect(() => { load() }, [load])
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
+    <ViewportPage>
+      <div className="mb-4 flex shrink-0 items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Admin 审计日志</h1>
           <p className="text-slate-500 text-sm">Prompt、表情包、屏蔽规则、配置等高风险操作</p>
         </div>
         <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
       </div>
-      <div className="flex items-center gap-3 mb-4">
+      <div className="mb-4 flex shrink-0 items-center gap-3">
         <select value={actionFilter} onChange={e => { setActionFilter(e.target.value); setPage(1) }}
           className="p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs">
           <option value="">全部操作</option>
@@ -2501,9 +2506,9 @@ function AuditPage() {
           <option value="config">config</option>
         </select>
       </div>
-      <Card className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="px-3 py-2">time</th><th className="px-3 py-2">actor</th><th className="px-3 py-2">action</th><th className="px-3 py-2">target</th><th className="px-3 py-2">detail</th><th className="px-3 py-2">ip</th></tr></thead>
+      <Card className="viewport-scroll min-h-0 flex-1 overflow-auto">
+        <table className="min-w-[860px] w-full text-xs">
+          <thead className="sticky top-0 z-10 bg-slate-900 shadow-[0_1px_0_rgba(30,41,59,1)]"><tr className="text-left text-slate-500"><th className="px-3 py-2">time</th><th className="px-3 py-2">actor</th><th className="px-3 py-2">action</th><th className="px-3 py-2">target</th><th className="px-3 py-2">detail</th><th className="px-3 py-2">ip</th></tr></thead>
           <tbody>{data.items.map(r => (
             <tr key={r.id} className="border-b border-slate-800/50 align-top">
               <td className="px-3 py-2 whitespace-nowrap text-slate-500">{r.created_at}</td>
@@ -2516,8 +2521,8 @@ function AuditPage() {
           ))}</tbody>
         </table>
       </Card>
-      <Pagination page={page} total={data.total} limit={50} onChange={setPage} />
-    </div>
+      <div className="shrink-0"><Pagination page={page} total={data.total} limit={50} onChange={setPage} /></div>
+    </ViewportPage>
   )
 }
 

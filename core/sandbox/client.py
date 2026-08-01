@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import stat
 from collections.abc import AsyncIterable, Mapping
@@ -14,6 +15,13 @@ import httpx
 
 from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError
 from core.sandbox.paths import validate_sha256, validate_workspace_id
+
+
+_LEGACY_RENDERED_LINE_RE = re.compile(r"^\s*\d+\t")
+
+
+class _SandboxEndpointNotFound(SandboxServiceError):
+    """仅表示滚动升级期间 sandboxd 尚未提供目标端点。"""
 
 
 def _read_token_file(token_file: Path) -> str:
@@ -121,6 +129,17 @@ class HttpSandboxdBackend:
                 retryable=True,
                 stop=False,
             )
+        if (
+            path == "/v1/files/read-text"
+            and response.status_code == 404
+            and str(body.get("detail") or "").strip().lower() == "not found"
+        ):
+            raise _SandboxEndpointNotFound(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox 控制面版本暂不支持此请求",
+                retryable=True,
+                stop=False,
+            )
         if response.is_error or body.get("status") == "error":
             error = body.get("error") if isinstance(body.get("error"), dict) else {}
             raw_code = str(error.get("code") or SandboxErrorCode.RUNTIME_UNAVAILABLE.value)
@@ -158,7 +177,68 @@ class HttpSandboxdBackend:
         return self._request("POST", "/v1/files/read", payload=payload)
 
     def read_text_file(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        return self._request("POST", "/v1/files/read-text", payload=payload)
+        try:
+            return self._request(
+                "POST",
+                "/v1/files/read-text",
+                payload=payload,
+            )
+        except _SandboxEndpointNotFound:
+            # 滚动升级时 Nanobot Server 可能先于宿主 sandboxd 更新。旧版
+            # /v1/files/read 只能返回带行号且可能截断的内容，因此仅降级为
+            # 只读预览，绝不伪造可用于覆盖写入的 SHA-256。
+            legacy_result = self.read_file({
+                "workspace_id": payload.get("workspace_id"),
+                "path": payload.get("path"),
+                "cwd": payload.get("cwd", ""),
+                "offset": 0,
+                "limit": 2_000,
+            })
+            raw_data = legacy_result.get("data")
+            if not isinstance(raw_data, Mapping):
+                raise SandboxServiceError(
+                    SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                    "Sandbox 文件服务返回了无效兼容预览",
+                    retryable=True,
+                    stop=False,
+                )
+            if raw_data.get("binary") is True:
+                raise SandboxServiceError(
+                    SandboxErrorCode.UNSUPPORTED_FILE_TYPE,
+                    "在线预览只支持 UTF-8 文本文件",
+                )
+            numbered_content = str(raw_data.get("content") or "")
+            content = "\n".join(
+                _LEGACY_RENDERED_LINE_RE.sub("", line, count=1)
+                for line in numbered_content.splitlines()
+            )
+            truncated = bool(
+                raw_data.get("line_truncated")
+                or raw_data.get("output_truncated")
+                or raw_data.get("eof") is not True
+            )
+            preview_notice = (
+                "宿主 sandboxd 尚未升级，当前仅显示可能截断的只读预览。"
+                if truncated
+                else "宿主 sandboxd 尚未升级，当前为只读兼容预览。"
+            )
+            return {
+                "status": "success",
+                "summary": "文本文件兼容预览完成",
+                "next_actions": [],
+                "artifacts": [],
+                "data": {
+                    "protocol_version": raw_data.get("protocol_version"),
+                    "path": str(raw_data.get("path") or payload.get("path") or ""),
+                    "size_bytes": int(raw_data.get("size_bytes") or 0),
+                    "sha256": "",
+                    "content": content,
+                    "editable": False,
+                    "preview_only": True,
+                    "preview_truncated": truncated,
+                    "preview_notice": preview_notice,
+                },
+            }
 
     def search_files(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/files/search", payload=payload)

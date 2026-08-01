@@ -20,6 +20,7 @@ import {
   MiniStat,
   PageHeader,
   Spinner,
+  ViewportPage,
 } from '../../components/ui'
 
 
@@ -169,11 +170,11 @@ function FileBrowser({ entries, currentPath, loading, selectedPath, onOpen, onNa
 
 function FileEditor({ editor, loading, saving, onChange, onSave, onReload }) {
   if (loading) {
-    return <div className="flex min-h-[34rem] items-center justify-center"><Spinner /></div>
+    return <div className="flex min-h-[34rem] items-center justify-center xl:h-full xl:min-h-0"><Spinner /></div>
   }
   if (!editor) {
     return (
-      <div className="flex min-h-[34rem] flex-col items-center justify-center px-6 text-center">
+      <div className="flex min-h-[34rem] flex-col items-center justify-center px-6 text-center xl:h-full xl:min-h-0">
         <File className="h-10 w-10 text-slate-800" aria-hidden="true" />
         <p className="mt-4 text-sm text-slate-400">选择文件以查看和编辑</p>
         <p className="mt-1 max-w-md text-xs leading-5 text-slate-600">
@@ -187,9 +188,10 @@ function FileEditor({ editor, loading, saving, onChange, onSave, onReload }) {
   const dirty = editor.isNew
     || editor.content !== editor.originalContent
     || editor.path !== editor.originalPath
+  const editable = editor.editable !== false
 
   return (
-    <div className="flex min-h-[34rem] flex-col">
+    <div className="flex min-h-[34rem] flex-col xl:h-full xl:min-h-0">
       <div className="border-b border-slate-800 p-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <Field
@@ -213,33 +215,42 @@ function FileEditor({ editor, loading, saving, onChange, onSave, onReload }) {
                 重新加载
               </ActionButton>
             )}
-            <ActionButton
-              type="button"
-              tone="emerald"
-              onClick={onSave}
-              disabled={saving || !dirty || !editor.path.trim() || tooLarge}
-              className="gap-1.5"
-            >
-              <Save className="h-3.5 w-3.5" aria-hidden="true" />
-              {saving ? '保存中…' : editor.isNew ? '创建文件' : '保存文件'}
-            </ActionButton>
+            {editable && (
+              <ActionButton
+                type="button"
+                tone="emerald"
+                onClick={onSave}
+                disabled={saving || !dirty || !editor.path.trim() || tooLarge}
+                className="gap-1.5"
+              >
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+                {saving ? '保存中…' : editor.isNew ? '创建文件' : '保存文件'}
+              </ActionButton>
+            )}
           </div>
         </div>
       </div>
+      {editor.previewNotice && (
+        <div role="status" className="border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs leading-5 text-amber-200">
+          {editor.previewNotice}
+        </div>
+      )}
       <label htmlFor="sandbox-file-content" className="sr-only">文件内容</label>
       <textarea
         id="sandbox-file-content"
         value={editor.content}
         onChange={event => onChange({ ...editor, content: event.target.value })}
+        readOnly={!editable}
         spellCheck="false"
-        className="min-h-[28rem] flex-1 resize-y bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-200 outline-none placeholder:text-slate-700 focus:ring-1 focus:ring-inset focus:ring-emerald-500"
+        className="min-h-[28rem] flex-1 resize-y overflow-auto bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-200 outline-none placeholder:text-slate-700 focus:ring-1 focus:ring-inset focus:ring-emerald-500 read-only:cursor-default read-only:text-slate-400 xl:min-h-0 xl:resize-none"
         placeholder="输入 UTF-8 文本内容"
       />
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-800 px-3 py-2 text-[11px] text-slate-500">
         <span>{formatBytes(sizeBytes)} / 256 KiB</span>
         <span>{editor.content.split('\n').length.toLocaleString()} 行</span>
-        <span>{dirty ? '有未保存修改' : '已保存'}</span>
-        {!editor.isNew && <span className="font-mono">SHA-256 {String(editor.sha256 || '').slice(0, 12)}…</span>}
+        <span>{editable ? (dirty ? '有未保存修改' : '已保存') : '只读预览'}</span>
+        {!editor.isNew && editor.sha256 && <span className="font-mono">SHA-256 {String(editor.sha256).slice(0, 12)}…</span>}
+        {editor.previewTruncated && <span className="text-amber-300">预览内容已截断</span>}
         {tooLarge && <span className="text-red-300">内容超过在线保存上限</span>}
       </div>
     </div>
@@ -351,6 +362,9 @@ export function SandboxFilesPage() {
         content: data.content || '',
         originalContent: data.content || '',
         sha256: data.sha256 || '',
+        editable: data.editable !== false,
+        previewNotice: data.preview_notice || '',
+        previewTruncated: data.preview_truncated === true,
       })
     } catch (loadError) {
       setEditor(null)
@@ -375,7 +389,7 @@ export function SandboxFilesPage() {
   }
 
   const saveFile = async () => {
-    if (!editor || !workspaceId) return
+    if (!editor || !workspaceId || editor.editable === false) return
     setSaving(true)
     setError('')
     setNotice('')
@@ -397,6 +411,9 @@ export function SandboxFilesPage() {
         content: editor.content,
         originalContent: editor.content,
         sha256: data.sha256 || editor.sha256,
+        editable: true,
+        previewNotice: '',
+        previewTruncated: false,
       })
       setNotice(`文件 ${savedPath} 已保存。`)
       await Promise.all([
@@ -413,7 +430,7 @@ export function SandboxFilesPage() {
   if (loading && !workspaces.length) return <Spinner />
 
   return (
-    <div>
+    <ViewportPage>
       <PageHeader
         title="Sandbox 文件系统"
         description="在 Workspace 作用域内浏览和编辑持久文件。页面只使用容器内逻辑相对路径，不显示或接收宿主机路径。"
@@ -443,14 +460,14 @@ export function SandboxFilesPage() {
         )}
       />
 
-      <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-4 grid shrink-0 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <MiniStat label="Workspace 状态" value={selectedWorkspace?.status || '未选择'} tone={selectedWorkspace ? 'emerald' : 'slate'} />
         <MiniStat label="当前占用" value={formatBytes(selectedWorkspace?.used_bytes)} />
         <MiniStat label="空间配额" value={formatBytes(selectedWorkspace?.quota_bytes)} />
         <MiniStat label="当前目录可见项" value={entries.length} />
       </div>
 
-      <Card className="mb-4 p-3">
+      <Card className="mb-4 shrink-0 p-3">
         <div className="grid gap-3 lg:grid-cols-[minmax(18rem,30rem)_1fr] lg:items-end">
           <Field id="sandbox-workspace-select" label="Workspace">
             <select
@@ -489,14 +506,14 @@ export function SandboxFilesPage() {
       )}
 
       {!workspaceId ? (
-        <Card className="flex min-h-80 flex-col items-center justify-center px-6 text-center">
+        <Card className="flex min-h-80 flex-1 flex-col items-center justify-center px-6 text-center">
           <FolderTree className="h-10 w-10 text-slate-800" aria-hidden="true" />
           <p className="mt-4 text-sm text-slate-400">没有可浏览的活跃 Workspace</p>
           <p className="mt-1 text-xs text-slate-600">请先在 Sandbox 管理页为会话授予 Workspace 能力。</p>
         </Card>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[minmax(20rem,26rem)_minmax(0,1fr)]">
-          <Card className="overflow-hidden">
+        <div className="viewport-scroll grid min-h-0 flex-1 gap-4 overflow-y-auto xl:grid-cols-[minmax(20rem,26rem)_minmax(0,1fr)] xl:overflow-hidden">
+          <Card className="flex min-h-[24rem] flex-col overflow-hidden xl:min-h-0">
             <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2.5">
               <div className="min-w-0">
                 <h2 className="truncate text-xs font-medium text-slate-200" title={currentPath || '/'}>{currentPath || '/'}</h2>
@@ -504,14 +521,16 @@ export function SandboxFilesPage() {
               </div>
               <Badge tone="slate">只显示安全文件类型</Badge>
             </div>
-            <FileBrowser
-              entries={entries}
-              currentPath={currentPath}
-              loading={browserLoading}
-              selectedPath={editor?.path}
-              onOpen={openFile}
-              onNavigate={navigate}
-            />
+            <div className="viewport-scroll min-h-0 flex-1 overflow-y-auto">
+              <FileBrowser
+                entries={entries}
+                currentPath={currentPath}
+                loading={browserLoading}
+                selectedPath={editor?.path}
+                onOpen={openFile}
+                onNavigate={navigate}
+              />
+            </div>
             {nextCursor && (
               <div className="border-t border-slate-800 p-2">
                 <ActionButton
@@ -526,7 +545,7 @@ export function SandboxFilesPage() {
             )}
           </Card>
 
-          <Card className="min-w-0 overflow-hidden">
+          <Card className="min-h-[34rem] min-w-0 overflow-hidden xl:min-h-0">
             <FileEditor
               editor={editor}
               loading={editorLoading}
@@ -542,13 +561,13 @@ export function SandboxFilesPage() {
       )}
 
       {selectedWorkspace && (
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-600">
+        <div className="mt-3 flex shrink-0 flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-600">
           <span className="font-mono">Workspace {selectedWorkspace.workspace_id}</span>
           <span>绑定会话：{selectedWorkspace.sessions?.length || 0}</span>
           <span>配额状态：{selectedWorkspace.quota_status || 'unknown'}</span>
           {entries[0]?.modified_at_ns && <span>最近可见修改：{formatModifiedAt(Math.max(...entries.map(entry => Number(entry.modified_at_ns) || 0)))}</span>}
         </div>
       )}
-    </div>
+    </ViewportPage>
   )
 }

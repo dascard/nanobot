@@ -5,6 +5,10 @@ APP_JS = Path("webui/src/App.jsx")
 UI_JS = Path("webui/src/components/ui.jsx")
 CSS = Path("webui/src/index.css")
 LLM_LOGS_JS = Path("webui/src/features/agent-runs/LLMApiLogsPage.jsx")
+AGENT_RUNS_JS = Path("webui/src/features/agent-runs/AgentRunsPage.jsx")
+TOOL_CALLS_JS = Path("webui/src/features/agent-runs/ToolCallsPage.jsx")
+SANDBOX_FILES_JS = Path("webui/src/features/sandbox/SandboxFilesPage.jsx")
+TRIGGERS_JS = Path("webui/src/features/triggers/TriggersPage.jsx")
 MODELS_JS = Path("webui/src/features/models/ModelsPage.jsx")
 MODELS_DIR = Path("webui/src/features/models")
 PROMPT_JS = Path("webui/src/features/prompt/PromptPages.jsx")
@@ -371,6 +375,53 @@ def test_shared_ui_components_support_dense_admin_shell():
     assert "export function IconButton(" in ui_source
     assert "rounded-lg" in ui_source
     assert "@media (prefers-reduced-motion: reduce)" in css_source
+
+
+def test_dense_admin_pages_use_viewport_bounded_scroll_regions():
+    ui_source = UI_JS.read_text(encoding="utf-8")
+    css_source = CSS.read_text(encoding="utf-8")
+
+    assert "export function ViewportPage(" in ui_source
+    assert "flex h-full min-h-0 flex-col" in ui_source
+    assert ".viewport-scroll" in css_source
+
+    for path in (
+        LLM_LOGS_JS,
+        AGENT_RUNS_JS,
+        TOOL_CALLS_JS,
+        SANDBOX_FILES_JS,
+        TRIGGERS_JS,
+        MODELS_JS,
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "<ViewportPage" in source, path
+        assert "viewport-scroll" in source, path
+        assert "calc(100vh" not in source, path
+        assert "calc(100dvh" not in source, path
+
+    app_source = read_app()
+    bounded_sections = (
+        app_source.split("function GroupsPage()")[1].split(
+            "function GroupDetailPage()"
+        )[0],
+        app_source.split("function TimingGatePage()")[1].split(
+            "function TimingEventDetail("
+        )[0],
+        app_source.split("function StickerDedupPage()")[1].split(
+            "// ── Stickers ──"
+        )[0],
+        app_source.split("function DbPage()")[1].split("// ── Logs ──")[0],
+        app_source.split("function LogsPage()")[1].split(
+            "// ── Session Summary Browser ──"
+        )[0],
+        app_source.split("function PersonaPage()")[1].split(
+            "// ── Audit ──"
+        )[0],
+        app_source.split("function AuditPage()")[1].split("// ── App ──")[0],
+    )
+    for section in bounded_sections:
+        assert "<ViewportPage" in section
+        assert "viewport-scroll" in section
 
 
 def test_webui_scrollbars_use_global_dark_admin_theme():

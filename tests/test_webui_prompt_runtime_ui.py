@@ -108,9 +108,14 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "data-testid=\"prompt-v2-left-rail\"" in source
     assert "data-testid=\"prompt-v2-canvas-column\"" in source
     assert "data-testid=\"prompt-v2-side-panel\"" in source
-    assert "xl:h-[calc(100vh-170px)]" in source
+    assert "prompt-v2-page flex h-full min-h-0 flex-col" in source
+    assert "viewport-scroll grid min-h-0 flex-1" in source
+    assert "xl:items-stretch xl:overflow-hidden" in source
+    assert "xl:h-[calc(100vh-170px)]" not in source
     assert "prompt-v2-canvas" in source
-    assert "min-h-[720px]" in source
+    assert "min-h-[32rem]" in source
+    assert "xl:min-h-0" in source
+    assert "min-h-[720px]" not in source
     assert "const [canvasViewport, setCanvasViewport]" in source
     assert "handleCanvasWheel" in source
     assert "addEventListener('wheel', handleCanvasWheel, { passive: false })" in source

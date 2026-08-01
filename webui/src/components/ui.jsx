@@ -6,6 +6,14 @@ export function Card({ children, className = '', ...props }) {
   return <div {...props} className={`rounded-lg border border-slate-800 bg-slate-900 ${className}`}>{children}</div>
 }
 
+export function ViewportPage({ children, className = '' }) {
+  return (
+    <div className={`flex h-full min-h-0 flex-col ${className}`}>
+      {children}
+    </div>
+  )
+}
+
 export function Modal({ children, onClose, wide }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in" onClick={onClose}>
@@ -16,9 +24,9 @@ export function Modal({ children, onClose, wide }) {
   )
 }
 
-export function PageHeader({ title, description, actions, meta }) {
+export function PageHeader({ title, description, actions, meta, className = '' }) {
   return (
-    <div className="mb-4 flex flex-col gap-3 border-b border-slate-800 pb-4 md:flex-row md:items-start md:justify-between">
+    <div className={`mb-4 flex shrink-0 flex-col gap-3 border-b border-slate-800 pb-4 md:flex-row md:items-start md:justify-between ${className}`}>
       <div className="min-w-0">
         <h1 className="text-lg font-semibold leading-7 text-slate-50 md:text-xl">{title}</h1>
         {description && <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">{description}</p>}

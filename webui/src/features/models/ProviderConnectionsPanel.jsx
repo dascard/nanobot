@@ -170,7 +170,7 @@ export function ProviderConnectionsPanel({ providers, driverTypes, nativeTools, 
   }
 
   return (
-    <div className="grid overflow-hidden rounded-lg border border-slate-800 bg-slate-900 lg:h-[calc(100dvh-15.5rem)] lg:min-h-[38rem] lg:grid-cols-[17rem_minmax(0,1fr)]">
+    <div className="grid overflow-hidden rounded-lg border border-slate-800 bg-slate-900 lg:h-full lg:min-h-0 lg:grid-cols-[17rem_minmax(0,1fr)]">
       <ConsoleRail
         title="Provider Connections"
         count={providers.length}

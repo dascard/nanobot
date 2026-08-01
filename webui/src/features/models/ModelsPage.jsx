@@ -11,7 +11,12 @@ import {
 } from 'lucide-react'
 
 import { api } from '../../api'
-import { ActionButton, PageHeader, Spinner } from '../../components/ui'
+import {
+  ActionButton,
+  PageHeader,
+  Spinner,
+  ViewportPage,
+} from '../../components/ui'
 import { KtDriversPanel } from './KtDriversPanel'
 import { LocalComponentsPanel } from './LocalComponentsPanel'
 import { ModelCatalogPanel } from './ModelCatalogPanel'
@@ -123,7 +128,7 @@ export function ModelsPage() {
   if (!loadedOnce) return <Spinner />
 
   return (
-    <div className="min-w-0">
+    <ViewportPage className="min-w-0">
       <PageHeader
         title="模型运行控制台"
         description="Provider 保存连接；模型目录保存默认配置；Route Binding 直接选模型并只记录业务差异，最终由 KT Runtime 合并与执行。"
@@ -143,7 +148,7 @@ export function ModelsPage() {
         )}
       />
 
-      <div className="mb-4 overflow-x-auto rounded-lg border border-slate-800 bg-slate-900" aria-label="模型运行配置链">
+      <div className="mb-4 shrink-0 overflow-x-auto rounded-lg border border-slate-800 bg-slate-900" aria-label="模型运行配置链">
         <ol className="flex min-w-max items-center divide-x divide-transparent px-1">
           <WorkflowStep index="01" title="Provider Connection" description="Endpoint · Auth · KT Driver" count={providers.length} />
           <WorkflowStep index="02" title="Model Catalog" description="Defaults · Cost · Modality" count={modelDefaults.length} />
@@ -153,7 +158,7 @@ export function ModelsPage() {
       </div>
 
       {errorEntries.length > 0 && (
-        <div role="alert" className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
+        <div role="alert" className="mb-4 shrink-0 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
           <div className="flex items-start gap-2">
             <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
             <div className="min-w-0">
@@ -166,7 +171,7 @@ export function ModelsPage() {
         </div>
       )}
 
-      <div className="mb-4 overflow-x-auto border-b border-slate-800" role="tablist" aria-label="模型控制台工作区">
+      <div className="mb-4 shrink-0 overflow-x-auto border-b border-slate-800" role="tablist" aria-label="模型控制台工作区">
         <div className="flex min-w-max gap-1 pb-2">
           {WORKSPACES.map(item => {
             const Icon = item.icon
@@ -192,7 +197,7 @@ export function ModelsPage() {
         </div>
       </div>
 
-      <div id={`model-workspace-${workspace}`} role="tabpanel" tabIndex="0" className="min-w-0 outline-none">
+      <div id={`model-workspace-${workspace}`} role="tabpanel" tabIndex="0" className="viewport-scroll min-h-0 min-w-0 flex-1 overflow-y-auto outline-none">
         {workspace === 'connections' && (
           <ProviderConnectionsPanel
             providers={providers}
@@ -221,6 +226,6 @@ export function ModelsPage() {
         {workspace === 'catalog' && <ModelCatalogPanel providers={providers} modelDefaults={modelDefaults} onChanged={reload} />}
         {workspace === 'local' && <LocalComponentsPanel components={status?.local_components || {}} />}
       </div>
-    </div>
+    </ViewportPage>
   )
 }

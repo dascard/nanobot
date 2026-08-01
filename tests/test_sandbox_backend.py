@@ -67,6 +67,101 @@ def test_http_backend_uses_bearer_and_never_puts_token_in_json(tmp_path):
     assert token not in json.dumps(captured["body"])
 
 
+def test_text_read_falls_back_to_read_only_preview_during_rolling_upgrade(
+    tmp_path,
+):
+    token_file = tmp_path / "client.token"
+    token_file.write_text("t" * 64, encoding="ascii")
+    token_file.chmod(0o640)
+    requested_paths = []
+
+    def handler(request):
+        requested_paths.append(request.url.path)
+        if request.url.path == "/v1/files/read-text":
+            return httpx.Response(404, json={"detail": "Not Found"})
+        assert request.url.path == "/v1/files/read"
+        return httpx.Response(200, json={
+            "status": "success",
+            "summary": "文件读取完成",
+            "next_actions": [],
+            "artifacts": [],
+            "data": {
+                "protocol_version": "workspace.v2",
+                "path": "README.md",
+                "size_bytes": 25,
+                "content": "     1\t第一行\n     2\t第二行",
+                "binary": False,
+                "line_truncated": False,
+                "output_truncated": False,
+                "eof": True,
+            },
+        })
+
+    backend = HttpSandboxdBackend(
+        socket_path="/run/nanobot-sandboxd/sandboxd.sock",
+        token_file=str(token_file),
+        client=httpx.Client(
+            transport=httpx.MockTransport(handler),
+            base_url="http://sandboxd",
+        ),
+    )
+
+    result = backend.read_text_file({
+        "workspace_id": "00000000-0000-0000-0000-000000000001",
+        "path": "README.md",
+        "cwd": "",
+    })
+
+    assert requested_paths == ["/v1/files/read-text", "/v1/files/read"]
+    assert result["data"]["content"] == "第一行\n第二行"
+    assert result["data"]["editable"] is False
+    assert result["data"]["preview_only"] is True
+    assert result["data"]["preview_truncated"] is False
+    assert result["data"]["sha256"] == ""
+    assert "只读兼容预览" in result["data"]["preview_notice"]
+
+
+def test_text_read_does_not_hide_declared_file_errors(tmp_path):
+    token_file = tmp_path / "client.token"
+    token_file.write_text("t" * 64, encoding="ascii")
+    token_file.chmod(0o640)
+    requested_paths = []
+
+    def handler(request):
+        requested_paths.append(request.url.path)
+        return httpx.Response(415, json={
+            "status": "error",
+            "summary": "在线编辑只支持 UTF-8 文本文件",
+            "next_actions": [],
+            "artifacts": [],
+            "error": {
+                "code": "unsupported_file_type",
+                "retryable": False,
+                "hint": "",
+                "stop": True,
+            },
+        })
+
+    backend = HttpSandboxdBackend(
+        socket_path="/run/nanobot-sandboxd/sandboxd.sock",
+        token_file=str(token_file),
+        client=httpx.Client(
+            transport=httpx.MockTransport(handler),
+            base_url="http://sandboxd",
+        ),
+    )
+
+    with pytest.raises(SandboxServiceError) as raised:
+        backend.read_text_file({
+            "workspace_id": "00000000-0000-0000-0000-000000000001",
+            "path": "image.bin",
+            "cwd": "",
+        })
+
+    assert raised.value.code is SandboxErrorCode.UNSUPPORTED_FILE_TYPE
+    assert requested_paths == ["/v1/files/read-text"]
+
+
 def test_admin_backend_uses_dedicated_workspace_ensure_endpoint(tmp_path):
     token = "a" * 64
     token_file = tmp_path / "admin-client.token"

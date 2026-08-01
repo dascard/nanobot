@@ -170,6 +170,33 @@ describe('触发器管理页', () => {
     })
   })
 
+  it('复杂 Program 默认展示可读步骤，仅按需打开高级 JSON', async () => {
+    const defaultGet = api.get.getMockImplementation()
+    api.get.mockImplementation(path => {
+      if (path === `/triggers/${trigger.id}`) {
+        return response({
+          ...triggerDetail,
+          definition: {
+            ...triggerDetail.definition,
+            mode: 'program',
+          },
+        })
+      }
+      return defaultGet(path)
+    })
+    await renderPage()
+    fireEvent.click(screen.getByRole('button', { name: '编辑 每日资讯' }))
+
+    expect(await screen.findByText('工作流步骤')).toBeInTheDocument()
+    expect(screen.getByText('调用模型')).toBeInTheDocument()
+    expect(screen.getByText('使用步骤“model”的输出')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Program JSON')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '高级 JSON' }))
+    expect(screen.getByLabelText('Program JSON').value).toContain('"steps"')
+    expect(screen.getByRole('button', { name: '返回可视化步骤' })).toBeInTheDocument()
+  })
+
   it('创建触发器时只提交所选定义来源', async () => {
     await renderPage()
     fireEvent.click(screen.getByRole('button', { name: '创建触发器' }))

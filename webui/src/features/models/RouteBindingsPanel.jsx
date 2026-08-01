@@ -174,7 +174,7 @@ export function RouteBindingsPanel({ bindings, modelDefaults, statusRoutes, onCh
   }
 
   return (
-    <div className="grid overflow-hidden rounded-lg border border-slate-800 bg-slate-900 lg:h-[calc(100dvh-15.5rem)] lg:min-h-[38rem] lg:grid-cols-[18rem_minmax(0,1fr)]">
+    <div className="grid overflow-hidden rounded-lg border border-slate-800 bg-slate-900 lg:h-full lg:min-h-0 lg:grid-cols-[18rem_minmax(0,1fr)]">
       <ConsoleRail title="Route Bindings" count={bindings.length} query={query} onQuery={setQuery}>
         {filtered.map(item => {
           const candidates = item.effective_binding?.candidates || []

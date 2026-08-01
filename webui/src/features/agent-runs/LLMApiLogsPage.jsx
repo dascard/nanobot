@@ -1,7 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react'
 
 import { api } from '../../api'
-import { ActionButton, Card, Field, MiniStat, Toolbar } from '../../components/ui'
+import {
+  ActionButton,
+  Card,
+  Field,
+  MiniStat,
+  PageHeader,
+  Toolbar,
+  ViewportPage,
+} from '../../components/ui'
 import { LLMApiLogViewer } from '../../components/TraceView'
 import { safeJsonParse } from '../../components/traceUtils'
 
@@ -66,10 +74,18 @@ export function LLMApiLogsPage() {
   }, { total: 0, success: 0, failed: 0, created: 0, unbound: 0, latencyTotal: 0, latencyCount: 0 })
   const avgLatency = stats ? (stats.avg_latency_ms || 0) : (pageStats.latencyCount ? Math.round(pageStats.latencyTotal / pageStats.latencyCount) : 0)
   return (
-    <div>
-      <h1 className="text-xl font-semibold mb-1">LLM API 日志</h1>
-      <p className="text-slate-500 text-xs mb-4">发往模型网关的完整请求记录</p>
-      <Toolbar>
+    <ViewportPage>
+      <PageHeader
+        title="LLM API 日志"
+        description="发往模型网关的完整请求记录；筛选区、日志表和展开详情在当前视口内独立工作。"
+        meta={(
+          <>
+            <span>筛选结果：{pageStats.total}</span>
+            <span>每页：{limit}</span>
+          </>
+        )}
+      />
+      <Toolbar className="shrink-0">
         <Field id="llm-log-run-filter" label="run_id" className="w-full sm:w-44">
           <input id="llm-log-run-filter" value={runFilter} onChange={e => { setRunFilter(e.target.value); setPage(1) }}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
@@ -101,7 +117,7 @@ export function LLMApiLogsPage() {
         </Field>
         <ActionButton onClick={load} className="mb-0.5">刷新</ActionButton>
       </Toolbar>
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
+      <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 md:grid-cols-6">
         <MiniStat label={stats ? '筛选总数' : '当前页总数'} value={pageStats.total} />
         <MiniStat label="success" value={pageStats.success} tone="emerald" />
         <MiniStat label="failed/error" value={pageStats.failed_error ?? pageStats.failed} tone={(pageStats.failed_error ?? pageStats.failed) ? 'red' : 'slate'} />
@@ -109,10 +125,10 @@ export function LLMApiLogsPage() {
         <MiniStat label="平均延迟" value={avgLatency ? `${avgLatency}ms` : '-'} />
         <MiniStat label="未绑定 run" value={pageStats.unbound_run_count ?? pageStats.unbound} tone={(pageStats.unbound_run_count ?? pageStats.unbound) ? 'amber' : 'slate'} />
       </div>
-      <Card className="overflow-hidden">
-        <div className="overflow-x-auto">
+      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="viewport-scroll min-h-0 flex-1 overflow-auto">
         <table className="min-w-[860px] w-full text-sm">
-          <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+          <thead className="sticky top-0 z-10 bg-slate-900"><tr className="text-left text-slate-500 border-b border-slate-800">
             <th className="py-2 px-3">状态</th><th className="py-2 px-3">source</th><th className="py-2 px-3">model</th><th className="py-2 px-3">run</th><th className="py-2 px-3">耗时</th><th className="py-2 px-3">时间</th><th className="py-2 px-3">摘要</th>
           </tr></thead>
           <tbody>
@@ -165,7 +181,7 @@ export function LLMApiLogsPage() {
         </div>
         {!items.length && <div className="py-16 text-center text-sm text-slate-600">暂无 API 请求日志</div>}
         {total > limit && (
-          <div className="p-3 flex items-center justify-between text-xs">
+          <div className="flex shrink-0 items-center justify-between border-t border-slate-800 p-3 text-xs">
             <span className="text-slate-500">共 {total} 条 | 第 {page}/{totalPages} 页</span>
             <div className="flex gap-2">
               <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50">上一页</button>
@@ -174,6 +190,6 @@ export function LLMApiLogsPage() {
           </div>
         )}
       </Card>
-    </div>
+    </ViewportPage>
   )
 }

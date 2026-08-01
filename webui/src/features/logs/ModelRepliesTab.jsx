@@ -44,8 +44,8 @@ export function ModelRepliesTab() {
   const formatTime = (ts) => ts ? new Date(ts).toLocaleString('zh-CN', { hour12: false }) : ''
 
   return (
-    <div style={{ height: 'calc(100vh - 140px)' }} className="flex flex-col">
-      <div className="flex items-center gap-2 mb-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-3 flex shrink-0 items-center gap-2">
         <input value={groupId} onChange={e => setGroupId(e.target.value)} onKeyDown={e => e.key === 'Enter' && load(0)}
           placeholder="群号筛选..." className="w-32 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
         <button onClick={() => load(0)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">查询</button>
@@ -56,7 +56,7 @@ export function ModelRepliesTab() {
         <button disabled={!hasMore} onClick={() => load(nextBeforeId, true)}
           className="px-3 py-1 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 rounded-lg text-xs">更早 ›</button>
       </div>
-      <div className="flex-1 overflow-auto rounded-xl bg-slate-950 border border-slate-800">
+      <div className="viewport-scroll min-h-0 flex-1 overflow-auto rounded-xl bg-slate-950 border border-slate-800">
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-slate-900 text-slate-400">
             <tr>
