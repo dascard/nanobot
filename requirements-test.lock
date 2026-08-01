@@ -83,7 +83,9 @@ croniter==6.2.4
     # via -r requirements.txt
     # from https://pypi.org/simple
 cryptography==49.0.0
-    # via pyjwt
+    # via
+    #   -r requirements.txt
+    #   pyjwt
     # from https://pypi.org/simple
 dateparser==1.4.1
     # via htmldate

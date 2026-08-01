@@ -2,12 +2,24 @@
 
 Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配器 / Web 客户端消息，运行 KohakuTerrarium Agent，维护聊天记忆、群聊运行状态、TimingGate 判定、RAG 语义索引、表情包数据、用户画像、主动外呼、代码执行沙箱、Prompt Runtime 模板和管理后台调试面板。
 
+## 阅读导航
+
+- [快速开始](#快速开始)
+- [模型目录与路由](#模型目录与路由)
+- [RAG 与评测](#rag-与评测)
+- [代码执行沙箱](#代码执行沙箱)
+- [常用 API](#常用-api)
+- [Prompt Runtime 模板](#prompt-runtime-模板)
+- [测试](#测试)
+
 ## 主要能力
 
 - KT Agent 回复链路：基于 `vendor/KohakuTerrarium` 和 `creatures/nanobot` 配置运行。
 - Agent Link v1：MeaPet 等桌面端可主动建立一条双向 WebSocket，让 Nanobot
   在 Agent Loop 中直接看到并调用前端动态工具。
-- 模型路由：支持 new-api / OpenAI 兼容网关、主模型、快模型、回复模型和本地 Qwen 分类 / 视觉模型。
+- 模型控制面：Provider Connection 只管理连接与认证；模型目录维护价格、能力和默认请求参数；Route Binding 直接选择目录模型并保存业务特化配置。
+- 模型路由：先按路由能力硬过滤，再按质量门槛、价格、额外模态和智能度排列候选；低智能免费模型及显式兜底模型最后尝试。
+- Codex OAuth 账号池：支持多个账号、权重轮询、会话粘性、账号级熔断，以及“下一账号 → 下一模型”的故障转移。
 - TimingGate：对群聊消息做 `continue` / `wait` / `no_reply` 判定，支持延迟 timer 和 parse_error 观测。
 - 群聊上下文：保留消息、引用、@、指向性、冷却和 generation 信息，减少 bot 打断用户之间定向对话。
 - 表情包系统：自动入库、缓存预览、视觉打标、搜索、禁用、去重和使用统计。
@@ -34,6 +46,9 @@ graph TD
     RT -->|continue| Bridge[NanobotBridge]
     RT -->|wait| Timer["/group_timing/timer"]
     Bridge --> KT[KohakuTerrarium Agent]
+    WEB --> ModelControl[Provider / Model Catalog / Route Binding]
+    ModelControl --> DB
+    ModelControl -->|运行时配置| Bridge
     KT --> Tools[Tools: reply / sticker_search / news / sql / image / group_analysis]
     Tools --> DB
     Tools --> RAG
@@ -104,6 +119,14 @@ DATABASE_URL=sqlite:///./data/nanobot.db
 LOG_DIR=./data
 LOG_LEVEL=INFO
 ```
+
+使用 Codex OAuth 账号池时，还需要一个至少 32 字节的随机密钥：
+
+```env
+NANOBOT_CODEX_CREDENTIAL_SECRET=<at-least-32-byte-random-secret>
+```
+
+建议为 Codex 凭据配置独立密钥。留空时会从 `NANOBOT_ASSET_TOKEN_SECRET` 做域隔离派生；两者都没有有效值时，管理端会拒绝启动 Device OAuth。更换密钥后，已有账号凭据无法继续解密，需要重新登录。
 
 `NANOBOT_SUPER_USER_IDS` 是超级用户权限和主动外呼目标的唯一配置来源，支持英文
 或中文逗号分隔。不要把真实 ID 写入源码、受版本控制的配置或 Admin 数据库设置；
@@ -258,6 +281,57 @@ git submodule update --init --recursive
 docker compose up -d --build
 ```
 
+## 模型目录与路由
+
+模型控制面分为 3 层，每层只保存自己的职责：
+
+| 配置层 | 保存内容 | 管理入口 |
+| --- | --- | --- |
+| Provider Connection | Endpoint、认证、KT Driver、目录同步身份 | WebUI「Provider 连接」 |
+| 模型目录默认配置 | 价格、智能度、上下文、模态、能力、超时、重试和默认请求参数 | WebUI「模型目录」 |
+| Route Binding | 候选模型、最低智能度、排序策略和少量业务覆盖 | WebUI「路由绑定」 |
+
+新增配置不需要再创建 Model Preset。Route Binding 直接引用 `provider_id + model`，未覆盖的字段继承模型目录默认配置。旧 Preset API 和旧 Route 配置只用于滚动部署、迁移与兼容；管理页面会把尚未迁移的路由标记为 `Legacy`。
+
+### 推荐配置顺序
+
+1. 在「Provider 连接」中配置 Endpoint、凭据和 KT Driver；OpenAI 兼容连接可同步上游 `/models`。
+2. 在「模型目录」中选择需要使用的模型，核对真实价格、能力、输入 / 输出模态和默认请求参数。
+3. 在「路由绑定」中选择候选模型，只填写该业务路由确实需要覆盖的温度、输出上限、思考等级或超时。
+4. 查看右侧「最终解析顺序」，确认实际候选和继承来源后再保存。
+
+### Model ID 与来源命名空间
+
+New-API 对外暴露的 Model ID 应保留来源前缀，例如 `deepseek/...`、`openrouter/...`、`dashscope/...`、`krill/...` 或 `opencode/...`。Nanobot 将完整 Model ID 视为稳定身份，不再剥离前缀后跨渠道匹配元数据，从而避免不同来源的同名模型互相覆盖。
+
+目录同步采用 Provider 快照语义：一次成功同步会更新该 Provider 的当前模型，并淘汰上游已经移除的旧条目。模型元数据覆盖位于 `clients/data/model_overrides.json`；其中的键必须使用完整公共 Model ID，`upstream_model` 和 `metadata_source` 仅用于说明别名来源与信息依据。
+
+### 候选过滤与排序
+
+默认排序策略为「质量门槛 → 价格 → 模态」，运行时顺序如下：
+
+1. 先硬过滤不支持路由所需 Endpoint、图像输入、流式输出或工具调用的模型。
+2. 达到最低智能度的模型进入正常候选；低于门槛的付费模型后置。
+3. 低于门槛的免费模型，以及标记为 `fallback_only` 的模型，只作为最后兜底。
+4. 同一质量层内，已知价格优先，并按输入价与输出价总和从低到高排列。
+5. 同价时按额外模态从少到多、智能度从高到低排列，最后用配置顺序保证结果稳定。
+
+需要严格固定顺序时可选择「完全手工顺序」。熔断器仍会跳过暂时不可用的候选：同一健康键连续失败 3 次后禁用 5 分钟，再继续向下尝试。
+
+### Codex 多账号轮询
+
+Codex Provider 可在 WebUI 中维护多个 OAuth 账号。每个账号支持名称、启停状态和 `1–100` 的轮询权重：
+
+- 新会话按权重轮询选择账号，同一会话保持账号粘性。
+- 当前账号失败后，先尝试同一模型的下一账号，再进入下一模型。
+- 熔断状态按「模型 + Codex 账号」隔离，一个账号异常不会连带禁用其他账号。
+- Access Token、Refresh Token 和 ID Token 使用 Fernet 加密后写入 `system_settings`，不会返回浏览器，也不会写入管理审计详情。
+- 请求处理链不会自动打开交互式 OAuth；只有管理员显式点击登录时才启动 Device Code 流程。
+
+浏览器显示授权成功后，管理页仍会继续轮询 Token Endpoint；短暂的 `authorization_pending` 属于正常中间状态，只有换取 Token 成功后账号才会进入 `ready`。如果流程被拒绝、过期或网络中断，可直接对该账号重新登录，不需要删除账号配置。
+
+该账号池是 Nanobot 的扩展，不是 Codex CLI 原生多账号功能。轮询只能用于可正常使用的独立账号，不得用于规避账号、订阅或工作区限额。
+
 ## RAG 与评测
 
 ### 召回链路
@@ -369,6 +443,16 @@ Agent Link 的固定信封、握手、动态工具、幂等和离线字段约定
 | `GET /api/v1/admin/rag/benchmark/reports/latest` | 查看最近一次 benchmark 报告 |
 | `GET /api/v1/admin/prompt` | Prompt Runtime 预览 / 模板管理相关数据 |
 | `GET /api/v1/admin/models/status` | 模型状态 |
+| `GET /api/v1/admin/models/catalog` | Provider 模型目录与同步状态 |
+| `GET /api/v1/admin/models/defaults` | 模型目录默认配置 |
+| `PUT /api/v1/admin/models/defaults` | 新增或更新模型默认配置 |
+| `GET /api/v1/admin/models/bindings` | Route Binding 与最终候选顺序 |
+| `PUT /api/v1/admin/models/bindings/{route_key}` | 保存候选模型及路由覆盖 |
+| `GET /api/v1/admin/models/codex/accounts` | Codex 账号池与轮询策略 |
+| `PATCH /api/v1/admin/models/codex/accounts/{account_id}` | 修改账号名称、权重或启停状态 |
+| `DELETE /api/v1/admin/models/codex/accounts/{account_id}` | 删除 Codex 账号及加密凭据 |
+| `POST /api/v1/admin/models/codex/device-login` | 启动 Codex Device Code 登录 |
+| `GET /api/v1/admin/models/codex/device-login/{login_id}` | 查询 Device Code 登录进度 |
 | `GET /api/v1/admin/persona/users` | 用户画像列表与注入预览 |
 | `GET /api/v1/admin/proactive-outreach/*` | 主动外呼配置、run-once 演练与投递记录 |
 | `GET /api/v1/admin/sandbox/status` | Sandbox readiness、Profile 与开关状态 |
@@ -431,6 +515,7 @@ python -m pytest tests/test_persona_preprocess.py tests/test_group_memory_rag.py
 python -m pytest tests/test_proactive_outreach.py tests/test_admin_proactive_outreach.py -q
 python -m pytest "tests/test_sandbox_*.py" "tests/test_sandboxd_*.py" -q
 python -m pytest tests/test_tracing_sqlite_retry.py tests/test_database.py -q
+python -m pytest tests/test_codex_accounts.py tests/test_codex_oauth_adapter.py tests/test_model_attempts.py tests/test_admin_model_presets.py -q
 ```
 
 ## License

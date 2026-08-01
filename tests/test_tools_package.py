@@ -52,7 +52,8 @@ def test_combined_news_tool():
     """测试组合出的新闻搜集工具逻辑"""
     with patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.search") as mock_search, \
          patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.extract_web_content") as mock_extract, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen") as mock_deepen:
+         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen") as mock_deepen, \
+         patch("config.NEW_API_KEY", ""):
         
         mock_search.return_value = [
             {
@@ -84,7 +85,8 @@ def test_combined_news_tool_output_matches_qqbot_markdown_render_patterns():
     """输出应包含 QQbot 复杂 Markdown 检测所需的标题和表格。"""
     with patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.search") as mock_search, \
          patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.extract_web_content") as mock_extract, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen") as mock_deepen:
+         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen") as mock_deepen, \
+         patch("config.NEW_API_KEY", ""):
 
         mock_search.return_value = [
             {

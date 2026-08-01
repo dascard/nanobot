@@ -66,7 +66,7 @@ def _install_route_response(monkeypatch, body, *, raw_body: bytes | None = None)
     monkeypatch.setattr(
         classifier_client,
         "ensure_model_route_enabled",
-        lambda _route_key: dict(route),
+        lambda _route_key, _route=None: dict(route),
     )
     monkeypatch.setattr(
         classifier_client.urllib.request,

@@ -792,20 +792,29 @@ def delete_model_provider(
     if provider.builtin:
         raise HTTPException(409, "内置 Provider 不允许删除，可以将其禁用")
     references = _provider_route_references(provider_id)
-    from core.model_provider.preset_config import list_model_presets
+    from core.model_provider.preset_config import (
+        list_model_defaults,
+        list_model_presets,
+    )
 
     preset_references = [
         preset.id
         for preset in list_model_presets(db)
         if preset.provider_id == provider_id
     ]
-    if references or preset_references:
+    model_default_references = [
+        item.model
+        for item in list_model_defaults(db)
+        if item.provider_id == provider_id
+    ]
+    if references or preset_references or model_default_references:
         raise HTTPException(
             409,
             detail={
-                "message": "Provider 正被 Model Preset 或 Route 引用，不能删除",
+                "message": "Provider 正被模型默认配置或 Route 引用，不能删除",
                 "route_references": references,
                 "preset_references": preset_references,
+                "model_default_references": model_default_references,
             },
         )
     keys = provider_config_keys(provider_id, db)

@@ -89,6 +89,9 @@ _LLM_REQUEST_EXECUTION_PHASE_VERSION = (
 _GROUP_ROLLING_CHATLOG_SOURCE_VERSION = (
     "20260731_group_rolling_chatlog_source"
 )
+_CHAT_LOG_SESSION_ID_INDEX_VERSION = (
+    "20260801_chat_log_session_id_index"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -638,6 +641,18 @@ def _chat_log_session_message_index(conn: Any, engine: Any, db_path: str | None)
     if "chat_logs" in _table_names(conn):
         _create_indexes(conn, [
             "CREATE INDEX IF NOT EXISTS idx_cl_session_msg ON chat_logs(session_id, message_id)"
+        ])
+
+
+def _chat_log_session_id_index(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    if "chat_logs" in _table_names(conn):
+        _create_indexes(conn, [
+            "CREATE INDEX IF NOT EXISTS "
+            "idx_cl_session_id ON chat_logs(session_id, id)"
         ])
 
 
@@ -4281,6 +4296,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _GROUP_ROLLING_CHATLOG_SOURCE_VERSION,
         "group rolling summary ChatLog source cursors",
         _group_rolling_chatlog_source,
+    ),
+    (
+        _CHAT_LOG_SESSION_ID_INDEX_VERSION,
+        "chat log session/id index",
+        _chat_log_session_id_index,
     ),
 ]
 

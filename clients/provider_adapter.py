@@ -154,6 +154,11 @@ class OpenAICompatibleProviderAdapter:
         }
         if request.model:
             payload["model"] = request.model
+        payload.update(dict(request.extra_body))
+        if request.reasoning_effort:
+            payload.setdefault("reasoning_effort", request.reasoning_effort)
+        if request.service_tier:
+            payload.setdefault("service_tier", request.service_tier)
         apply_enable_thinking_to_payload(
             payload,
             request.model,
@@ -161,6 +166,7 @@ class OpenAICompatibleProviderAdapter:
         )
         url = f"{self._base_url}/chat/completions"
         headers = {"Content-Type": "application/json"}
+        headers.update(dict(request.extra_headers))
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 

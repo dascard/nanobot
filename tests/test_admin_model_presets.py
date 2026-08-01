@@ -220,6 +220,143 @@ def test_preset_binding_crud_preserves_fallback_order_and_hides_secret(
     ).status_code == 200
 
 
+def test_model_defaults_bind_models_with_route_overrides_and_order_fallbacks(
+    admin_client,
+    auth_header,
+):
+    provider_response = admin_client.post(
+        "/api/v1/admin/models/providers",
+        json=_provider_payload(),
+        headers=auth_header,
+    )
+    assert provider_response.status_code == 201, provider_response.text
+
+    models = [
+        ("free-strong", 11, 0.0, False, False),
+        ("paid-text", 12, 0.2, False, False),
+        ("paid-vision", 12, 0.2, True, False),
+        ("free-weak", 8, 0.0, True, True),
+    ]
+    for model, intelligence, price, vision, fallback_only in models:
+        payload = _preset_payload("unused", model)
+        payload.pop("id")
+        payload.update({
+            "display_name": model,
+            "intelligence": intelligence,
+            "fallback_only": fallback_only,
+            "cost_input_1m": price,
+            "cost_output_1m": price,
+            "capabilities": {
+                "supports_stream": True,
+                "supports_tools": True,
+                "supports_image": vision,
+            },
+            "input_modalities": ["text", "image"] if vision else ["text"],
+            "output_modalities": ["text"],
+            "supported_endpoints": ["chat/completions"],
+        })
+        response = admin_client.put(
+            "/api/v1/admin/models/defaults",
+            json=payload,
+            headers=auth_header,
+        )
+        assert response.status_code == 200, response.text
+
+    candidates = [
+        {"provider_id": "team_gateway", "model": "free-weak"},
+        {"provider_id": "team_gateway", "model": "paid-vision"},
+        {
+            "provider_id": "team_gateway",
+            "model": "paid-text",
+            "overrides": {"temperature": 0.7, "max_output": 321},
+        },
+        {"provider_id": "team_gateway", "model": "free-strong"},
+    ]
+    response = admin_client.put(
+        "/api/v1/admin/models/bindings/reply",
+        json={
+            "candidates": candidates,
+            "min_intelligence": 10,
+            "sort_policy": "cost_modality_quality",
+        },
+        headers=auth_header,
+    )
+    assert response.status_code == 200, response.text
+    resolved = response.json()["resolved_candidates"]
+    assert [item["model"] for item in resolved] == [
+        "free-strong",
+        "paid-text",
+        "paid-vision",
+        "free-weak",
+    ]
+    paid_text = resolved[1]
+    assert paid_text["route_overrides"] == {
+        "temperature": 0.7,
+        "max_output": 321,
+    }
+    assert resolved[-1]["fallback_only"] is True
+
+    incompatible_vision = admin_client.put(
+        "/api/v1/admin/models/bindings/sticker_describe",
+        json={
+            "candidates": [
+                {"provider_id": "team_gateway", "model": "paid-text"},
+            ],
+        },
+        headers=auth_header,
+    )
+    assert incompatible_vision.status_code == 422
+    assert "不支持图像输入" in incompatible_vision.text
+
+    compatible_vision = admin_client.put(
+        "/api/v1/admin/models/bindings/sticker_describe",
+        json={
+            "candidates": [
+                {"provider_id": "team_gateway", "model": "paid-vision"},
+            ],
+        },
+        headers=auth_header,
+    )
+    assert compatible_vision.status_code == 200, compatible_vision.text
+
+    invalid_update = _preset_payload("unused", "paid-vision")
+    invalid_update.pop("id")
+    invalid_update.update({
+        "display_name": "paid-vision",
+        "intelligence": 12,
+        "cost_input_1m": 0.2,
+        "cost_output_1m": 0.2,
+        "capabilities": {
+            "supports_stream": True,
+            "supports_tools": True,
+            "supports_image": False,
+        },
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "supported_endpoints": ["chat/completions"],
+    })
+    rejected_update = admin_client.put(
+        "/api/v1/admin/models/defaults",
+        json=invalid_update,
+        headers=auth_header,
+    )
+    assert rejected_update.status_code == 422
+    assert "不支持图像输入" in rejected_update.text
+
+    listed = admin_client.get(
+        "/api/v1/admin/models/defaults",
+        headers=auth_header,
+    )
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()["defaults"]) == 4
+    protected = admin_client.delete(
+        "/api/v1/admin/models/defaults",
+        params={"provider_id": "team_gateway", "model": "paid-text"},
+        headers=auth_header,
+    )
+    assert protected.status_code == 409
+
+
 def test_driver_specific_validation_and_reply_only_codex_binding(
     admin_client,
     auth_header,
@@ -389,3 +526,155 @@ def test_kt_management_endpoints_return_public_metadata(
     )
     assert tools.status_code == 200, tools.text
     assert isinstance(tools.json()["tools"], list)
+
+
+def test_codex_account_pool_admin_api_manages_public_metadata_only(
+    admin_client,
+    auth_header,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "NANOBOT_CODEX_CREDENTIAL_SECRET",
+        "codex-admin-test-secret-0123456789abcdef",
+    )
+
+    async def fake_start(account_id):
+        return {
+            "login_id": "login-safe-id",
+            "account_id": account_id,
+            "user_code": "ABCD-EFGH",
+            "verification_url": "https://auth.openai.com/codex/device",
+            "status": "pending",
+            "error": "",
+            "created_at": 1,
+            "expires_at": 901,
+            "token_expires_at": None,
+            "poll_after_seconds": 2,
+        }
+
+    monkeypatch.setattr(
+        "nanobot_kt.codex_oauth_adapter.codex_device_login_manager.start",
+        fake_start,
+    )
+    started = admin_client.post(
+        "/api/v1/admin/models/codex/device-login",
+        headers=auth_header,
+        json={"name": "工作账号"},
+    )
+    assert started.status_code == 200, started.text
+    account_id = started.json()["account_id"]
+
+    listed = admin_client.get(
+        "/api/v1/admin/models/codex/accounts",
+        headers=auth_header,
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["accounts"] == [
+        {
+            "id": account_id,
+            "name": "工作账号",
+            "enabled": True,
+            "weight": 1,
+            "status": "login_required",
+            "credential_configured": False,
+            "expired": None,
+            "expires_at": None,
+            "account_configured": False,
+            "created_at": listed.json()["accounts"][0]["created_at"],
+            "updated_at": listed.json()["accounts"][0]["updated_at"],
+        }
+    ]
+    assert "access_token" not in listed.text
+    assert "refresh_token" not in listed.text
+
+    updated = admin_client.patch(
+        f"/api/v1/admin/models/codex/accounts/{account_id}",
+        headers=auth_header,
+        json={"name": "备用账号", "enabled": False, "weight": 2},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["account"]["name"] == "备用账号"
+    assert updated.json()["account"]["enabled"] is False
+    assert updated.json()["account"]["weight"] == 2
+
+    deleted = admin_client.delete(
+        f"/api/v1/admin/models/codex/accounts/{account_id}",
+        headers=auth_header,
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == {"ok": True, "account_id": account_id}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("get", "/api/v1/admin/models/codex/accounts", None),
+        ("post", "/api/v1/admin/models/codex/device-login", {}),
+        (
+            "patch",
+            "/api/v1/admin/models/codex/accounts/ca_account_test_001",
+            {"enabled": False},
+        ),
+        (
+            "delete",
+            "/api/v1/admin/models/codex/accounts/ca_account_test_001",
+            None,
+        ),
+    ],
+)
+def test_codex_account_admin_endpoints_require_authentication(
+    admin_client,
+    method,
+    path,
+    body,
+):
+    response = admin_client.request(method, path, json=body)
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"name": ""},
+        {"name": "x" * 101},
+        {"weight": 0},
+        {"weight": 101},
+    ],
+)
+def test_codex_account_update_rejects_invalid_input(
+    admin_client,
+    auth_header,
+    payload,
+):
+    response = admin_client.patch(
+        "/api/v1/admin/models/codex/accounts/ca_account_test_001",
+        headers=auth_header,
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    assert "access_token" not in response.text
+    assert "refresh_token" not in response.text
+
+
+def test_codex_login_refuses_to_start_without_encryption_secret(
+    admin_client,
+    auth_header,
+    monkeypatch,
+):
+    monkeypatch.delenv("NANOBOT_CODEX_CREDENTIAL_SECRET", raising=False)
+    monkeypatch.delenv("NANOBOT_ASSET_TOKEN_SECRET", raising=False)
+    monkeypatch.setattr(
+        "core.settings_service.settings.get",
+        lambda _key, _default=None: "",
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/models/codex/device-login",
+        headers=auth_header,
+        json={"name": "不能落明文"},
+    )
+
+    assert response.status_code == 503
+    assert "至少 32 字节" in response.text

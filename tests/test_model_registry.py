@@ -124,3 +124,61 @@ class TestSelectModel:
         assert text["supports_image"] is False
         assert text["supports_tools"] is True
         assert text["supports_stream"] is True
+
+    def test_replace_provider_models_replaces_snapshot_and_keeps_other_provider(
+        self,
+        monkeypatch,
+    ):
+        common = {
+            "tier": "fast",
+            "cost_input_1m": 0.1,
+            "cost_output_1m": 0.2,
+            "supports_image": False,
+            "supports_tools": True,
+            "supports_stream": True,
+            "tags": ["general"],
+        }
+        r = _make_registry([
+            {
+                **common,
+                "id": "stale",
+                "provider": "new-api",
+                "intelligence": 5,
+            },
+            {
+                **common,
+                "id": "kept",
+                "provider": "new-api",
+                "intelligence": 6,
+            },
+            {
+                **common,
+                "id": "other",
+                "provider": "local",
+                "intelligence": 7,
+            },
+        ])
+        monkeypatch.setattr(r, "save_registry", lambda: None)
+
+        changed = r.replace_provider_models("new-api", [
+            {
+                **common,
+                "id": "kept",
+                "provider": "untrusted-value",
+                "intelligence": 8,
+            },
+            {
+                **common,
+                "id": "new",
+                "provider": "untrusted-value",
+                "intelligence": 9,
+            },
+        ])
+
+        assert changed == 3
+        assert [m["id"] for m in r.get_models_by_provider("new-api")] == [
+            "kept",
+            "new",
+        ]
+        assert [m["id"] for m in r.get_models_by_provider("local")] == ["other"]
+        assert r.get_model_info("stale") is None

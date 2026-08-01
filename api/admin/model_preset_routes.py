@@ -42,6 +42,8 @@ class ModelPresetWriteBody(BaseModel):
     service_tier: str = Field(default="", max_length=64)
     cost_input_1m: float | None = Field(default=None, ge=0)
     cost_output_1m: float | None = Field(default=None, ge=0)
+    intelligence: int = Field(default=0, ge=0, le=15)
+    fallback_only: bool = False
     timeout: float = Field(default=120.0, ge=1, le=900)
     enable_thinking: Literal["auto", "true", "false"] = "auto"
     capabilities: dict[str, bool] = Field(default_factory=lambda: {
@@ -56,6 +58,11 @@ class ModelPresetWriteBody(BaseModel):
         default_factory=dict
     )
     driver_options: dict[str, Any] = Field(default_factory=dict)
+    input_modalities: list[str] = Field(default_factory=lambda: ["text"])
+    output_modalities: list[str] = Field(default_factory=lambda: ["text"])
+    supported_endpoints: list[str] = Field(
+        default_factory=lambda: ["chat/completions"]
+    )
 
 
 class ModelPresetCreateBody(ModelPresetWriteBody):
@@ -74,8 +81,37 @@ class PresetTestBody(PresetResolveBody):
     )
 
 
+class ModelDefaultTestBody(BaseModel):
+    provider_id: str = Field(min_length=1, max_length=64)
+    model: str = Field(min_length=1, max_length=256)
+    prompt: str = Field(
+        default="请只回复：Nanobot 模型连接正常",
+        min_length=1,
+        max_length=2000,
+    )
+
+
+class RouteModelOverridesBody(BaseModel):
+    max_output: int | None = Field(default=None, ge=1, le=1_000_000)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    reasoning_effort: str | None = Field(default=None, max_length=32)
+    service_tier: str | None = Field(default=None, max_length=64)
+    timeout: float | None = Field(default=None, ge=1, le=900)
+    enable_thinking: Literal["auto", "true", "false"] | None = None
+    extra_headers: dict[str, str] | None = None
+    extra_body: dict[str, Any] | None = None
+    retry_policy: RetryPolicyBody | None = None
+    driver_options: dict[str, Any] | None = None
+
+
 class RouteBindingCandidateBody(BaseModel):
-    preset_id: str = Field(min_length=1, max_length=64)
+    provider_id: str = Field(default="", max_length=64)
+    model: str = Field(default="", max_length=256)
+    overrides: RouteModelOverridesBody = Field(
+        default_factory=RouteModelOverridesBody
+    )
+    # 旧字段保留到滚动部署完成。
+    preset_id: str = Field(default="", max_length=64)
     selected_variations: dict[str, str] = Field(default_factory=dict)
 
 
@@ -84,11 +120,26 @@ class RouteBindingBody(BaseModel):
         min_length=1,
         max_length=8,
     )
+    min_intelligence: int = Field(default=0, ge=0, le=15)
+    sort_policy: Literal["cost_modality_quality", "manual"] = (
+        "cost_modality_quality"
+    )
 
 
 class RouteMigrationBody(BaseModel):
     preset_id: str = Field(default="", max_length=64)
     display_name: str = Field(default="", max_length=100)
+
+
+class CodexDeviceLoginBody(BaseModel):
+    account_id: str = Field(default="", max_length=64)
+    name: str = Field(default="", max_length=100)
+
+
+class CodexAccountUpdateBody(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    enabled: bool | None = None
+    weight: int | None = Field(default=None, ge=1, le=100)
 
 
 def _setting_command(db: Session) -> SystemSettingCommandService:
@@ -257,6 +308,8 @@ def _preset_from_body(
         service_tier=str(body.service_tier or "").strip(),
         cost_input_1m=body.cost_input_1m,
         cost_output_1m=body.cost_output_1m,
+        intelligence=body.intelligence,
+        fallback_only=body.fallback_only,
         timeout=body.timeout,
         enable_thinking=body.enable_thinking,
         capabilities=capabilities,
@@ -265,6 +318,9 @@ def _preset_from_body(
         retry_policy=body.retry_policy.model_dump(),
         variation_groups=dict(body.variation_groups),
         driver_options=driver_options,
+        input_modalities=tuple(body.input_modalities),
+        output_modalities=tuple(body.output_modalities),
+        supported_endpoints=tuple(body.supported_endpoints),
     )
 
 
@@ -277,6 +333,133 @@ def _preset_view(preset: object, db: Session) -> dict[str, Any]:
         **preset.public_view(provider),
         "route_references": preset_route_references(preset.id, db),
     }
+
+
+def _model_default_view(model_default: object, db: Session) -> dict[str, Any]:
+    from core.model_provider.preset_config import (
+        model_default_route_references,
+    )
+    from core.model_provider.provider_config import get_provider_instance
+
+    provider = get_provider_instance(model_default.provider_id, db)
+    return {
+        **model_default.public_view(provider),
+        "route_references": model_default_route_references(
+            model_default.provider_id,
+            model_default.model,
+            db,
+        ),
+    }
+
+
+@router.get("/models/defaults")
+def list_model_defaults_api(
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.model_provider.preset_config import (
+        list_model_defaults,
+        model_driver_schemas,
+    )
+
+    return {
+        "defaults": [
+            _model_default_view(item, db) for item in list_model_defaults(db)
+        ],
+        "driver_schemas": model_driver_schemas(),
+    }
+
+
+@router.put("/models/defaults")
+def upsert_model_default(
+    body: ModelPresetWriteBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.model_provider.preset_config import (
+        ensure_model_supports_route,
+        model_default_id,
+        model_default_route_references,
+        model_default_write,
+    )
+    from core.model_provider.route_registry import require_model_route_descriptor
+    from core.settings_service import settings
+
+    default = _preset_from_body(
+        model_default_id(body.provider_id, body.model),
+        body,
+        db,
+    )
+    for route_key in model_default_route_references(
+        default.provider_id,
+        default.model,
+        db,
+    ):
+        try:
+            ensure_model_supports_route(
+                default,
+                require_model_route_descriptor(route_key),
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    _setting_command(db).upsert_many((model_default_write(default),))
+    settings.invalidate()
+    audit(
+        db,
+        "upsert_model_default",
+        "model_default",
+        f"{default.provider_id}/{default.model}",
+        {
+            "provider_id": default.provider_id,
+            "model": default.model,
+            "fallback_only": default.fallback_only,
+        },
+        ip_address=client_ip(request),
+    )
+    return {"ok": True, "model_default": _model_default_view(default, db)}
+
+
+@router.delete("/models/defaults")
+def delete_model_default(
+    provider_id: str,
+    model: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.model_provider.preset_config import (
+        get_model_default,
+        model_default_route_references,
+        model_default_setting_key,
+    )
+    from core.settings_service import settings
+
+    default = get_model_default(provider_id, model, db)
+    if default is None:
+        raise HTTPException(404, "模型默认配置不存在")
+    references = model_default_route_references(provider_id, model, db)
+    if references:
+        raise HTTPException(
+            409,
+            detail={
+                "message": "模型正被 Route Binding 引用，不能删除默认配置",
+                "route_references": references,
+            },
+        )
+    deleted = _setting_command(db).delete_many((
+        model_default_setting_key(provider_id, model),
+    ))
+    settings.invalidate()
+    audit(
+        db,
+        "delete_model_default",
+        "model_default",
+        f"{provider_id}/{model}",
+        {"deleted": deleted},
+        ip_address=client_ip(request),
+    )
+    return {"ok": True, "provider_id": provider_id, "model": model}
 
 
 @router.get("/models/presets")
@@ -442,6 +625,10 @@ def _runtime_plan(preset: object, provider: object):
         max_context=preset.max_context,
         cost_input_1m=preset.cost_input_1m,
         cost_output_1m=preset.cost_output_1m,
+        intelligence=preset.intelligence,
+        fallback_only=preset.fallback_only,
+        input_modalities=tuple(preset.input_modalities),
+        output_modalities=tuple(preset.output_modalities),
         reasoning_effort=preset.reasoning_effort,
         service_tier=preset.service_tier,
         enable_thinking=preset.enable_thinking,
@@ -544,8 +731,15 @@ def _binding_candidate_views(route_key: str, db: Session) -> list[dict[str, Any]
             "model": item.preset.model,
             "provider_id": item.preset.provider_id,
             "driver_type": getattr(provider, "driver_type", ""),
-            "preset_enabled": item.preset.enabled,
+            "model_enabled": item.preset.enabled,
             "provider_enabled": bool(getattr(provider, "enabled", False)),
+            "cost_input_1m": item.preset.cost_input_1m,
+            "cost_output_1m": item.preset.cost_output_1m,
+            "intelligence": item.preset.intelligence,
+            "fallback_only": item.preset.fallback_only,
+            "input_modalities": list(item.preset.input_modalities),
+            "output_modalities": list(item.preset.output_modalities),
+            "route_overrides": dict(item.route_overrides),
         })
     return views
 
@@ -561,6 +755,7 @@ def list_model_bindings(
         get_route_binding,
     )
     from core.model_provider.route_registry import list_model_route_descriptors
+    from core.model_provider.contracts import ProviderCapability
 
     items = []
     for descriptor in list_model_route_descriptors():
@@ -586,6 +781,26 @@ def list_model_bindings(
                 if descriptor.route_key == "reply"
                 else ["openai"]
             ),
+            "required_model_capabilities": {
+                "supports_image": (
+                    ProviderCapability.VISION
+                    in descriptor.required_provider_capabilities
+                ),
+                "supports_stream": (
+                    ProviderCapability.STREAMING
+                    in descriptor.required_provider_capabilities
+                ),
+                "supports_tools": (
+                    ProviderCapability.TOOL_CALLING
+                    in descriptor.required_provider_capabilities
+                ),
+            },
+            "required_input_modalities": (
+                ["image"]
+                if ProviderCapability.VISION
+                in descriptor.required_provider_capabilities
+                else []
+            ),
             "legacy": {
                 "provider_id": legacy.get("provider_id"),
                 "profile_id": legacy.get("profile_id"),
@@ -609,11 +824,17 @@ def update_model_binding(
     from core.model_provider.preset_config import (
         ModelRouteBinding,
         ModelRouteBindingCandidate,
+        ensure_model_supports_route,
+        get_model_default,
         get_model_preset,
+        resolve_model_default,
         resolve_model_preset,
         route_binding_write,
     )
-    from core.model_provider.provider_config import get_provider_instance
+    from core.model_provider.provider_config import (
+        canonical_provider_instance_id,
+        get_provider_instance,
+    )
     from core.model_provider.route_registry import require_model_route_descriptor
     from core.settings_service import settings
 
@@ -624,6 +845,66 @@ def update_model_binding(
     seen: set[str] = set()
     candidates = []
     for item in body.candidates:
+        if item.provider_id or item.model:
+            if not item.provider_id or not item.model:
+                raise HTTPException(422, "Provider 与 Model 必须同时配置")
+            provider_id = canonical_provider_instance_id(item.provider_id)
+            model_default = get_model_default(provider_id, item.model, db)
+            if model_default is None:
+                raise HTTPException(
+                    422,
+                    f"模型没有默认配置: {provider_id}/{item.model}",
+                )
+            identity = f"{provider_id}/{item.model}"
+            if identity in seen:
+                raise HTTPException(422, f"模型重复: {identity}")
+            seen.add(identity)
+            provider = get_provider_instance(provider_id, db)
+            if provider is None:
+                raise HTTPException(422, f"Provider 不存在: {provider_id}")
+            if (
+                descriptor.route_key != "reply"
+                and not provider.route_completion_supported
+            ):
+                raise HTTPException(
+                    422,
+                    f"Route {descriptor.route_key} 目前只支持 OpenAI-compatible 模型",
+                )
+            overrides = item.overrides.model_dump(
+                exclude_unset=True,
+                exclude_none=True,
+            )
+            if "retry_policy" in overrides:
+                retry = overrides["retry_policy"]
+                if retry["max_delay"] < retry["base_delay"]:
+                    raise HTTPException(422, "retry.max_delay 不能小于 base_delay")
+            if "extra_headers" in overrides:
+                overrides["extra_headers"] = _validate_extra_headers(
+                    overrides["extra_headers"]
+                )
+            if "extra_body" in overrides and _json_size(
+                overrides["extra_body"]
+            ) > 64 * 1024:
+                raise HTTPException(422, "Extra Body 超过 64 KiB")
+            if "driver_options" in overrides:
+                overrides["driver_options"] = _validate_driver_options(
+                    provider.driver_type,
+                    overrides["driver_options"],
+                )
+            candidate = ModelRouteBindingCandidate(
+                provider_id=provider_id,
+                model=model_default.model,
+                overrides=overrides,
+            )
+            try:
+                resolved = resolve_model_default(model_default, overrides)
+                ensure_model_supports_route(resolved.preset, descriptor)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            candidates.append(candidate)
+            continue
+        if not item.preset_id:
+            raise HTTPException(422, "候选必须选择模型")
         preset = get_model_preset(item.preset_id, db)
         if preset is None:
             raise HTTPException(422, f"Model Preset 不存在: {item.preset_id}")
@@ -639,7 +920,8 @@ def update_model_binding(
                 f"Route {descriptor.route_key} 目前只支持 OpenAI-compatible Preset",
             )
         try:
-            resolve_model_preset(preset, item.selected_variations)
+            resolved = resolve_model_preset(preset, item.selected_variations)
+            ensure_model_supports_route(resolved.preset, descriptor)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         candidates.append(ModelRouteBindingCandidate(
@@ -649,6 +931,8 @@ def update_model_binding(
     binding = ModelRouteBinding(
         route_key=descriptor.route_key,
         candidates=tuple(candidates),
+        min_intelligence=body.min_intelligence,
+        sort_policy=body.sort_policy,
     )
     _setting_command(db).upsert_many((route_binding_write(binding),))
     settings.invalidate()
@@ -657,7 +941,11 @@ def update_model_binding(
         "update_model_binding",
         "model_route_binding",
         descriptor.route_key,
-        {"preset_ids": [item.preset_id for item in candidates]},
+        {
+            "models": [item.identity for item in candidates],
+            "min_intelligence": binding.min_intelligence,
+            "sort_policy": binding.sort_policy,
+        },
         ip_address=client_ip(request),
     )
     return {
@@ -792,13 +1080,143 @@ def get_codex_status(_auth=Depends(verify_admin)):
     return codex_status()
 
 
-@router.post("/models/codex/device-login")
-async def start_codex_device_login(_auth=Depends(verify_admin)):
-    from nanobot_kt.codex_oauth_adapter import codex_device_login_manager
+@router.get("/models/codex/accounts")
+def get_codex_accounts(
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from nanobot_kt.codex_accounts import list_codex_account_views
+
+    return {
+        "accounts": list_codex_account_views(db),
+        "strategy": {
+            "mode": "session_sticky_weighted_round_robin",
+            "session_sticky": True,
+            "failover": "next_account_then_next_model",
+            "health_scope": "model_account",
+        },
+    }
+
+
+@router.patch("/models/codex/accounts/{account_id}")
+def patch_codex_account(
+    account_id: str,
+    body: CodexAccountUpdateBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    if body.name is None and body.enabled is None and body.weight is None:
+        raise HTTPException(422, "至少需要修改一个 Codex 账号字段")
+    from nanobot_kt.codex_accounts import (
+        CodexAccountError,
+        codex_account_public_view,
+        update_codex_account,
+    )
 
     try:
-        return await codex_device_login_manager.start()
+        account = update_codex_account(
+            account_id,
+            name=body.name,
+            enabled=body.enabled,
+            weight=body.weight,
+            db=db,
+        )
+    except CodexAccountError as exc:
+        status_code = 404 if "不存在" in str(exc) else 422
+        raise HTTPException(status_code, str(exc)) from exc
+    audit(
+        db,
+        "update_codex_account",
+        "codex_account",
+        account.id,
+        {
+            "name_changed": body.name is not None,
+            "enabled": body.enabled,
+            "weight": body.weight,
+        },
+        ip_address=client_ip(request),
+    )
+    return {"ok": True, "account": codex_account_public_view(account)}
+
+
+@router.delete("/models/codex/accounts/{account_id}")
+def remove_codex_account(
+    account_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from nanobot_kt.codex_accounts import (
+        CodexAccountError,
+        delete_codex_account,
+    )
+
+    try:
+        deleted = delete_codex_account(account_id, db)
+    except CodexAccountError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not deleted:
+        raise HTTPException(404, "Codex 账号不存在")
+    audit(
+        db,
+        "delete_codex_account",
+        "codex_account",
+        account_id,
+        {},
+        ip_address=client_ip(request),
+    )
+    return {"ok": True, "account_id": account_id}
+
+
+@router.post("/models/codex/device-login")
+async def start_codex_device_login(
+    request: Request,
+    body: CodexDeviceLoginBody | None = None,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from nanobot_kt.codex_accounts import (
+        CodexAccountError,
+        CodexCredentialConfigurationError,
+        create_codex_account,
+        delete_codex_account,
+        get_codex_account,
+    )
+    from nanobot_kt.codex_oauth_adapter import codex_device_login_manager
+
+    payload = body or CodexDeviceLoginBody()
+    created_account = False
+    try:
+        if payload.account_id:
+            account = get_codex_account(payload.account_id, db)
+            if account is None:
+                raise HTTPException(404, "Codex 账号不存在")
+        else:
+            account = create_codex_account(payload.name, db=db)
+            created_account = True
+        result = await codex_device_login_manager.start(account.id)
+        audit(
+            db,
+            "start_codex_device_login",
+            "codex_account",
+            account.id,
+            {"new_account": created_account},
+            ip_address=client_ip(request),
+        )
+        return result
+    except HTTPException:
+        raise
+    except CodexCredentialConfigurationError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except CodexAccountError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
+        if created_account:
+            try:
+                delete_codex_account(account.id, db)
+            except Exception:
+                pass
         raise HTTPException(502, f"Codex Device OAuth 启动失败: {str(exc)[:300]}") from exc
 
 
@@ -814,15 +1232,17 @@ async def get_codex_device_login(login_id: str, _auth=Depends(verify_admin)):
 
 @router.get("/models/codex/usage")
 async def get_codex_usage(_auth=Depends(verify_admin)):
-    from kohakuterrarium.studio.identity.codex_oauth import get_usage_async
+    from nanobot_kt.codex_oauth_adapter import codex_usage
 
     try:
-        return await get_usage_async()
+        return await codex_usage()
     except Exception as exc:
         raise HTTPException(401, f"Codex Usage 获取失败: {str(exc)[:300]}") from exc
 
 
 __all__ = [
+    "CodexAccountUpdateBody",
+    "CodexDeviceLoginBody",
     "ModelPresetCreateBody",
     "ModelPresetWriteBody",
     "PresetResolveBody",

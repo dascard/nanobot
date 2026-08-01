@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Column, DateTime, Index, Integer, String, Text
 
 from core.db.base import Base
 
@@ -27,6 +27,10 @@ class ChatLog(Base):
     """完整原始消息档案，供审计、画像和离线分析使用。"""
 
     __tablename__ = "chat_logs"
+    __table_args__ = (
+        Index("idx_cl_session_id", "session_id", "id"),
+    )
+
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(String, index=True)
     session_id = Column(String, index=True)

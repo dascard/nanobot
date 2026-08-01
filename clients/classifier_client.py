@@ -7,13 +7,16 @@ L3: Output validation (strict format)
 L4: Timeout fallback
 """
 
+import asyncio
 import hashlib
 import logging
 import os
 import re
+import urllib.error
 import urllib.request
 from config import CLASSIFIER_API_URL
 from clients.provider_adapter import adapter_from_route, registry_from_provider_configs
+from core.async_bridge import run_awaitable_sync
 from core.model_provider import (
     ModelProviderRegistry,
     ModelProviderRequest,
@@ -270,6 +273,103 @@ OUTPUT_PATTERN = re.compile(r"^(是|否)[,，](-?\d+)$")
 THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
+def _track_route_model_health(model: str, *, success: bool) -> None:
+    """同步 Route 复用全局模型熔断器，不阻塞已有事件循环。"""
+
+    try:
+        from clients.new_api_client import NewAPIClient
+
+        tracker = NewAPIClient.get_failure_tracker()
+        operation = (
+            tracker.record_success(model)
+            if success
+            else tracker.record_failure(model)
+        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            run_awaitable_sync(operation)
+        else:
+            loop.create_task(operation)
+    except Exception as exc:
+        logger.warning(
+            "[call_model_route] 更新模型健康状态失败 model=%s error=%s",
+            model,
+            type(exc).__name__,
+        )
+
+
+def _bound_route_completion_attempts(
+    route_key: str,
+    resolved_route: dict,
+) -> list[dict]:
+    """把有效 Binding 候选展开成同步 completion 的逐次调用配置。"""
+
+    if not resolved_route.get("binding_candidates"):
+        return []
+
+    from clients.new_api_client import NewAPIClient
+    from core.model_provider.preset_config import resolve_route_binding_candidates
+
+    candidates = resolve_route_binding_candidates(route_key)
+    tracker = NewAPIClient.get_failure_tracker()
+    attempts: list[dict] = []
+    unavailable: list[str] = []
+    for candidate_index, (candidate, resolved) in enumerate(candidates):
+        model = resolved.preset
+        provider = _get_provider_config(model.provider_id)
+        identity = candidate.identity or f"{model.provider_id}/{model.model}"
+        if provider is None:
+            unavailable.append(f"{identity}: Provider 不存在")
+            continue
+        if not model.enabled:
+            unavailable.append(f"{identity}: 模型已禁用")
+            continue
+        if not provider.get("enabled", True):
+            unavailable.append(f"{identity}: Provider 已禁用")
+            continue
+        if not provider.get("route_completion_supported", True):
+            unavailable.append(f"{identity}: Provider 不支持同步 Route")
+            continue
+        if not provider.get("base_url"):
+            unavailable.append(f"{identity}: Base URL 未配置")
+            continue
+        if tracker.sync_is_disabled(model.model):
+            unavailable.append(f"{identity}: 熔断冷却中")
+            continue
+        attempts.append({
+            **resolved_route,
+            "profile_id": model.id,
+            "provider_id": model.provider_id,
+            "base_url": provider.get("base_url", ""),
+            "api_key": provider.get("api_key", ""),
+            "provider_enabled": True,
+            "driver_type": provider.get("driver_type", "openai"),
+            "route_completion_supported": True,
+            "model": model.model,
+            "max_context": model.max_context,
+            "max_tokens": model.max_output,
+            "temperature": model.temperature,
+            "timeout": model.timeout,
+            "enable_thinking": model.enable_thinking,
+            "reasoning_effort": model.reasoning_effort,
+            "service_tier": model.service_tier,
+            "extra_headers": dict(model.extra_headers),
+            "extra_body": dict(model.extra_body),
+            "candidate_index": candidate_index,
+        })
+    if not attempts:
+        detail = "；".join(unavailable) or "没有满足硬能力约束的候选"
+        raise RuntimeError(f"Route {route_key} 没有可调用候选：{detail}")
+    if unavailable:
+        logger.warning(
+            "[call_model_route] route=%s 跳过不可用候选：%s",
+            route_key,
+            "；".join(unavailable),
+        )
+    return attempts
+
+
 def call_model_route_response(
     route_key: str = "timing_gate",
     messages: list[dict] | None = None,
@@ -288,13 +388,10 @@ def call_model_route_response(
     调用 /chat/completions，返回 cleaned text。
     """
     descriptor = require_model_route_descriptor(route_key)
-    route = ensure_model_route_enabled(route_key)
-    logger.info(
-        "[call_model_route] route=%s provider=%s model=%s",
-        route_key,
-        route.get("provider_id", ""),
-        route.get("model", ""),
-    )
+    route = resolve_model_route(route_key)
+    binding_managed = bool(route.get("binding_candidates"))
+    if not binding_managed:
+        route = ensure_model_route_enabled(route_key, route)
 
     if not messages:
         fallback_messages = [
@@ -319,46 +416,107 @@ def call_model_route_response(
                 fallback_messages=fallback_messages,
             )
 
-    adapter = adapter_from_route(
-        route,
-        opener_factory=urllib.request.build_opener,
-    )
-    provider_registry = ModelProviderRegistry()
-    provider_registry.register(adapter)
-    provider_registry.freeze()
-    provider = provider_registry.require(
-        adapter.descriptor.id,
-        capabilities=descriptor.required_provider_capabilities,
-    )
-    if not isinstance(provider, SyncModelCompletionPort):
-        raise TypeError(
-            f"Provider {adapter.descriptor.id} 未实现同步 completion Port"
+    attempts = _bound_route_completion_attempts(route_key, route) or [route]
+    last_error: Exception | None = None
+    for candidate_index, attempt_route in enumerate(attempts):
+        target_model = str(attempt_route.get("model") or "")
+        logger.info(
+            "[call_model_route] route=%s candidate=%d/%d provider=%s model=%s",
+            route_key,
+            candidate_index + 1,
+            len(attempts),
+            attempt_route.get("provider_id", ""),
+            target_model,
         )
-    response = provider.complete(
-        ModelProviderRequest(
-            messages=tuple(messages),
-            model=str(route.get("model") or ""),
-            max_tokens=(
-                max_tokens if max_tokens is not None else int(route["max_tokens"])
-            ),
-            temperature=(
-                temperature
-                if temperature is not None
-                else float(route["temperature"])
-            ),
-            timeout_seconds=timeout or float(route.get("timeout", 15)),
-            enable_thinking=str(route.get("enable_thinking") or "auto"),
-            trace_source=descriptor.trace_source,
-            metadata={"route_key": route_key},
+        adapter = adapter_from_route(
+            attempt_route,
+            opener_factory=urllib.request.build_opener,
         )
-    )
-    return ModelRouteResponse(
-        content=response.content,
-        reasoning_content=response.reasoning_content,
-        finish_reason=response.finish_reason,
-        usage=dict(response.usage),
-        raw_response=dict(response.raw_response),
-    )
+        provider_registry = ModelProviderRegistry()
+        provider_registry.register(adapter)
+        provider_registry.freeze()
+        provider = provider_registry.require(
+            adapter.descriptor.id,
+            capabilities=descriptor.required_provider_capabilities,
+        )
+        if not isinstance(provider, SyncModelCompletionPort):
+            raise TypeError(
+                f"Provider {adapter.descriptor.id} 未实现同步 completion Port"
+            )
+        try:
+            response = provider.complete(
+                ModelProviderRequest(
+                    messages=tuple(messages),
+                    model=target_model,
+                    max_tokens=(
+                        max_tokens
+                        if max_tokens is not None
+                        else int(attempt_route["max_tokens"])
+                    ),
+                    temperature=(
+                        temperature
+                        if temperature is not None
+                        else float(attempt_route["temperature"])
+                    ),
+                    timeout_seconds=(
+                        timeout or float(attempt_route.get("timeout", 15))
+                    ),
+                    enable_thinking=str(
+                        attempt_route.get("enable_thinking") or "auto"
+                    ),
+                    reasoning_effort=str(
+                        attempt_route.get("reasoning_effort") or ""
+                    ),
+                    service_tier=str(attempt_route.get("service_tier") or ""),
+                    extra_headers=dict(attempt_route.get("extra_headers") or {}),
+                    extra_body=dict(attempt_route.get("extra_body") or {}),
+                    trace_source=descriptor.trace_source,
+                    metadata={
+                        "route_key": route_key,
+                        "candidate_index": candidate_index,
+                    },
+                )
+            )
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            status = int(getattr(exc, "code", 0) or 0)
+            if binding_managed and status not in {400, 413, 422, 401, 403}:
+                _track_route_model_health(target_model, success=False)
+            if status in {401, 403} or candidate_index + 1 >= len(attempts):
+                raise
+            logger.warning(
+                "[call_model_route] route=%s model=%s status=%s，切换候选",
+                route_key,
+                target_model,
+                status,
+            )
+            continue
+        except Exception as exc:
+            last_error = exc
+            if binding_managed:
+                _track_route_model_health(target_model, success=False)
+            if candidate_index + 1 >= len(attempts):
+                raise
+            logger.warning(
+                "[call_model_route] route=%s model=%s error=%s，切换候选",
+                route_key,
+                target_model,
+                type(exc).__name__,
+            )
+            continue
+
+        if binding_managed:
+            _track_route_model_health(target_model, success=True)
+        return ModelRouteResponse(
+            content=response.content,
+            reasoning_content=response.reasoning_content,
+            finish_reason=response.finish_reason,
+            usage=dict(response.usage),
+            raw_response=dict(response.raw_response),
+        )
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"Route {route_key} 没有执行任何模型候选")
 
 
 def call_model_route(
@@ -522,7 +680,7 @@ def resolve_model_route(route_key: str) -> dict:
         "route_registry_sha256": route_registry_snapshot.sha256,
     }
 
-    # 新控制面：Route 优先绑定 Model Preset；未绑定时完整保留旧配置解析。
+    # 新控制面：Route 优先绑定目录模型并叠加局部覆盖；未绑定时保留旧解析。
     binding_applied = False
     try:
         from core.model_provider.preset_config import (
@@ -533,12 +691,13 @@ def resolve_model_route(route_key: str) -> dict:
         binding = get_effective_route_binding(route_key)
         bound_candidates = resolve_route_binding_candidates(route_key)
         if binding is not None and bound_candidates:
-            _candidate, resolved_preset = bound_candidates[0]
-            preset = resolved_preset.preset
-            bound_provider = _get_provider_config(preset.provider_id)
+            _candidate, resolved_model = bound_candidates[0]
+            model_config = resolved_model.preset
+            bound_provider = _get_provider_config(model_config.provider_id)
             if bound_provider is None:
                 raise ValueError(
-                    f"Preset {preset.id} 引用的 Provider 不存在: {preset.provider_id}"
+                    "模型默认配置引用的 Provider 不存在: "
+                    f"{model_config.provider_id}"
                 )
             binding_applied = True
             runtime_supported = (
@@ -547,8 +706,8 @@ def resolve_model_route(route_key: str) -> dict:
                 else bool(bound_provider.get("route_completion_supported"))
             )
             result.update({
-                "profile_id": preset.id,
-                "provider_id": preset.provider_id,
+                "profile_id": model_config.id,
+                "provider_id": model_config.provider_id,
                 "base_url": bound_provider.get("base_url", ""),
                 "api_key": bound_provider.get("api_key", ""),
                 "api_key_configured": bool(
@@ -558,20 +717,22 @@ def resolve_model_route(route_key: str) -> dict:
                 "provider_enabled": bool(bound_provider.get("enabled", True)),
                 "driver_type": bound_provider.get("driver_type", "openai"),
                 "route_completion_supported": runtime_supported,
-                "model": preset.model,
-                "max_context": preset.max_context,
-                "max_tokens": preset.max_output,
-                "temperature": preset.temperature,
-                "timeout": preset.timeout,
-                "enable_thinking": preset.enable_thinking,
-                "reasoning_effort": preset.reasoning_effort,
-                "service_tier": preset.service_tier,
+                "model": model_config.model,
+                "max_context": model_config.max_context,
+                "max_tokens": model_config.max_output,
+                "temperature": model_config.temperature,
+                "timeout": model_config.timeout,
+                "enable_thinking": model_config.enable_thinking,
+                "reasoning_effort": model_config.reasoning_effort,
+                "service_tier": model_config.service_tier,
                 "selected_variations": dict(
-                    resolved_preset.selected_variations
+                    resolved_model.selected_variations
                 ),
+                "route_overrides": dict(resolved_model.route_overrides),
                 "binding_candidates": [
                     {
-                        "preset_id": item.preset.id,
+                        **entry.to_dict(),
+                        "profile_id": item.preset.id,
                         "provider_id": item.preset.provider_id,
                         "model": item.preset.model,
                         "driver_type": (
@@ -579,12 +740,16 @@ def resolve_model_route(route_key: str) -> dict:
                                 "driver_type", "openai"
                             )
                         ),
-                        "selected_variations": dict(item.selected_variations),
+                        "route_overrides": dict(item.route_overrides),
+                        "intelligence": item.preset.intelligence,
+                        "fallback_only": item.preset.fallback_only,
+                        "cost_input_1m": item.preset.cost_input_1m,
+                        "cost_output_1m": item.preset.cost_output_1m,
                     }
-                    for _entry, item in bound_candidates
+                    for entry, item in bound_candidates
                 ],
                 "binding_inherited_from": binding.inherited_from or None,
-                "source": "model_preset",
+                "source": "model_binding",
             })
     except ValueError as exc:
         result["binding_error"] = str(exc)
@@ -646,6 +811,12 @@ def build_provider_catalog(db=None) -> list[dict]:
         _close_db = False
     try:
         from core.database import SystemSetting
+        from core.model_provider.preset_config import list_model_defaults
+
+        defaults = {
+            (item.provider_id, item.model): item
+            for item in list_model_defaults(db)
+        }
         rows = db.query(SystemSetting).filter(
             SystemSetting.key.like("model.catalog.%")
         ).all()
@@ -660,18 +831,30 @@ def build_provider_catalog(db=None) -> list[dict]:
                 continue
             provider = canonical_provider_id(raw_provider)
             for m in data.get("models", []):
-                items.append({
+                model_default = defaults.get((provider, m))
+                entry = {
                     "id": f"{provider}::{m}",
                     "provider": provider,
                     "model": m,
-                    "capabilities": ["vision"] if ("vl" in m.lower() or "vision" in m.lower()) else [],
+                    "configured": model_default is not None,
                     "stale": not data.get("last_refresh_ok", True),
                     "updated_at": str(data.get("updated_at") or ""),
                     "last_refresh_ok": data.get("last_refresh_ok", True),
                     "last_error": str(data.get("last_error") or ""),
                     "source": "provider_catalog",
                     "verified": True,
-                })
+                }
+                if model_default is not None:
+                    entry["default_config"] = model_default.public_view()
+                    entry["capabilities"] = [
+                        name.removeprefix("supports_")
+                        for name, enabled in model_default.capabilities.items()
+                        if enabled
+                    ]
+                else:
+                    entry["default_config"] = None
+                    entry["capabilities"] = []
+                items.append(entry)
         return sorted(items, key=lambda x: x["model"])
     finally:
         if _close_db:

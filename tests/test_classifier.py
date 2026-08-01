@@ -200,7 +200,7 @@ def test_model_route_task_renderer_programming_error_is_not_silently_fallback(
     monkeypatch.setattr(
         classifier_client,
         "ensure_model_route_enabled",
-        lambda _route_key: {
+        lambda _route_key, _route=None: {
             "base_url": "http://classifier.invalid/v1",
             "provider_id": "local_llama",
             "model": "classifier",
@@ -292,6 +292,89 @@ def test_model_route_runtime_uses_public_resolver_snapshot(monkeypatch):
     assert resolver_calls == ["timing_gate"]
     request = opener.open.call_args.args[0]
     assert request.full_url == "http://public-resolver.test/v1/chat/completions"
+
+
+def test_bound_sync_route_really_falls_back_to_next_candidate(monkeypatch):
+    from clients import classifier_client
+
+    base_route = {
+        "route_key": "timing_gate",
+        "base_url": "http://models.test/v1",
+        "api_key": "",
+        "provider_id": "newapi",
+        "provider_enabled": True,
+        "route_completion_supported": True,
+        "model": "first-model",
+        "max_tokens": 30,
+        "temperature": 0,
+        "timeout": 1,
+        "enable_thinking": "false",
+        "binding_candidates": [{"model": "first-model"}],
+    }
+    attempts = [
+        {**base_route, "model": "first-model"},
+        {**base_route, "model": "second-model"},
+    ]
+    monkeypatch.setattr(
+        classifier_client,
+        "resolve_model_route",
+        lambda _route_key: dict(base_route),
+    )
+    monkeypatch.setattr(
+        classifier_client,
+        "_bound_route_completion_attempts",
+        lambda _route_key, _route: attempts,
+    )
+    health_updates = []
+    monkeypatch.setattr(
+        classifier_client,
+        "_track_route_model_health",
+        lambda model, *, success: health_updates.append((model, success)),
+    )
+    requested_models = []
+
+    class FakeResponse:
+        status = 200
+
+        def read(self, *_args):
+            return json.dumps({
+                "choices": [{"message": {"content": "是,7"}}],
+            }).encode("utf-8")
+
+        def getcode(self):
+            return 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeOpener:
+        def open(self, request, timeout=0):
+            del timeout
+            model = json.loads(request.data.decode("utf-8"))["model"]
+            requested_models.append(model)
+            if model == "first-model":
+                raise OSError("first unavailable")
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "urllib.request.build_opener",
+        lambda *_args, **_kwargs: FakeOpener(),
+    )
+
+    response = classifier_client.call_model_route_response(
+        route_key="timing_gate",
+        user_message="测试回退",
+    )
+
+    assert response.content == "是,7"
+    assert requested_models == ["first-model", "second-model"]
+    assert health_updates == [
+        ("first-model", False),
+        ("second-model", True),
+    ]
 
 
 def test_classifier_failure_never_persists_credential_url_or_raw_body(

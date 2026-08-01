@@ -3,7 +3,6 @@
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
-
 AttemptOutcome = Literal["failure", "pending", "success"]
 
 
@@ -19,20 +18,22 @@ def merge_model_candidates(
     preferred: Mapping[str, Any] | None,
     automatic: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """首选候选在前，随后追加自动候选，并按模型 ID 保序去重。"""
+    """首选候选在前，并按候选身份保序去重。"""
     merged: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
+    seen_keys: set[str] = set()
 
     for candidate in ([preferred] if preferred is not None else []):
         model_id = str(candidate.get("id") or "").strip()
-        if model_id and model_id not in seen_ids:
+        candidate_key = str(candidate.get("_candidate_key") or model_id).strip()
+        if model_id and candidate_key and candidate_key not in seen_keys:
             merged.append(dict(candidate))
-            seen_ids.add(model_id)
+            seen_keys.add(candidate_key)
 
     for candidate in automatic:
         model_id = str(candidate.get("id") or "").strip()
-        if model_id and model_id not in seen_ids:
+        candidate_key = str(candidate.get("_candidate_key") or model_id).strip()
+        if model_id and candidate_key and candidate_key not in seen_keys:
             merged.append(dict(candidate))
-            seen_ids.add(model_id)
+            seen_keys.add(candidate_key)
 
     return merged

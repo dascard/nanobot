@@ -38,6 +38,7 @@ def _transport(driver_type: str, **overrides):
         "driver_options": {},
         "provider_name": driver_type,
         "provider_native_tools": (),
+        "codex_account_id": "",
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -60,8 +61,8 @@ class _ProviderDouble:
         ),
         (
             "codex",
-            "kohakuterrarium.llm.codex_provider",
-            "CodexOAuthProvider",
+            "nanobot_kt.codex_accounts",
+            "AccountBoundCodexOAuthProvider",
         ),
     ],
 )
@@ -91,6 +92,7 @@ def test_create_kt_provider_uses_driver_specific_constructor(
             temperature=None,
             extra_headers={},
             extra_body={},
+            codex_account_id="ca_test_account_0001",
         )
 
     provider = create_kt_provider(transport)
@@ -110,6 +112,7 @@ def test_create_kt_provider_uses_driver_specific_constructor(
     else:
         assert provider.kwargs["reasoning_effort"] == "high"
         assert provider.kwargs["service_tier"] == "priority"
+        assert provider.kwargs["account_id"] == "ca_test_account_0001"
 
 
 def test_apply_preset_route_replaces_all_kt_provider_references(
@@ -298,3 +301,77 @@ def test_reply_route_skips_driver_whose_runtime_dependency_is_missing(
             default_base_url="https://fallback.example.com/v1",
             default_api_key="fallback-secret",
         )
+
+
+def test_reply_route_expands_codex_model_into_session_ordered_accounts(
+    monkeypatch,
+):
+    preset = SimpleNamespace(
+        id="codex-default",
+        provider_id="codex",
+        enabled=True,
+        timeout=300,
+        model="gpt-5.6-codex",
+        temperature=None,
+        max_output=32768,
+        max_context=200000,
+        cost_input_1m=0,
+        cost_output_1m=0,
+        intelligence=15,
+        fallback_only=False,
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        reasoning_effort="high",
+        service_tier="",
+        enable_thinking="auto",
+        capabilities={"supports_tools": True, "supports_image": True},
+        extra_headers={},
+        extra_body={},
+        retry_policy={},
+        driver_options={},
+    )
+    candidate = SimpleNamespace(identity="codex/gpt-5.6-codex")
+    provider = SimpleNamespace(
+        id="codex",
+        driver_type="codex",
+        enabled=True,
+        agent_runtime_supported=True,
+        runtime_available=True,
+        runtime_unavailable_reason="",
+        credential_configured=True,
+        base_url="",
+        api_key="",
+        registry_provider="codex",
+        provider_name="codex",
+        provider_native_tools=("image_gen",),
+    )
+    monkeypatch.setattr(
+        "core.model_provider.preset_config.resolve_route_binding_candidates",
+        lambda _route_key: [(candidate, SimpleNamespace(preset=preset))],
+    )
+    monkeypatch.setattr(
+        "core.model_provider.provider_config.get_provider_instance",
+        lambda _provider_id: provider,
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.codex_accounts.codex_account_pool.ordered_account_ids",
+        lambda session_id: (
+            "ca_second_account_02",
+            "ca_first_account_001",
+        ) if session_id == "session-42" else (),
+    )
+
+    plans = resolve_reply_route_plans(
+        default_base_url="https://fallback.example.com/v1",
+        default_api_key="fallback-secret",
+        session_id="session-42",
+    )
+
+    assert [item.model for item in plans] == [
+        "gpt-5.6-codex",
+        "gpt-5.6-codex",
+    ]
+    assert [item.codex_account_id for item in plans] == [
+        "ca_second_account_02",
+        "ca_first_account_001",
+    ]

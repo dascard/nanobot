@@ -7,6 +7,7 @@ import {
   RefreshCw,
   ShieldCheck,
   TimerReset,
+  Trash2,
   Wrench,
 } from 'lucide-react'
 
@@ -25,11 +26,55 @@ function formatEpoch(value) {
   return new Date(Number(value) * 1000).toLocaleString('zh-CN', { hour12: false })
 }
 
+const ACCOUNT_STATUS_LABELS = {
+  ready: '可用',
+  refresh_required: '待自动刷新',
+  expired: '需重新登录',
+  login_required: '未登录',
+  unavailable: '凭据不可用',
+  disabled: '已停用',
+}
+
+function CodexAccountRow({ account, busy, onLogin, onSave, onDelete }) {
+  const [name, setName] = useState(account.name || '')
+  const [weight, setWeight] = useState(Number(account.weight || 1))
+
+  const changed = name.trim() !== account.name || Number(weight) !== Number(account.weight)
+  const statusReady = account.enabled && ['ready', 'refresh_required'].includes(account.status)
+
+  return (
+    <article className="rounded-md border border-slate-800 bg-slate-950 p-3">
+      <div className="grid gap-3 lg:grid-cols-[minmax(12rem,1fr)_7rem_10rem_auto] lg:items-end">
+        <label className="text-[10px] text-slate-500">
+          账号名称
+          <input value={name} onChange={event => setName(event.target.value)} maxLength={100} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500" />
+        </label>
+        <label className="text-[10px] text-slate-500">
+          轮询权重
+          <input type="number" min="1" max="100" value={weight} onChange={event => setWeight(event.target.value)} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500" />
+        </label>
+        <div>
+          <div className="text-[10px] text-slate-500">账号状态</div>
+          <div className="mt-1 flex h-8 items-center gap-2"><StatePill ok={statusReady}>{ACCOUNT_STATUS_LABELS[account.status] || account.status}</StatePill><span className="text-[10px] text-slate-600">{formatEpoch(account.expires_at)}</span></div>
+        </div>
+        <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
+          {changed && <ActionButton tone="emerald" disabled={busy || !name.trim() || Number(weight) < 1 || Number(weight) > 100} onClick={() => onSave(account.id, { name: name.trim(), weight: Number(weight) })}>保存</ActionButton>}
+          <ActionButton disabled={busy} onClick={() => onSave(account.id, { enabled: !account.enabled })}>{account.enabled ? '停用' : '启用'}</ActionButton>
+          <ActionButton tone="blue" disabled={busy} onClick={() => onLogin(account.id)}>{account.credential_configured ? '重新登录' : '登录'}</ActionButton>
+          <ActionButton tone="red" disabled={busy} onClick={() => onDelete(account)} className="gap-1"><Trash2 className="h-3 w-3" />删除</ActionButton>
+        </div>
+      </div>
+    </article>
+  )
+}
+
 export function KtDriversPanel({ driverSchemas, nativeTools, codexStatus, onChanged }) {
   const [login, setLogin] = useState(null)
   const [loginError, setLoginError] = useState('')
   const [usage, setUsage] = useState(null)
   const [usageLoading, setUsageLoading] = useState(false)
+  const [newAccountName, setNewAccountName] = useState('')
+  const [accountBusy, setAccountBusy] = useState('')
 
   useEffect(() => {
     if (!login?.login_id || login.status !== 'pending') return undefined
@@ -46,17 +91,49 @@ export function KtDriversPanel({ driverSchemas, nativeTools, codexStatus, onChan
     return () => window.clearInterval(timer)
   }, [login?.login_id, login?.status, login?.poll_after_seconds, onChanged])
 
-  const startLogin = async () => {
+  const startLogin = async (accountId = '') => {
     setLoginError('')
     setLogin({ status: 'starting' })
+    setAccountBusy(accountId || 'new')
     try {
-      const response = await api.post('/models/codex/device-login')
+      const response = await api.post('/models/codex/device-login', {
+        account_id: accountId,
+        name: accountId ? '' : newAccountName.trim(),
+      })
       setLogin(response.data)
+      if (!accountId) setNewAccountName('')
+      await onChanged?.()
       window.open(response.data.verification_url, '_blank', 'noopener,noreferrer')
     } catch (error) {
       setLogin(null)
       setLoginError(formatApiError(error, 'Codex Device OAuth 启动失败'))
+    } finally {
+      setAccountBusy('')
     }
+  }
+
+  const saveAccount = async (accountId, changes) => {
+    setLoginError('')
+    setAccountBusy(accountId)
+    try {
+      await api.patch(`/models/codex/accounts/${encodeURIComponent(accountId)}`, changes)
+      await onChanged?.()
+    } catch (error) {
+      setLoginError(formatApiError(error, 'Codex 账号保存失败'))
+    } finally { setAccountBusy('') }
+  }
+
+  const deleteAccount = async account => {
+    if (!window.confirm(`确定删除 Codex 账号“${account.name}”？此操作会同时删除加密凭据。`)) return
+    setLoginError('')
+    setAccountBusy(account.id)
+    try {
+      await api.delete(`/models/codex/accounts/${encodeURIComponent(account.id)}`)
+      if (login?.account_id === account.id) setLogin(null)
+      await onChanged?.()
+    } catch (error) {
+      setLoginError(formatApiError(error, 'Codex 账号删除失败'))
+    } finally { setAccountBusy('') }
   }
 
   const loadUsage = async () => {
@@ -85,13 +162,23 @@ export function KtDriversPanel({ driverSchemas, nativeTools, codexStatus, onChan
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
         <section className="rounded-lg border border-slate-800 bg-slate-900">
-          <header className="flex flex-col gap-3 border-b border-slate-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5"><div><div className="flex items-center gap-2"><KeyRound className="h-4 w-4 text-violet-300" aria-hidden="true" /><h2 className="text-sm font-semibold text-slate-100">Codex OAuth Account</h2>{codexStatus?.authenticated && !codexStatus?.expired ? <StatePill ok>已登录</StatePill> : <StatePill ok={false}>{codexStatus?.expired ? 'Token 过期' : '未登录'}</StatePill>}</div><p className="mt-1 text-[11px] text-slate-500">使用 KT Codex Driver 的 Device OAuth；验证码直接显示在浏览器，不依赖服务端终端。</p></div><div className="flex gap-2"><ActionButton tone="blue" onClick={startLogin} disabled={login?.status === 'starting' || login?.status === 'pending'}>{codexStatus?.authenticated ? '重新登录' : '开始登录'}</ActionButton><ActionButton onClick={loadUsage} disabled={usageLoading || !codexStatus?.authenticated}>{usageLoading ? '读取中...' : '刷新用量'}</ActionButton></div></header>
+          <header className="flex flex-col gap-3 border-b border-slate-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5"><div><div className="flex items-center gap-2"><KeyRound className="h-4 w-4 text-violet-300" aria-hidden="true" /><h2 className="text-sm font-semibold text-slate-100">Codex OAuth 账号池</h2>{codexStatus?.authenticated ? <StatePill ok>{codexStatus.enabled_account_count || 0} 个可用</StatePill> : <StatePill ok={false}>未就绪</StatePill>}</div><p className="mt-1 text-[11px] text-slate-500">多账号凭据独立加密；新会话按权重轮询，单个会话保持粘性，失败后切到下一账号。</p></div><ActionButton onClick={loadUsage} disabled={usageLoading || !codexStatus?.authenticated}>{usageLoading ? '读取中...' : '刷新最近用量'}</ActionButton></header>
           <div className="p-4 sm:p-5">
-            <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">认证状态</div><div className="mt-1 flex items-center gap-2 text-xs text-slate-300">{codexStatus?.authenticated ? <ShieldCheck className="h-3.5 w-3.5 text-emerald-300" /> : <TimerReset className="h-3.5 w-3.5 text-amber-300" />}{codexStatus?.authenticated ? 'Token 已保存' : '等待 Device OAuth'}</div></div><div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">Token 到期</div><div className="mt-1 text-xs text-slate-300">{formatEpoch(codexStatus?.expires_at)}</div></div><div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">Account ID</div><div className="mt-1 text-xs text-slate-300">{codexStatus?.account_configured ? '已绑定' : '未提供'}</div></div></div>
+            <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">账号池状态</div><div className="mt-1 flex items-center gap-2 text-xs text-slate-300">{codexStatus?.authenticated ? <ShieldCheck className="h-3.5 w-3.5 text-emerald-300" /> : <TimerReset className="h-3.5 w-3.5 text-amber-300" />}{codexStatus?.account_count || 0} 个账号 / {codexStatus?.enabled_account_count || 0} 个可用</div></div><div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">首账号选择</div><div className="mt-1 text-xs text-slate-300">加权轮询 + 会话粘性</div></div><div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">失败策略</div><div className="mt-1 text-xs text-slate-300">下一账号 → 下一模型</div></div></div>
+            <div className="mt-3"><InlineNotice>仅添加你有权使用且允许自动化调用的账号；账号池不得用于绕过账号或工作区限额。</InlineNotice></div>
+
+            <div className="mt-4 flex flex-col gap-2 rounded-md border border-slate-800 bg-slate-950 p-3 sm:flex-row sm:items-end">
+              <label className="min-w-0 flex-1 text-[10px] text-slate-500">新账号名称（可选）<input value={newAccountName} onChange={event => setNewAccountName(event.target.value)} maxLength={100} placeholder={`Codex 账号 ${(codexStatus?.account_count || 0) + 1}`} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500" /></label>
+              <ActionButton tone="blue" onClick={() => startLogin('')} disabled={Boolean(accountBusy) || login?.status === 'starting' || login?.status === 'pending'}>添加账号并登录</ActionButton>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {(codexStatus?.accounts || []).length === 0 ? <InlineNotice>账号池为空。添加账号后，Codex Route 才会进入运行时候选。</InlineNotice> : (codexStatus?.accounts || []).map(account => <CodexAccountRow key={`${account.id}:${account.name}:${account.weight}`} account={account} busy={accountBusy === account.id} onLogin={startLogin} onSave={saveAccount} onDelete={deleteAccount} />)}
+            </div>
 
             {login?.status === 'starting' && <div className="mt-4"><InlineNotice tone="blue"><RefreshCw className="mr-1 inline h-3.5 w-3.5 animate-spin" />正在向 OpenAI 申请 Device Code...</InlineNotice></div>}
             {login?.user_code && login.status === 'pending' && <div className="mt-4 rounded-lg border border-violet-500/20 bg-violet-500/5 p-4"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-[10px] uppercase tracking-wide text-violet-300">Device Code</div><div className="mt-1 font-mono text-2xl font-semibold tracking-[0.18em] text-white">{login.user_code}</div><div className="mt-2 text-[11px] text-slate-500">有效至 {formatEpoch(login.expires_at)}，页面会自动轮询登录结果。</div></div><div className="flex flex-wrap gap-2"><ActionButton onClick={copyCode} className="gap-1.5"><Clipboard className="h-3.5 w-3.5" />复制代码</ActionButton><a href={login.verification_url} target="_blank" rel="noreferrer" className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-500">打开验证页<ExternalLink className="h-3.5 w-3.5" /></a></div></div></div>}
-            {login?.status === 'authenticated' && <div className="mt-4"><InlineNotice tone="emerald"><CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />Codex OAuth 登录完成。现在可以启用 Codex Provider，并测试绑定的 Model Preset。</InlineNotice></div>}
+            {login?.status === 'authenticated' && <div className="mt-4"><InlineNotice tone="emerald"><CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />Codex OAuth 登录完成，凭据已加密写入账号池。</InlineNotice></div>}
             {login && ['failed', 'expired', 'denied', 'cancelled'].includes(login.status) && <div className="mt-4"><InlineNotice tone="red">{login.error || `登录状态：${login.status}`}</InlineNotice></div>}
             {loginError && <div className="mt-4"><InlineNotice tone="red" role="alert">{loginError}</InlineNotice></div>}
 

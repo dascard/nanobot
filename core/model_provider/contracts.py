@@ -112,6 +112,10 @@ class ModelProviderRequest:
     temperature: float = 0.0
     timeout_seconds: float = 30.0
     enable_thinking: str = "auto"
+    reasoning_effort: str = ""
+    service_tier: str = ""
+    extra_headers: Mapping[str, str] = field(default_factory=dict)
+    extra_body: Mapping[str, Any] = field(default_factory=dict)
     trace_source: str = "model_provider"
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -127,6 +131,8 @@ class ModelProviderRequest:
             "messages",
             tuple(_freeze_mapping(message) for message in self.messages),
         )
+        object.__setattr__(self, "extra_headers", _freeze_mapping(self.extra_headers))
+        object.__setattr__(self, "extra_body", _freeze_mapping(self.extra_body))
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
 
 

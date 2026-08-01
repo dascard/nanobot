@@ -447,6 +447,93 @@ class TestNewAPIBackgroundTasks:
         assert "tracker failed" in caplog.text
 
 
+class TestNewAPIModelSync:
+    @staticmethod
+    def _discard_background_task(awaitable, **_kwargs):
+        awaitable.close()
+        return None
+
+    @pytest.mark.asyncio
+    async def test_empty_registry_ignores_recent_persisted_timestamp(
+        self,
+        monkeypatch,
+    ):
+        from unittest.mock import AsyncMock
+
+        from clients import model_registry, new_api_client as module
+        from clients.new_api_client import NewAPIClient
+
+        class FakeRegistry:
+            def __init__(self):
+                self.models = []
+
+            def get_models_by_provider(self, provider):
+                assert provider == "new-api"
+                return list(self.models)
+
+            def replace_provider_models(self, provider, models):
+                assert provider == "new-api"
+                self.models = list(models)
+                return len(models)
+
+        fake_registry = FakeRegistry()
+        fetch_models = AsyncMock(return_value=[{
+            "id": "live-model",
+            "provider": "new-api",
+        }])
+        monkeypatch.setattr(module, "registry", fake_registry)
+        monkeypatch.setattr(
+            model_registry.runtime_state,
+            "get",
+            AsyncMock(return_value=module.time.time()),
+        )
+        monkeypatch.setattr(NewAPIClient, "_last_model_sync_ts", None)
+        monkeypatch.setattr(NewAPIClient, "_model_sync_lock", asyncio.Lock())
+        monkeypatch.setattr(
+            NewAPIClient,
+            "_track_background_task",
+            staticmethod(self._discard_background_task),
+        )
+
+        client = NewAPIClient(api_key="test", base_url="http://test")
+        monkeypatch.setattr(client, "fetch_models", fetch_models)
+
+        assert await client.sync_models_to_registry() == 1
+        assert await client.sync_models_to_registry() == 0
+        fetch_models.assert_awaited_once()
+        assert [m["id"] for m in fake_registry.models] == ["live-model"]
+
+    @pytest.mark.asyncio
+    async def test_empty_registry_throttles_after_failed_fetch(
+        self,
+        monkeypatch,
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from clients import model_registry, new_api_client as module
+        from clients.new_api_client import NewAPIClient
+
+        fake_registry = MagicMock()
+        fake_registry.get_models_by_provider.return_value = []
+        fetch_models = AsyncMock(return_value=[])
+        monkeypatch.setattr(module, "registry", fake_registry)
+        monkeypatch.setattr(
+            model_registry.runtime_state,
+            "get",
+            AsyncMock(return_value=module.time.time()),
+        )
+        monkeypatch.setattr(NewAPIClient, "_last_model_sync_ts", None)
+        monkeypatch.setattr(NewAPIClient, "_model_sync_lock", asyncio.Lock())
+
+        client = NewAPIClient(api_key="test", base_url="http://test")
+        monkeypatch.setattr(client, "fetch_models", fetch_models)
+
+        assert await client.sync_models_to_registry() == 0
+        assert await client.sync_models_to_registry() == 0
+        fetch_models.assert_awaited_once()
+        fake_registry.replace_provider_models.assert_not_called()
+
+
 class TestComplexityEstimator:
     def test_simple_greeting(self):
         from clients.new_api_client import NewAPIClient
@@ -684,6 +771,62 @@ class TestPriorityScore:
         )
 
         assert merged["supports_image"] is True
+
+    def test_model_override_preserves_explicit_description(self, monkeypatch):
+        from clients.new_api_client import NewAPIClient
+
+        monkeypatch.setattr(
+            NewAPIClient,
+            "_model_overrides_cache",
+            {
+                "official-model": {
+                    "description": "经官方资料核验的描述",
+                    "tags": ["paid", "vision"],
+                },
+            },
+        )
+
+        client = NewAPIClient(api_key="test", base_url="http://test")
+        merged = client._apply_model_override(
+            "official-model",
+            {
+                "id": "official-model",
+                "tags": ["paid"],
+                "cost_input_1m": 0.2,
+                "cost_output_1m": 0.8,
+                "description": "自动生成描述",
+            },
+        )
+
+        assert merged["description"] == "经官方资料核验的描述"
+
+    def test_current_model_overrides_match_verified_capabilities(self, monkeypatch):
+        from clients.new_api_client import NewAPIClient
+
+        monkeypatch.setattr(NewAPIClient, "_model_overrides_cache", None)
+        overrides = NewAPIClient._load_model_overrides()
+
+        assert len(overrides) == 12
+        assert not {
+            "qwen/qwen3-coder:free",
+            "qwen3-coder",
+            "openai/gpt-oss-120b:free",
+            "gpt-oss-120b",
+            "nemotron-3-super-free",
+            "opencode/nemotron-3-super-free",
+        } & overrides.keys()
+        assert overrides["dashscope/qwen3.6-27b"]["supports_image"] is True
+        assert overrides["dashscope/qwen3.6-27b"]["context_window"] == 262144
+        assert overrides["krill/gpt-5.6-luna"]["context_window"] == 1050000
+        assert overrides["krill/gpt-image-2"]["enabled"] is False
+        assert overrides["krill/gpt-image-2"]["supported_endpoints"] == [
+            "images/generations",
+            "images/edits",
+            "batch",
+        ]
+        assert overrides[
+            "openrouter/google/gemma-4-31b-it:free"
+        ]["fallback_only"] is True
 
     def test_ordered_candidates_filters_required_capabilities_before_intel_fallback(self, monkeypatch):
         from clients import new_api_client as module

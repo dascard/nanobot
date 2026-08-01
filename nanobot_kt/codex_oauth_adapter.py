@@ -15,28 +15,29 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-
 from kohakuterrarium.llm.codex_auth import (
     CLIENT_ID,
     DEVICE_REDIRECT_URI,
     DEVICE_TOKEN_URL,
     DEVICE_USERCODE_URL,
     DEVICE_VERIFY_URL,
+    TOKEN_URL,
     CodexTokens,
-    _exchange_code,
 )
-
 
 _PENDING_ERRORS = {
     "authorization_pending",
     "pending",
+    "deviceauth_authorization_pending",
     "deviceauth_authorization_unknown",
 }
+_PENDING_HTTP_STATUSES = {403, 404}
 
 
 @dataclass(slots=True)
 class CodexDeviceLogin:
     login_id: str
+    account_id: str
     device_auth_id: str
     user_code: str
     verification_url: str
@@ -51,6 +52,7 @@ class CodexDeviceLogin:
     def public_view(self) -> dict[str, Any]:
         return {
             "login_id": self.login_id,
+            "account_id": self.account_id,
             "user_code": self.user_code,
             "verification_url": self.verification_url,
             "status": self.status,
@@ -67,11 +69,24 @@ class CodexDeviceLoginManager:
         self._sessions: dict[str, CodexDeviceLogin] = {}
         self._lock = asyncio.Lock()
 
-    async def start(self) -> dict[str, Any]:
+    async def start(self, account_id: str) -> dict[str, Any]:
+        from nanobot_kt.codex_accounts import (
+            ACCOUNT_ID_PATTERN,
+            ensure_codex_credential_encryption_ready,
+        )
+
+        ensure_codex_credential_encryption_ready()
+        normalized_account_id = str(account_id or "").strip()
+        if not ACCOUNT_ID_PATTERN.fullmatch(normalized_account_id):
+            raise ValueError("Codex 账号 ID 无效")
         async with self._lock:
             self._remove_stale()
             for session in self._sessions.values():
-                if session.status == "pending" and time.time() < session.expires_at:
+                if (
+                    session.account_id == normalized_account_id
+                    and session.status == "pending"
+                    and time.time() < session.expires_at
+                ):
                     return session.public_view()
 
             async with httpx.AsyncClient(timeout=30) as client:
@@ -85,6 +100,7 @@ class CodexDeviceLoginManager:
             expires_at = _device_expiry(data)
             session = CodexDeviceLogin(
                 login_id=secrets.token_urlsafe(18),
+                account_id=normalized_account_id,
                 device_auth_id=str(data["device_auth_id"]),
                 user_code=str(data["user_code"]),
                 verification_url=DEVICE_VERIFY_URL,
@@ -130,6 +146,11 @@ class CodexDeviceLoginManager:
                     )
                     if response.status_code == 200:
                         tokens = await _tokens_from_device_response(response.json())
+                        from nanobot_kt.codex_accounts import (
+                            save_codex_account_tokens,
+                        )
+
+                        save_codex_account_tokens(session.account_id, tokens)
                         session.status = "authenticated"
                         session.token_expires_at = tokens.expires_at
                         return
@@ -147,6 +168,10 @@ class CodexDeviceLoginManager:
                         )
                         session.error = error_message or error_code
                         return
+                    # Codex 官方设备登录将 403/404 作为“尚未授权”响应；该响应的
+                    # error.code 曾发生过变化，不能只依赖错误码判断是否继续轮询。
+                    if response.status_code in _PENDING_HTTP_STATUSES:
+                        continue
                     session.status = "failed"
                     session.error = error_message or (
                         f"Device OAuth 返回 HTTP {response.status_code}"
@@ -201,10 +226,28 @@ async def _tokens_from_device_response(data: dict[str, Any]) -> CodexTokens:
     auth_code = str(data.get("authorization_code") or "")
     code_verifier = str(data.get("code_verifier") or "")
     if auth_code and code_verifier:
-        return await _exchange_code(
-            auth_code,
-            code_verifier,
-            DEVICE_REDIRECT_URI,
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                TOKEN_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "code": auth_code,
+                    "redirect_uri": DEVICE_REDIRECT_URI,
+                    "client_id": CLIENT_ID,
+                    "code_verifier": code_verifier,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            response.raise_for_status()
+            token_data = response.json()
+        return CodexTokens(
+            access_token=str(token_data.get("access_token") or ""),
+            refresh_token=str(token_data.get("refresh_token") or ""),
+            expires_at=time.time() + int(token_data.get("expires_in", 3600)),
+            id_token=str(token_data.get("id_token") or ""),
+            account_id=str(
+                token_data.get("account_id") or data.get("account_id") or ""
+            ),
         )
     access_token = str(data.get("access_token") or "")
     if not access_token:
@@ -216,11 +259,48 @@ async def _tokens_from_device_response(data: dict[str, Any]) -> CodexTokens:
         id_token=str(data.get("id_token") or ""),
         account_id=str(data.get("account_id") or ""),
     )
-    tokens.save()
     return tokens
 
 
 def codex_status() -> dict[str, Any]:
+    from nanobot_kt.codex_accounts import list_codex_account_views
+
+    accounts = list_codex_account_views()
+    if accounts:
+        usable = [
+            item
+            for item in accounts
+            if item["enabled"]
+            and item["status"] in {"ready", "refresh_required"}
+        ]
+        expiries = [
+            float(item["expires_at"])
+            for item in usable
+            if item.get("expires_at")
+        ]
+        return {
+            "authenticated": bool(usable),
+            "expired": (
+                all(bool(item.get("expired")) for item in usable)
+                if usable
+                else None
+            ),
+            "expires_at": min(expiries) if expiries else None,
+            "account_configured": any(
+                bool(item.get("account_configured")) for item in usable
+            ),
+            "account_count": len(accounts),
+            "enabled_account_count": len(usable),
+            "accounts": accounts,
+            "strategy": {
+                "mode": "session_sticky_weighted_round_robin",
+                "session_sticky": True,
+                "failover": "next_account_then_next_model",
+                "health_scope": "model_account",
+            },
+        }
+
+    # 一个发布周期内保留旧单文件状态投影，方便部署前完成无损导入。
     tokens = CodexTokens.load()
     if tokens is None:
         return {
@@ -228,12 +308,60 @@ def codex_status() -> dict[str, Any]:
             "expired": None,
             "expires_at": None,
             "account_configured": False,
+            "account_count": 0,
+            "enabled_account_count": 0,
+            "accounts": [],
+            "strategy": {
+                "mode": "session_sticky_weighted_round_robin",
+                "session_sticky": True,
+                "failover": "next_account_then_next_model",
+                "health_scope": "model_account",
+            },
+            "legacy_token_detected": False,
         }
     return {
         "authenticated": True,
         "expired": tokens.is_expired(),
         "expires_at": tokens.expires_at or None,
         "account_configured": bool(tokens.account_id),
+        "account_count": 0,
+        "enabled_account_count": 0,
+        "accounts": [],
+        "strategy": {
+            "mode": "legacy_single_file",
+            "session_sticky": False,
+            "failover": "none",
+            "health_scope": "model",
+        },
+        "legacy_token_detected": True,
+    }
+
+
+async def codex_usage() -> dict[str, Any]:
+    """返回进程最近一次 Codex 响应携带的全局配额快照。"""
+
+    if not codex_status().get("authenticated"):
+        return {
+            "status": "not_logged_in",
+            "captured_at": None,
+            "snapshots": [],
+            "promo_message": None,
+        }
+    from kohakuterrarium.llm.codex_rate_limits import get_cached
+
+    cached = get_cached()
+    if cached is None or cached.is_empty():
+        return {
+            "status": "no_data_yet",
+            "captured_at": None,
+            "snapshots": [],
+            "promo_message": None,
+        }
+    return {
+        "status": "ok",
+        "captured_at": cached.captured_at,
+        "snapshots": [item.to_dict() for item in cached.snapshots],
+        "promo_message": cached.promo_message,
     }
 
 
@@ -245,4 +373,5 @@ __all__ = [
     "KtProviderCredentialStatusAdapter",
     "codex_device_login_manager",
     "codex_status",
+    "codex_usage",
 ]

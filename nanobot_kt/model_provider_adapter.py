@@ -33,6 +33,7 @@ class KtPresetTransport(Protocol):
     driver_options: dict[str, Any]
     provider_name: str
     provider_native_tools: tuple[str, ...]
+    codex_account_id: str
 
 
 class KtModelPresetResolverAdapter:
@@ -93,10 +94,20 @@ def create_kt_provider(transport: KtPresetTransport) -> object:
     retry_policy = dict(transport.retry_policy or {})
     max_retries = int(retry_policy.get("max_retries", 3))
     if driver_type == "codex":
-        from kohakuterrarium.llm.codex_provider import CodexOAuthProvider
+        from nanobot_kt.codex_accounts import (
+            AccountBoundCodexOAuthProvider,
+            codex_account_pool,
+        )
 
-        provider = CodexOAuthProvider(
+        account_id = str(getattr(transport, "codex_account_id", "") or "")
+        if not account_id:
+            account_ids = codex_account_pool.ordered_account_ids("")
+            if not account_ids:
+                raise RuntimeError("没有可用的 Codex OAuth 账号")
+            account_id = account_ids[0]
+        provider = AccountBoundCodexOAuthProvider(
             model=transport.model,
+            account_id=account_id,
             reasoning_effort=transport.reasoning_effort or "medium",
             service_tier=transport.service_tier or None,
             timeout=float(transport.timeout),
@@ -277,6 +288,9 @@ def _transport_fingerprint(transport: KtPresetTransport) -> str:
         "driver_options": transport.driver_options,
         "provider_name": transport.provider_name,
         "provider_native_tools": transport.provider_native_tools,
+        "codex_account_id": str(
+            getattr(transport, "codex_account_id", "") or ""
+        ),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

@@ -189,14 +189,23 @@ def test_openai_adapter_implements_port_and_introspection_redacts_secrets(monkey
         max_tokens=64,
         timeout_seconds=7,
         enable_thinking="false",
+        reasoning_effort="high",
+        service_tier="priority",
+        extra_headers={"X-Nanobot-Route": "test"},
+        extra_body={"parallel_tool_calls": True},
     ))
     introspection = dict(adapter.introspect())
+    payload = json.loads(calls[0][0].data.decode("utf-8"))
 
     assert result.content == "结果"
     assert result.reasoning_content == "推理"
     assert result.finish_reason == "stop"
     assert result.usage == {"total_tokens": 8}
     assert calls[0][1] == 7
+    assert payload["reasoning_effort"] == "high"
+    assert payload["service_tier"] == "priority"
+    assert payload["parallel_tool_calls"] is True
+    assert calls[0][0].get_header("X-nanobot-route") == "test"
     assert introspection["authentication_configured"] is True
     serialized = json.dumps(introspection, ensure_ascii=False)
     assert "provider-secret" not in serialized

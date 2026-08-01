@@ -10,10 +10,9 @@ from core.runtime_paths import RUNTIME_PATHS
 
 logger = logging.getLogger("nanobot.registry")
 
-MODEL_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "models.json")
-
-
 _DATA_DIR = os.fspath(RUNTIME_PATHS.data_dir / "model_registry")
+MODEL_SEED_PATH = os.path.join(os.path.dirname(__file__), "data", "models.json")
+MODEL_DATA_PATH = os.path.join(_DATA_DIR, "models.json")
 _FAILURE_STATE_PATH = os.path.join(_DATA_DIR, "model_failures.json")
 _RUNTIME_STATE_PATH = os.path.join(_DATA_DIR, "runtime_state.json")
 UNKNOWN_MODEL_COST = 999.0
@@ -38,6 +37,53 @@ def model_intelligence_value(value: Any, default: float = 0.0) -> float:
     if not math.isfinite(score):
         return float(default)
     return score
+
+
+def model_routing_sort_key(
+    model: dict[str, Any],
+    *,
+    intel_floor: int,
+    configured_index: int = 0,
+) -> tuple[int, float, int, float, int]:
+    """质量分层后按总价、额外模态和智能度排序。
+
+    低于质量门槛的免费模型以及显式 ``fallback_only`` 模型永远位于
+    正常候选之后，只承担最后兜底。能力不兼容应在调用本函数前硬过滤。
+    """
+
+    intelligence = model_intelligence_value(model.get("intelligence"))
+    input_cost = model_cost_value(model.get("cost_input_1m"))
+    output_cost = model_cost_value(model.get("cost_output_1m"))
+    tags = {str(item).strip().lower() for item in (model.get("tags") or [])}
+    is_free = input_cost == 0 and output_cost == 0
+    below_floor = intelligence < max(0, int(intel_floor))
+    if bool(model.get("fallback_only")) or (is_free and below_floor):
+        quality_bucket = 2
+    elif below_floor:
+        quality_bucket = 1
+    else:
+        quality_bucket = 0
+
+    input_modalities = model.get("input_modalities")
+    if not isinstance(input_modalities, (list, tuple)):
+        input_modalities = ["text", "image"] if model.get("supports_image") else ["text"]
+    output_modalities = model.get("output_modalities")
+    if not isinstance(output_modalities, (list, tuple)):
+        output_modalities = ["text"]
+    modality_count = max(0, len(set(input_modalities)) - 1) + max(
+        0, len(set(output_modalities)) - 1
+    )
+    if "audio" in tags and "audio" not in input_modalities:
+        modality_count += 1
+    if "video" in tags and "video" not in input_modalities:
+        modality_count += 1
+    return (
+        quality_bucket,
+        input_cost + output_cost,
+        modality_count,
+        -intelligence,
+        configured_index,
+    )
 
 
 def normalize_model_cost_fields(
@@ -304,14 +350,23 @@ class ModelRegistry:
 
     def _load_registry(self):
         try:
-            if os.path.exists(MODEL_DATA_PATH):
-                with open(MODEL_DATA_PATH, "r", encoding="utf-8") as f:
+            load_path = (
+                MODEL_DATA_PATH
+                if os.path.exists(MODEL_DATA_PATH)
+                else MODEL_SEED_PATH
+            )
+            if os.path.exists(load_path):
+                with open(load_path, "r", encoding="utf-8") as f:
                     content = f.read()
                     if content.strip():
                         self.data = json.loads(content)
                         self._log_all_models("loaded")
             else:
-                logger.warning(f"Model registry file not found at {MODEL_DATA_PATH}")
+                logger.warning(
+                    "Model registry file not found at %s or %s",
+                    MODEL_DATA_PATH,
+                    MODEL_SEED_PATH,
+                )
         except Exception as e:
             logger.error(f"Failed to load model registry: {e}")
 
@@ -597,6 +652,72 @@ class ModelRegistry:
             self._log_all_models("post-sync")
 
         self.save_registry()
+        return total
+
+    def replace_provider_models(
+        self,
+        provider: str,
+        models: list[dict[str, Any]],
+    ) -> int:
+        """以一次上游目录快照替换指定 Provider，淘汰已下线模型。"""
+
+        normalized_provider = str(provider or "").strip()
+        if not normalized_provider:
+            return 0
+
+        existing = self.data.get("models", [])
+        old_provider_models = {
+            str(model.get("id")): model
+            for model in existing
+            if model.get("provider") == normalized_provider and model.get("id")
+        }
+        other_provider_models = [
+            model
+            for model in existing
+            if model.get("provider") != normalized_provider
+        ]
+
+        replacement: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw_model in models:
+            model_id = str(raw_model.get("id") or "").strip()
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            candidate = dict(raw_model)
+            candidate["provider"] = normalized_provider
+            replacement.append(normalize_model_record(
+                candidate,
+                fallback=old_provider_models.get(model_id),
+            ))
+
+        replacement.sort(key=lambda item: str(item.get("id") or ""))
+        new_provider_models = {
+            str(model.get("id")): model
+            for model in replacement
+        }
+        added = sorted(set(new_provider_models) - set(old_provider_models))
+        removed = sorted(set(old_provider_models) - set(new_provider_models))
+        updated = sorted(
+            model_id
+            for model_id in set(old_provider_models) & set(new_provider_models)
+            if old_provider_models[model_id] != new_provider_models[model_id]
+        )
+
+        self.data["models"] = other_provider_models + replacement
+        self.data["last_updated"] = __import__("datetime").datetime.now().isoformat()
+        self.save_registry()
+
+        total = len(added) + len(updated) + len(removed)
+        if total:
+            logger.info(
+                "Provider model snapshot replaced: provider=%s added=%s "
+                "updated=%s removed=%s",
+                normalized_provider,
+                added,
+                updated,
+                removed,
+            )
         return total
 
     def remove_model(self, model_id: str):

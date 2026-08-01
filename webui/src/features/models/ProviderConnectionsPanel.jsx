@@ -197,7 +197,7 @@ export function ProviderConnectionsPanel({ providers, driverTypes, nativeTools, 
       </ConsoleRail>
 
       {!draft ? (
-        <EmptyEditor title="选择一个 Provider" description="Provider 只管理 Endpoint、认证和 KT Driver 身份；模型参数在 Preset 中配置。" />
+        <EmptyEditor title="选择一个 Provider" description="Provider 只管理 Endpoint、认证和 KT Driver 身份；模型参数在模型目录中配置。" />
       ) : (
         <form onSubmit={save} className="min-w-0 overflow-y-auto">
           <header className="sticky top-0 z-10 flex flex-col gap-3 border-b border-slate-800 bg-slate-900/95 px-4 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:px-5">
@@ -225,7 +225,7 @@ export function ProviderConnectionsPanel({ providers, driverTypes, nativeTools, 
               {message && <div className="px-4 pt-4 sm:px-5"><InlineNotice tone={message.tone} role={message.tone === 'red' ? 'alert' : undefined}>{message.text}</InlineNotice></div>}
               <EditorSection title="连接身份" description="Provider Connection 是可复用的连接实例，不包含具体 Model ID。">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <FormField id="model-provider-id" label="Provider ID" required hint="保存后不可修改，用于 Preset 引用。">
+                  <FormField id="model-provider-id" label="Provider ID" required hint="保存后不可修改，用于模型目录和 Route Binding 引用。">
                     <input id="model-provider-id" value={draft.id} disabled={!draft.creating} onChange={event => update({ id: event.target.value })} autoComplete="off" className={inputClass} />
                   </FormField>
                   <FormField id="model-provider-display-name" label="显示名称" required>
@@ -299,7 +299,7 @@ export function ProviderConnectionsPanel({ providers, driverTypes, nativeTools, 
               </EditorSection>
 
               {!draft.creating && !draft.builtin && (
-                <EditorSection title="危险操作" description="只有未被 Preset 和 Route 引用的自定义 Provider 才能删除。">
+                <EditorSection title="危险操作" description="只有未被模型默认配置和 Route Binding 引用的自定义 Provider 才能删除。">
                   <ActionButton type="button" tone="red" onClick={remove} disabled={saving} className="gap-1.5"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" />删除 Provider</ActionButton>
                 </EditorSection>
               )}
@@ -316,7 +316,7 @@ export function ProviderConnectionsPanel({ providers, driverTypes, nativeTools, 
                 <div className="mt-3" aria-live="polite"><InlineNotice tone={operation.ok ? 'emerald' : 'red'}>{operation.ok ? (operation.kind === 'catalog' ? '模型目录同步完成' : `连接测试通过，${operation.data?.latency_ms || 0}ms`) : operation.error || operation.data?.error || '操作失败'}</InlineNotice></div>
               )}
               {operation?.loading && <div className="mt-3 flex items-center gap-2 text-xs text-slate-500"><RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />{operation.kind === 'catalog' ? '同步中...' : '测试中...'}</div>}
-              {!draft.enabled && <div className="mt-3"><InlineNotice tone="amber"><Unplug className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />此连接已停用，绑定它的 Preset 不会进入运行候选。</InlineNotice></div>}
+              {!draft.enabled && <div className="mt-3"><InlineNotice tone="amber"><Unplug className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />此连接已停用，关联模型不会进入 Route Binding 运行候选。</InlineNotice></div>}
             </aside>
           </div>
         </form>

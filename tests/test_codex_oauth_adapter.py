@@ -1,5 +1,7 @@
 """WebUI Codex Device OAuth 适配器测试。"""
 
+from types import SimpleNamespace
+
 import pytest
 
 from nanobot_kt.codex_oauth_adapter import CodexDeviceLoginManager
@@ -47,6 +49,25 @@ async def _no_sleep(_seconds):
     return None
 
 
+def _mock_account_storage(monkeypatch, saved=None):
+    account_id = "ca_test_account_0001"
+    monkeypatch.setattr(
+        "nanobot_kt.codex_accounts.ensure_codex_credential_encryption_ready",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.codex_accounts.get_codex_account",
+        lambda _account_id: SimpleNamespace(id=account_id),
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.codex_accounts.save_codex_account_tokens",
+        lambda saved_account_id, tokens: (
+            saved.append((saved_account_id, tokens)) if saved is not None else None
+        ),
+    )
+    return account_id
+
+
 @pytest.mark.asyncio
 async def test_device_login_exposes_only_browser_safe_fields_and_saves_token(
     monkeypatch,
@@ -68,24 +89,23 @@ async def test_device_login_exposes_only_browser_safe_fields_and_saves_token(
         _no_sleep,
     )
     saved = []
-    monkeypatch.setattr(
-        "nanobot_kt.codex_oauth_adapter.CodexTokens.save",
-        lambda tokens: saved.append(tokens),
-    )
+    account_id = _mock_account_storage(monkeypatch, saved)
     manager = CodexDeviceLoginManager()
 
-    started = await manager.start()
+    started = await manager.start(account_id)
     await manager._sessions[started["login_id"]].task
     completed = await manager.get(started["login_id"])
 
     assert started["status"] == "pending"
+    assert started["account_id"] == account_id
     assert started["user_code"] == "ABCD-EFGH"
     assert "device_auth_id" not in started
     assert "access_token" not in started
     assert completed["status"] == "authenticated"
     assert completed["token_expires_at"] is not None
     assert len(saved) == 1
-    assert saved[0].account_id == "account-id"
+    assert saved[0][0] == account_id
+    assert saved[0][1].account_id == "account-id"
 
 
 @pytest.mark.asyncio
@@ -107,11 +127,48 @@ async def test_device_login_keeps_pending_then_reports_denial(monkeypatch):
         "nanobot_kt.codex_oauth_adapter.asyncio.sleep",
         _no_sleep,
     )
+    account_id = _mock_account_storage(monkeypatch)
     manager = CodexDeviceLoginManager()
 
-    started = await manager.start()
+    started = await manager.start(account_id)
     await manager._sessions[started["login_id"]].task
     completed = await manager.get(started["login_id"])
 
     assert completed["status"] == "denied"
     assert completed["error"] == "用户拒绝授权"
+
+
+@pytest.mark.asyncio
+async def test_device_login_accepts_current_codex_pending_responses(monkeypatch):
+    _OAuthClient.token_responses = [
+        _Response(403, {
+            "error": {
+                "code": "deviceauth_authorization_pending",
+                "message": "Device authorization is pending. Please try again.",
+                "type": "invalid_request_error",
+            },
+        }),
+        _Response(404, {}),
+        _Response(200, {
+            "access_token": "access-token-secret",
+            "refresh_token": "refresh-token-secret",
+            "expires_in": 3600,
+        }),
+    ]
+    monkeypatch.setattr(
+        "nanobot_kt.codex_oauth_adapter.httpx.AsyncClient",
+        _OAuthClient,
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.codex_oauth_adapter.asyncio.sleep",
+        _no_sleep,
+    )
+    account_id = _mock_account_storage(monkeypatch)
+    manager = CodexDeviceLoginManager()
+
+    started = await manager.start(account_id)
+    await manager._sessions[started["login_id"]].task
+    completed = await manager.get(started["login_id"])
+
+    assert completed["status"] == "authenticated"
+    assert completed["error"] == ""

@@ -140,36 +140,49 @@ def test_model_provider_page_exposes_control_plane_lifecycle_and_key_actions():
     assert "draft.catalog?.stale" in source
 
 
-def test_model_console_exposes_presets_bindings_and_operable_kt_workspace():
+def test_model_console_exposes_catalog_defaults_bindings_and_operable_kt_workspace():
     source = read_models_sources()
 
-    assert "Model Presets" in source
+    assert "Model Presets" not in source
+    assert "模型预设" not in source
+    assert "模型目录与默认配置" in source
+    assert "api.put('/models/defaults'" in source
     assert "Route Binding" in source
+    assert "provider_id" in source
+    assert "model" in source
+    assert "overrides" in source
     assert "max_context" in source
     assert "max_output" in source
     assert "reasoning_effort" in source
     assert "service_tier" in source
     assert "cost_input_1m" in source
     assert "cost_output_1m" in source
-    assert "价格与路由成本" in source
-    assert "Preset 价格" in source
+    assert "输入 $/M" in source
+    assert "输出 $/M" in source
     assert "PricingPills" in source
-    assert "model-preset-cost-input" in source
-    assert "model-preset-cost-output" in source
-    assert "driver === 'codex' ? null : 1" in source
-    assert "'xhigh', 'max'" in source
+    assert "model-default-input-cost" in source
+    assert "model-default-output-cost" in source
     assert "retry_policy" in source
     assert "Extra Body JSON" in source
-    assert "Variation Groups" in source
-    assert "Resolved Request" in source
-    assert "request_preview" in source
-    assert "真实 KT Driver 测试" in source
+    assert "Driver Options JSON" in source
+    assert "输入模态" in source
+    assert "输出模态" in source
+    assert "支持的 Endpoint" in source
+    assert "fallback_only" in source
+    assert "仅作最后兜底" in source
+    assert "低智能免费或标记“仅兜底”的模型排在最后" in source
+    assert "cost_modality_quality" in source
+    assert "required_input_modalities" in source
+    assert "resolved_candidates" in source
     assert "/models/codex/device-login" in source
+    assert "/models/codex/accounts/" in source
     assert "/models/codex/usage" in source
     assert "Device Code" in source
+    assert "Codex OAuth 账号池" in source
+    assert "加权轮询 + 会话粘性" in source
+    assert "不得用于绕过账号或工作区限额" in source
     assert "Provider Native Tools" in source
     assert "Provider Connection" in source
-    assert "Ordered Fallback" in source
 
 
 def test_model_provider_forms_are_labelled_and_report_async_states():

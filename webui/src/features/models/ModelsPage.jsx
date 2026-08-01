@@ -8,7 +8,6 @@ import {
   Database,
   GitBranch,
   RefreshCw,
-  SlidersHorizontal,
 } from 'lucide-react'
 
 import { api } from '../../api'
@@ -16,24 +15,22 @@ import { ActionButton, PageHeader, Spinner } from '../../components/ui'
 import { KtDriversPanel } from './KtDriversPanel'
 import { LocalComponentsPanel } from './LocalComponentsPanel'
 import { ModelCatalogPanel } from './ModelCatalogPanel'
-import { ModelPresetsPanel } from './ModelPresetsPanel'
 import { ProviderConnectionsPanel } from './ProviderConnectionsPanel'
 import { RouteBindingsPanel } from './RouteBindingsPanel'
 import { formatApiError } from './modelConsoleUi'
 
 const WORKSPACES = [
   { key: 'connections', label: '连接', detail: 'Endpoint 与认证', icon: Cable },
-  { key: 'presets', label: '模型预设', detail: '完整请求参数', icon: SlidersHorizontal },
-  { key: 'bindings', label: '路由绑定', detail: 'Primary 与 fallback', icon: GitBranch },
+  { key: 'catalog', label: '模型目录', detail: '模型默认配置', icon: Database },
+  { key: 'bindings', label: '路由绑定', detail: '模型选择与局部覆盖', icon: GitBranch },
   { key: 'kt', label: 'KT / Codex', detail: 'Driver、OAuth 与用量', icon: Blocks },
-  { key: 'catalog', label: '模型目录', detail: '上游发现快照', icon: Database },
   { key: 'local', label: '本地组件', detail: '分类与向量模型', icon: Cpu },
 ]
 
 const RESOURCE_LABELS = {
   status: '运行状态',
   providers: 'Provider Connections',
-  presets: 'Model Presets',
+  defaults: '模型默认配置',
   bindings: 'Route Bindings',
   nativeTools: 'KT Native Tools',
   codexStatus: 'Codex OAuth 状态',
@@ -64,7 +61,7 @@ export function ModelsPage() {
   const [status, setStatus] = useState(null)
   const [providers, setProviders] = useState([])
   const [driverTypes, setDriverTypes] = useState([])
-  const [presets, setPresets] = useState([])
+  const [modelDefaults, setModelDefaults] = useState([])
   const [driverSchemas, setDriverSchemas] = useState([])
   const [bindings, setBindings] = useState([])
   const [nativeTools, setNativeTools] = useState([])
@@ -78,7 +75,7 @@ export function ModelsPage() {
     const requests = [
       ['status', api.get('/models/status')],
       ['providers', api.get('/models/providers')],
-      ['presets', api.get('/models/presets')],
+      ['defaults', api.get('/models/defaults')],
       ['bindings', api.get('/models/bindings')],
       ['nativeTools', api.get('/models/kt/native-tools')],
       ['codexStatus', api.get('/models/codex/status')],
@@ -98,8 +95,8 @@ export function ModelsPage() {
         setProviders(data.providers || [])
         setDriverTypes(data.driver_types || [])
       }
-      if (key === 'presets') {
-        setPresets(data.presets || [])
+      if (key === 'defaults') {
+        setModelDefaults(data.defaults || [])
         setDriverSchemas(data.driver_schemas || [])
       }
       if (key === 'bindings') setBindings(data.bindings || [])
@@ -129,11 +126,11 @@ export function ModelsPage() {
     <div className="min-w-0">
       <PageHeader
         title="模型运行控制台"
-        description="Provider 保存连接，Model Preset 保存完整模型参数，Route Binding 只定义业务用途和有序回退；最终由 KT Runtime 解析并执行。"
+        description="Provider 保存连接；模型目录保存默认配置；Route Binding 直接选模型并只记录业务差异，最终由 KT Runtime 合并与执行。"
         meta={(
           <>
             <span>{providers.length} 个连接</span>
-            <span>{presets.length} 个预设</span>
+            <span>{modelDefaults.length} 个已配置模型</span>
             <span>{bindingCount}/{bindings.length} 条有效绑定</span>
             <span>Codex {codexStatus?.authenticated && !codexStatus?.expired ? '已登录' : '未就绪'}</span>
           </>
@@ -149,8 +146,8 @@ export function ModelsPage() {
       <div className="mb-4 overflow-x-auto rounded-lg border border-slate-800 bg-slate-900" aria-label="模型运行配置链">
         <ol className="flex min-w-max items-center divide-x divide-transparent px-1">
           <WorkflowStep index="01" title="Provider Connection" description="Endpoint · Auth · KT Driver" count={providers.length} />
-          <WorkflowStep index="02" title="Model Preset" description="Model · Context · Retry · Variations" count={presets.length} />
-          <WorkflowStep index="03" title="Route Binding" description="Primary · Ordered Fallback" count={bindingCount} />
+          <WorkflowStep index="02" title="Model Catalog" description="Defaults · Cost · Modality" count={modelDefaults.length} />
+          <WorkflowStep index="03" title="Route Binding" description="Models · Overrides · Fallback" count={bindingCount} />
           <WorkflowStep index="04" title="KT Runtime" description="Driver Resolution · Circuit Breaker" count={driverSchemas.length} last />
         </ol>
       </div>
@@ -205,20 +202,10 @@ export function ModelsPage() {
             onOpenKt={() => setWorkspace('kt')}
           />
         )}
-        {workspace === 'presets' && (
-          <ModelPresetsPanel
-            presets={presets}
-            providers={providers}
-            driverSchemas={driverSchemas}
-            codexStatus={codexStatus}
-            onChanged={reload}
-            onOpenKt={() => setWorkspace('kt')}
-          />
-        )}
         {workspace === 'bindings' && (
           <RouteBindingsPanel
             bindings={bindings}
-            presets={presets}
+            modelDefaults={modelDefaults}
             statusRoutes={status?.routes || {}}
             onChanged={reload}
           />
@@ -231,7 +218,7 @@ export function ModelsPage() {
             onChanged={reload}
           />
         )}
-        {workspace === 'catalog' && <ModelCatalogPanel providers={providers} presets={presets} onChanged={reload} />}
+        {workspace === 'catalog' && <ModelCatalogPanel providers={providers} modelDefaults={modelDefaults} onChanged={reload} />}
         {workspace === 'local' && <LocalComponentsPanel components={status?.local_components || {}} />}
       </div>
     </div>

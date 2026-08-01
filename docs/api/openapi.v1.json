@@ -1633,6 +1633,67 @@
         "title": "CircuitResetRequest",
         "type": "object"
       },
+      "CodexAccountUpdateBody": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight"
+          }
+        },
+        "title": "CodexAccountUpdateBody",
+        "type": "object"
+      },
+      "CodexDeviceLoginBody": {
+        "properties": {
+          "account_id": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "title": "CodexDeviceLoginBody",
+        "type": "object"
+      },
       "CompatibilityResponse": {
         "description": "尚未迁移到类型化 Endpoint Contract 的兼容响应；运行时媒体类型和正文保持原端点语义。"
       },
@@ -5235,11 +5296,30 @@
             "title": "Extra Headers",
             "type": "object"
           },
+          "fallback_only": {
+            "default": false,
+            "title": "Fallback Only",
+            "type": "boolean"
+          },
           "id": {
             "maxLength": 64,
             "minLength": 1,
             "title": "Id",
             "type": "string"
+          },
+          "input_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
+          },
+          "intelligence": {
+            "default": 0,
+            "maximum": 15.0,
+            "minimum": 0.0,
+            "title": "Intelligence",
+            "type": "integer"
           },
           "max_context": {
             "default": 128000,
@@ -5261,6 +5341,13 @@
             "title": "Model",
             "type": "string"
           },
+          "output_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Modalities",
+            "type": "array"
+          },
           "provider_id": {
             "maxLength": 64,
             "minLength": 1,
@@ -5281,6 +5368,13 @@
             "maxLength": 64,
             "title": "Service Tier",
             "type": "string"
+          },
+          "supported_endpoints": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Endpoints",
+            "type": "array"
           },
           "temperature": {
             "anyOf": [
@@ -5394,6 +5488,25 @@
             "title": "Extra Headers",
             "type": "object"
           },
+          "fallback_only": {
+            "default": false,
+            "title": "Fallback Only",
+            "type": "boolean"
+          },
+          "input_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
+          },
+          "intelligence": {
+            "default": 0,
+            "maximum": 15.0,
+            "minimum": 0.0,
+            "title": "Intelligence",
+            "type": "integer"
+          },
           "max_context": {
             "default": 128000,
             "maximum": 4000000.0,
@@ -5413,6 +5526,13 @@
             "minLength": 1,
             "title": "Model",
             "type": "string"
+          },
+          "output_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Modalities",
+            "type": "array"
           },
           "provider_id": {
             "maxLength": 64,
@@ -5434,6 +5554,13 @@
             "maxLength": 64,
             "title": "Service Tier",
             "type": "string"
+          },
+          "supported_endpoints": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Endpoints",
+            "type": "array"
           },
           "temperature": {
             "anyOf": [
@@ -6769,6 +6896,22 @@
             "minItems": 1,
             "title": "Candidates",
             "type": "array"
+          },
+          "min_intelligence": {
+            "default": 0,
+            "maximum": 15.0,
+            "minimum": 0.0,
+            "title": "Min Intelligence",
+            "type": "integer"
+          },
+          "sort_policy": {
+            "default": "cost_modality_quality",
+            "enum": [
+              "cost_modality_quality",
+              "manual"
+            ],
+            "title": "Sort Policy",
+            "type": "string"
           }
         },
         "required": [
@@ -6779,10 +6922,25 @@
       },
       "RouteBindingCandidateBody": {
         "properties": {
+          "model": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Model",
+            "type": "string"
+          },
+          "overrides": {
+            "$ref": "#/components/schemas/RouteModelOverridesBody"
+          },
           "preset_id": {
+            "default": "",
             "maxLength": 64,
-            "minLength": 1,
             "title": "Preset Id",
+            "type": "string"
+          },
+          "provider_id": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Provider Id",
             "type": "string"
           },
           "selected_variations": {
@@ -6793,9 +6951,6 @@
             "type": "object"
           }
         },
-        "required": [
-          "preset_id"
-        ],
         "title": "RouteBindingCandidateBody",
         "type": "object"
       },
@@ -6815,6 +6970,139 @@
           }
         },
         "title": "RouteMigrationBody",
+        "type": "object"
+      },
+      "RouteModelOverridesBody": {
+        "properties": {
+          "driver_options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Options"
+          },
+          "enable_thinking": {
+            "anyOf": [
+              {
+                "enum": [
+                  "auto",
+                  "true",
+                  "false"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enable Thinking"
+          },
+          "extra_body": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Body"
+          },
+          "extra_headers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Headers"
+          },
+          "max_output": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Output"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "retry_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetryPolicyBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "service_tier": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Tier"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "timeout": {
+            "anyOf": [
+              {
+                "maximum": 900.0,
+                "minimum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout"
+          }
+        },
+        "title": "RouteModelOverridesBody",
         "type": "object"
       },
       "RuntimeModuleContributionResponse": {
@@ -15631,6 +15919,197 @@
         "x-nanobot-pagination": "none"
       }
     },
+    "/api/v1/admin/models/codex/accounts": {
+      "get": {
+        "operationId": "get_api_v1_admin_models_codex_accounts",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Codex Accounts",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/codex/accounts/{account_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_admin_models_codex_accounts_account_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Remove Codex Account",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_admin_models_codex_accounts_account_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodexAccountUpdateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Patch Codex Account",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
     "/api/v1/admin/models/codex/device-login": {
       "post": {
         "operationId": "post_api_v1_admin_models_codex_device_login",
@@ -15646,6 +16125,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CodexDeviceLoginBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -15853,6 +16349,195 @@
           }
         },
         "summary": "Get Codex Usage",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/models/defaults": {
+      "delete": {
+        "operationId": "delete_api_v1_admin_models_defaults",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "title": "Provider Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Delete Model Default",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "get": {
+        "operationId": "get_api_v1_admin_models_defaults",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Model Defaults Api",
+        "tags": [
+          "admin-model-presets"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "put": {
+        "operationId": "put_api_v1_admin_models_defaults",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelPresetWriteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Upsert Model Default",
         "tags": [
           "admin-model-presets"
         ],

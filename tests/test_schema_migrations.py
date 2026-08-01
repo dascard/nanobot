@@ -2099,3 +2099,74 @@ def test_scheduled_task_schedule_columns_backfills_cron_spec():
             "SELECT schedule_spec FROM scheduled_tasks WHERE id = 2"
         )).one()
         assert bad[0] == ""
+
+
+def test_chat_log_session_id_index_avoids_group_rollup_temp_sort():
+    from core.db.models.chat import ChatLog
+    from core.schema_migrations import (
+        MIGRATIONS,
+        _CHAT_LOG_SESSION_ID_INDEX_VERSION,
+        run_schema_migrations,
+    )
+
+    model_index = next(
+        index
+        for index in ChatLog.__table__.indexes
+        if index.name == "idx_cl_session_id"
+    )
+    assert [column.name for column in model_index.columns] == [
+        "session_id",
+        "id",
+    ]
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations ("
+            "version TEXT PRIMARY KEY, name TEXT NOT NULL, "
+            "applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(
+            text(
+                "INSERT INTO schema_migrations(version, name) "
+                "VALUES (:version, :name)"
+            ),
+            [
+                {"version": version, "name": name}
+                for version, name, _migration in MIGRATIONS
+                if version != _CHAT_LOG_SESSION_ID_INDEX_VERSION
+            ],
+        )
+        conn.execute(text(
+            "CREATE TABLE chat_logs ("
+            "id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, "
+            "content TEXT, meta_json TEXT)"
+        ))
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    indexes = {
+        index["name"]: index["column_names"]
+        for index in inspect(engine).get_indexes("chat_logs")
+    }
+    assert indexes["idx_cl_session_id"] == ["session_id", "id"]
+    with engine.connect() as conn:
+        plan = conn.execute(text(
+            "EXPLAIN QUERY PLAN "
+            "SELECT * FROM chat_logs "
+            "WHERE session_id = 'group_1' AND id > 0 "
+            "AND role IN ('ambient', 'user', 'assistant') "
+            "ORDER BY id DESC"
+        )).fetchall()
+        applied_count = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = :version"
+        ), {
+            "version": _CHAT_LOG_SESSION_ID_INDEX_VERSION,
+        }).scalar_one()
+
+    assert not any(
+        "USE TEMP B-TREE FOR ORDER BY" in str(row[-1])
+        for row in plan
+    )
+    assert applied_count == 1

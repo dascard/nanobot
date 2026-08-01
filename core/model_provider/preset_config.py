@@ -1,13 +1,14 @@
-"""Model Preset 与业务 Route Binding 控制面。
+"""模型默认配置与业务 Route Binding 控制面。
 
-Provider 只保存连接、认证和 KT Driver 身份；Preset 保存模型请求参数；
-Binding 只描述业务 Route 采用哪些 Preset 及其 fallback 顺序。三层配置分别
-持久化，避免把连接凭据、模型参数和业务路由重新揉成一个大对象。
+Provider 只保存连接、认证和 KT Driver 身份；模型目录默认配置保存模型自身
+元数据与默认请求参数；Binding 直接引用 Provider + Model，并仅保存业务 Route
+的局部覆盖。旧 Model Preset 仅用于无损迁移和滚动部署兼容。
 """
 
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from dataclasses import dataclass, field, replace
@@ -18,9 +19,22 @@ from core.settings_admin_service import SystemSettingWrite
 
 
 PRESET_SETTING_PREFIX = "model.presets."
+MODEL_DEFAULT_SETTING_PREFIX = "model.defaults."
 ROUTE_BINDING_SETTING_PREFIX = "model.bindings."
 PRESET_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 RETRY_CLASSES = frozenset({"rate_limit", "server", "transient", "overflow"})
+ROUTE_OVERRIDE_FIELDS = frozenset({
+    "max_output",
+    "temperature",
+    "reasoning_effort",
+    "service_tier",
+    "timeout",
+    "enable_thinking",
+    "extra_headers",
+    "extra_body",
+    "retry_policy",
+    "driver_options",
+})
 SENSITIVE_HEADER_NAMES = frozenset({
     "authorization",
     "proxy-authorization",
@@ -43,6 +57,32 @@ def validate_preset_id(preset_id: str) -> str:
 
 def preset_setting_key(preset_id: str) -> str:
     return f"{PRESET_SETTING_PREFIX}{validate_preset_id(preset_id)}"
+
+
+def _validate_model_identity(provider_id: str, model: str) -> tuple[str, str]:
+    provider = str(provider_id or "").strip()
+    model_id = str(model or "").strip()
+    if not PRESET_ID_PATTERN.fullmatch(provider):
+        raise ValueError("Provider ID 无效")
+    if not model_id or len(model_id) > 256 or any(
+        char in model_id for char in ("\x00", "\r", "\n")
+    ):
+        raise ValueError("Model ID 无效")
+    return provider, model_id
+
+
+def model_default_id(provider_id: str, model: str) -> str:
+    """生成只用于兼容 KT Profile 的稳定内部 ID。"""
+
+    provider, model_id = _validate_model_identity(provider_id, model)
+    digest = hashlib.sha256(f"{provider}\x00{model_id}".encode()).hexdigest()[:20]
+    return f"model-{digest}"
+
+
+def model_default_setting_key(provider_id: str, model: str) -> str:
+    provider, model_id = _validate_model_identity(provider_id, model)
+    digest = hashlib.sha256(model_id.encode()).hexdigest()
+    return f"{MODEL_DEFAULT_SETTING_PREFIX}{provider}.{digest}"
 
 
 def route_binding_setting_key(route_key: str) -> str:
@@ -75,6 +115,14 @@ def _positive_int(value: object, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
 def _json_object(value: object) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
@@ -93,6 +141,17 @@ def _string_map(value: object) -> dict[str, str]:
     }
 
 
+def _string_tuple(value: object, default: tuple[str, ...]) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return default
+    normalized: list[str] = []
+    for item in value:
+        text = str(item or "").strip().lower().lstrip("/")
+        if text and text not in normalized:
+            normalized.append(text)
+    return tuple(normalized) or default
+
+
 @dataclass(frozen=True, slots=True)
 class ModelPreset:
     id: str
@@ -107,6 +166,8 @@ class ModelPreset:
     service_tier: str = ""
     cost_input_1m: float | None = None
     cost_output_1m: float | None = None
+    intelligence: int = 0
+    fallback_only: bool = False
     timeout: float = 120.0
     enable_thinking: str = "auto"
     capabilities: dict[str, bool] = field(default_factory=lambda: {
@@ -121,6 +182,9 @@ class ModelPreset:
         default_factory=dict
     )
     driver_options: dict[str, Any] = field(default_factory=dict)
+    input_modalities: tuple[str, ...] = ("text",)
+    output_modalities: tuple[str, ...] = ("text",)
+    supported_endpoints: tuple[str, ...] = ("chat/completions",)
     updated_at: str = ""
 
     def to_storage(self) -> dict[str, Any]:
@@ -136,6 +200,8 @@ class ModelPreset:
             "service_tier": self.service_tier,
             "cost_input_1m": self.cost_input_1m,
             "cost_output_1m": self.cost_output_1m,
+            "intelligence": self.intelligence,
+            "fallback_only": self.fallback_only,
             "timeout": self.timeout,
             "enable_thinking": self.enable_thinking,
             "capabilities": dict(self.capabilities),
@@ -144,6 +210,9 @@ class ModelPreset:
             "retry_policy": dict(self.retry_policy),
             "variation_groups": dict(self.variation_groups),
             "driver_options": dict(self.driver_options),
+            "input_modalities": list(self.input_modalities),
+            "output_modalities": list(self.output_modalities),
+            "supported_endpoints": list(self.supported_endpoints),
         }
 
     def public_view(self, provider: object | None = None) -> dict[str, Any]:
@@ -203,6 +272,8 @@ class ModelPreset:
             cost_output_1m=_optional_non_negative_float(
                 data.get("cost_output_1m")
             ),
+            intelligence=_bounded_int(data.get("intelligence"), 0, 0, 15),
+            fallback_only=bool(data.get("fallback_only", False)),
             timeout=max(0.1, _finite_float(data.get("timeout"), 120.0)),
             enable_thinking=thinking,
             capabilities={
@@ -223,6 +294,15 @@ class ModelPreset:
             retry_policy=_json_object(data.get("retry_policy")),
             variation_groups=_json_object(data.get("variation_groups")),
             driver_options=_json_object(data.get("driver_options")),
+            input_modalities=_string_tuple(
+                data.get("input_modalities"), ("text",)
+            ),
+            output_modalities=_string_tuple(
+                data.get("output_modalities"), ("text",)
+            ),
+            supported_endpoints=_string_tuple(
+                data.get("supported_endpoints"), ("chat/completions",)
+            ),
             updated_at=updated_at,
         )
 
@@ -231,20 +311,42 @@ class ModelPreset:
 class ResolvedModelPreset:
     preset: ModelPreset
     selected_variations: dict[str, str] = field(default_factory=dict)
+    route_overrides: dict[str, Any] = field(default_factory=dict)
 
     def public_view(self, provider: object | None = None) -> dict[str, Any]:
         return {
             **self.preset.public_view(provider),
             "selected_variations": dict(self.selected_variations),
+            "route_overrides": dict(self.route_overrides),
         }
 
 
 @dataclass(frozen=True, slots=True)
 class ModelRouteBindingCandidate:
-    preset_id: str
+    provider_id: str = ""
+    model: str = ""
+    overrides: dict[str, Any] = field(default_factory=dict)
+    # 旧字段只用于滚动部署期间读取既有配置。
+    preset_id: str = ""
     selected_variations: dict[str, str] = field(default_factory=dict)
 
+    @property
+    def uses_model_default(self) -> bool:
+        return bool(self.provider_id and self.model)
+
+    @property
+    def identity(self) -> str:
+        if self.uses_model_default:
+            return f"{self.provider_id}/{self.model}"
+        return self.preset_id
+
     def to_dict(self) -> dict[str, Any]:
+        if self.uses_model_default:
+            return {
+                "provider_id": self.provider_id,
+                "model": self.model,
+                "overrides": dict(self.overrides),
+            }
         return {
             "preset_id": self.preset_id,
             "selected_variations": dict(self.selected_variations),
@@ -252,6 +354,21 @@ class ModelRouteBindingCandidate:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ModelRouteBindingCandidate":
+        provider_id = str(data.get("provider_id") or "").strip()
+        model = str(data.get("model") or "").strip()
+        if provider_id or model:
+            provider_id, model = _validate_model_identity(provider_id, model)
+            raw_overrides = _json_object(data.get("overrides"))
+            unknown = sorted(set(raw_overrides) - ROUTE_OVERRIDE_FIELDS)
+            if unknown:
+                raise ValueError(
+                    f"Route 覆盖包含不支持字段: {', '.join(unknown)}"
+                )
+            return cls(
+                provider_id=provider_id,
+                model=model,
+                overrides=raw_overrides,
+            )
         return cls(
             preset_id=validate_preset_id(str(data.get("preset_id") or "")),
             selected_variations=_string_map(data.get("selected_variations")),
@@ -262,11 +379,17 @@ class ModelRouteBindingCandidate:
 class ModelRouteBinding:
     route_key: str
     candidates: tuple[ModelRouteBindingCandidate, ...]
+    min_intelligence: int = 0
+    sort_policy: str = "cost_modality_quality"
     inherited_from: str = ""
     updated_at: str = ""
 
     def to_storage(self) -> dict[str, Any]:
-        return {"candidates": [candidate.to_dict() for candidate in self.candidates]}
+        return {
+            "candidates": [candidate.to_dict() for candidate in self.candidates],
+            "min_intelligence": self.min_intelligence,
+            "sort_policy": self.sort_policy,
+        }
 
     def public_view(self) -> dict[str, Any]:
         return {
@@ -295,6 +418,15 @@ class ModelRouteBinding:
         return cls(
             route_key=str(route_key or "").strip(),
             candidates=candidates,
+            min_intelligence=_bounded_int(
+                data.get("min_intelligence"), 0, 0, 15
+            ),
+            sort_policy=(
+                "cost_modality_quality"
+                if str(data.get("sort_policy") or "cost_modality_quality")
+                != "manual"
+                else "manual"
+            ),
             updated_at=updated_at,
         )
 
@@ -359,6 +491,69 @@ def get_model_preset(
             return None
         return ModelPreset.from_storage(
             preset_id,
+            data,
+            updated_at=_row_timestamp(row),
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    finally:
+        if owned_db is not None:
+            owned_db.close()
+
+
+def list_model_defaults(db: Any | None = None) -> list[ModelPreset]:
+    """列出模型目录的持久默认配置。"""
+
+    row_map, owned_db = _load_rows(db)
+    try:
+        defaults: list[ModelPreset] = []
+        for key, row in row_map.items():
+            if not key.startswith(MODEL_DEFAULT_SETTING_PREFIX):
+                continue
+            try:
+                data = json.loads(str(row.value or "{}"))
+                if not isinstance(data, dict):
+                    continue
+                provider_id, model = _validate_model_identity(
+                    str(data.get("provider_id") or ""),
+                    str(data.get("model") or ""),
+                )
+                defaults.append(ModelPreset.from_storage(
+                    model_default_id(provider_id, model),
+                    data,
+                    updated_at=_row_timestamp(row),
+                ))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return sorted(defaults, key=lambda item: (item.provider_id, item.model))
+    finally:
+        if owned_db is not None:
+            owned_db.close()
+
+
+def get_model_default(
+    provider_id: str,
+    model: str,
+    db: Any | None = None,
+) -> ModelPreset | None:
+    provider, model_id = _validate_model_identity(provider_id, model)
+    key = model_default_setting_key(provider, model_id)
+    row_map, owned_db = _load_rows(db)
+    try:
+        row = row_map.get(key)
+        if row is None:
+            return None
+        data = json.loads(str(row.value or "{}"))
+        if not isinstance(data, dict):
+            return None
+        stored_provider, stored_model = _validate_model_identity(
+            str(data.get("provider_id") or ""),
+            str(data.get("model") or ""),
+        )
+        if (stored_provider, stored_model) != (provider, model_id):
+            return None
+        return ModelPreset.from_storage(
+            model_default_id(provider, model_id),
             data,
             updated_at=_row_timestamp(row),
         )
@@ -459,6 +654,138 @@ def resolve_model_preset(
     return resolved
 
 
+def resolve_model_default(
+    model_default: ModelPreset,
+    overrides: dict[str, Any] | None = None,
+) -> ResolvedModelPreset:
+    """把 Route 局部覆盖合并到模型默认配置。"""
+
+    patch = dict(overrides or {})
+    unknown = sorted(set(patch) - ROUTE_OVERRIDE_FIELDS)
+    if unknown:
+        raise ValueError(f"Route 覆盖包含不支持字段: {', '.join(unknown)}")
+    merged = model_default.to_storage()
+    merged.update(patch)
+    resolved = ModelPreset.from_storage(
+        model_default.id,
+        merged,
+        updated_at=model_default.updated_at,
+    )
+    if resolved.max_output > resolved.max_context:
+        raise ValueError("Route max_output 不能大于模型 max_context")
+    return ResolvedModelPreset(
+        preset=resolved,
+        route_overrides=patch,
+    )
+
+
+def model_route_compatibility_error(
+    model: ModelPreset,
+    route_descriptor: object,
+) -> str:
+    """检查模型自身能力是否满足业务 Route 的硬约束。"""
+
+    from core.model_provider.contracts import ProviderCapability
+
+    required = frozenset(
+        getattr(route_descriptor, "required_provider_capabilities", ()) or ()
+    )
+    endpoints = {
+        str(endpoint or "").strip().lower().lstrip("/")
+        for endpoint in model.supported_endpoints
+    }
+    input_modalities = {
+        str(modality or "").strip().lower()
+        for modality in model.input_modalities
+    }
+    if (
+        ProviderCapability.CHAT_COMPLETION in required
+        and "chat/completions" not in endpoints
+    ):
+        return "不支持 chat/completions"
+    if ProviderCapability.VISION in required and (
+        not model.capabilities.get("supports_image", False)
+        or "image" not in input_modalities
+    ):
+        return "不支持图像输入"
+    if (
+        ProviderCapability.STREAMING in required
+        and not model.capabilities.get("supports_stream", False)
+    ):
+        return "不支持流式输出"
+    if (
+        ProviderCapability.TOOL_CALLING in required
+        and not model.capabilities.get("supports_tools", False)
+    ):
+        return "不支持工具调用"
+    return ""
+
+
+def ensure_model_supports_route(
+    model: ModelPreset,
+    route_descriptor: object,
+) -> None:
+    error = model_route_compatibility_error(model, route_descriptor)
+    if error:
+        route_key = str(getattr(route_descriptor, "route_key", "") or "")
+        raise ValueError(
+            f"模型 {model.provider_id}/{model.model} 与 Route {route_key} 不兼容："
+            f"{error}"
+        )
+
+
+def _candidate_sort_key(
+    item: tuple[int, ModelRouteBindingCandidate, ResolvedModelPreset],
+    min_intelligence: int,
+) -> tuple[int, int, float, int, int, int]:
+    index, _candidate, resolved = item
+    model = resolved.preset
+    is_free = model.cost_input_1m == 0 and model.cost_output_1m == 0
+    below_floor = model.intelligence < min_intelligence
+    if model.fallback_only or (is_free and below_floor):
+        quality_bucket = 2
+    elif below_floor:
+        quality_bucket = 1
+    else:
+        quality_bucket = 0
+    price_unknown = int(
+        model.cost_input_1m is None or model.cost_output_1m is None
+    )
+    total_price = (
+        float(model.cost_input_1m or 0)
+        + float(model.cost_output_1m or 0)
+        if not price_unknown
+        else float("inf")
+    )
+    modality_count = max(0, len(model.input_modalities) - 1) + max(
+        0, len(model.output_modalities) - 1
+    )
+    return (
+        quality_bucket,
+        price_unknown,
+        total_price,
+        modality_count,
+        -model.intelligence,
+        index,
+    )
+
+
+def order_resolved_binding_candidates(
+    candidates: list[tuple[ModelRouteBindingCandidate, ResolvedModelPreset]],
+    *,
+    min_intelligence: int,
+    sort_policy: str = "cost_modality_quality",
+) -> list[tuple[ModelRouteBindingCandidate, ResolvedModelPreset]]:
+    if sort_policy == "manual":
+        return list(candidates)
+    indexed = [
+        (index, candidate, resolved)
+        for index, (candidate, resolved) in enumerate(candidates)
+    ]
+    indexed.sort(key=lambda item: _candidate_sort_key(item, min_intelligence))
+    return [(candidate, resolved) for _index, candidate, resolved in indexed]
+
+
 def resolve_route_binding_candidates(
     route_key: str,
     db: Any | None = None,
@@ -466,16 +793,47 @@ def resolve_route_binding_candidates(
     binding = get_effective_route_binding(route_key, db)
     if binding is None:
         return []
+    from core.model_provider.route_registry import require_model_route_descriptor
+
+    descriptor = require_model_route_descriptor(route_key)
     resolved: list[tuple[ModelRouteBindingCandidate, ResolvedModelPreset]] = []
+    incompatible: list[str] = []
     for candidate in binding.candidates:
+        if candidate.uses_model_default:
+            model_default = get_model_default(
+                candidate.provider_id,
+                candidate.model,
+                db,
+            )
+            if model_default is None:
+                raise ValueError(
+                    "Route 引用了没有默认配置的模型: "
+                    f"{candidate.provider_id}/{candidate.model}"
+                )
+            item = resolve_model_default(model_default, candidate.overrides)
+            error = model_route_compatibility_error(item.preset, descriptor)
+            if error:
+                incompatible.append(f"{candidate.identity}: {error}")
+            else:
+                resolved.append((candidate, item))
+            continue
         preset = get_model_preset(candidate.preset_id, db)
         if preset is None:
-            raise ValueError(f"Route 引用了不存在的 Preset: {candidate.preset_id}")
-        resolved.append((
-            candidate,
-            resolve_model_preset(preset, candidate.selected_variations),
-        ))
-    return resolved
+            raise ValueError(f"Route 引用了不存在的旧 Preset: {candidate.preset_id}")
+        item = resolve_model_preset(preset, candidate.selected_variations)
+        error = model_route_compatibility_error(item.preset, descriptor)
+        if error:
+            incompatible.append(f"{candidate.identity}: {error}")
+        else:
+            resolved.append((candidate, item))
+    if binding.candidates and not resolved:
+        detail = "；".join(incompatible) or "没有可用候选"
+        raise ValueError(f"Route {route_key} 没有满足硬能力约束的候选：{detail}")
+    return order_resolved_binding_candidates(
+        resolved,
+        min_intelligence=binding.min_intelligence,
+        sort_policy=binding.sort_policy,
+    )
 
 
 def preset_route_references(
@@ -490,11 +848,44 @@ def preset_route_references(
     ]
 
 
+def model_default_route_references(
+    provider_id: str,
+    model: str,
+    db: Any | None = None,
+) -> list[str]:
+    target = _validate_model_identity(provider_id, model)
+    return [
+        binding.route_key
+        for binding in list_route_bindings(db)
+        if any(
+            candidate.uses_model_default
+            and (candidate.provider_id, candidate.model) == target
+            for candidate in binding.candidates
+        )
+    ]
+
+
 def model_preset_write(preset: ModelPreset) -> SystemSettingWrite:
     return SystemSettingWrite(
         key=preset_setting_key(preset.id),
         value=json.dumps(preset.to_storage(), ensure_ascii=False, separators=(",", ":")),
         description=f"model preset {preset.id}",
+    )
+
+
+def model_default_write(model_default: ModelPreset) -> SystemSettingWrite:
+    provider_id, model = _validate_model_identity(
+        model_default.provider_id,
+        model_default.model,
+    )
+    return SystemSettingWrite(
+        key=model_default_setting_key(provider_id, model),
+        value=json.dumps(
+            model_default.to_storage(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        description=f"model defaults {provider_id}/{model}",
     )
 
 
@@ -568,6 +959,7 @@ def build_request_preview(
             "retry_policy": dict(preset.retry_policy),
             "driver_options": dict(preset.driver_options),
             "selected_variations": dict(resolved.selected_variations),
+            "route_overrides": dict(resolved.route_overrides),
         },
     }
 
@@ -653,16 +1045,28 @@ __all__ = [
     "ModelRouteBindingCandidate",
     "ResolvedModelPreset",
     "SENSITIVE_HEADER_NAMES",
+    "MODEL_DEFAULT_SETTING_PREFIX",
+    "ROUTE_OVERRIDE_FIELDS",
     "build_request_preview",
     "get_effective_route_binding",
+    "get_model_default",
     "get_model_preset",
     "get_route_binding",
+    "ensure_model_supports_route",
+    "list_model_defaults",
     "list_model_presets",
     "list_route_bindings",
+    "model_default_id",
+    "model_default_route_references",
+    "model_default_setting_key",
+    "model_default_write",
     "model_driver_schemas",
+    "model_route_compatibility_error",
     "model_preset_write",
+    "order_resolved_binding_candidates",
     "preset_route_references",
     "preset_setting_key",
+    "resolve_model_default",
     "resolve_model_preset",
     "resolve_route_binding_candidates",
     "route_binding_setting_key",

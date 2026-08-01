@@ -460,6 +460,69 @@ class TestNanobotBridge:
         if terminal_kind == "no_reply":
             assert bridge.is_no_reply_session("session-terminal") is True
 
+    def test_model_loop_uses_model_account_health_key_and_updates_sticky_account(
+        self,
+        monkeypatch,
+    ):
+        """Codex 成功只清理当前账号熔断，并把成功账号设为会话粘性账号。"""
+        import json
+
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.bridge import NanobotBridge
+
+        bridge = NanobotBridge()
+        bridge._agent = SimpleNamespace(controller=SimpleNamespace())
+        runtime = MagicMock()
+        runtime.read_conversation.return_value = ()
+
+        async def execute_turn(_request):
+            runtime_messages = _runtime_tool_exchange(
+                "reply",
+                json.dumps(
+                    {REPLY_MARKER: {"content": "合法回复"}},
+                    ensure_ascii=False,
+                ),
+            )
+            runtime.read_conversation.return_value = runtime_messages
+            return AgentTurnResult(raw_result=None, messages=runtime_messages)
+
+        runtime.execute_turn = AsyncMock(side_effect=execute_turn)
+        bridge._runtime = runtime
+        tracker = MagicMock(
+            record_failure=AsyncMock(),
+            record_success=AsyncMock(),
+        )
+        sticky = MagicMock()
+        monkeypatch.setattr(
+            "nanobot_kt.codex_accounts.codex_account_pool.mark_success",
+            sticky,
+        )
+        account_id = "ca_account_health_01"
+        health_key = f"gpt-5.6-codex@codex:{account_id}"
+
+        result = run_async(bridge._run_model_loop(
+            candidate_models=[{
+                "id": "gpt-5.6-codex",
+                "_health_key": health_key,
+                "_codex_account_id": account_id,
+            }],
+            route_plan=SimpleNamespace(),
+            event_content="你好",
+            query="你好",
+            session_id="session-codex-health",
+            meta={"stream": False},
+            tracker=tracker,
+            trace_id="trace-codex-health",
+            run_id="run-codex-health",
+            reply_llm_source="replyer.private_chat",
+            runtime_context=_runtime_context("session-codex-health"),
+        ))
+
+        assert result.health_status == "success"
+        tracker.record_success.assert_awaited_once_with(health_key)
+        tracker.record_failure.assert_not_awaited()
+        sticky.assert_called_once_with("session-codex-health", account_id)
+
     @pytest.mark.parametrize(
         ("raw_output", "expected_agent_result"),
         [

@@ -2613,18 +2613,14 @@ class TestModelRouteV2:
         assert local_components["rag_reranker"]["download_repo_id"] == "BAAI/bge-reranker-v2-m3"
 
     def test_models_status_adds_local_llama_provider_from_classifier_url(self, client, auth_header, monkeypatch):
+        from core.settings_service import settings
+
+        monkeypatch.setenv("CLASSIFIER_API_URL", "http://local-classifier:9999/v1")
         monkeypatch.setattr("config.CLASSIFIER_API_URL", "http://local-classifier:9999/v1")
-        monkeypatch.setattr(
-            "clients.classifier_client.list_providers",
-            lambda: [{
-                "id": "newapi",
-                "base_url": "http://new-api:9000/v1",
-                "api_key": "new-api-key",
-                "enabled": True,
-            }],
-        )
+        settings.invalidate()
 
         r = client.get("/api/v1/admin/models/status", headers=auth_header)
+        settings.invalidate()
 
         assert r.status_code == 200, r.text
         providers = {item["id"]: item for item in r.json()["providers"]}

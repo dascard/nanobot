@@ -27,6 +27,7 @@ from clients.model_registry import (
     registry,
     model_cost_value,
     model_intelligence_value,
+    model_routing_sort_key,
     model_supports_capabilities,
     normalize_model_record,
 )
@@ -525,17 +526,11 @@ class NewAPIClient:
         if not overrides:
             return base
 
-        candidates: list[str] = []
-        candidates.append(model_id)
+        candidates: list[str] = [model_id]
 
-        # Strip provider prefix (e.g. "deepseek/deepseek-v4-pro-free" → "deepseek-v4-pro-free")
-        if "/" in model_id:
-            bare = model_id.split("/")[-1]
-        else:
-            bare = model_id
-
-        # Build candidate forms: with/without :free and -free
-        for mid in {model_id, bare}:
+        # 公共 Model ID 的来源前缀是身份的一部分，不能剥离后跨渠道匹配。
+        # 仅对同一个完整 ID 兼容历史上的 :free / -free 后缀差异。
+        for mid in {model_id}:
             candidates.append(mid)
             if mid.endswith(":free"):
                 candidates.append(mid[:-5])
@@ -574,7 +569,11 @@ class NewAPIClient:
                 final_tags.remove("paid")
                 merged["tags"] = final_tags
             # Regenerate description to match final tag state
-            merged["description"] = self._build_description(model_id, final_tags)
+            if "description" not in override:
+                merged["description"] = self._build_description(
+                    model_id,
+                    final_tags,
+                )
         return normalize_model_record(merged, fallback=base)
 
     def _build_description(self, model_id: str, tags: list[str]) -> str:
@@ -683,14 +682,28 @@ class NewAPIClient:
             async with self.__class__._model_sync_lock:
                 if self.__class__._last_model_sync_ts is None:
                     saved = await _rs.get("last_model_sync_ts", 0)
-                    self.__class__._last_model_sync_ts = saved
+                    # 运行时目录首次启用时可能尚无模型快照。此时不能被旧的
+                    # 持久化时间戳拦住，但首次尝试之后仍应遵守同步间隔，避免
+                    # 上游故障期间每个聊天请求都重复访问 `/models`。
+                    has_provider_models = bool(
+                        registry.get_models_by_provider(self.registry_provider)
+                    )
+                    self.__class__._last_model_sync_ts = (
+                        saved if has_provider_models else 0
+                    )
 
-        if not force and now - self.__class__._last_model_sync_ts < interval_sec:
+        if (
+            not force
+            and now - self.__class__._last_model_sync_ts < interval_sec
+        ):
             return 0
 
         async with self.__class__._model_sync_lock:
             now = time.time()
-            if not force and now - self.__class__._last_model_sync_ts < interval_sec:
+            if (
+                not force
+                and now - self.__class__._last_model_sync_ts < interval_sec
+            ):
                 return 0
 
             logger.info(f"Starting model sync from {self.base_url}/models (force={force})")
@@ -700,7 +713,10 @@ class NewAPIClient:
                 self.__class__._last_model_sync_ts = now
                 return 0
 
-            updated = registry.add_or_update_many(models)
+            updated = registry.replace_provider_models(
+                self.registry_provider,
+                models,
+            )
             self.__class__._last_model_sync_ts = now
             # Persist sync timestamp so restart doesn't re-sync
             self.__class__._track_background_task(
@@ -837,11 +853,7 @@ class NewAPIClient:
                                avoid_tags: list[str] | None = None,
                                required_capabilities: dict[str, bool] | None = None,
                                ) -> list[dict[str, Any]]:
-        """Return healthy models ordered by priority.
-
-        Phase 1: models meeting intel_floor, priority-score first.
-        Phase 2: lower-intelligence fallback models, priority-score first.
-        """
+        """按质量层级、总价、额外模态、智能度返回健康候选。"""
         all_models = registry.get_models_by_provider(provider)
         if not all_models:
             return []
@@ -878,18 +890,13 @@ class NewAPIClient:
         if not candidates:
             return []
 
-        qualified = [
-            m for m in candidates
-            if model_intelligence_value(m.get("intelligence")) >= intel_floor
-        ]
-        fallback = [
-            m for m in candidates
-            if model_intelligence_value(m.get("intelligence")) < intel_floor
-        ]
-
-        qualified.sort(key=lambda m: registry.compute_priority_score(m))
-        fallback.sort(key=lambda m: registry.compute_priority_score(m))
-        return qualified + fallback
+        indexed = list(enumerate(candidates))
+        indexed.sort(key=lambda item: model_routing_sort_key(
+            item[1],
+            intel_floor=intel_floor,
+            configured_index=item[0],
+        ))
+        return [model for _index, model in indexed]
 
     def resolve_model(self, messages: list[dict[str, Any]],
                       tools: list[dict[str, Any]] | None = None,
