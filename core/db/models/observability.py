@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Index, Integer, String, Text, text
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text, text
 
 from core.db.base import Base
 
@@ -109,6 +109,32 @@ class LLMApiRequestLog(Base):
     request_preview = Column(Text, default="")
     headers_json = Column(Text, default="{}")
     status = Column(String, index=True, default="created")
+    cache_status = Column(
+        String,
+        nullable=False,
+        index=True,
+        default="pending",
+        server_default=text("'pending'"),
+    )
+    cache_hit = Column(Boolean, nullable=True)
+    cache_hit_tokens = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    cache_write_tokens = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    cache_details_json = Column(
+        Text,
+        nullable=False,
+        default="{}",
+        server_default=text("'{}'"),
+    )
     response_status = Column(Integer, default=0)
     response_json = Column(Text, default="{}")
     response_preview = Column(Text, default="")

@@ -122,6 +122,11 @@ def test_schema_migrations_records_applied_versions():
         "phase",
         "round_index",
         "route_attempt_index",
+        "cache_status",
+        "cache_hit",
+        "cache_hit_tokens",
+        "cache_write_tokens",
+        "cache_details_json",
     } <= llm_log_columns
     reply_contract_columns = [col["name"] for col in inspector.get_columns("reply_contract_check_logs")]
     assert "reply_tool_call_count" in reply_contract_columns
@@ -406,6 +411,67 @@ def test_scheduled_task_owner_migration_scopes_valid_rows_and_blocks_unknown():
     assert rows[2]["owner_chat_stream_id"] == ""
     assert rows[2]["owner_migration_required"] == 1
     assert rows[2]["enabled"] == 0
+
+
+def test_llm_cache_observability_migration_backfills_existing_logs():
+    from core.schema_migrations import _llm_cache_observability
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE llm_api_request_logs ("
+            "id INTEGER PRIMARY KEY, status TEXT, response_json TEXT)"
+        ))
+        conn.execute(
+            text(
+                "INSERT INTO llm_api_request_logs(id, status, response_json) "
+                "VALUES (:id, :status, :response_json)"
+            ),
+            [
+                {
+                    "id": 1,
+                    "status": "success",
+                    "response_json": json.dumps({
+                        "usage": {
+                            "prompt_tokens_details": {"cached_tokens": 12},
+                        },
+                    }),
+                },
+                {
+                    "id": 2,
+                    "status": "success",
+                    "response_json": json.dumps({"usage": {"prompt_tokens": 4}}),
+                },
+                {
+                    "id": 3,
+                    "status": "error",
+                    "response_json": "{}",
+                },
+                {
+                    "id": 4,
+                    "status": "created",
+                    "response_json": "{}",
+                },
+            ],
+        )
+
+        _llm_cache_observability(conn, engine, None)
+        rows = conn.execute(text(
+            "SELECT id, cache_status, cache_hit, cache_hit_tokens "
+            "FROM llm_api_request_logs ORDER BY id"
+        )).mappings().all()
+
+    assert [row["cache_status"] for row in rows] == [
+        "hit",
+        "not_reported",
+        "error",
+        "pending",
+    ]
+    assert rows[0]["cache_hit"] == 1
+    assert rows[0]["cache_hit_tokens"] == 12
+    assert rows[1]["cache_hit"] is None
+    assert rows[2]["cache_hit"] is None
+    assert rows[3]["cache_hit"] is None
 
 
 def test_block_session_memory_migration_adds_table_and_column():

@@ -92,6 +92,9 @@ _GROUP_ROLLING_CHATLOG_SOURCE_VERSION = (
 _CHAT_LOG_SESSION_ID_INDEX_VERSION = (
     "20260801_chat_log_session_id_index"
 )
+_LLM_CACHE_OBSERVABILITY_VERSION = (
+    "20260802_llm_cache_observability"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -815,6 +818,89 @@ def _llm_request_execution_phase(
             "CREATE INDEX IF NOT EXISTS idx_llm_api_request_phase "
             "ON llm_api_request_logs(phase)",
         ])
+
+
+def _llm_cache_observability(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """增加模型缓存命中字段，并从历史响应中尽可能回填。"""
+
+    from foundation.llm.cache_usage import (
+        CACHE_STATUS_PENDING,
+        normalize_llm_cache_usage,
+    )
+
+    _add_missing_columns(conn, "llm_api_request_logs", {
+        "cache_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "cache_hit": "BOOLEAN",
+        "cache_hit_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "cache_write_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "cache_details_json": "TEXT NOT NULL DEFAULT '{}'",
+    })
+    if "llm_api_request_logs" not in _table_names(conn):
+        return
+
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_llm_api_request_cache_status "
+        "ON llm_api_request_logs(cache_status)",
+    ])
+    required_columns = {"id", "status", "response_json"}
+    if not required_columns <= _columns(conn, "llm_api_request_logs"):
+        return
+
+    update_statement = text(
+        "UPDATE llm_api_request_logs SET "
+        "cache_status = :cache_status, cache_hit = :cache_hit, "
+        "cache_hit_tokens = :cache_hit_tokens, "
+        "cache_write_tokens = :cache_write_tokens, "
+        "cache_details_json = :cache_details_json WHERE id = :id"
+    )
+    last_id = -(2**63)
+    while True:
+        rows = conn.execute(text(
+            "SELECT id, status, response_json FROM llm_api_request_logs "
+            "WHERE id > :last_id ORDER BY id LIMIT 500"
+        ), {"last_id": last_id}).mappings().all()
+        if not rows:
+            break
+
+        updates: list[dict[str, Any]] = []
+        for row in rows:
+            call_status = str(row.get("status") or "")
+            if call_status in {"created", "stream_created", ""}:
+                updates.append({
+                    "id": row["id"],
+                    "cache_status": CACHE_STATUS_PENDING,
+                    "cache_hit": None,
+                    "cache_hit_tokens": 0,
+                    "cache_write_tokens": 0,
+                    "cache_details_json": "{}",
+                })
+                continue
+            try:
+                response = json.loads(str(row.get("response_json") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                response = {}
+            cache_usage = normalize_llm_cache_usage(
+                response,
+                successful=call_status in {"success", "stream_success"},
+            )
+            updates.append({
+                "id": row["id"],
+                "cache_status": cache_usage.status,
+                "cache_hit": cache_usage.hit,
+                "cache_hit_tokens": cache_usage.hit_tokens,
+                "cache_write_tokens": cache_usage.write_tokens,
+                "cache_details_json": json.dumps(
+                    cache_usage.details,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            })
+        conn.execute(update_statement, updates)
+        last_id = int(rows[-1]["id"])
 
 
 def _reply_contract_check_logs(conn: Any, engine: Any, db_path: str | None) -> None:
@@ -4301,6 +4387,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _CHAT_LOG_SESSION_ID_INDEX_VERSION,
         "chat log session/id index",
         _chat_log_session_id_index,
+    ),
+    (
+        _LLM_CACHE_OBSERVABILITY_VERSION,
+        "llm cache hit observability",
+        _llm_cache_observability,
     ),
 ]
 

@@ -13,6 +13,14 @@ import {
 import { LLMApiLogViewer } from '../../components/TraceView'
 import { safeJsonParse } from '../../components/traceUtils'
 
+const CACHE_STATUS_META = {
+  hit: { label: '命中', className: 'bg-emerald-500/10 text-emerald-300' },
+  miss: { label: '未命中', className: 'bg-amber-500/10 text-amber-300' },
+  not_reported: { label: '未上报', className: 'bg-slate-500/10 text-slate-400' },
+  pending: { label: '处理中', className: 'bg-blue-500/10 text-blue-300' },
+  error: { label: '调用失败', className: 'bg-red-500/10 text-red-300' },
+}
+
 // ── LLM API 日志独立页面 ──
 export function LLMApiLogsPage() {
   const [items, setItems] = useState([])
@@ -24,6 +32,7 @@ export function LLMApiLogsPage() {
   const [sourceFilter, setSourceFilter] = useState('')
   const [modelFilter, setModelFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [cacheFilter, setCacheFilter] = useState('')
   const [openId, setOpenId] = useState(null)
   const [detailsById, setDetailsById] = useState({})
   const [loadingDetailId, setLoadingDetailId] = useState(null)
@@ -36,8 +45,9 @@ export function LLMApiLogsPage() {
     if (sourceFilter) params.source = sourceFilter
     if (modelFilter) params.model = modelFilter
     if (statusFilter) params.status = statusFilter
+    if (cacheFilter) params.cache_status = cacheFilter
     api.get('/llm-api-logs', { params }).then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0); setStats(r.data.stats || null) }).catch(() => {})
-  }, [page, runFilter, traceFilter, sourceFilter, modelFilter, statusFilter])
+  }, [page, runFilter, traceFilter, sourceFilter, modelFilter, statusFilter, cacheFilter])
   useEffect(() => { load() }, [load])
   const openLog = (logId) => {
     if (openId === logId) {
@@ -64,6 +74,10 @@ export function LLMApiLogsPage() {
     if (status === 'success' || status === 'stream_success') acc.success += 1
     if (status === 'failed' || status === 'error' || status === 'stream_error') acc.failed += 1
     if (status === 'created' || status === 'stream_created') acc.created += 1
+    const cacheStatus = item.cache_status || 'pending'
+    if (cacheStatus === 'hit') acc.cacheHit += 1
+    if (cacheStatus === 'miss') acc.cacheMiss += 1
+    if (cacheStatus === 'not_reported') acc.cacheNotReported += 1
     if (!item.run_id) acc.unbound += 1
     const latency = Number(item.latency_ms || 0)
     if (latency > 0) {
@@ -71,7 +85,7 @@ export function LLMApiLogsPage() {
       acc.latencyCount += 1
     }
     return acc
-  }, { total: 0, success: 0, failed: 0, created: 0, unbound: 0, latencyTotal: 0, latencyCount: 0 })
+  }, { total: 0, success: 0, failed: 0, created: 0, cacheHit: 0, cacheMiss: 0, cacheNotReported: 0, unbound: 0, latencyTotal: 0, latencyCount: 0 })
   const avgLatency = stats ? (stats.avg_latency_ms || 0) : (pageStats.latencyCount ? Math.round(pageStats.latencyTotal / pageStats.latencyCount) : 0)
   return (
     <ViewportPage>
@@ -115,26 +129,41 @@ export function LLMApiLogsPage() {
             <option value="stream_error">stream_error</option>
           </select>
         </Field>
+        <Field id="llm-log-cache-filter" label="缓存" className="w-full sm:w-32">
+          <select id="llm-log-cache-filter" value={cacheFilter} onChange={e => { setCacheFilter(e.target.value); setPage(1) }}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm">
+            <option value="">全部缓存状态</option>
+            <option value="hit">命中</option>
+            <option value="miss">未命中</option>
+            <option value="not_reported">未上报</option>
+            <option value="pending">处理中</option>
+            <option value="error">调用失败</option>
+          </select>
+        </Field>
         <ActionButton onClick={load} className="mb-0.5">刷新</ActionButton>
       </Toolbar>
-      <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 md:grid-cols-6">
+      <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
         <MiniStat label={stats ? '筛选总数' : '当前页总数'} value={pageStats.total} />
         <MiniStat label="success" value={pageStats.success} tone="emerald" />
         <MiniStat label="failed/error" value={pageStats.failed_error ?? pageStats.failed} tone={(pageStats.failed_error ?? pageStats.failed) ? 'red' : 'slate'} />
         <MiniStat label="created" value={pageStats.created} tone={pageStats.created ? 'amber' : 'slate'} />
+        <MiniStat label="缓存命中" value={pageStats.cache_hit ?? pageStats.cacheHit} tone={(pageStats.cache_hit ?? pageStats.cacheHit) ? 'emerald' : 'slate'} />
+        <MiniStat label="缓存未命中" value={pageStats.cache_miss ?? pageStats.cacheMiss} tone={(pageStats.cache_miss ?? pageStats.cacheMiss) ? 'amber' : 'slate'} />
+        <MiniStat label="缓存未上报" value={pageStats.cache_not_reported ?? pageStats.cacheNotReported} />
         <MiniStat label="平均延迟" value={avgLatency ? `${avgLatency}ms` : '-'} />
         <MiniStat label="未绑定 run" value={pageStats.unbound_run_count ?? pageStats.unbound} tone={(pageStats.unbound_run_count ?? pageStats.unbound) ? 'amber' : 'slate'} />
       </div>
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="viewport-scroll min-h-0 flex-1 overflow-auto">
-        <table className="min-w-[860px] w-full text-sm">
+        <table className="min-w-[980px] w-full text-sm">
           <thead className="sticky top-0 z-10 bg-slate-900"><tr className="text-left text-slate-500 border-b border-slate-800">
-            <th className="py-2 px-3">状态</th><th className="py-2 px-3">source</th><th className="py-2 px-3">model</th><th className="py-2 px-3">run</th><th className="py-2 px-3">耗时</th><th className="py-2 px-3">时间</th><th className="py-2 px-3">摘要</th>
+            <th className="py-2 px-3">状态</th><th className="py-2 px-3">缓存</th><th className="py-2 px-3">source</th><th className="py-2 px-3">model</th><th className="py-2 px-3">run</th><th className="py-2 px-3">耗时</th><th className="py-2 px-3">时间</th><th className="py-2 px-3">摘要</th>
           </tr></thead>
           <tbody>
             {items.map(ll => {
               const isIncomplete = (ll.status === 'created') && (ll.latency_ms === 0 || !ll.latency_ms)
               const statusTone = ll.status === 'success' ? 'emerald' : ll.status === 'stream_success' ? 'blue' : ll.status === 'error' || ll.status === 'failed' || ll.status === 'stream_error' ? 'red' : ll.status === 'stream_created' ? 'blue' : 'slate'
+              const cacheMeta = CACHE_STATUS_META[ll.cache_status] || CACHE_STATUS_META.pending
               const detail = detailsById[ll.id]
               const request = detail ? safeJsonParse(detail.request_json, {}) : {}
               const messagesCount = request.messages?.length || 0
@@ -145,6 +174,7 @@ export function LLMApiLogsPage() {
                 <tr className="border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/30"
                   onClick={() => openLog(ll.id)}>
                   <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${statusTone === 'emerald' ? 'bg-emerald-500/10 text-emerald-300' : statusTone === 'blue' ? 'bg-blue-500/10 text-blue-300' : statusTone === 'red' ? 'bg-red-500/10 text-red-300' : 'bg-slate-500/10 text-slate-400'}`}>{ll.status || '-'}</span></td>
+                  <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs whitespace-nowrap ${cacheMeta.className}`}>{cacheMeta.label}{ll.cache_status === 'hit' ? ` · ${ll.cache_hit_tokens || 0}` : ''}</span></td>
                   <td className="py-2 px-3 text-slate-200">{ll.source || '-'}</td>
                   <td className="py-2 px-3 text-slate-400 max-w-40 truncate">{ll.model || '-'}</td>
                   <td className="py-2 px-3 text-xs text-slate-500 max-w-32 truncate font-mono">{ll.run_id ? ll.run_id.slice(0, 16) : <span className="text-amber-500">未绑定</span>}</td>
@@ -159,7 +189,7 @@ export function LLMApiLogsPage() {
                 </tr>
                 {openId === ll.id && (
                 <tr className="border-b border-slate-800/50 bg-slate-900/50">
-                  <td colSpan={7} className="p-4">
+                  <td colSpan={8} className="p-4">
                     {loadingDetailId === ll.id && (
                       <div className="py-8 text-center text-sm text-slate-500">
                         正在加载完整 request_json / response_json...

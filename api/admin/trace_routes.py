@@ -170,6 +170,7 @@ def list_llm_api_logs(
     source: str = "",
     model: str = "",
     status: str = "",
+    cache_status: str = "",
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
@@ -184,6 +185,8 @@ def list_llm_api_logs(
         q = q.filter(LLMApiRequestLog.model == model)
     if status:
         q = q.filter(LLMApiRequestLog.status == status)
+    if cache_status:
+        q = q.filter(LLMApiRequestLog.cache_status == cache_status)
     total = q.count()
     by_status = {
         str(row[0] or "created"): int(row[1] or 0)
@@ -194,6 +197,19 @@ def list_llm_api_logs(
     success_count = sum(by_status.get(s, 0) for s in ("success", "stream_success"))
     failed_error_count = sum(by_status.get(s, 0) for s in ("failed", "error", "stream_error"))
     created_count = sum(by_status.get(s, 0) for s in ("created", "stream_created"))
+    by_cache_status = {
+        str(row[0] or "pending"): int(row[1] or 0)
+        for row in q.with_entities(
+            LLMApiRequestLog.cache_status,
+            func.count(LLMApiRequestLog.id),
+        )
+        .group_by(LLMApiRequestLog.cache_status)
+        .all()
+    }
+    cache_token_totals = q.with_entities(
+        func.sum(LLMApiRequestLog.cache_hit_tokens),
+        func.sum(LLMApiRequestLog.cache_write_tokens),
+    ).one()
     avg_latency = (
         q.filter(LLMApiRequestLog.latency_ms > 0)
         .with_entities(func.avg(LLMApiRequestLog.latency_ms))
@@ -229,6 +245,10 @@ def list_llm_api_logs(
                 LLMApiRequestLog.response_preview,
                 LLMApiRequestLog.response_status,
                 LLMApiRequestLog.status,
+                LLMApiRequestLog.cache_status,
+                LLMApiRequestLog.cache_hit,
+                LLMApiRequestLog.cache_hit_tokens,
+                LLMApiRequestLog.cache_write_tokens,
                 LLMApiRequestLog.error,
                 LLMApiRequestLog.latency_ms,
                 LLMApiRequestLog.created_at,
@@ -265,6 +285,14 @@ def list_llm_api_logs(
             "avg_latency_ms": int(avg_latency or 0),
             "unbound_run_count": unbound_run_count,
             "by_status": by_status,
+            "cache_hit": by_cache_status.get("hit", 0),
+            "cache_miss": by_cache_status.get("miss", 0),
+            "cache_not_reported": by_cache_status.get("not_reported", 0),
+            "cache_pending": by_cache_status.get("pending", 0),
+            "cache_error": by_cache_status.get("error", 0),
+            "cache_hit_tokens": int(cache_token_totals[0] or 0),
+            "cache_write_tokens": int(cache_token_totals[1] or 0),
+            "by_cache_status": by_cache_status,
         },
     }
 

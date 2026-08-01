@@ -1,7 +1,7 @@
 {
   "approved_changes": [
     {
-      "after_sha256": "8790d6e49fba9d05ce4ca0a9c8213b6628de09f30876fe3f718b3a66383d0797",
+      "after_sha256": "48a58c59d3e640087fb517953dda41a69e641ff6478d5ea8c4960af6fd34d918",
       "before_sha256": "5f369375cd179c523d77fc5728228fa1f6d70ef5d68b40f8dc55935213a4dbed",
       "id": "stage1_admin_structured_views",
       "reason": "删除 Admin 任意 SQL 产品入口，改为代码所有的结构化 Table View Registry；Sandbox、URL、CQ 和 Prompt 安全基线保持不变。",
@@ -170,7 +170,7 @@
       "id": "security_invariants",
       "note": "Sandbox 路径、Admin 结构化视图、URL、CQ 和 Prompt 权威边界不得削弱。",
       "path": "tests/golden/architecture_behavior/security_invariants.json",
-      "sha256": "8790d6e49fba9d05ce4ca0a9c8213b6628de09f30876fe3f718b3a66383d0797"
+      "sha256": "48a58c59d3e640087fb517953dda41a69e641ff6478d5ea8c4960af6fd34d918"
     }
   ]
 }

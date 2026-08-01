@@ -398,7 +398,10 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     )
     LLMRequestTracer.finish_request(
         log_id=llm_log_id,
-        response={"choices": [{"message": {"content": "输出"}}]},
+        response={
+            "choices": [{"message": {"content": "输出"}}],
+            "usage": {"cached_tokens": 16},
+        },
         response_status=200,
         status="success",
         latency_ms=7,
@@ -441,15 +444,30 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     assert llm_logs_resp.json()["stats"]["total"] == 1
     assert llm_logs_resp.json()["stats"]["success"] == 1
     assert llm_logs_resp.json()["stats"]["avg_latency_ms"] == 7
+    assert llm_logs_resp.json()["stats"]["cache_hit"] == 1
+    assert llm_logs_resp.json()["stats"]["cache_hit_tokens"] == 16
     llm_list_item = llm_logs_resp.json()["items"][0]
     assert llm_list_item["summary_only"] is True
+    assert llm_list_item["cache_status"] == "hit"
+    assert llm_list_item["cache_hit"] is True
+    assert llm_list_item["cache_hit_tokens"] == 16
     assert "request_json" not in llm_list_item
     assert "response_json" not in llm_list_item
+
+    cache_filtered_resp = client.get(
+        "/api/v1/admin/llm-api-logs",
+        params={"cache_status": "hit"},
+        headers=auth_header,
+    )
+    assert cache_filtered_resp.status_code == 200
+    assert cache_filtered_resp.json()["total"] == 1
 
     llm_detail_resp = client.get(f"/api/v1/admin/llm-api-logs/{llm_log_id}", headers=auth_header)
     assert llm_detail_resp.status_code == 200, llm_detail_resp.text
     assert json.loads(llm_detail_resp.json()["request_json"])["messages"][0]["content"] == "输入"
     assert json.loads(llm_detail_resp.json()["response_json"])["choices"][0]["message"]["content"] == "输出"
+    assert llm_detail_resp.json()["cache_status"] == "hit"
+    assert llm_detail_resp.json()["cache_hit_tokens"] == 16
 
     tools_resp = client.get("/api/v1/admin/tool-calls", headers=auth_header)
     assert tools_resp.status_code == 200, tools_resp.text

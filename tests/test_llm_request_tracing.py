@@ -84,16 +84,23 @@ def test_record_request_returns_id_and_finish_updates_same_row(db_session):
 
     assert isinstance(log_id, int)
     assert log_id > 0
+    created_row = db_session.query(LLMApiRequestLog).filter_by(id=log_id).one()
+    assert created_row.cache_status == "pending"
+    assert created_row.cache_hit is None
 
     LLMRequestTracer.finish_request(
         log_id=log_id,
-        response={"choices": [{"message": {"content": "ok"}}]},
+        response={
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"cached_tokens": 48, "cache_write_tokens": 5},
+        },
         response_status=200,
         status="success",
         latency_ms=123,
         phase="agent.final_action",
     )
 
+    db_session.expire_all()
     row = db_session.query(LLMApiRequestLog).filter_by(id=log_id).one()
     assert json.loads(row.request_json)["messages"][0]["content"] == "hi"
     assert json.loads(row.response_json)["choices"][0]["message"]["content"] == "ok"
@@ -106,6 +113,14 @@ def test_record_request_returns_id_and_finish_updates_same_row(db_session):
     assert row.latency_ms == 123
     assert row.finished_at is not None
     assert "secret-token" not in row.headers_json
+    assert row.cache_status == "hit"
+    assert row.cache_hit is True
+    assert row.cache_hit_tokens == 48
+    assert row.cache_write_tokens == 5
+    cache_details = json.loads(row.cache_details_json)
+    assert {
+        metric["source"] for metric in cache_details["reported_metrics"]
+    } == {"usage.cached_tokens", "usage.cache_write_tokens"}
 
 
 def test_finish_request_records_error_status(db_session):
@@ -131,6 +146,9 @@ def test_finish_request_records_error_status(db_session):
     assert row.status == "error"
     assert row.response_status == 502
     assert row.error == "upstream failed"
+    assert row.cache_status == "error"
+    assert row.cache_hit is None
+    assert row.cache_hit_tokens == 0
     response_audit = json.loads(row.response_json)
     assert response_audit["response_body_omitted"] is True
     assert "bad gateway" in response_audit["safe_summary"]

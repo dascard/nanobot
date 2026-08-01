@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from foundation.llm.cache_usage import (
+    CACHE_STATUS_PENDING,
+    normalize_llm_cache_usage,
+)
+
 from core.prompt_v2.template_resolution import serialize_template_resolutions_json
 from core.safe_diagnostics import safe_response_summary, safe_url_for_logging
 from core.time_utils import db_now_naive, to_db_naive
@@ -1014,6 +1019,11 @@ class LLMRequestTracer:
                         ),
                         request_preview=_preview(request_payload, max_chars=4000),
                         status=str(status or "created")[:32],
+                        cache_status=CACHE_STATUS_PENDING,
+                        cache_hit=None,
+                        cache_hit_tokens=0,
+                        cache_write_tokens=0,
+                        cache_details_json="{}",
                         response_status=int(response_status or 0),
                         error=safe_response_summary(error, max_chars=2000),
                         message_sources_json=_json_dumps(lint_result.get("message_sources") or [], max_chars=0),
@@ -1060,7 +1070,12 @@ class LLMRequestTracer:
                     if log is None:
                         return
                     normalized_status = str(status or "success")[:32]
-                    if normalized_status in {"success", "stream_success"}:
+                    successful = normalized_status in {"success", "stream_success"}
+                    cache_usage = normalize_llm_cache_usage(
+                        response or {},
+                        successful=successful,
+                    )
+                    if successful:
                         log.response_json = _bounded_payload_json(
                             response or {},
                             max_chars=MAX_LLM_RESPONSE_JSON_CHARS,
@@ -1080,6 +1095,15 @@ class LLMRequestTracer:
                             audit,
                             max_chars=4000,
                         )
+                    log.cache_status = cache_usage.status
+                    log.cache_hit = cache_usage.hit
+                    log.cache_hit_tokens = cache_usage.hit_tokens
+                    log.cache_write_tokens = cache_usage.write_tokens
+                    log.cache_details_json = json.dumps(
+                        cache_usage.details,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
                     log.response_status = int(response_status or 0)
                     log.status = normalized_status
                     if phase is not None:

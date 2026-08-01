@@ -3,6 +3,14 @@ import { useState } from 'react'
 import { Badge, Card, InfoGrid, MiniStat } from './ui'
 import { safeJsonParse } from './traceUtils'
 
+const CACHE_STATUS_META = {
+  hit: { label: '命中', tone: 'emerald', className: 'text-emerald-300' },
+  miss: { label: '未命中', tone: 'amber', className: 'text-amber-300' },
+  not_reported: { label: '供应商未上报', tone: 'slate', className: 'text-slate-400' },
+  pending: { label: '处理中', tone: 'blue', className: 'text-blue-300' },
+  error: { label: '调用失败', tone: 'red', className: 'text-red-300' },
+}
+
 function formatBytes(n) {
   if (!n || n < 1024) return `${n || 0}B`
   if (n < 1048576) return `${(n / 1024).toFixed(1)}KB`
@@ -214,6 +222,7 @@ export function LLMApiLogViewer({ log }) {
   if (!log) return <div className="py-8 text-center text-sm text-slate-600">无数据</div>
   const request = safeJsonParse(log.request_json, {})
   const response = safeJsonParse(log.response_json, {})
+  const cacheDetails = safeJsonParse(log.cache_details_json, {})
   const requestLint = safeJsonParse(log.request_lint_json, {})
   const lintIssues = Array.isArray(requestLint.issues) ? requestLint.issues : []
   const lintCounts = requestLint.severity_counts || {}
@@ -227,6 +236,7 @@ export function LLMApiLogViewer({ log }) {
   const statusTone = log.status === 'success' ? 'emerald' : log.status === 'stream_success' ? 'blue' : log.status === 'error' || log.status === 'failed' || log.status === 'stream_error' ? 'red' : log.status === 'stream_created' ? 'blue' : 'slate'
   const issueTone = (severity) => severity === 'P0' ? 'red' : severity === 'P1' ? 'amber' : 'slate'
   const reasoningTrace = extractReasoningTrace(response)
+  const cacheMeta = CACHE_STATUS_META[log.cache_status] || CACHE_STATUS_META.pending
 
   return (
     <div className="space-y-4 text-sm">
@@ -246,6 +256,9 @@ export function LLMApiLogViewer({ log }) {
             { label: 'provider', value: log.provider || '-' },
             { label: 'model', value: log.model || '-' },
             { label: 'status', value: log.status || '-', className: statusTone === 'emerald' ? 'text-emerald-300' : statusTone === 'blue' ? 'text-blue-300' : statusTone === 'red' ? 'text-red-300' : 'text-slate-300' },
+            { label: '缓存结果', value: cacheMeta.label, className: cacheMeta.className },
+            { label: '缓存命中 tokens', value: log.cache_hit_tokens ?? 0 },
+            { label: '缓存写入 tokens', value: log.cache_write_tokens ?? 0 },
             { label: 'response_status', value: log.response_status || 0 },
             { label: 'latency', value: log.latency_ms ? `${log.latency_ms}ms` : '-' },
             { label: 'run_id', value: log.run_id ? log.run_id.slice(0, 16) : '未绑定 run', className: log.run_id ? 'text-slate-300' : 'text-amber-300' },
@@ -472,6 +485,7 @@ export function LLMApiLogViewer({ log }) {
           <RawJsonAccordion label="headers_json" text={log.headers_json} />
           <RawJsonAccordion label="request_lint_json" text={log.request_lint_json} />
           <RawJsonAccordion label="message_sources_json" text={log.message_sources_json} />
+          <RawJsonAccordion label="cache_details_json" text={Object.keys(cacheDetails).length ? log.cache_details_json : ''} />
         </div>
       </section>
     </div>
@@ -495,10 +509,12 @@ export function LLMApiRequestLogsBlock({ logs = [] }) {
           const statusTone = ll.status === 'success' ? 'emerald' : ll.status === 'stream_success' ? 'blue' : ll.status === 'error' || ll.status === 'failed' || ll.status === 'stream_error' ? 'red' : ll.status === 'stream_created' ? 'blue' : 'slate'
           const requestLint = safeJsonParse(ll.request_lint_json, {})
           const p0Count = requestLint.severity_counts?.P0 || 0
+          const cacheMeta = CACHE_STATUS_META[ll.cache_status] || CACHE_STATUS_META.pending
           return (
             <details key={ll.id} className="border-b border-slate-800/50">
               <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-sm flex gap-3 items-center">
                 <Badge tone={statusTone}>{ll.status || '-'}</Badge>
+                <Badge tone={cacheMeta.tone}>缓存：{cacheMeta.label}{ll.cache_status === 'hit' ? ` ${ll.cache_hit_tokens || 0}` : ''}</Badge>
                 {p0Count > 0 && <Badge tone="red">P0 {p0Count}</Badge>}
                 <span className="text-slate-200 w-16">{ll.source || '-'}</span>
                 <span className="text-slate-400 w-32 truncate">{ll.model || '-'}</span>

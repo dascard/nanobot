@@ -5,6 +5,7 @@ APP_JS = Path("webui/src/App.jsx")
 UI_JS = Path("webui/src/components/ui.jsx")
 CSS = Path("webui/src/index.css")
 LLM_LOGS_JS = Path("webui/src/features/agent-runs/LLMApiLogsPage.jsx")
+TRACE_VIEW_JS = Path("webui/src/components/TraceView.jsx")
 AGENT_RUNS_JS = Path("webui/src/features/agent-runs/AgentRunsPage.jsx")
 TOOL_CALLS_JS = Path("webui/src/features/agent-runs/ToolCallsPage.jsx")
 SANDBOX_FILES_JS = Path("webui/src/features/sandbox/SandboxFilesPage.jsx")
@@ -104,11 +105,25 @@ def test_key_filters_have_labels_or_aria_labels():
     assert "Field id=\"llm-log-run-filter\"" in source
     assert "id=\"llm-log-run-filter\"" in source
     assert "Field id=\"llm-log-status-filter\"" in source
+    assert "Field id=\"llm-log-cache-filter\"" in source
     assert "id=\"model-catalog-query\"" in source
     assert "htmlFor=\"model-catalog-provider\"" in source
     assert "Field id=\"session-config-platform-filter\"" in source
     assert "Field id=\"session-config-chat-type-filter\"" in source
     assert "Field id=\"session-config-guidance-filter\"" in source
+
+
+def test_llm_api_logs_expose_cache_result_and_token_counts():
+    page_source = LLM_LOGS_JS.read_text(encoding="utf-8")
+    detail_source = TRACE_VIEW_JS.read_text(encoding="utf-8")
+
+    assert "params.cache_status = cacheFilter" in page_source
+    assert "缓存命中" in page_source
+    assert "缓存未命中" in page_source
+    assert "缓存未上报" in page_source
+    assert "ll.cache_hit_tokens" in page_source
+    assert "cache_details_json" in detail_source
+    assert "缓存写入 tokens" in detail_source
 
 
 def test_model_routes_page_links_task_and_output_contracts():

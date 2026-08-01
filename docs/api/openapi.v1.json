@@ -14664,6 +14664,16 @@
             }
           },
           {
+            "in": "query",
+            "name": "cache_status",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Cache Status",
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
