@@ -39,6 +39,7 @@ MAX_WEB_SEARCH_PREVIEW_CHARS = 40000
 MAX_LLM_REQUEST_JSON_CHARS = 256_000
 MAX_LLM_RESPONSE_JSON_CHARS = 64_000
 MAX_LLM_FAILURE_SUMMARY_CHARS = 4_000
+MAX_SANDBOX_TRACE_COMMAND_BYTES = 16 * 1024
 
 
 @dataclass
@@ -140,6 +141,20 @@ def _safe_sandbox_ref(value: Any) -> str | dict[str, Any]:
     return {"ref_omitted": True, **_text_audit(ref)}
 
 
+def _safe_sandbox_command(value: Any) -> str:
+    command = str(value or "")
+    safe_command = safe_response_summary(
+        command,
+        max_chars=MAX_SANDBOX_TRACE_COMMAND_BYTES,
+    )
+    encoded = safe_command.encode("utf-8", errors="replace")
+    if len(encoded) <= MAX_SANDBOX_TRACE_COMMAND_BYTES:
+        return safe_command
+    suffix = b"...[TRUNCATED]"
+    head = encoded[:MAX_SANDBOX_TRACE_COMMAND_BYTES - len(suffix)]
+    return head.decode("utf-8", errors="ignore") + suffix.decode("ascii")
+
+
 def _uses_metadata_only_trace(tool_name: str) -> bool:
     """从类型化工具描述符读取 Trace 策略，避免维护第二份工具名集合。"""
 
@@ -148,7 +163,7 @@ def _uses_metadata_only_trace(tool_name: str) -> bool:
 
 
 def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
-    """Sandbox 工具参数进入持久 Trace 前仅保留安全元数据。"""
+    """Sandbox 工具参数进入持久 Trace 前执行有界脱敏。"""
 
     name = str(tool_name or "")
     if not _uses_metadata_only_trace(name):
@@ -167,8 +182,10 @@ def sanitize_tool_trace_args(tool_name: str, args: Any) -> Any:
         result["rejected_field_count"] = unknown_count
     if name == "sandbox_exec":
         command = str(args.get("command") or "")
+        safe_command = _safe_sandbox_command(command)
         result.update({
-            "command_omitted": True,
+            "command": safe_command,
+            "command_sanitized": safe_command != command,
             "command_lines": command.count("\n") + (1 if command else 0),
             **{f"command_{key}": value for key, value in _text_audit(command).items()},
             "cwd": _safe_sandbox_path(args.get("cwd"), allow_empty=True),

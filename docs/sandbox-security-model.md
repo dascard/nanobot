@@ -294,10 +294,11 @@ kill switch 必须执行以下动作：
 - catalog generation、策略 SHA 和镜像 IMAGE ID；
 - quota generation 与有界用量；
 - 管理操作、操作者与审计原因。
+- Agent 工具调用 Trace 中经凭据脱敏且有界的 `sandbox_exec` 命令。
 
 不得记录或展示：
 
-- 完整命令；
+- 未经脱敏或超过 16 KiB 上限的原始命令；
 - stdout／stderr 正文；
 - 文件正文或补丁正文；
 - Secret、Token、Cookie、Authorization header；

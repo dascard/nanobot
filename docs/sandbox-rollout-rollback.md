@@ -35,7 +35,7 @@ platform:encoded_external_session_id:chat_type
 - `trusted_developer` 仍为 `grantable=false`，没有私有仓库凭据注入路径；
 - Sandbox Agent 兼容性 Eval 已使用真实 Agent 事件 artifact 运行，静态 case 或合成单元测试不能代替生产体验证据；
 - 旧 bash/read/write/edit/grep/glob 与通用宿主写入口继续硬禁用；
-- Trace 中没有文件正文、完整命令、stdout/stderr、transport token 或宿主路径。
+- Trace 中的 `sandbox_exec` 命令已经凭据脱敏且不超过 16 KiB；没有文件正文、stdout/stderr、transport token 或宿主路径。
 
 截至 2026-07-26，当前开发宿主缺少 AppArmor、`/srv/nanobot` 独立 project quota 数据盘和 quota 工具，且当前会话不是 root，因此生产灰度状态为 `BLOCKED`。代码与静态测试通过不能解除该阻断。
 
@@ -126,4 +126,4 @@ Profile 变更不是只改数据库字符串。切换 Profile 必须定向 quies
 - 非 Nanobot 容器、镜像和 volume 未变化；
 - Workspace、Runtime、Asset、grant、quota binding、operation 和审计记录仍存在；
 - 主聊天、固定 Worker 和非 Sandbox 工具继续健康；
-- Trace 与 Web 页面未泄漏命令、文件正文、Token 或宿主路径。
+- Trace 与 Web 页面中的 `sandbox_exec` 命令已经凭据脱敏且有界，并且未泄漏文件正文、Token 或宿主路径。

@@ -35,13 +35,13 @@ def test_metadata_only_trace_policy_comes_from_tool_descriptor_registry(monkeypa
     assert not hasattr(tracing, "SANDBOX_TRACE_TOOL_NAMES")
 
 
-def test_sandbox_trace_sanitizers_omit_commands_file_bodies_and_process_output():
+def test_sandbox_trace_sanitizers_keep_command_and_omit_process_output():
     from core.tracing import sanitize_tool_trace_args, sanitize_tool_trace_result
 
-    command_secret = "echo SUPER_SECRET_COMMAND"
+    command = "python -m pytest tests/ -v"
     stdout_secret = "SUPER_SECRET_STDOUT"
     args = sanitize_tool_trace_args("sandbox_exec", {
-        "command": command_secret,
+        "command": command,
         "cwd": "/srv/nanobot/private",
         "timeout_seconds": 20,
     })
@@ -60,12 +60,43 @@ def test_sandbox_trace_sanitizers_omit_commands_file_bodies_and_process_output()
     }))
     serialized = json.dumps({"args": args, "result": result}, ensure_ascii=False)
 
-    assert command_secret not in serialized
+    assert args["command"] == command
+    assert args["command_sanitized"] is False
     assert stdout_secret not in serialized
     assert "/srv/nanobot" not in serialized
     assert args["cwd"] == "[INVALID_PATH]"
     assert len(args["command_sha256"]) == 64
     assert len(result["data"]["stdout_sha256"]) == 64
+
+
+def test_sandbox_trace_command_redacts_recognizable_credentials():
+    from core.tracing import sanitize_tool_trace_args
+
+    token = "TRACE_TOKEN_MUST_NOT_PERSIST"
+    command = (
+        f"curl -H 'Authorization: Bearer {token}' "
+        f"'https://example.test/run?token={token}'"
+    )
+
+    args = sanitize_tool_trace_args("sandbox_exec", {"command": command})
+    serialized = json.dumps(args, ensure_ascii=False)
+
+    assert token not in serialized
+    assert "[REDACTED]" in args["command"]
+    assert args["command_sanitized"] is True
+
+
+def test_sandbox_trace_command_is_bounded_by_utf8_bytes():
+    from core.tracing import sanitize_tool_trace_args
+
+    command = "测" * (16 * 1024)
+
+    args = sanitize_tool_trace_args("sandbox_exec", {"command": command})
+
+    assert len(args["command"].encode("utf-8")) <= 16 * 1024
+    assert args["command"].endswith("...[TRUNCATED]")
+    assert args["command_sanitized"] is True
+    assert args["command_bytes"] == len(command.encode("utf-8"))
 
 
 def test_workspace_trace_sanitizers_omit_write_read_and_search_text():
@@ -275,15 +306,16 @@ def test_asset_publish_trace_omits_short_lived_transport_token():
     assert result["data"]["ref"] == f"asset://sha256/{'a' * 64}"
 
 
-def test_tool_tracer_persists_only_sandbox_audit_metadata(db_session):
+def test_tool_tracer_persists_sandbox_command_and_safe_result_metadata(db_session):
     from core.database import ToolCall
     from core.tracing import ToolTracer
 
+    command = "python -m pytest tests/test_sandbox_trace_policy.py -q"
     call_id = ToolTracer.start_tool_call(
         "trace-sandbox",
         "run-sandbox",
         "sandbox_exec",
-        {"command": "echo TRACE_COMMAND_SECRET", "cwd": "/srv/nanobot/private"},
+        {"command": command, "cwd": "/srv/nanobot/private"},
     )
     ToolTracer.finish_tool_call(
         call_id,
@@ -304,7 +336,7 @@ def test_tool_tracer_persists_only_sandbox_audit_metadata(db_session):
     row = db_session.query(ToolCall).filter_by(tool_call_id=call_id).one()
 
     persisted = row.args_json + row.result_preview + row.error
-    assert "TRACE_COMMAND_SECRET" not in persisted
+    assert command in row.args_json
     assert "TRACE_STDOUT_SECRET" not in persisted
     assert "/srv/nanobot" not in persisted
     assert "command_sha256" in row.args_json
