@@ -8,7 +8,6 @@ and provides a simple async handle_message() interface for use in routes.py.
 
 import asyncio
 import hashlib
-import inspect
 import logging
 from uuid import uuid4
 from datetime import datetime
@@ -41,6 +40,7 @@ from nanobot_kt.direct_tool_execution import (
 from nanobot_kt.model_attempts import (
     classify_attempt_outcome,
     merge_model_candidates,
+    record_candidate_health,
 )
 from clients.new_api_client import NewAPIClient
 from clients.model_registry import model_supports_capabilities, registry
@@ -167,33 +167,6 @@ def _strip_kt_framework_prompt_sections(text: str) -> str:
     if not indexes:
         return content
     return content[: min(indexes)].rstrip()
-
-
-async def _call_tracker_method(tracker: Any, method_name: str, model_id: str) -> None:
-    if tracker is None:
-        return
-    method = getattr(tracker, method_name, None)
-    if not method:
-        return
-    result = method(model_id)
-    if inspect.isawaitable(result):
-        await result
-
-
-def _candidate_health_key(candidate: dict[str, Any] | None, model_id: str) -> str:
-    return str((candidate or {}).get("_health_key") or model_id)
-
-
-def _remember_codex_account_success(
-    candidate: dict[str, Any] | None,
-    session_id: str,
-) -> None:
-    account_id = str((candidate or {}).get("_codex_account_id") or "")
-    if not account_id:
-        return
-    from nanobot_kt.codex_accounts import codex_account_pool
-
-    codex_account_pool.mark_success(session_id, account_id)
 
 
 class NanobotBridge(MessageContractBridgeMixin):
@@ -1180,7 +1153,6 @@ class NanobotBridge(MessageContractBridgeMixin):
             health_status = "pending"
 
             candidate_route_plan = candidate.get("_route_plan") or route_plan
-            health_key = _candidate_health_key(candidate, target_model)
             self._set_runtime_model_route(target_model, candidate_route_plan)
             logger.info(
                 f"[Model Router] Attempt {attempt + 1}: {target_model} "
@@ -1246,16 +1218,18 @@ class NanobotBridge(MessageContractBridgeMixin):
                     "[NanobotBridge] Using preserved tool HTML output (replacing buffer)"
                 )
                 self._output._buffer = [terminal_output.html]
-                await _call_tracker_method(tracker, "record_success", health_key)
-                _remember_codex_account_success(candidate, session_id)
+                await record_candidate_health(
+                    tracker, candidate, target_model, "success", session_id
+                )
                 health_status = "success"
                 break
 
             reply_text = self._extract_reply_from_tool_output(session_id)
             if self.is_no_reply_session(session_id):
                 logger.info("[NanobotBridge] no_reply() called, stopping model loop")
-                await _call_tracker_method(tracker, "record_success", health_key)
-                _remember_codex_account_success(candidate, session_id)
+                await record_candidate_health(
+                    tracker, candidate, target_model, "success", session_id
+                )
                 health_status = "success"
                 break
             if reply_text:
@@ -1266,8 +1240,9 @@ class NanobotBridge(MessageContractBridgeMixin):
                     "[NanobotBridge] reply() called len=%d, stopping model loop",
                     len(reply_text),
                 )
-                await _call_tracker_method(tracker, "record_success", health_key)
-                _remember_codex_account_success(candidate, session_id)
+                await record_candidate_health(
+                    tracker, candidate, target_model, "success", session_id
+                )
                 health_status = "success"
                 break
 
@@ -1276,7 +1251,9 @@ class NanobotBridge(MessageContractBridgeMixin):
                 logger.warning(
                     f"[NanobotBridge] Framework error. Recording failure for {target_model}"
                 )
-                await _call_tracker_method(tracker, "record_failure", health_key)
+                await record_candidate_health(
+                    tracker, candidate, target_model, "failure", session_id
+                )
                 health_status = "failure"
 
                 # reasoning_content: 只 ban 出错的特定模型，不波及同厂商其他模型
@@ -2350,32 +2327,22 @@ class NanobotBridge(MessageContractBridgeMixin):
             response = reply_resolution.response
             reply_source = reply_resolution.agent_result
             if target_model:
-                selected_health_key = _candidate_health_key(
-                    model_loop.selected_candidate,
-                    target_model,
-                )
                 if (
                     reply_resolution.finish_status in {"success", "no_reply"}
                     and model_loop.health_status != "success"
                 ):
-                    await _call_tracker_method(
-                        tracker,
-                        "record_success",
-                        selected_health_key,
-                    )
-                    _remember_codex_account_success(
-                        model_loop.selected_candidate,
-                        session_id,
+                    await record_candidate_health(
+                        tracker, model_loop.selected_candidate,
+                        target_model, "success", session_id,
                     )
                     model_loop.health_status = "success"
                 elif (
                     reply_resolution.finish_status in {"suppressed", "error"}
                     and model_loop.health_status != "failure"
                 ):
-                    await _call_tracker_method(
-                        tracker,
-                        "record_failure",
-                        selected_health_key,
+                    await record_candidate_health(
+                        tracker, model_loop.selected_candidate,
+                        target_model, "failure", session_id,
                     )
                     model_loop.health_status = "failure"
             if reply_resolution.finish_status in {"no_reply", "suppressed"}:

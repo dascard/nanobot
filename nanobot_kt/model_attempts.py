@@ -1,5 +1,6 @@
 """模型候选合并和单次尝试结果判定。"""
 
+import inspect
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
@@ -12,6 +13,28 @@ def classify_attempt_outcome(response: str | None) -> AttemptOutcome:
     if not text.strip() or "[系统内部错误]" in text:
         return "failure"
     return "pending"
+
+
+async def record_candidate_health(
+    tracker: Any,
+    candidate: Mapping[str, Any] | None,
+    model_id: str,
+    outcome: Literal["success", "failure"],
+    session_id: str,
+) -> str:
+    """按模型与账号隔离健康状态，并在成功后更新 Codex 会话粘性。"""
+    health_key = str((candidate or {}).get("_health_key") or model_id)
+    method = getattr(tracker, f"record_{outcome}", None) if tracker else None
+    if method:
+        result = method(health_key)
+        if inspect.isawaitable(result):
+            await result
+    account_id = str((candidate or {}).get("_codex_account_id") or "")
+    if outcome == "success" and account_id:
+        from nanobot_kt.codex_accounts import codex_account_pool
+
+        codex_account_pool.mark_success(session_id, account_id)
+    return health_key
 
 
 def merge_model_candidates(
