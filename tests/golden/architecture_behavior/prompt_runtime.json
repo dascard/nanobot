@@ -36,6 +36,11 @@
       "size_bytes": 1347
     },
     {
+      "path": "data/prompts_v2/tasks/outreach_extract.md",
+      "sha256": "62013ef923058e55d76ca66cb07418e20bccadb9182f1dcde83659053408dbcf",
+      "size_bytes": 1455
+    },
+    {
       "path": "data/prompts_v2/tasks/outreach_generate.md",
       "sha256": "abc6d838e43d9e2d55d00df177c9578ce5680e875536be6b35d374d0be679406",
       "size_bytes": 1822
@@ -44,6 +49,11 @@
       "path": "data/prompts_v2/tasks/outreach_judge.md",
       "sha256": "47efc15598a2a98dcc0e0da0cfce4ae1edb13d96f774248c3b868008f2ea9ae5",
       "size_bytes": 3035
+    },
+    {
+      "path": "data/prompts_v2/tasks/outreach_quality.md",
+      "sha256": "2ab3ee0902525d4fb2fa1f603e28b697a4cb44a6d24e0bce7f08a34f27802d70",
+      "size_bytes": 1456
     },
     {
       "path": "data/prompts_v2/tasks/private_decision.md",
