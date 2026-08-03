@@ -218,6 +218,59 @@ def test_build_session_memory_large_session_uses_latest_raw_window(db_session):
     assert debug["rolling_summary_raw_start_turn_id"] == min(turn_ids)
 
 
+def test_private_cache_epoch_appends_until_high_water_then_rebuilds_once(
+    db_session,
+    monkeypatch,
+):
+    from app.session_memory import config
+    from core.context_builder import build_session_memory
+
+    monkeypatch.setattr(config, "PRIVATE_CACHE_EPOCH_LOW_WATER_TURNS", 4, raising=False)
+    monkeypatch.setattr(config, "PRIVATE_CACHE_EPOCH_HIGH_WATER_TURNS", 10, raising=False)
+    monkeypatch.setattr(config, "PRIVATE_CACHE_EPOCH_LOW_WATER_TOKENS", 4000, raising=False)
+    monkeypatch.setattr(config, "PRIVATE_CACHE_EPOCH_HIGH_WATER_TOKENS", 8000, raising=False)
+    monkeypatch.setattr(config, "SESSION_SUMMARY_LLM_ENABLED", False)
+
+    def add_pair(index: int) -> None:
+        _turn(db_session, role="user", content=f"问题 {index}")
+        _turn(db_session, role="assistant", content=f"回答 {index}")
+
+    for index in range(1, 5):
+        add_pair(index)
+    db_session.commit()
+
+    _header, first_messages, first_debug = build_session_memory(
+        db_session,
+        "s1",
+        max_total=4000,
+    )
+    assert [item["turn_id"] for item in first_messages] == list(range(1, 9))
+    assert first_debug["prefix_epoch_rollover"] is False
+
+    add_pair(5)
+    db_session.commit()
+    _header, rebuilt_messages, rebuilt_debug = build_session_memory(
+        db_session,
+        "s1",
+        max_total=4000,
+    )
+    assert [item["turn_id"] for item in rebuilt_messages] == [7, 8, 9, 10]
+    assert rebuilt_debug["prefix_epoch_rollover"] is True
+    assert rebuilt_debug["prefix_epoch"] != first_debug["prefix_epoch"]
+
+    add_pair(6)
+    db_session.commit()
+    _header, appended_messages, appended_debug = build_session_memory(
+        db_session,
+        "s1",
+        max_total=4000,
+    )
+    assert appended_messages[:4] == rebuilt_messages
+    assert [item["turn_id"] for item in appended_messages] == [7, 8, 9, 10, 11, 12]
+    assert appended_debug["prefix_epoch"] == rebuilt_debug["prefix_epoch"]
+    assert appended_debug["prefix_epoch_rollover"] is False
+
+
 def test_admin_rollup_inputs_large_session_uses_latest_raw_window(db_session):
     from api.admin.session_memory_routes import _build_rollup_inputs
 
@@ -2447,6 +2500,19 @@ def test_summary_prompt_explains_disposition_semantics():
     assert "四个可继承数组合计最多 7 项" in output_instruction
     assert "summary 不超过 400 字" in output_instruction
     assert "约 3000 tokens 以内" in output_instruction
+    assert '"quality":{"score":0.9,"issues":[]}' in output_instruction
+    assert "quality 不允许 reason 或其他字段" in output_instruction
+
+
+def test_summary_task_runtime_failure_keeps_safe_specific_code():
+    from app.session_memory.llm_summarizer import _safe_session_summary_error
+
+    assert _safe_session_summary_error(
+        RuntimeError("task_runtime_failed:invalid_json")
+    ) == "task_runtime_failed:invalid_json"
+    assert _safe_session_summary_error(
+        RuntimeError("task_runtime_failed:schema_invalid")
+    ) == "task_runtime_failed:schema_invalid"
 
 
 def test_summary_state_obligation_budget_caps_next_batch_audit():

@@ -142,7 +142,7 @@ export function LLMApiLogsPage() {
         </Field>
         <ActionButton onClick={load} className="mb-0.5">刷新</ActionButton>
       </Toolbar>
-      <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
+      <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-11">
         <MiniStat label={stats ? '筛选总数' : '当前页总数'} value={pageStats.total} />
         <MiniStat label="success" value={pageStats.success} tone="emerald" />
         <MiniStat label="failed/error" value={pageStats.failed_error ?? pageStats.failed} tone={(pageStats.failed_error ?? pageStats.failed) ? 'red' : 'slate'} />
@@ -150,6 +150,8 @@ export function LLMApiLogsPage() {
         <MiniStat label="缓存命中" value={pageStats.cache_hit ?? pageStats.cacheHit} tone={(pageStats.cache_hit ?? pageStats.cacheHit) ? 'emerald' : 'slate'} />
         <MiniStat label="缓存未命中" value={pageStats.cache_miss ?? pageStats.cacheMiss} tone={(pageStats.cache_miss ?? pageStats.cacheMiss) ? 'amber' : 'slate'} />
         <MiniStat label="缓存未上报" value={pageStats.cache_not_reported ?? pageStats.cacheNotReported} />
+        <MiniStat label="未命中 tokens" value={pageStats.cache_miss_tokens ?? 0} tone={(pageStats.cache_miss_tokens ?? 0) ? 'amber' : 'slate'} />
+        <MiniStat label="Token 命中率" value={pageStats.cache_hit_token_ratio == null ? '-' : `${(pageStats.cache_hit_token_ratio * 100).toFixed(1)}%`} tone={(pageStats.cache_hit_token_ratio ?? 0) >= 0.5 ? 'emerald' : 'amber'} />
         <MiniStat label="平均延迟" value={avgLatency ? `${avgLatency}ms` : '-'} />
         <MiniStat label="未绑定 run" value={pageStats.unbound_run_count ?? pageStats.unbound} tone={(pageStats.unbound_run_count ?? pageStats.unbound) ? 'amber' : 'slate'} />
       </div>
@@ -174,7 +176,7 @@ export function LLMApiLogsPage() {
                 <tr className="border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/30"
                   onClick={() => openLog(ll.id)}>
                   <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${statusTone === 'emerald' ? 'bg-emerald-500/10 text-emerald-300' : statusTone === 'blue' ? 'bg-blue-500/10 text-blue-300' : statusTone === 'red' ? 'bg-red-500/10 text-red-300' : 'bg-slate-500/10 text-slate-400'}`}>{ll.status || '-'}</span></td>
-                  <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs whitespace-nowrap ${cacheMeta.className}`}>{cacheMeta.label}{ll.cache_status === 'hit' ? ` · ${ll.cache_hit_tokens || 0}` : ''}</span></td>
+                  <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs whitespace-nowrap ${cacheMeta.className}`}>{cacheMeta.label}{ll.cache_status === 'hit' ? ` · ${ll.cache_hit_tokens || 0}` : ll.cache_status === 'miss' ? ` · ${ll.cache_miss_tokens || 0}` : ''}</span></td>
                   <td className="py-2 px-3 text-slate-200">{ll.source || '-'}</td>
                   <td className="py-2 px-3 text-slate-400 max-w-40 truncate">{ll.model || '-'}</td>
                   <td className="py-2 px-3 text-xs text-slate-500 max-w-32 truncate font-mono">{ll.run_id ? ll.run_id.slice(0, 16) : <span className="text-amber-500">未绑定</span>}</td>

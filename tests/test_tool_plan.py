@@ -34,6 +34,27 @@ def test_tool_plan_builds_prompt_schemas_and_stable_hash(monkeypatch):
     assert plan.sha256 == same_plan.sha256
 
 
+def test_tool_plan_sorts_dynamic_schemas_by_name_after_merge():
+    from core.tool_plan import ToolPlan, extend_tool_plan
+
+    base = ToolPlan.from_effective_tools(
+        enabled={"reply": True},
+        chat_type="private",
+        tool_schemas=[_tool("reply")],
+    )
+    extended = extend_tool_plan(
+        base,
+        [_tool("z_dynamic"), _tool("a_dynamic")],
+        chat_type="private",
+        platform="qq",
+        session_id="private_1",
+    )
+
+    assert [
+        item["function"]["name"] for item in extended.sent_tool_schemas
+    ] == ["a_dynamic", "reply", "z_dynamic"]
+
+
 def test_tool_plan_normalizes_wire_schema_and_returns_defensive_copies():
     from core.tool_plan import ToolPlan
 

@@ -202,10 +202,13 @@ class ToolPlan:
             session_id=session_id,
             db=db,
         )
-        normalized_schemas = tuple(
-            normalize_wire_tool_schema(tool)
-            for tool in schemas
-        )
+        normalized_schemas = tuple(sorted(
+            (
+                normalize_wire_tool_schema(tool)
+                for tool in schemas
+            ),
+            key=_tool_name,
+        ))
         sent_schemas = tuple(
             tool
             for tool in normalized_schemas

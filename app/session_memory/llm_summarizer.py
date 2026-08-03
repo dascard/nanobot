@@ -162,11 +162,43 @@ _SAFE_SESSION_SUMMARY_ERROR_CODES = frozenset({
     "sync_summarizer_returned_awaitable",
 })
 
+_SAFE_TASK_RUNTIME_FAILURE_CODES = frozenset({
+    "authorization_failed",
+    "business_validation_failed",
+    "cancelled",
+    "conflict",
+    "contract_version_mismatch",
+    "empty_output",
+    "execution_timeout",
+    "field_out_of_range",
+    "invalid_invocation",
+    "invalid_json",
+    "output_limit_exceeded",
+    "permanent_failure",
+    "provider_error",
+    "provider_unavailable",
+    "quota_exceeded",
+    "rate_limited",
+    "route_unavailable",
+    "schema_invalid",
+    "template_unavailable",
+    "transient_transport",
+})
+
 
 def _safe_session_summary_error(exc: BaseException) -> str:
     """将任意异常收敛为不含请求正文、地址或凭证的稳定错误码。"""
 
     raw = str(exc or "")
+    task_runtime_match = re.fullmatch(
+        r"task_runtime_failed:([a-z][a-z0-9_]{2,63})",
+        raw.strip(),
+    )
+    if (
+        task_runtime_match is not None
+        and task_runtime_match.group(1) in _SAFE_TASK_RUNTIME_FAILURE_CODES
+    ):
+        return f"task_runtime_failed:{task_runtime_match.group(1)}"
     safe_codes: list[str] = []
     for part in raw.split(","):
         code = part.strip().split(":", 1)[0]

@@ -400,7 +400,10 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
         log_id=llm_log_id,
         response={
             "choices": [{"message": {"content": "输出"}}],
-            "usage": {"cached_tokens": 16},
+            "usage": {
+                "prompt_cache_hit_tokens": 16,
+                "prompt_cache_miss_tokens": 4,
+            },
         },
         response_status=200,
         status="success",
@@ -446,11 +449,14 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     assert llm_logs_resp.json()["stats"]["avg_latency_ms"] == 7
     assert llm_logs_resp.json()["stats"]["cache_hit"] == 1
     assert llm_logs_resp.json()["stats"]["cache_hit_tokens"] == 16
+    assert llm_logs_resp.json()["stats"]["cache_miss_tokens"] == 4
+    assert llm_logs_resp.json()["stats"]["cache_hit_token_ratio"] == 0.8
     llm_list_item = llm_logs_resp.json()["items"][0]
     assert llm_list_item["summary_only"] is True
     assert llm_list_item["cache_status"] == "hit"
     assert llm_list_item["cache_hit"] is True
     assert llm_list_item["cache_hit_tokens"] == 16
+    assert llm_list_item["cache_miss_tokens"] == 4
     assert "request_json" not in llm_list_item
     assert "response_json" not in llm_list_item
 
@@ -468,6 +474,7 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     assert json.loads(llm_detail_resp.json()["response_json"])["choices"][0]["message"]["content"] == "输出"
     assert llm_detail_resp.json()["cache_status"] == "hit"
     assert llm_detail_resp.json()["cache_hit_tokens"] == 16
+    assert llm_detail_resp.json()["cache_miss_tokens"] == 4
 
     tools_resp = client.get("/api/v1/admin/tool-calls", headers=auth_header)
     assert tools_resp.status_code == 200, tools_resp.text

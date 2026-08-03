@@ -370,6 +370,16 @@ def _bound_route_completion_attempts(
     return attempts
 
 
+def resolve_model_route_attempts(route_key: str) -> list[dict]:
+    """展开 Route 的健康候选，供同一次语义任务按 attempt 顺序切换模型。"""
+
+    route = resolve_model_route(route_key)
+    attempts = _bound_route_completion_attempts(route_key, route)
+    if attempts:
+        return attempts
+    return [ensure_model_route_enabled(route_key, route)]
+
+
 def call_model_route_response(
     route_key: str = "timing_gate",
     messages: list[dict] | None = None,

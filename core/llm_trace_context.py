@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import Any
 
 llm_trace_id: ContextVar[str] = ContextVar("llm_trace_id", default="")
 llm_run_id: ContextVar[str] = ContextVar("llm_run_id", default="")
@@ -17,6 +18,10 @@ llm_phase: ContextVar[str] = ContextVar("llm_phase", default="")
 llm_route_attempt_index: ContextVar[int] = ContextVar(
     "llm_route_attempt_index",
     default=0,
+)
+llm_cache_context: ContextVar[dict[str, Any] | None] = ContextVar(
+    "llm_cache_context",
+    default=None,
 )
 
 
@@ -31,6 +36,12 @@ def get_llm_trace_execution_vars() -> tuple[str, int]:
     return llm_phase.get(), llm_route_attempt_index.get()
 
 
+def get_llm_cache_context() -> dict[str, Any]:
+    """返回当前请求的无正文 Prompt Cache epoch 上下文副本。"""
+
+    return dict(llm_cache_context.get() or {})
+
+
 @contextmanager
 def llm_trace_scope(
     *,
@@ -39,6 +50,7 @@ def llm_trace_scope(
     source: str = "",
     phase: str = "",
     route_attempt_index: int | None = None,
+    cache_context: dict[str, Any] | None = None,
 ):
     """LLM 请求链路上下文管理器。
 
@@ -51,6 +63,7 @@ def llm_trace_scope(
     prev_s = llm_source.get()
     prev_p = llm_phase.get()
     prev_a = llm_route_attempt_index.get()
+    prev_c = llm_cache_context.get()
     tok_t = llm_trace_id.set(trace_id or prev_t)
     tok_r = llm_run_id.set(run_id or prev_r)
     tok_s = llm_source.set(source or prev_s)
@@ -58,9 +71,13 @@ def llm_trace_scope(
     tok_a = llm_route_attempt_index.set(
         prev_a if route_attempt_index is None else max(0, int(route_attempt_index))
     )
+    tok_c = llm_cache_context.set(
+        dict(prev_c or {}) if cache_context is None else dict(cache_context)
+    )
     try:
         yield
     finally:
+        llm_cache_context.reset(tok_c)
         llm_route_attempt_index.reset(tok_a)
         llm_phase.reset(tok_p)
         llm_source.reset(tok_s)

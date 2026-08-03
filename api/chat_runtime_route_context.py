@@ -166,6 +166,8 @@ def build_chat_runtime_route_context(
         get_effort_constraint=get_effort_constraint,
     )
     platform = str(runtime_payload.bridge_meta.get("platform") or "")
+    bridge_meta = dict(runtime_payload.bridge_meta)
+    bridge_meta["context_debug"] = ctx_debug
     _log_prompt_budget(
         runtime_input,
         services=services,
@@ -175,7 +177,7 @@ def build_chat_runtime_route_context(
     return ChatRuntimeRouteContext(
         safe_user_input=runtime_payload.safe_user_input,
         enriched_query=runtime_payload.enriched_query,
-        bridge_meta=runtime_payload.bridge_meta,
+        bridge_meta=bridge_meta,
         platform=platform,
         prompt_budget=runtime_payload.prompt_budget,
         persona_text=persona_text,

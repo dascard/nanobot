@@ -258,6 +258,7 @@ export function LLMApiLogViewer({ log }) {
             { label: 'status', value: log.status || '-', className: statusTone === 'emerald' ? 'text-emerald-300' : statusTone === 'blue' ? 'text-blue-300' : statusTone === 'red' ? 'text-red-300' : 'text-slate-300' },
             { label: '缓存结果', value: cacheMeta.label, className: cacheMeta.className },
             { label: '缓存命中 tokens', value: log.cache_hit_tokens ?? 0 },
+            { label: '缓存未命中 tokens', value: log.cache_miss_tokens ?? 0 },
             { label: '缓存写入 tokens', value: log.cache_write_tokens ?? 0 },
             { label: 'response_status', value: log.response_status || 0 },
             { label: 'latency', value: log.latency_ms ? `${log.latency_ms}ms` : '-' },

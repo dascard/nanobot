@@ -21,6 +21,7 @@ class LLMCacheUsage:
     status: str
     hit: bool | None
     hit_tokens: int
+    miss_tokens: int
     write_tokens: int
     details: dict[str, Any]
 
@@ -97,6 +98,7 @@ def normalize_llm_cache_usage(
             status=CACHE_STATUS_ERROR,
             hit=None,
             hit_tokens=0,
+            miss_tokens=0,
             write_tokens=0,
             details={},
         )
@@ -140,17 +142,20 @@ def normalize_llm_cache_usage(
             status=CACHE_STATUS_NOT_REPORTED,
             hit=None,
             hit_tokens=0,
+            miss_tokens=0,
             write_tokens=0,
             details={},
         )
 
     hit_tokens = max(values_by_kind["read"], default=0)
+    miss_tokens = max(values_by_kind["miss"], default=0)
     write_tokens = max(values_by_kind["write"], default=0)
     cache_hit = hit_tokens > 0
     return LLMCacheUsage(
         status=CACHE_STATUS_HIT if cache_hit else CACHE_STATUS_MISS,
         hit=cache_hit,
         hit_tokens=hit_tokens,
+        miss_tokens=miss_tokens,
         write_tokens=write_tokens,
         details={"reported_metrics": reported},
     )

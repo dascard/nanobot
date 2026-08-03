@@ -35,6 +35,8 @@ class GroupRollupDecision:
     protected_rows: tuple[ChatLog, ...]
     pending_tokens: int
     protected_tokens: int
+    epoch_tokens: int
+    epoch_high_water_tokens: int
     force: bool
     should_enqueue: bool
     reason: str
@@ -97,7 +99,7 @@ def _load_protected_tail(
             latest_message_at = row.created_at
         selected_desc.append(row)
         token_count += group_chatlog_token_cost(row)
-        if token_count >= config.GROUP_RAW_WINDOW_MAX_TOKENS:
+        if token_count >= config.GROUP_CACHE_EPOCH_LOW_WATER_TOKENS:
             break
     return tuple(reversed(selected_desc)), token_count, latest_message_at
 
@@ -171,7 +173,12 @@ def build_group_rollup_decision(
         after_clear_at=history_clear_at,
     )
 
-    force = pending_tokens >= config.GROUP_ROLLING_FORCE_TOKENS
+    epoch_tokens = pending_tokens + protected_tokens
+    epoch_high_water_tokens = max(
+        config.GROUP_CACHE_EPOCH_LOW_WATER_TOKENS + 1,
+        config.GROUP_CACHE_EPOCH_HIGH_WATER_TOKENS,
+    )
+    force = epoch_tokens >= epoch_high_water_tokens
     if not pending_rows:
         reason = "empty_pending"
         should_enqueue = False
@@ -210,6 +217,8 @@ def build_group_rollup_decision(
         protected_rows=protected_rows,
         pending_tokens=pending_tokens,
         protected_tokens=protected_tokens,
+        epoch_tokens=epoch_tokens,
+        epoch_high_water_tokens=epoch_high_water_tokens,
         force=force,
         should_enqueue=should_enqueue,
         reason=reason,
@@ -357,6 +366,8 @@ def discover_group_summary_jobs(
             "force": decision.force,
             "pending_tokens": decision.pending_tokens,
             "protected_tokens": decision.protected_tokens,
+            "epoch_tokens": decision.epoch_tokens,
+            "epoch_high_water_tokens": decision.epoch_high_water_tokens,
             "latest_message_at": (
                 decision.latest_message_at.isoformat()
                 if decision.latest_message_at is not None

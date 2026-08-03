@@ -122,7 +122,11 @@ def test_llm_api_logs_expose_cache_result_and_token_counts():
     assert "缓存未命中" in page_source
     assert "缓存未上报" in page_source
     assert "ll.cache_hit_tokens" in page_source
+    assert "ll.cache_miss_tokens" in page_source
+    assert "cache_hit_token_ratio" in page_source
+    assert "Token 命中率" in page_source
     assert "cache_details_json" in detail_source
+    assert "缓存未命中 tokens" in detail_source
     assert "缓存写入 tokens" in detail_source
 
 

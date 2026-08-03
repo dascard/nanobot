@@ -298,6 +298,15 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         "rolling_summary_recent_raw_turn_ids",
         "rolling_summary_skipped_reason",
         "rolling_summary_error",
+        "prefix_epoch",
+        "prefix_epoch_generation",
+        "prefix_epoch_covered_until",
+        "prefix_epoch_low_water_tokens",
+        "prefix_epoch_high_water_tokens",
+        "prefix_epoch_history_tokens",
+        "prefix_epoch_rollover",
+        "prefix_epoch_rollover_reason",
+        "prefix_epoch_high_water_reached",
     ):
         if key in context_debug:
             meta_update[key] = context_debug[key]

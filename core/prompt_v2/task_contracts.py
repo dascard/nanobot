@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
 from typing import Any, Literal
@@ -1465,6 +1466,26 @@ def _parse_json_object(raw: str, *, contract_id: str) -> dict:
     return value
 
 
+def _unwrap_session_summary_json(raw: str) -> str:
+    """只移除摘要模型常见且边界完整的传输外壳。"""
+
+    text = str(raw or "").strip()
+    think_match = re.fullmatch(
+        r"<think>[\s\S]*</think>\s*(?P<body>[\s\S]+)",
+        text,
+    )
+    if think_match is not None:
+        text = think_match.group("body").strip()
+    fence_match = re.fullmatch(
+        r"```(?:json)?\s*(?P<body>[\s\S]*?)\s*```",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if fence_match is not None:
+        text = fence_match.group("body").strip()
+    return text
+
+
 def _validate_output_schema(
     contract: TaskContract,
     value: dict[str, Any],
@@ -1616,8 +1637,13 @@ def parse_task_output(task_key: str, raw: str) -> dict:
     if contract.output_contract_id == "timing_proactive_v1":
         return _parse_timing_proactive(raw)
     if contract.output_schema:
+        normalized_raw = (
+            _unwrap_session_summary_json(raw)
+            if contract.output_contract_id == "session_summary_v1"
+            else raw
+        )
         value = _parse_json_object(
-            raw,
+            normalized_raw,
             contract_id=contract.output_contract_id,
         )
         return _validate_output_schema(contract, value)

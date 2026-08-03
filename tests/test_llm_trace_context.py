@@ -1,6 +1,7 @@
 """测试 llm_trace_context ContextVar 传递与嵌套。"""
 
 from core.llm_trace_context import (
+    get_llm_cache_context,
     get_llm_trace_execution_vars,
     get_llm_trace_vars,
     llm_phase,
@@ -46,9 +47,11 @@ def test_scope_inherits_run_id_and_execution_phase():
         source="replyer",
         phase="agent.tool_round",
         route_attempt_index=1,
+        cache_context={"prefix_epoch": "epoch-1"},
     ):
         assert get_llm_trace_vars() == ("t1", "r1", "replyer")
         assert get_llm_trace_execution_vars() == ("agent.tool_round", 1)
+        assert get_llm_cache_context() == {"prefix_epoch": "epoch-1"}
         with llm_trace_scope(
             source="group_analysis",
             phase="model.route_retry",
@@ -56,10 +59,13 @@ def test_scope_inherits_run_id_and_execution_phase():
         ):
             assert get_llm_trace_vars() == ("t1", "r1", "group_analysis")
             assert get_llm_trace_execution_vars() == ("model.route_retry", 2)
+            assert get_llm_cache_context() == {"prefix_epoch": "epoch-1"}
         assert get_llm_trace_vars() == ("t1", "r1", "replyer")
         assert get_llm_trace_execution_vars() == ("agent.tool_round", 1)
+        assert get_llm_cache_context() == {"prefix_epoch": "epoch-1"}
     assert get_llm_trace_vars() == ("", "", "")
     assert get_llm_trace_execution_vars() == ("", 0)
+    assert get_llm_cache_context() == {}
 
 
 def test_get_llm_trace_vars():

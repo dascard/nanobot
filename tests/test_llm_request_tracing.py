@@ -116,11 +116,59 @@ def test_record_request_returns_id_and_finish_updates_same_row(db_session):
     assert row.cache_status == "hit"
     assert row.cache_hit is True
     assert row.cache_hit_tokens == 48
+    assert row.cache_miss_tokens == 0
     assert row.cache_write_tokens == 5
     cache_details = json.loads(row.cache_details_json)
     assert {
         metric["source"] for metric in cache_details["reported_metrics"]
     } == {"usage.cached_tokens", "usage.cache_write_tokens"}
+
+
+def test_request_trace_records_cache_shape_epoch_and_deepseek_miss(db_session):
+    from core.llm_trace_context import llm_trace_scope
+    from core.tracing import LLMRequestTracer
+
+    request = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "固定前缀"},
+            {"role": "user", "content": "历史" * 3000},
+            {"role": "system", "content": "动态上下文"},
+            {"role": "user", "content": "当前消息"},
+        ],
+        "tools": [],
+    }
+    with llm_trace_scope(
+        source="cache-shape-test",
+        cache_context={
+            "prefix_epoch": "group-epoch-9",
+            "session_id": "group_cache_shape",
+        },
+    ):
+        log_id = LLMRequestTracer.record_request(
+            source="cache-shape-test",
+            provider="newapi",
+            model="deepseek-chat",
+            request=request,
+        )
+    LLMRequestTracer.finish_request(
+        log_id=log_id,
+        response={
+            "usage": {
+                "prompt_cache_hit_tokens": 0,
+                "prompt_cache_miss_tokens": 321,
+            },
+        },
+        status="success",
+    )
+
+    row = db_session.query(LLMApiRequestLog).filter_by(id=log_id).one()
+    details = json.loads(row.cache_details_json)
+    assert row.cache_miss_tokens == 321
+    assert details["cache_shape"]["prefix_epoch"] == "group-epoch-9"
+    assert details["cache_shape"]["history_head_sha256"]
+    assert details["miss_reason"] == "cold_start"
+    assert "group_cache_shape" not in row.cache_details_json
 
 
 def test_finish_request_records_error_status(db_session):

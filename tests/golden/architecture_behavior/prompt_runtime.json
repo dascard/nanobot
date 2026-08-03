@@ -12,13 +12,13 @@
     },
     {
       "path": "data/prompts_v2/chat/flow.json",
-      "sha256": "da132cf15f0a22b527ec54dac4200f9450ce21cf61fb722a76d6f967cdf39f97",
-      "size_bytes": 3335
+      "sha256": "63d190065b51d425c2ed4253ea61655d65b53d29a17949cebe27f74f132b7e42",
+      "size_bytes": 3336
     },
     {
       "path": "data/prompts_v2/chat/main.md",
-      "sha256": "4a4b1883bee0680946f57a6e224534fbbbc3ecbf332e0ce185faaf4cfaa3cdfc",
-      "size_bytes": 4757
+      "sha256": "e1a17a8523dfa5ec63c1f9c53f4fcb3979c99818e133380ad3703e1968fa6fa6",
+      "size_bytes": 4800
     },
     {
       "path": "data/prompts_v2/chat/platform/qq/common.md",
@@ -122,18 +122,18 @@
     },
     {
       "path": "prompts.v2.default/chat/flow.json",
-      "sha256": "da132cf15f0a22b527ec54dac4200f9450ce21cf61fb722a76d6f967cdf39f97",
-      "size_bytes": 3335
+      "sha256": "63d190065b51d425c2ed4253ea61655d65b53d29a17949cebe27f74f132b7e42",
+      "size_bytes": 3336
     },
     {
       "path": "prompts.v2.default/chat/identity_context.md",
-      "sha256": "c10bab58653b14e4b05d9f067da233b3a6828781ef2240edbe3f5f07fcfdb46d",
-      "size_bytes": 389
+      "sha256": "e943c304c4373f93425fd2b870c457ecff2109663aaa40e95c4f49d98a215726",
+      "size_bytes": 326
     },
     {
       "path": "prompts.v2.default/chat/main.md",
-      "sha256": "4a4b1883bee0680946f57a6e224534fbbbc3ecbf332e0ce185faaf4cfaa3cdfc",
-      "size_bytes": 4757
+      "sha256": "e1a17a8523dfa5ec63c1f9c53f4fcb3979c99818e133380ad3703e1968fa6fa6",
+      "size_bytes": 4800
     },
     {
       "path": "prompts.v2.default/chat/platform/qq/common.md",
@@ -242,13 +242,13 @@
     },
     {
       "path": "prompts.v2.default/tasks/session_summary_output.md",
-      "sha256": "b7211cd7ea79ce38aba7bc0837d94d6f1822902602e85c7e8232c01090f46423",
-      "size_bytes": 1936
+      "sha256": "b87efc8993d4269a995a729af5db98010ccb65412284cbe5be992974324eb202",
+      "size_bytes": 2202
     },
     {
       "path": "prompts.v2.default/tasks/session_summary_system.md",
-      "sha256": "e2b9f9df80e35ab87816e9e12ce8f21b0bdd31a2a6bddcbf4b4afde506194ebd",
-      "size_bytes": 1416
+      "sha256": "81b57f750a42df57565a9e3d93d9ed821c6e90737813ec037e1c8108850a0ab6",
+      "size_bytes": 1478
     },
     {
       "path": "prompts.v2.default/tasks/timing_gate.md",

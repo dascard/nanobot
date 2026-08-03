@@ -123,6 +123,12 @@ class LLMApiRequestLog(Base):
         default=0,
         server_default=text("0"),
     )
+    cache_miss_tokens = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     cache_write_tokens = Column(
         Integer,
         nullable=False,

@@ -43,6 +43,15 @@ class RouteTaskModelAdapter:
                 descriptor.execution_mode
                 is ModelRouteExecutionMode.CHAT_COMPLETION
             ):
+                route_attempts = (
+                    classifier_client.resolve_model_route_attempts(
+                        request.route_key
+                    )
+                )
+                route = route_attempts[min(
+                    request.attempt_no - 1,
+                    len(route_attempts) - 1,
+                )]
                 return self._complete_chat_task(
                     request,
                     route=route,

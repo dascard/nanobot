@@ -61,13 +61,13 @@ DEFAULT_FLOW: dict[str, Any] = {
         {"from": "group_policy", "to": "identity_context", "chat_types": ["group"], "platforms": ["web"]},
         {"from": "private_policy", "to": "identity_context", "chat_types": ["private"]},
         {"from": "identity_context", "to": "session_guidance"},
-        {"from": "session_guidance", "to": "persona_reference"},
-        {"from": "persona_reference", "to": "runtime_context"},
-        {"from": "runtime_context", "to": "group_context", "chat_types": ["group"]},
-        {"from": "runtime_context", "to": "conversation_context_header", "chat_types": ["private"]},
+        {"from": "session_guidance", "to": "group_context", "chat_types": ["group"]},
+        {"from": "session_guidance", "to": "conversation_context_header", "chat_types": ["private"]},
         {"from": "group_context", "to": "conversation_context_header", "chat_types": ["group"]},
         {"from": "conversation_context_header", "to": "history_messages"},
-        {"from": "history_messages", "to": "current_user_event"},
+        {"from": "history_messages", "to": "persona_reference"},
+        {"from": "persona_reference", "to": "runtime_context"},
+        {"from": "runtime_context", "to": "current_user_event"},
     ],
 }
 

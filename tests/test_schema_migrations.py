@@ -125,6 +125,7 @@ def test_schema_migrations_records_applied_versions():
         "cache_status",
         "cache_hit",
         "cache_hit_tokens",
+        "cache_miss_tokens",
         "cache_write_tokens",
         "cache_details_json",
     } <= llm_log_columns
@@ -457,8 +458,8 @@ def test_llm_cache_observability_migration_backfills_existing_logs():
 
         _llm_cache_observability(conn, engine, None)
         rows = conn.execute(text(
-            "SELECT id, cache_status, cache_hit, cache_hit_tokens "
-            "FROM llm_api_request_logs ORDER BY id"
+            "SELECT id, cache_status, cache_hit, cache_hit_tokens, "
+            "cache_miss_tokens FROM llm_api_request_logs ORDER BY id"
         )).mappings().all()
 
     assert [row["cache_status"] for row in rows] == [
@@ -469,9 +470,53 @@ def test_llm_cache_observability_migration_backfills_existing_logs():
     ]
     assert rows[0]["cache_hit"] == 1
     assert rows[0]["cache_hit_tokens"] == 12
+    assert rows[0]["cache_miss_tokens"] == 0
     assert rows[1]["cache_hit"] is None
     assert rows[2]["cache_hit"] is None
     assert rows[3]["cache_hit"] is None
+
+
+def test_llm_cache_diagnostics_v2_backfills_deepseek_miss_and_shape():
+    from core.schema_migrations import _llm_cache_diagnostics_v2
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE llm_api_request_logs ("
+            "id INTEGER PRIMARY KEY, status TEXT, source TEXT, model TEXT, "
+            "request_json TEXT, response_json TEXT, cache_details_json TEXT)"
+        ))
+        conn.execute(text(
+            "INSERT INTO llm_api_request_logs("
+            "id, status, source, model, request_json, response_json, "
+            "cache_details_json) VALUES (1, 'success', 'replyer.group_chat', "
+            "'deepseek-chat', :request_json, :response_json, '{}')"
+        ), {
+            "request_json": json.dumps({
+                "messages": [
+                    {"role": "system", "content": "固定前缀"},
+                    {"role": "user", "content": "当前消息"},
+                ],
+                "tools": [],
+            }, ensure_ascii=False),
+            "response_json": json.dumps({
+                "usage": {
+                    "prompt_cache_hit_tokens": 20,
+                    "prompt_cache_miss_tokens": 80,
+                },
+            }),
+        })
+
+        _llm_cache_diagnostics_v2(conn, engine, None)
+        row = conn.execute(text(
+            "SELECT cache_miss_tokens, cache_details_json "
+            "FROM llm_api_request_logs WHERE id = 1"
+        )).mappings().one()
+
+    assert row["cache_miss_tokens"] == 80
+    details = json.loads(row["cache_details_json"])
+    assert details["cache_shape"]["leading_system_sha256"]
+    assert details["cache_shape"]["scope_sha256"]
 
 
 def test_block_session_memory_migration_adds_table_and_column():

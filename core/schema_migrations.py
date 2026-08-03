@@ -95,6 +95,9 @@ _CHAT_LOG_SESSION_ID_INDEX_VERSION = (
 _LLM_CACHE_OBSERVABILITY_VERSION = (
     "20260802_llm_cache_observability"
 )
+_LLM_CACHE_DIAGNOSTICS_V2_VERSION = (
+    "20260803_llm_cache_miss_and_shape"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -836,6 +839,7 @@ def _llm_cache_observability(
         "cache_status": "TEXT NOT NULL DEFAULT 'pending'",
         "cache_hit": "BOOLEAN",
         "cache_hit_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "cache_miss_tokens": "INTEGER NOT NULL DEFAULT 0",
         "cache_write_tokens": "INTEGER NOT NULL DEFAULT 0",
         "cache_details_json": "TEXT NOT NULL DEFAULT '{}'",
     })
@@ -854,6 +858,7 @@ def _llm_cache_observability(
         "UPDATE llm_api_request_logs SET "
         "cache_status = :cache_status, cache_hit = :cache_hit, "
         "cache_hit_tokens = :cache_hit_tokens, "
+        "cache_miss_tokens = :cache_miss_tokens, "
         "cache_write_tokens = :cache_write_tokens, "
         "cache_details_json = :cache_details_json WHERE id = :id"
     )
@@ -875,6 +880,7 @@ def _llm_cache_observability(
                     "cache_status": CACHE_STATUS_PENDING,
                     "cache_hit": None,
                     "cache_hit_tokens": 0,
+                    "cache_miss_tokens": 0,
                     "cache_write_tokens": 0,
                     "cache_details_json": "{}",
                 })
@@ -892,9 +898,95 @@ def _llm_cache_observability(
                 "cache_status": cache_usage.status,
                 "cache_hit": cache_usage.hit,
                 "cache_hit_tokens": cache_usage.hit_tokens,
+                "cache_miss_tokens": cache_usage.miss_tokens,
                 "cache_write_tokens": cache_usage.write_tokens,
                 "cache_details_json": json.dumps(
                     cache_usage.details,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            })
+        conn.execute(update_statement, updates)
+        last_id = int(rows[-1]["id"])
+
+
+def _llm_cache_diagnostics_v2(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """补齐 DeepSeek miss tokens，并回填无正文缓存形状。"""
+
+    from foundation.llm.cache_shape import build_llm_cache_shape
+    from foundation.llm.cache_usage import normalize_llm_cache_usage
+
+    _add_missing_columns(conn, "llm_api_request_logs", {
+        "cache_miss_tokens": "INTEGER NOT NULL DEFAULT 0",
+    })
+    if "llm_api_request_logs" not in _table_names(conn):
+        return
+    required = {
+        "id",
+        "status",
+        "source",
+        "model",
+        "request_json",
+        "response_json",
+        "cache_details_json",
+    }
+    if not required <= _columns(conn, "llm_api_request_logs"):
+        return
+
+    update_statement = text(
+        "UPDATE llm_api_request_logs SET "
+        "cache_miss_tokens = :cache_miss_tokens, "
+        "cache_details_json = :cache_details_json WHERE id = :id"
+    )
+    last_id = -(2**63)
+    while True:
+        rows = conn.execute(text(
+            "SELECT id, status, source, model, request_json, response_json, "
+            "cache_details_json FROM llm_api_request_logs "
+            "WHERE id > :last_id ORDER BY id LIMIT 500"
+        ), {"last_id": last_id}).mappings().all()
+        if not rows:
+            break
+
+        updates: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                request_payload = json.loads(str(row.get("request_json") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                request_payload = {}
+            try:
+                response_payload = json.loads(str(row.get("response_json") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                response_payload = {}
+            try:
+                details = json.loads(str(row.get("cache_details_json") or "{}"))
+                if not isinstance(details, dict):
+                    details = {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                details = {}
+            call_status = str(row.get("status") or "")
+            cache_usage = normalize_llm_cache_usage(
+                response_payload,
+                successful=call_status in {"success", "stream_success"},
+            )
+            details["cache_shape"] = build_llm_cache_shape(
+                request_payload,
+                cache_context={
+                    "scope_key": (
+                        f"{row.get('source') or 'unknown'}:"
+                        f"{row.get('model') or ''}"
+                    ),
+                },
+            )
+            updates.append({
+                "id": row["id"],
+                "cache_miss_tokens": cache_usage.miss_tokens,
+                "cache_details_json": json.dumps(
+                    details,
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ),
@@ -4392,6 +4484,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _LLM_CACHE_OBSERVABILITY_VERSION,
         "llm cache hit observability",
         _llm_cache_observability,
+    ),
+    (
+        _LLM_CACHE_DIAGNOSTICS_V2_VERSION,
+        "llm cache miss tokens and prefix shape",
+        _llm_cache_diagnostics_v2,
     ),
 ]
 

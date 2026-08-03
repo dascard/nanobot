@@ -254,7 +254,7 @@ def test_group_memory_uses_untrusted_data_contribution_contract():
     assert descriptor.phase == "context"
     assert descriptor.authority == "data"
     assert descriptor.trust == "untrusted_data"
-    assert descriptor.after == ("runtime_context",)
+    assert descriptor.after == ("session_guidance",)
     assert descriptor.chat_types == frozenset({"group"})
     assert descriptor.required_variables == frozenset({
         "group_profile_context",
@@ -310,13 +310,13 @@ def test_unknown_flow_extension_is_low_authority_many_untrusted_data():
     edge = next(
         item
         for item in flow["edges"]
-        if item["from"] == "history_messages"
+        if item["from"] == "runtime_context"
         and item["to"] == "current_user_event"
     )
     flow["edges"].remove(edge)
     flow["edges"].extend([
         {
-            "from": "history_messages",
+            "from": "runtime_context",
             "to": "external_context",
             "chat_types": ["private"],
         },

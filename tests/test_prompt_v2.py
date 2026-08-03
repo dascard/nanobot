@@ -315,7 +315,7 @@ async def test_prompt_template_resolution_metadata_does_not_change_wire_request_
 
 
 @pytest.mark.asyncio
-async def test_prompt_cache_prefix_keeps_stable_runtime_context_before_history(
+async def test_prompt_cache_prefix_keeps_sender_context_after_history(
     tmp_path,
     monkeypatch,
 ):
@@ -391,12 +391,6 @@ async def test_prompt_cache_prefix_keeps_stable_runtime_context_before_history(
         "runtime_context"
     ]["message_indexes"][0]
 
-    assert section_order.index("persona_reference") < section_order.index(
-        "runtime_context"
-    )
-    assert section_order.index("runtime_context") < section_order.index(
-        "group_context"
-    )
     assert section_order.index("group_context") < section_order.index(
         "conversation_context_header"
     )
@@ -404,6 +398,12 @@ async def test_prompt_cache_prefix_keeps_stable_runtime_context_before_history(
         section_order.index("history_messages")
     )
     assert section_order.index("history_messages") < section_order.index(
+        "persona_reference"
+    )
+    assert section_order.index("persona_reference") < section_order.index(
+        "runtime_context"
+    )
+    assert section_order.index("runtime_context") < section_order.index(
         "current_user_event"
     )
     assert first.messages[:first_header_index + 1] == (
@@ -463,9 +463,12 @@ async def test_prompt_cache_runtime_context_is_stable_across_wall_clock_changes(
     section_order = [item["node_id"] for item in first.flow_sections]
     runtime_index = section_order.index("runtime_context")
 
-    assert section_order[runtime_index + 1] == "group_context"
-    assert section_order.index("runtime_context") < section_order.index(
-        "conversation_context_header"
+    assert section_order[runtime_index + 1] == "current_user_event"
+    assert section_order.index("history_messages") < section_order.index(
+        "persona_reference"
+    )
+    assert section_order.index("persona_reference") < section_order.index(
+        "runtime_context"
     )
     assert first.messages == second.messages
     runtime_message_index = next(
@@ -1223,9 +1226,9 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
         "user",
         "system",
         "user",
-        "system",
-        "user",
         "assistant",
+        "user",
+        "system",
         "user",
     ]
 
@@ -1877,13 +1880,7 @@ async def test_prompt_v2_strict_audit_rejects_missing_singleton_flow_node(monkey
     flow["edges"].extend([
         {
             "from": "persona_reference",
-            "to": "group_context",
-            "chat_types": ["group"],
-        },
-        {
-            "from": "persona_reference",
-            "to": "conversation_context_header",
-            "chat_types": ["private"],
+            "to": "current_user_event",
         },
     ])
     monkeypatch.setattr(

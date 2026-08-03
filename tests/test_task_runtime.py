@@ -656,18 +656,25 @@ def test_route_task_adapter_selects_transport_from_descriptor(
     from core.task_runtime import TaskModelRequest
 
     calls: list[str] = []
+    route = {
+        "provider_id": "newapi",
+        "model": "route-model",
+        "base_url": "http://model.invalid/v1",
+        "api_key": "test-key",
+        "temperature": 0.1,
+        "max_tokens": 128,
+        "enable_thinking": "false",
+    }
     monkeypatch.setattr(
         adapter_module.classifier_client,
         "resolve_model_route",
-        lambda _route_key: {
-            "provider_id": "newapi",
-            "model": "route-model",
-            "base_url": "http://model.invalid/v1",
-            "api_key": "test-key",
-            "temperature": 0.1,
-            "max_tokens": 128,
-            "enable_thinking": "false",
-        },
+        lambda _route_key: route,
+    )
+    monkeypatch.setattr(
+        adapter_module.classifier_client,
+        "resolve_model_route_attempts",
+        lambda _route_key: [route],
+        raising=False,
     )
     monkeypatch.setattr(
         adapter_module,
@@ -721,6 +728,150 @@ def test_route_task_adapter_selects_transport_from_descriptor(
 
     assert calls == [expected_transport]
     assert result.content == '{"ok":true}'
+
+
+def test_route_task_adapter_switches_chat_candidate_on_runtime_retry(monkeypatch):
+    import clients.task_runtime_adapter as adapter_module
+    from core.model_provider.route_registry import ModelRouteExecutionMode
+    from core.task_runtime import TaskModelRequest
+
+    candidates = [
+        {
+            "provider_id": "newapi",
+            "model": "cheap-json-weak",
+            "base_url": "http://first.invalid/v1",
+            "api_key": "first-key",
+            "temperature": 0.1,
+            "max_tokens": 128,
+            "enable_thinking": "false",
+        },
+        {
+            "provider_id": "newapi",
+            "model": "reliable-json-model",
+            "base_url": "http://second.invalid/v1",
+            "api_key": "second-key",
+            "temperature": 0.1,
+            "max_tokens": 128,
+            "enable_thinking": "false",
+        },
+    ]
+    monkeypatch.setattr(
+        adapter_module.classifier_client,
+        "resolve_model_route",
+        lambda _route_key: candidates[0],
+    )
+    monkeypatch.setattr(
+        adapter_module.classifier_client,
+        "resolve_model_route_attempts",
+        lambda _route_key: candidates,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        adapter_module,
+        "require_model_route_descriptor",
+        lambda _route_key: SimpleNamespace(
+            execution_mode=ModelRouteExecutionMode.CHAT_COMPLETION,
+        ),
+    )
+
+    calls: list[dict] = []
+
+    class DummyClient:
+        def __init__(self, **kwargs):
+            self.connection = kwargs
+
+        async def chat_completion(self, **kwargs):
+            calls.append({**self.connection, **kwargs})
+            return {
+                "choices": [{
+                    "message": {"content": '{"ok":true}'},
+                    "finish_reason": "stop",
+                }],
+                "model": kwargs["manual_model"],
+            }
+
+    monkeypatch.setattr(adapter_module, "NewAPIClient", DummyClient)
+
+    result = adapter_module.RouteTaskModelAdapter().complete_task(
+        TaskModelRequest(
+            task_id="candidate-retry",
+            contract_version="test-v1",
+            route_key="session_summary",
+            messages=({"role": "user", "content": "测试"},),
+            run_id="taskrun_candidate_retry",
+            attempt_no=2,
+            timeout_seconds=5,
+        )
+    )
+
+    assert result.content == '{"ok":true}'
+    assert calls == [{
+        "api_key": "second-key",
+        "base_url": "http://second.invalid/v1",
+        "messages": [{"role": "user", "content": "测试"}],
+        "temperature": 0.1,
+        "manual_model": "reliable-json-model",
+        "max_tokens": 128,
+        "llm_source": "session_summary",
+        "enable_thinking": "false",
+    }]
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        lambda payload: f"```json\n{payload}\n```",
+        lambda payload: f"<think>先核对字段，不输出这段。</think>\n{payload}",
+        lambda payload: (
+            "<think>先核对字段，不输出这段。</think>\n"
+            f"```json\n{payload}\n```"
+        ),
+    ],
+)
+def test_session_summary_accepts_controlled_json_transport_envelopes(wrapper):
+    from core.task_runtime import TaskInvocation, TaskRuntime, thaw_task_value
+
+    payload = json.dumps(
+        {
+            "summary": "群聊摘要",
+            "open_threads": [],
+            "decisions": [],
+            "important_user_requests": [],
+            "resolved_items": [],
+            "artifacts": [],
+            "participants": ["甲"],
+            "keywords": ["缓存"],
+            "quality": {"score": 0.95, "issues": []},
+            "inheritance": [],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    raw = wrapper(payload)
+    runtime = TaskRuntime(
+        _FakeTaskModelPort(
+            _completion_for("session_summary", raw),
+            _completion_for("session_summary", raw),
+        ),
+        run_id_factory=lambda: "taskrun_session_summary_envelope",
+        sleeper=lambda _seconds: None,
+        jitter_source=lambda: 0.0,
+    )
+
+    result = runtime.execute(TaskInvocation(
+        invocation_id="session_summary",
+        route_key="session_summary",
+        input_values={},
+        rendered_messages=({"role": "user", "content": "生成摘要"},),
+        timeout_budget_seconds=120,
+    ))
+
+    assert result.ok is True
+    assert result.parsed_value["summary"] == "群聊摘要"
+    assert thaw_task_value(result.parsed_value["quality"]) == {
+        "score": 0.95,
+        "issues": [],
+    }
 
 
 def test_task_runtime_stop_never_recreates_adapter_implicitly():

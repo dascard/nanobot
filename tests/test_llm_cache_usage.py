@@ -77,6 +77,22 @@ def test_normalize_llm_cache_usage_records_provider_hits(
     }
 
 
+def test_normalize_llm_cache_usage_keeps_deepseek_miss_tokens_separate():
+    result = normalize_llm_cache_usage(
+        {
+            "usage": {
+                "prompt_cache_hit_tokens": 42,
+                "prompt_cache_miss_tokens": 100,
+            },
+        },
+        successful=True,
+    )
+
+    assert result.hit_tokens == 42
+    assert result.miss_tokens == 100
+    assert result.write_tokens == 0
+
+
 def test_normalize_llm_cache_usage_distinguishes_miss_from_not_reported():
     missed = normalize_llm_cache_usage(
         {
@@ -154,4 +170,5 @@ def test_normalize_llm_cache_usage_marks_failed_calls_as_error():
     assert result.status == "error"
     assert result.hit is None
     assert result.hit_tokens == 0
+    assert result.miss_tokens == 0
     assert result.details == {}

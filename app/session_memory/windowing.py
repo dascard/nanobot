@@ -432,6 +432,43 @@ def raw_window_limits(chat_type: str, *, max_total: int | None = None) -> tuple[
             int(max_total or config.GROUP_RAW_WINDOW_MAX_TOKENS),
         )
     return (
-        config.PRIVATE_RAW_WINDOW_MAX_TURNS,
-        int(max_total or config.PRIVATE_RAW_WINDOW_MAX_TOKENS),
+        config.PRIVATE_CACHE_EPOCH_LOW_WATER_TURNS,
+        int(max_total or config.PRIVATE_CACHE_EPOCH_LOW_WATER_TOKENS),
+    )
+
+
+def cache_epoch_window_limits(
+    chat_type: str,
+    *,
+    max_total: int | None = None,
+) -> tuple[int, int, int, int]:
+    """返回 (低水位 turns/tokens, 高水位 turns/tokens)。"""
+
+    low_turns, low_tokens = raw_window_limits(chat_type, max_total=max_total)
+    if chat_type == "group":
+        configured_low = max(1, config.GROUP_CACHE_EPOCH_LOW_WATER_TOKENS)
+        configured_high = max(
+            configured_low + 1,
+            config.GROUP_CACHE_EPOCH_HIGH_WATER_TOKENS,
+        )
+        high_tokens = max(
+            low_tokens + 1,
+            round(low_tokens * configured_high / configured_low),
+        )
+        return low_turns, low_tokens, low_turns, high_tokens
+
+    configured_low = max(1, config.PRIVATE_CACHE_EPOCH_LOW_WATER_TOKENS)
+    configured_high = max(
+        configured_low + 1,
+        config.PRIVATE_CACHE_EPOCH_HIGH_WATER_TOKENS,
+    )
+    high_tokens = max(
+        low_tokens + 1,
+        round(low_tokens * configured_high / configured_low),
+    )
+    return (
+        low_turns,
+        low_tokens,
+        max(low_turns + 1, config.PRIVATE_CACHE_EPOCH_HIGH_WATER_TURNS),
+        high_tokens,
     )

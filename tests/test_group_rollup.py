@@ -37,8 +37,21 @@ def _small_thresholds(monkeypatch) -> None:
     from app.session_memory import group_rollup
 
     monkeypatch.setattr(group_rollup.config, "GROUP_RAW_WINDOW_MAX_TOKENS", 6)
+    monkeypatch.setattr(
+        group_rollup.config,
+        "GROUP_CACHE_EPOCH_LOW_WATER_TOKENS",
+        6,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        group_rollup.config,
+        "GROUP_CACHE_EPOCH_HIGH_WATER_TOKENS",
+        22,
+        raising=False,
+    )
     monkeypatch.setattr(group_rollup.config, "GROUP_ROLLING_MIN_TOKENS", 8)
-    monkeypatch.setattr(group_rollup.config, "GROUP_ROLLING_FORCE_TOKENS", 16)
+    # 新逻辑必须以总 epoch 高水位触发，不能继续依赖旧 pending-only 阈值。
+    monkeypatch.setattr(group_rollup.config, "GROUP_ROLLING_FORCE_TOKENS", 999)
     monkeypatch.setattr(group_rollup.config, "GROUP_ROLLING_JOB_MAX_TOKENS", 16)
     monkeypatch.setattr(group_rollup, "group_chatlog_token_cost", lambda _row: 1)
 
@@ -123,6 +136,8 @@ def test_group_rollup_cooldown_and_force_threshold(
     assert len(forced.protected_rows) == 6
     assert len(forced.pending_rows) == 16
     assert forced.pending_tokens == 16
+    assert forced.epoch_tokens == 22
+    assert forced.epoch_high_water_tokens == 22
     assert forced.force is True
     assert forced.should_enqueue is True
     assert forced.reason == "force_threshold"

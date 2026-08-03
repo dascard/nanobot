@@ -253,8 +253,6 @@ def build_identity_context(request) -> str:
         "别人可能这样叫你:\n"
         "{{ name_hint }}\n"
         "{{ alias_names }}\n\n"
-        "sender_id: {{ sender_id }}\n"
-        "is_super_user: {{ is_super_user }}\n"
         "</identity_context>"
     )
     try:

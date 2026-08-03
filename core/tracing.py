@@ -8,8 +8,13 @@ from datetime import datetime
 from typing import Any
 
 from foundation.llm.cache_usage import (
+    CACHE_STATUS_MISS,
     CACHE_STATUS_PENDING,
     normalize_llm_cache_usage,
+)
+from foundation.llm.cache_shape import (
+    build_llm_cache_shape,
+    infer_cache_miss_reason,
 )
 
 from core.prompt_v2.template_resolution import serialize_template_resolutions_json
@@ -951,6 +956,44 @@ class PromptTracer:
             logger.warning("prompt_render_log failed: %s", e)
 
 
+def _previous_comparable_cache_shape(
+    db: Any,
+    *,
+    log: Any,
+    current_shape: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """查找同一匿名 scope 最近一次请求的缓存形状。"""
+
+    from core.database import LLMApiRequestLog
+
+    scope_sha256 = str(current_shape.get("scope_sha256") or "")
+    rows = (
+        db.query(LLMApiRequestLog.cache_details_json)
+        .filter(
+            LLMApiRequestLog.id < int(log.id or 0),
+            LLMApiRequestLog.source == str(log.source or ""),
+            LLMApiRequestLog.provider == str(log.provider or ""),
+            LLMApiRequestLog.model == str(log.model or ""),
+            LLMApiRequestLog.status.in_(("success", "stream_success")),
+        )
+        .order_by(LLMApiRequestLog.id.desc())
+        .limit(50)
+        .all()
+    )
+    for row in rows:
+        try:
+            details = json.loads(str(row[0] or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        shape = details.get("cache_shape") if isinstance(details, dict) else None
+        if not isinstance(shape, dict):
+            continue
+        if scope_sha256 and str(shape.get("scope_sha256") or "") != scope_sha256:
+            continue
+        return shape
+    return None
+
+
 class LLMRequestTracer:
     @staticmethod
     def record_request(
@@ -976,6 +1019,20 @@ class LLMRequestTracer:
             from core.llm_request_linter import lint_llm_request
 
             request_payload = request or {}
+            try:
+                from core.llm_trace_context import get_llm_cache_context
+
+                cache_context = get_llm_cache_context()
+            except Exception:
+                cache_context = {}
+            cache_context.setdefault(
+                "scope_key",
+                f"{source or 'unknown'}:{model or ''}",
+            )
+            cache_shape = build_llm_cache_shape(
+                request_payload,
+                cache_context=cache_context,
+            )
             try:
                 lint_result = lint_llm_request(request_payload)
             except Exception as e:
@@ -1022,8 +1079,13 @@ class LLMRequestTracer:
                         cache_status=CACHE_STATUS_PENDING,
                         cache_hit=None,
                         cache_hit_tokens=0,
+                        cache_miss_tokens=0,
                         cache_write_tokens=0,
-                        cache_details_json="{}",
+                        cache_details_json=json.dumps(
+                            {"cache_shape": cache_shape},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                         response_status=int(response_status or 0),
                         error=safe_response_summary(error, max_chars=2000),
                         message_sources_json=_json_dumps(lint_result.get("message_sources") or [], max_chars=0),
@@ -1098,9 +1160,39 @@ class LLMRequestTracer:
                     log.cache_status = cache_usage.status
                     log.cache_hit = cache_usage.hit
                     log.cache_hit_tokens = cache_usage.hit_tokens
+                    log.cache_miss_tokens = cache_usage.miss_tokens
                     log.cache_write_tokens = cache_usage.write_tokens
+                    try:
+                        cache_details = json.loads(log.cache_details_json or "{}")
+                        if not isinstance(cache_details, dict):
+                            cache_details = {}
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        cache_details = {}
+                    cache_details.update(cache_usage.details)
+                    cache_shape = cache_details.get("cache_shape")
+                    cache_shape = (
+                        cache_shape if isinstance(cache_shape, dict) else {}
+                    )
+                    total_cache_tokens = (
+                        cache_usage.hit_tokens + cache_usage.miss_tokens
+                    )
+                    if total_cache_tokens > 0:
+                        cache_details["cache_hit_ratio"] = round(
+                            cache_usage.hit_tokens / total_cache_tokens,
+                            6,
+                        )
+                    if cache_usage.status == CACHE_STATUS_MISS:
+                        previous_shape = _previous_comparable_cache_shape(
+                            db,
+                            log=log,
+                            current_shape=cache_shape,
+                        )
+                        cache_details["miss_reason"] = infer_cache_miss_reason(
+                            cache_shape,
+                            previous_shape,
+                        )
                     log.cache_details_json = json.dumps(
-                        cache_usage.details,
+                        cache_details,
                         ensure_ascii=False,
                         separators=(",", ":"),
                     )

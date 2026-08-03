@@ -211,8 +211,8 @@ def test_restrict_tool_plan_only_reduces_permissions():
 
     assert restricted.executable_tool_names == frozenset({"reply", "no_reply"})
     assert [item["function"]["name"] for item in restricted.sent_tool_schemas] == [
-        "reply",
         "no_reply",
+        "reply",
     ]
     assert restricted.enabled["workspace_read"] is False
     assert restricted.enabled["sandbox_exec"] is False

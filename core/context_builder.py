@@ -3,6 +3,7 @@
 从 api/routes.py 提取，独立于路由层。
 """
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timedelta
@@ -44,6 +45,56 @@ GROUP_PROFILE_CONTEXT_DEPRECATED_REASON = (
     "build_group_profile_context 仅保留旧测试兼容；真实运行时群体记忆注入必须使用 "
     "app.group_memory.injection_service.GroupMemoryInjectionService。"
 )
+
+
+def _prefix_epoch_debug(
+    *,
+    session_id: str,
+    chat_type: str,
+    summary,
+    history_clear_at: datetime | None,
+    low_water_tokens: int,
+    high_water_tokens: int,
+) -> dict:
+    """生成不会暴露会话 ID 或摘要正文的稳定 epoch 标识。"""
+
+    summary_text = str(getattr(summary, "summary_text", "") or "")
+    summary_fingerprint = hashlib.sha256(json.dumps(
+        {
+            "text": summary_text,
+            "kind": str(getattr(summary, "summary_kind", "") or ""),
+            "source_type": str(getattr(summary, "source_type", "") or ""),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8", errors="replace")).hexdigest()
+    covered_until = int(
+        getattr(summary, "covered_until_source_id", 0)
+        or getattr(summary, "covered_until_turn_id", 0)
+        or 0
+    )
+    payload = json.dumps(
+        {
+            "session_id": str(session_id or ""),
+            "chat_type": chat_type,
+            "history_clear_at": (
+                history_clear_at.isoformat() if history_clear_at is not None else ""
+            ),
+            "summary_fingerprint": summary_fingerprint,
+            "covered_until": covered_until,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "prefix_epoch": hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24],
+        "prefix_epoch_generation": int(getattr(summary, "id", 0) or 0),
+        "prefix_epoch_covered_until": covered_until,
+        "prefix_epoch_low_water_tokens": int(low_water_tokens),
+        "prefix_epoch_high_water_tokens": int(high_water_tokens),
+    }
 
 
 def _cap_text(text: str, max_chars: int, label: str = "") -> str:
@@ -224,10 +275,10 @@ def build_session_memory(
         maybe_rollup_session_summary,
     )
     from app.session_memory.windowing import (
+        cache_epoch_window_limits,
         is_allowed_leading_assistant,
         load_latest_raw_window,
         load_pending_for_summary_turns,
-        raw_window_limits,
     )
     from core.database import User
 
@@ -331,13 +382,18 @@ def build_session_memory(
         # raw window 与 pending 永不跨块:起点 clamp 到 open 块首 turn。
         last_covered_id = max(last_covered_id, block_first_turn_id - 1)
 
-    max_turns, max_tokens = raw_window_limits(chat_type, max_total=max_total)
-    recent_window, raw_debug = load_latest_raw_window(
+    (
+        low_water_turns,
+        low_water_tokens,
+        high_water_turns,
+        high_water_tokens,
+    ) = cache_epoch_window_limits(chat_type, max_total=max_total)
+    epoch_window, epoch_debug = load_latest_raw_window(
         db,
         session_id=session_id,
         chat_type=chat_type,
-        max_turns=max_turns,
-        max_tokens=max_tokens,
+        max_turns=high_water_turns,
+        max_tokens=high_water_tokens,
         max_per_msg=max(
             int(max_per_msg or 0),
             config.PRIVATE_CONTEXT_MAX_MESSAGE_CHARS,
@@ -345,6 +401,34 @@ def build_session_memory(
         after_clear_at=history_clear_at,
         after_turn_id=last_covered_id,
     )
+    epoch_start_id = int(epoch_debug.get("raw_window_start_turn_id") or 0)
+    overflow_pending, _overflow_debug = load_pending_for_summary_turns(
+        db,
+        session_id=session_id,
+        last_covered_id=last_covered_id,
+        raw_window_start_turn_id=epoch_start_id,
+        after_clear_at=history_clear_at,
+    )
+    prefix_epoch_rollover = bool(overflow_pending) or (
+        int(epoch_debug.get("raw_window_count") or 0) >= high_water_turns
+        or int(epoch_debug.get("raw_window_tokens") or 0) >= high_water_tokens
+    )
+    if prefix_epoch_rollover:
+        recent_window, raw_debug = load_latest_raw_window(
+            db,
+            session_id=session_id,
+            chat_type=chat_type,
+            max_turns=low_water_turns,
+            max_tokens=low_water_tokens,
+            max_per_msg=max(
+                int(max_per_msg or 0),
+                config.PRIVATE_CONTEXT_MAX_MESSAGE_CHARS,
+            ) if not is_group else max_per_msg,
+            after_clear_at=history_clear_at,
+            after_turn_id=last_covered_id,
+        )
+    else:
+        recent_window, raw_debug = epoch_window, epoch_debug
     debug["rolling_summary_eligible_skipped"] = list(raw_debug.get("raw_window_skipped") or [])
     raw_start_id = int(raw_debug.get("raw_window_start_turn_id") or 0)
     pending, pending_debug = load_pending_for_summary_turns(
@@ -359,6 +443,15 @@ def build_session_memory(
     debug["rolling_summary_pending_turn_ids"] = [int(turn.id) for turn in pending]
     debug["rolling_summary_raw_start_turn_id"] = raw_start_id
     debug["rolling_summary_recent_raw_turn_ids"] = list(raw_debug.get("raw_window_turn_ids") or [])
+    debug.update({
+        "prefix_epoch_rollover": prefix_epoch_rollover,
+        "prefix_epoch_rollover_reason": (
+            "high_water" if prefix_epoch_rollover else ""
+        ),
+        "prefix_epoch_history_tokens": int(
+            raw_debug.get("raw_window_tokens") or 0
+        ),
+    })
 
     if pending:
         try:
@@ -375,6 +468,7 @@ def build_session_memory(
                 after_clear_at=history_clear_at,
                 block_id=block_id,
                 dry_run=read_only,
+                force=prefix_epoch_rollover,
             )
             if rollup_result.skipped_reason == "history_clear_changed":
                 active_summary = None
@@ -407,6 +501,14 @@ def build_session_memory(
             debug["rolling_summary_error"] = str(exc)
 
     summary_header = render_rolling_summary_context(active_summary)
+    debug.update(_prefix_epoch_debug(
+        session_id=session_id,
+        chat_type=chat_type,
+        summary=active_summary,
+        history_clear_at=history_clear_at,
+        low_water_tokens=low_water_tokens,
+        high_water_tokens=high_water_tokens,
+    ))
     if active_summary is not None and summary_header:
         debug["rolling_summary_injected"] = True
         debug["rolling_summary_id"] = int(active_summary.id or 0)
@@ -781,6 +883,7 @@ def build_group_recent_messages(
     after_source_id: int = 0,
     after_clear_at: datetime | None = None,
     exclude_message_ids: list[str] | None = None,
+    source_id_block_span: int = 0,
 ) -> tuple[list[dict], dict]:
     """从 ChatLog 构建群聊统一上下文 role messages。
 
@@ -812,6 +915,8 @@ def build_group_recent_messages(
         if max_tokens is not None
         else None
     )
+    normalized_block_span = max(0, int(source_id_block_span or 0))
+    block_aligned = False
     for row in rows:
         if excluded and _chatlog_source_ids(row) & excluded:
             skipped_excluded += 1
@@ -846,6 +951,19 @@ def build_group_recent_messages(
             )
         ):
             truncated = True
+            if normalized_block_span > 1:
+                boundary_block = int(row.id or 0) // normalized_block_span
+                trim_count = 0
+                for selected_row, _block, _role, _cost in reversed(selected_desc):
+                    if int(selected_row.id or 0) // normalized_block_span != boundary_block:
+                        break
+                    trim_count += 1
+                if 0 < trim_count < len(selected_desc):
+                    removed = selected_desc[-trim_count:]
+                    del selected_desc[-trim_count:]
+                    total_chars -= sum(len(item[1]) for item in removed)
+                    total_tokens -= sum(item[3] for item in removed)
+                    block_aligned = True
             break
         role = "assistant" if row.role == "assistant" else "user"
         selected_desc.append((row, block, role, token_cost))
@@ -906,6 +1024,8 @@ def build_group_recent_messages(
             for source_id in list(item.get("source_ids") or [])
         ],
         "group_recent_after_source_id": int(after_source_id or 0),
+        "group_recent_source_id_block_span": normalized_block_span,
+        "group_recent_block_aligned": block_aligned,
     }
     return messages, debug
 
@@ -985,6 +1105,9 @@ def build_chat_context(
         after_source_id=covered_until_source_id,
         after_clear_at=history_clear_at,
         exclude_message_ids=exclude_message_ids,
+        source_id_block_span=(
+            session_memory_config.GROUP_CONTEXT_SOURCE_ID_BLOCK_SPAN
+        ),
     )
     summary_header = ""
     try:
@@ -1021,6 +1144,29 @@ def build_chat_context(
             "rolling_summary_eligible_skipped": [],
             "rolling_summary_pending_truncated": False,
             "rolling_summary_raw_window_count": len(messages),
+        })
+        debug.update(_prefix_epoch_debug(
+            session_id=session_id,
+            chat_type="group",
+            summary=active_summary,
+            history_clear_at=history_clear_at,
+            low_water_tokens=(
+                session_memory_config.GROUP_CACHE_EPOCH_LOW_WATER_TOKENS
+            ),
+            high_water_tokens=(
+                session_memory_config.GROUP_CACHE_EPOCH_HIGH_WATER_TOKENS
+            ),
+        ))
+        debug.update({
+            "prefix_epoch_history_tokens": int(
+                debug.get("group_recent_tokens") or 0
+            ),
+            "prefix_epoch_rollover": False,
+            "prefix_epoch_rollover_reason": "",
+            "prefix_epoch_high_water_reached": (
+                int(debug.get("group_recent_tokens") or 0)
+                >= session_memory_config.GROUP_CACHE_EPOCH_HIGH_WATER_TOKENS
+            ),
         })
     except Exception as exc:
         logger.warning("[Context] group rolling summary render failed: %s", exc)

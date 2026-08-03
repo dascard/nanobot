@@ -208,8 +208,12 @@ def list_llm_api_logs(
     }
     cache_token_totals = q.with_entities(
         func.sum(LLMApiRequestLog.cache_hit_tokens),
+        func.sum(LLMApiRequestLog.cache_miss_tokens),
         func.sum(LLMApiRequestLog.cache_write_tokens),
     ).one()
+    cache_hit_token_total = int(cache_token_totals[0] or 0)
+    cache_miss_token_total = int(cache_token_totals[1] or 0)
+    cache_prompt_token_total = cache_hit_token_total + cache_miss_token_total
     avg_latency = (
         q.filter(LLMApiRequestLog.latency_ms > 0)
         .with_entities(func.avg(LLMApiRequestLog.latency_ms))
@@ -248,6 +252,7 @@ def list_llm_api_logs(
                 LLMApiRequestLog.cache_status,
                 LLMApiRequestLog.cache_hit,
                 LLMApiRequestLog.cache_hit_tokens,
+                LLMApiRequestLog.cache_miss_tokens,
                 LLMApiRequestLog.cache_write_tokens,
                 LLMApiRequestLog.error,
                 LLMApiRequestLog.latency_ms,
@@ -290,8 +295,13 @@ def list_llm_api_logs(
             "cache_not_reported": by_cache_status.get("not_reported", 0),
             "cache_pending": by_cache_status.get("pending", 0),
             "cache_error": by_cache_status.get("error", 0),
-            "cache_hit_tokens": int(cache_token_totals[0] or 0),
-            "cache_write_tokens": int(cache_token_totals[1] or 0),
+            "cache_hit_tokens": cache_hit_token_total,
+            "cache_miss_tokens": cache_miss_token_total,
+            "cache_write_tokens": int(cache_token_totals[2] or 0),
+            "cache_hit_token_ratio": (
+                round(cache_hit_token_total / cache_prompt_token_total, 6)
+                if cache_prompt_token_total > 0 else None
+            ),
             "by_cache_status": by_cache_status,
         },
     }

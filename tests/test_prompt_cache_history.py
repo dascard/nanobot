@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+import pytest
+
 from core.db.models.chat import ChatLog, ConversationTurn
 
 
@@ -198,3 +200,148 @@ def test_group_pending_event_becomes_identical_history_tail(db_session):
     assert messages[0]["content"] == ensure_user_input_block(current)
     assert messages[1]["role"] == "assistant"
     assert messages[1]["content"] == "我已经看完这两条。"
+
+
+def test_group_recent_window_rotates_on_fixed_source_id_blocks(db_session):
+    from core.context_builder import (
+        build_group_recent_messages,
+        format_group_canonical_message,
+    )
+    from core.token_utils import estimate_tokens
+
+    created_at = datetime(2026, 7, 31, 16, 30, 0)
+    content = "固定块缓存边界" * 20
+    for index in range(1, 12):
+        db_session.add(ChatLog(
+            id=index,
+            user_id="group_block_cache",
+            session_id="group_block_cache",
+            role="assistant",
+            sender_name="小南",
+            content=content,
+            message_id=f"m{index:02d}",
+            created_at=created_at,
+            processed=1,
+            meta_json='{"kind":"group_reply"}',
+        ))
+    db_session.commit()
+    one_block_tokens = estimate_tokens(format_group_canonical_message(
+        sender_name="小南",
+        content=content,
+        timestamp=created_at,
+        message_id="m01",
+        max_chars=12000,
+    ))
+
+    before, before_debug = build_group_recent_messages(
+        db_session,
+        "group_block_cache",
+        limit=None,
+        max_per_msg=12000,
+        max_total=0,
+        max_tokens=one_block_tokens * 5,
+        source_id_block_span=4,
+    )
+    db_session.add(ChatLog(
+        id=12,
+        user_id="group_block_cache",
+        session_id="group_block_cache",
+        role="assistant",
+        sender_name="小南",
+        content=content,
+        message_id="m12",
+        created_at=created_at,
+        processed=1,
+        meta_json='{"kind":"group_reply"}',
+    ))
+    db_session.commit()
+    after, after_debug = build_group_recent_messages(
+        db_session,
+        "group_block_cache",
+        limit=None,
+        max_per_msg=12000,
+        max_total=0,
+        max_tokens=one_block_tokens * 5,
+        source_id_block_span=4,
+    )
+
+    before_ids = [item["source_id"] for item in before]
+    after_ids = [item["source_id"] for item in after]
+    assert before_ids == after_ids[:len(before_ids)]
+    assert len(after_ids) == len(before_ids) + 1
+    assert before_debug["group_recent_source_id_block_span"] == 4
+    assert before_debug["group_recent_block_aligned"] is True
+    assert after_debug["group_recent_block_aligned"] is False
+
+
+@pytest.mark.asyncio
+async def test_group_prompt_keeps_sender_specific_context_after_cached_history():
+    from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    shared = {
+        "platform": "qq",
+        "chat_type": "group",
+        "session_id": "group_cache_prefix",
+        "group_id": "group_cache_prefix",
+        "bot_name": "小南",
+        "bot_aliases": ["南南"],
+        "history_header": "<conversation_context>群聊历史</conversation_context>",
+        "history_messages": [
+            {"role": "user", "content": "<user_input>历史问题</user_input>"},
+            {"role": "assistant", "content": "历史回答"},
+        ],
+        "group_profile_context": "<group_memory_context>稳定群资料</group_memory_context>",
+        "session_guidance": "回答保持简洁。",
+        "user_input": "当前问题",
+    }
+    first = await compile_prompt_plan(
+        PromptCompileRequest(
+            **shared,
+            user_id="sender-cache-u1",
+            sender_id="sender-cache-u1",
+            sender_name="甲",
+            persona_text="甲的画像",
+            is_super_user=False,
+        ),
+        strict_audit=True,
+    )
+    second = await compile_prompt_plan(
+        PromptCompileRequest(
+            **shared,
+            user_id="sender-cache-u2",
+            sender_id="sender-cache-u2",
+            sender_name="乙",
+            persona_text="乙的画像",
+            is_super_user=True,
+        ),
+        strict_audit=True,
+    )
+
+    def section(plan, node_id):
+        return next(
+            item for item in plan.flow_sections
+            if item["node_id"] == node_id
+        )
+
+    first_history = section(first, "history_messages")
+    second_history = section(second, "history_messages")
+    first_history_end = max(first_history["message_indexes"])
+    second_history_end = max(second_history["message_indexes"])
+    assert first.messages[:first_history_end + 1] == (
+        second.messages[:second_history_end + 1]
+    )
+
+    for plan in (first, second):
+        history_end = max(section(plan, "history_messages")["message_indexes"])
+        persona_index = section(plan, "persona_reference")["message_indexes"][0]
+        runtime_index = section(plan, "runtime_context")["message_indexes"][0]
+        current_index = section(plan, "current_user_event")["message_indexes"][0]
+        assert history_end < persona_index < runtime_index < current_index
+
+    stable_prefix = json.dumps(
+        first.messages[:first_history_end + 1],
+        ensure_ascii=False,
+    )
+    assert "sender-cache-u1" not in stable_prefix
+    assert "sender-cache-u2" not in stable_prefix

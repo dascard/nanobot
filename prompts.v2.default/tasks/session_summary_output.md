@@ -1,11 +1,12 @@
 ---
 name: 会话滚动摘要输出合同
-version: 1
+version: 2
 kind: task
 tool_name: session_summary
 description: Session Summary JSON 字段、继承审计与输出预算合同。
 ---
 请输出严格 JSON，业务字段严格为 summary、open_threads、decisions、important_user_requests、resolved_items、artifacts、participants、keywords、quality，并额外输出仅用于审计的 inheritance 数组。
+每次都必须完整输出上述全部字段。quality 必须严格为 `"quality":{"score":0.9,"issues":[]}` 这一结构：score 是 0 到 1 的数字，issues 是字符串数组；没有问题时必须输出空数组，quality 不允许 reason 或其他字段。
 inheritance 每项字段为 source_id、disposition、target_field、target_index；disposition 只允许 carried、updated、resolved。
 carried 仅表示目标文本与 obligation.normalized_text 完全一致；改写、压缩、合并或改述都必须使用 updated；确认事项已完成才使用 resolved。
 target_index 从 0 开始；合并多个 obligation 到同一目标时，每个 source_id 都必须单独写一项 updated，并允许共享同一个 target_field 和 target_index。

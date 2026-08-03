@@ -822,14 +822,17 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     conversation = _FakeConversation()
     seen_events = []
     seen_runtime_contexts = []
+    seen_cache_contexts = []
 
     async def fake_process_event(event):
         from core.agent_runtime.request_scope import (
             require_current_runtime_context,
         )
+        from core.llm_trace_context import get_llm_cache_context
 
         seen_events.append(event)
         seen_runtime_contexts.append(require_current_runtime_context())
+        seen_cache_contexts.append(get_llm_cache_context())
         _append_reply_exchange(
             conversation,
             "V2 回复",
@@ -893,6 +896,7 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
                 "session_guidance_resolution_status": "configured",
                 "session_guidance_status": "emitted",
                 "context_debug": {
+                    **dict(request.debug.get("context_debug", {}) or {}),
                     "group_memory_injected": True,
                     "group_memory_ids": [11, 12],
                     "group_memory_context_chars": 620,
@@ -949,6 +953,13 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
             "runtime_preset": "none",
             "reply_model": "fake-model",
             "enable_reply_contract_retry": False,
+            "context_debug": {
+                "prefix_epoch": "epoch-group-3",
+                "prefix_epoch_generation": 3,
+                "prefix_epoch_covered_until": 120,
+                "prefix_epoch_low_water_tokens": 6000,
+                "prefix_epoch_high_water_tokens": 16000,
+            },
         },
     )
 
@@ -975,6 +986,14 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     assert [call["chat_type"] for call in captured_tool_plan_calls] == ["group"]
     assert [call["group_id"] for call in captured_tool_plan_calls] == ["1001"]
     assert len(seen_runtime_contexts) == 1
+    assert seen_cache_contexts == [{
+        "session_id": "group_1001",
+        "prefix_epoch": "epoch-group-3",
+        "prefix_epoch_generation": 3,
+        "prefix_epoch_covered_until": 120,
+        "prefix_epoch_low_water_tokens": 6000,
+        "prefix_epoch_high_water_tokens": 16000,
+    }]
     runtime_context = seen_runtime_contexts[0]
     assert runtime_context["is_super_user"] is True
     assert runtime_context["runtime_chat_type"] == "group"

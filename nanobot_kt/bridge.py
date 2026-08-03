@@ -830,6 +830,7 @@ class NanobotBridge(MessageContractBridgeMixin):
         trace_id: str,
         run_id: str,
         llm_source: str = "replyer",
+        cache_context: dict[str, Any] | None = None,
     ) -> tuple[Any, str]:
         retry_prompt = self._build_reply_contract_retry_prompt(raw_model_output)
 
@@ -865,6 +866,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 run_id=run_id,
                 source=retry_source,
                 phase="agent.reply_contract_retry",
+                cache_context=cache_context,
             ),
         ):
             turn = await self._require_runtime().execute_turn(
@@ -1133,6 +1135,22 @@ class NanobotBridge(MessageContractBridgeMixin):
         attempts = 0
         health_status = "pending"
         next_turn_kind = RuntimeTurnKind.USER_INPUT
+        context_debug = meta.get("context_debug")
+        context_debug = context_debug if isinstance(context_debug, dict) else {}
+        cache_context = {
+            "session_id": session_id,
+            **{
+                key: context_debug[key]
+                for key in (
+                    "prefix_epoch",
+                    "prefix_epoch_generation",
+                    "prefix_epoch_covered_until",
+                    "prefix_epoch_low_water_tokens",
+                    "prefix_epoch_high_water_tokens",
+                )
+                if key in context_debug
+            },
+        }
 
         for attempt in range(max_attempts):
             self._output.clear()
@@ -1178,6 +1196,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                         else "model.route_retry"
                     ),
                     route_attempt_index=attempt + 1,
+                    cache_context=cache_context,
                 ):
                     turn = await self._require_runtime().execute_turn(
                         AgentTurnRequest(
@@ -1540,6 +1559,21 @@ class NanobotBridge(MessageContractBridgeMixin):
                 trace_id=trace_id,
                 run_id=run_id,
                 llm_source=reply_llm_source,
+                cache_context={
+                    "session_id": session_id,
+                    **{
+                        key: (meta.get("context_debug") or {}).get(key)
+                        for key in (
+                            "prefix_epoch",
+                            "prefix_epoch_generation",
+                            "prefix_epoch_covered_until",
+                            "prefix_epoch_low_water_tokens",
+                            "prefix_epoch_high_water_tokens",
+                        )
+                        if isinstance(meta.get("context_debug"), dict)
+                        and (meta.get("context_debug") or {}).get(key) is not None
+                    },
+                },
             )
             retry_buffer = (
                 self._output.get_response()

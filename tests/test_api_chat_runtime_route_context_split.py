@@ -162,6 +162,7 @@ def test_build_chat_runtime_route_context_applies_group_persona_gate():
     assert context.platform == "qq"
     assert context.persona_text == "动态画像"
     assert context.ctx_debug == {"source": "history", "persona": "ok"}
+    assert context.bridge_meta["context_debug"] == context.ctx_debug
 
 
 def test_build_chat_runtime_route_context_injects_private_persona_with_safe_multimodal_input():
@@ -195,6 +196,7 @@ def test_build_chat_runtime_route_context_injects_private_persona_with_safe_mult
     assert calls["persona"] == [("u-runtime-route", "私聊问题 files=1", history)]
     assert context.persona_text == "动态画像"
     assert context.ctx_debug == {"history": "ok", "persona": "hit"}
+    assert context.bridge_meta["context_debug"] == context.ctx_debug
     assert context.bridge_meta["persona_text"] == "动态画像"
     assert context.bridge_meta["raw_query"] == "私聊问题 files=1"
     assert context.bridge_meta["effort_constraint"] == "constraint:high"
