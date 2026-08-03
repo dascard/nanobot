@@ -27,7 +27,7 @@ async def run_outreach_dry_run_once(
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
-    thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
+    thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
     grounding_builder: Callable[..., dict[str, Any]] = build_outreach_grounding,
     judge_service: Callable[..., dict[str, Any]] = judge_outreach,
     generator_service: Callable[..., str] = generate_outreach_message,

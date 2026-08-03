@@ -1073,8 +1073,38 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
             non_empty=("message",),
             payload=("message",),
             render_mode="system_with_user_ref",
-            output_contract_id="outreach_threads_v1",
+            output_contract_id="outreach_threads_v2",
             template_failure_policy="runtime_default_fail_closed",
+            output_schema={
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string"},
+                        "status": {
+                            "type": "string",
+                            "enum": [
+                                "open",
+                                "completed",
+                                "dismissed",
+                                "unknown",
+                            ],
+                        },
+                        "evidence_message_indexes": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "integer", "minimum": 0},
+                        },
+                    },
+                    "required": [
+                        "topic",
+                        "status",
+                        "evidence_message_indexes",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
         ),
         _contract(
             "tasks/outreach_judge",
@@ -1084,7 +1114,7 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
             non_empty=("message",),
             payload=("message",),
             render_mode="system_with_user_ref",
-            output_contract_id="outreach_judge_v1",
+            output_contract_id="outreach_judge_v2",
             template_failure_policy="runtime_default_fail_closed",
             output_schema={
                 "type": "object",
@@ -1102,6 +1132,20 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
                         "enum": ["message", "research"],
                     },
                     "research_query": {"type": "string"},
+                    "topic_type": {
+                        "type": "string",
+                        "enum": [
+                            "follow_up",
+                            "discovery",
+                            "status_check",
+                            "none",
+                        ],
+                    },
+                    "topic": {"type": "string"},
+                    "evidence_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                 },
                 "required": [
                     "should_reach_out",
@@ -1109,6 +1153,9 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
                     "next_intent",
                     "outreach_kind",
                     "research_query",
+                    "topic_type",
+                    "topic",
+                    "evidence_ids",
                 ],
                 "oneOf": [
                     {"required": ["next_check_in_hours"]},
@@ -1127,6 +1174,26 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
             render_mode="system_with_user_ref",
             output_contract_id="outreach_message_v1",
             template_failure_policy="runtime_default_fail_closed",
+        ),
+        _contract(
+            "tasks/outreach_quality",
+            owner_module="core.proactive",
+            domain="proactive_outreach",
+            required_call=("message",),
+            non_empty=("message",),
+            payload=("message",),
+            render_mode="system_with_user_ref",
+            output_contract_id="outreach_quality_v1",
+            template_failure_policy="runtime_default_fail_closed",
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "approved": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["approved", "reason"],
+                "additionalProperties": False,
+            },
         ),
         _contract(
             "tasks/proactive_research",
@@ -1306,6 +1373,12 @@ _TASK_INVOCATION_SPECS: tuple[TaskInvocationSpec, ...] = (
         ("tasks/outreach_generate",),
         "messages",
         "core.proactive_outreach.generate_outreach_message",
+    ),
+    TaskInvocationSpec(
+        "outreach_quality",
+        ("tasks/outreach_quality",),
+        "messages",
+        "core.proactive.model_policy.parse_outreach_quality_contract",
     ),
     TaskInvocationSpec(
         "proactive_research",

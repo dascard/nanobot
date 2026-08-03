@@ -81,6 +81,14 @@
       "stage": "阶段 7C"
     },
     {
+      "after_sha256": "812bcadaf84f66d0a8cf86586180ac6975aea12e7a5c12f8f0eb2d05abb241e3",
+      "before_sha256": "79a2d6dd773aeb8c314a610188eca9b88efafb1627c17eaf000dbbfe6bc9976d",
+      "id": "proactive_outreach_fact_guard_prompt",
+      "reason": "把主动外呼话题提取升级为带生命周期和证据的结构化合同，向正文传递完整选题依据，并新增生成后事实性与语义质量复核 Prompt。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "主动外呼事实性治理"
+    },
+    {
       "after_sha256": "59ca2e9a073385589f81b7374a91030605c583122f2c3af2b74b27b1b1e40d9c",
       "before_sha256": "89ab0c4a6e53be676d39cc717f74948d79a1008ad37802b53827656b49c96661",
       "id": "stage6_news_registry",
@@ -111,9 +119,17 @@
       "reason": "登记 Web 群学习工作台使用的受管规则启停配置；默认值为空且标记为危险设置，不创建白名单、不启用学习或 Prompt 注入。",
       "snapshot_id": "runtime_registries",
       "stage": "阶段 8"
+    },
+    {
+      "after_sha256": "dfc89e244a914bfb71b9de9d249498bec7f0abd00283a31c63d52c42470b4e84",
+      "before_sha256": "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552",
+      "id": "proactive_outreach_fact_guard_registry",
+      "reason": "升级主动外呼话题与 Judge 输出合同，登记独立质量复核模型路由及其受管配置。",
+      "snapshot_id": "runtime_registries",
+      "stage": "主动外呼事实性治理"
     }
   ],
-  "baseline_git_commit": "2d37134b9d6b9e3de5fa15d55ef7a309efd9985a",
+  "baseline_git_commit": "85408d9d10f4f51325586629cf4e9a45ce7d1c4c",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -123,7 +139,7 @@
     "environment": "清除代理；不访问网络；不读取生产数据库；只读取版本化 Prompt 文件"
   },
   "runtime_versions": {
-    "generated_with_python": "3.11.13",
+    "generated_with_python": "3.12.7",
     "kt_commit": "6c2c5f1d059ac7f99379b0cddeea21da8e9b55c0",
     "prompt_runtime_schema": "v2",
     "python_constraint": ">=3.11"
@@ -156,14 +172,14 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "79a2d6dd773aeb8c314a610188eca9b88efafb1627c17eaf000dbbfe6bc9976d"
+      "sha256": "812bcadaf84f66d0a8cf86586180ac6975aea12e7a5c12f8f0eb2d05abb241e3"
     },
     {
       "classification": "preserve",
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552"
+      "sha256": "dfc89e244a914bfb71b9de9d249498bec7f0abd00283a31c63d52c42470b4e84"
     },
     {
       "classification": "security_invariant",

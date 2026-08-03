@@ -225,9 +225,10 @@ async def test_scheduling_idempotency_and_auto_dry_run_modes_only_use_recording_
     assert quiet["recorded_publish_count"] == 0
 
     max_silence = _observations(cases["max_silence"])
+    assert cases["max_silence"]["status"] == "no_candidate"
     assert max_silence["forced"] is True
-    assert max_silence["judge_calls"] == 0
-    assert max_silence["recorded_publish_count"] == 1
+    assert max_silence["judge_calls"] == 1
+    assert max_silence["recorded_publish_count"] == 0
 
     duplicate = _observations(cases["duplicate_key"])
     assert duplicate["attempt_count"] == 2
@@ -249,7 +250,7 @@ async def test_scheduling_idempotency_and_auto_dry_run_modes_only_use_recording_
 
     metrics = report["metrics"]
     assert metrics["external_push_count"] == 0
-    assert metrics["duplicate_rate"] == pytest.approx(1 / 4)
+    assert metrics["duplicate_rate"] == pytest.approx(1 / 3)
     assert metrics["recorded_publish_count"] == sum(
         int(_observations(case).get("recorded_publish_count", 0))
         for case in cases.values()
@@ -639,7 +640,7 @@ async def test_simulation_exercises_shared_candidate_kernel_and_sqlite_state(mon
     assert cases["research_budget_exhausted"]["status"] == "research_blocked"
     assert report["metrics"]["budget_overrun_count"] == 0
     assert report["sqlite_state"]["duplicate_attempts"] == 1
-    assert report["sqlite_state"]["delivery_attempts"] == 4
+    assert report["sqlite_state"]["delivery_attempts"] == 3
     assert report["sqlite_state"]["duplicate_publishes"] == 0
 
 

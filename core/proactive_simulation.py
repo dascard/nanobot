@@ -158,11 +158,11 @@ _REQUIRED_CASE_EXPECTATIONS: dict[str, dict[str, Any]] = {
         },
     },
     "max_silence": {
-        "status": "recorded",
+        "status": "no_candidate",
         "observations": {
             "forced": True,
-            "judge_calls": 0,
-            "recorded_publish_count": 1,
+            "judge_calls": 1,
+            "recorded_publish_count": 0,
             "external_push_count": 0,
         },
     },
@@ -224,25 +224,23 @@ _REQUIRED_CASE_EXPECTATIONS: dict[str, dict[str, Any]] = {
 }
 
 _EXPECTED_LEDGER_STATE = {
-    "candidate_rows": 3,
-    "sent_rows": 3,
-    "delivery_attempts": 4,
-    "accepted_attempts": 3,
+    "candidate_rows": 2,
+    "sent_rows": 2,
+    "delivery_attempts": 3,
+    "accepted_attempts": 2,
     "rejected_attempts": 1,
-    "distinct_attempt_keys": 3,
+    "distinct_attempt_keys": 2,
     "duplicate_attempt_count": 1,
     "duplicate_publish_count": 0,
     "duplicate_attempts": 1,
     "duplicate_publishes": 0,
     "attempts_by_key": {
         "auto-candidate": 1,
-        "max-silence": 1,
         "same-due-anchor": 2,
     },
 }
 
 _EXPECTED_PUBLISH_RECORD_KEYS = {
-    ("max_silence", "max-silence"),
     ("duplicate_key", "same-due-anchor"),
     ("auto_publish", "auto-candidate"),
 }
@@ -750,7 +748,7 @@ def _schedule_gate(
         surge_roll=surge_roll,
         allow_early_surge=allow_early_surge,
     )
-    if due_decision["status"] not in {"due", "forced"}:
+    if due_decision["status"] not in {"due", "forced_evaluation"}:
         return due_decision
 
     interval_decision = evaluate_outreach_min_interval_gate(
@@ -763,7 +761,9 @@ def _schedule_gate(
     if interval_decision["status"] == "skipped_min_interval":
         return interval_decision
     return {
-        "status": "forced" if interval_decision["forced"] else "due",
+        "status": (
+            "forced_evaluation" if interval_decision["forced"] else "due"
+        ),
         "forced": bool(interval_decision["forced"]),
         "surge_probability": float(due_decision.get("surge_probability") or 0.0),
         "surge_roll": due_decision.get("surge_roll"),
@@ -1652,26 +1652,22 @@ async def run_accelerated_simulation() -> dict[str, Any]:
             first_attempt_at=_VIRTUAL_START + timedelta(hours=12),
         )
         before = len(recorder.records)
-        if forced["forced"]:
-            ledger.stage_candidate(
-                key="max-silence",
-                message="最长沉默兜底候选",
-                now=at,
-                case_id="max_silence",
-            )
-            await ledger.deliver(
-                key="max-silence",
-                now=at,
-                publisher=recorder,
-                case_id="max_silence",
-            )
+        silence_evaluation = await _evaluate_message(
+            now=at,
+            request_id="max-silence-evaluation",
+            judge_result=_judge(at, should_reach_out=False),
+        )
         cases.append(_case(
             "max_silence",
-            status="recorded" if forced["forced"] else "not_due",
-            passed=forced["forced"] and len(recorder.records) == before + 1,
+            status=str(silence_evaluation.get("status") or ""),
+            passed=(
+                forced["forced"]
+                and silence_evaluation.get("status") == "no_candidate"
+                and len(recorder.records) == before
+            ),
             observations={
                 "forced": forced["forced"],
-                "judge_calls": 0,
+                "judge_calls": 1,
                 "recorded_publish_count": len(recorder.records) - before,
                 "external_push_count": 0,
             },

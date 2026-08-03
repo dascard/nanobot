@@ -37,13 +37,13 @@
     },
     {
       "path": "data/prompts_v2/tasks/outreach_generate.md",
-      "sha256": "12a6f5b07867afdbcdd92fe3262237463b4c7e0fa977fb5dc9cbf127af76b6ec",
-      "size_bytes": 950
+      "sha256": "abc6d838e43d9e2d55d00df177c9578ce5680e875536be6b35d374d0be679406",
+      "size_bytes": 1822
     },
     {
       "path": "data/prompts_v2/tasks/outreach_judge.md",
-      "sha256": "7425fe9f338a1f80e7f6857c822172a1616ca52542501cabe404576884390b9d",
-      "size_bytes": 1788
+      "sha256": "47efc15598a2a98dcc0e0da0cfce4ae1edb13d96f774248c3b868008f2ea9ae5",
+      "size_bytes": 3035
     },
     {
       "path": "data/prompts_v2/tasks/private_decision.md",
@@ -207,18 +207,23 @@
     },
     {
       "path": "prompts.v2.default/tasks/outreach_extract.md",
-      "sha256": "bd13b3a5b059b8016e44c71b0a2b51b5a893089e57fb5ce3f71f7495cf564ab9",
-      "size_bytes": 695
+      "sha256": "62013ef923058e55d76ca66cb07418e20bccadb9182f1dcde83659053408dbcf",
+      "size_bytes": 1455
     },
     {
       "path": "prompts.v2.default/tasks/outreach_generate.md",
-      "sha256": "12a6f5b07867afdbcdd92fe3262237463b4c7e0fa977fb5dc9cbf127af76b6ec",
-      "size_bytes": 950
+      "sha256": "abc6d838e43d9e2d55d00df177c9578ce5680e875536be6b35d374d0be679406",
+      "size_bytes": 1822
     },
     {
       "path": "prompts.v2.default/tasks/outreach_judge.md",
-      "sha256": "7425fe9f338a1f80e7f6857c822172a1616ca52542501cabe404576884390b9d",
-      "size_bytes": 1788
+      "sha256": "47efc15598a2a98dcc0e0da0cfce4ae1edb13d96f774248c3b868008f2ea9ae5",
+      "size_bytes": 3035
+    },
+    {
+      "path": "prompts.v2.default/tasks/outreach_quality.md",
+      "sha256": "2ab3ee0902525d4fb2fa1f603e28b697a4cb44a6d24e0bce7f08a34f27802d70",
+      "size_bytes": 1456
     },
     {
       "path": "prompts.v2.default/tasks/persona_candidate_system.md",

@@ -30,6 +30,34 @@ def _seed_delivery_control(db_session):
     db_session.commit()
 
 
+def test_max_silence_forces_one_evaluation_then_respects_next_check():
+    from core.proactive_candidate import evaluate_outreach_due_gate
+
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    last_sent_at = now - timedelta(hours=49)
+    next_check_at = now + timedelta(hours=2)
+
+    first = evaluate_outreach_due_gate(
+        now=now,
+        last_effective_at=last_sent_at,
+        last_evaluation_at=last_sent_at,
+        next_check_at=next_check_at,
+        max_silence_min=2880,
+    )
+    after_evaluation = evaluate_outreach_due_gate(
+        now=now,
+        last_effective_at=last_sent_at,
+        last_evaluation_at=now - timedelta(minutes=5),
+        next_check_at=next_check_at,
+        max_silence_min=2880,
+    )
+
+    assert first["status"] == "forced_evaluation"
+    assert first["forced"] is True
+    assert after_evaluation["status"] == "skipped_not_due"
+    assert after_evaluation["forced"] is False
+
+
 def test_generation_failure_diagnostic_uses_only_whitelisted_error_types():
     from core.proactive_diagnostics import (
         OutreachModelContractError,
@@ -59,13 +87,20 @@ async def test_candidate_evaluator_handles_message_and_fail_closed_paths():
 
     now = datetime(2026, 7, 10, 12, 0, 0)
     grounding = {"user_id": "u1", "recent_messages": []}
+    expected_judge = _judge(now)
+    generation_calls = []
+
+    def generate(candidate_grounding, decision):
+        generation_calls.append((candidate_grounding, decision))
+        return "候选正文"
+
     candidate = await evaluate_outreach_candidate(
         user_id="u1",
         request_id="candidate-1",
         grounding=grounding,
         now=now,
-        judge_fn=lambda *_args, **_kwargs: _judge(now),
-        generator_fn=lambda *_args, **_kwargs: "候选正文",
+        judge_fn=lambda *_args, **_kwargs: expected_judge,
+        generator_fn=generate,
     )
     empty = await evaluate_outreach_candidate(
         user_id="u1",
@@ -91,6 +126,7 @@ async def test_candidate_evaluator_handles_message_and_fail_closed_paths():
 
     assert candidate["status"] == "candidate"
     assert candidate["message"] == "候选正文"
+    assert generation_calls == [(grounding, expected_judge)]
     assert empty["status"] == "generation_error"
     assert judge_error["status"] == "judge_error"
 

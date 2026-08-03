@@ -7,8 +7,10 @@ data/prompts_v2/chat/*
 !data/prompts_v2/tasks/
 data/prompts_v2/tasks/*
 !data/prompts_v2/tasks/group_memory_learning.md
+!data/prompts_v2/tasks/outreach_extract.md
 !data/prompts_v2/tasks/outreach_generate.md
 !data/prompts_v2/tasks/outreach_judge.md
+!data/prompts_v2/tasks/outreach_quality.md
 !data/prompts_v2/tasks/private_decision.md
 !data/prompts_v2/tools/
 data/prompts_v2/tools/*

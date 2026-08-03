@@ -102,6 +102,9 @@ class OutreachJudgeContractPolicy:
             "next_intent": "",
             "outreach_kind": "message",
             "research_query": "",
+            "topic_type": "none",
+            "topic": "",
+            "evidence_ids": [],
             "raw": response.content[:1000],
             "reasoning_content": response.reasoning_content[:1000],
             "finish_reason": response.finish_reason,
@@ -161,6 +164,9 @@ class OutreachJudgeContractPolicy:
             "next_intent",
             "outreach_kind",
             "research_query",
+            "topic_type",
+            "topic",
+            "evidence_ids",
         }
         if not required_fields.issubset(data):
             return self._error(
@@ -173,16 +179,56 @@ class OutreachJudgeContractPolicy:
         should_reach_out = data.get("should_reach_out")
         reason = data.get("reason")
         next_intent = data.get("next_intent")
+        topic_type_value = data.get("topic_type")
+        topic = data.get("topic")
+        evidence_ids_value = data.get("evidence_ids")
         if (
             not isinstance(should_reach_out, bool)
             or not isinstance(reason, str)
             or not isinstance(next_intent, str)
+            or not isinstance(topic_type_value, str)
+            or not isinstance(topic, str)
+            or not isinstance(evidence_ids_value, list)
+            or any(not isinstance(item, str) for item in evidence_ids_value)
         ):
             return self._error(
                 response,
                 now=now,
                 error_type="contract_error",
                 reason="主动外呼 Judge 字段类型不符合契约",
+            )
+        topic_type = topic_type_value.strip().lower()
+        evidence_ids = list(dict.fromkeys(
+            item.strip()[:200]
+            for item in evidence_ids_value
+            if item.strip()
+        ))
+        if topic_type not in {
+            "follow_up",
+            "discovery",
+            "status_check",
+            "none",
+        }:
+            return self._error(
+                response,
+                now=now,
+                error_type="contract_error",
+                reason="主动外呼 Judge 的 topic_type 不符合契约",
+            )
+        if should_reach_out:
+            if topic_type == "none" or not topic.strip() or not evidence_ids:
+                return self._error(
+                    response,
+                    now=now,
+                    error_type="contract_error",
+                    reason="主动外呼 Judge 缺少选题或事实依据",
+                )
+        elif topic_type != "none" or topic.strip() or evidence_ids:
+            return self._error(
+                response,
+                now=now,
+                error_type="contract_error",
+                reason="主动外呼 Judge 不发送时不得保留待生成选题",
             )
 
         candidate: datetime | None = None
@@ -246,6 +292,9 @@ class OutreachJudgeContractPolicy:
             "next_intent": next_intent[:500],
             "outreach_kind": outreach_kind,
             "research_query": research_query.strip()[:1000],
+            "topic_type": topic_type,
+            "topic": topic.strip()[:500],
+            "evidence_ids": evidence_ids[:12],
             "raw": response.content[:1000],
             "reasoning_content": response.reasoning_content[:1000],
             "finish_reason": response.finish_reason,
@@ -287,6 +336,46 @@ def parse_generator_message(response: ModelProviderResponse) -> str:
     return message
 
 
+def parse_outreach_quality_contract(
+    response: ModelProviderResponse,
+) -> dict[str, Any]:
+    finish_reason = (response.finish_reason or "").strip().lower()
+    if finish_reason != "stop":
+        error_type = (
+            "model_truncated" if finish_reason == "length" else "model_finish_error"
+        )
+        raise OutreachModelContractError(
+            "主动外呼质量复核未正常结束",
+            error_type=error_type,
+        )
+    cleaned = strip_think_blocks(response.content or "").strip()
+    if not cleaned:
+        raise OutreachModelContractError(
+            "主动外呼质量复核返回空正文",
+            error_type="empty_response",
+        )
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise OutreachModelContractError(
+            "主动外呼质量复核返回无效 JSON",
+            error_type="contract_error",
+        ) from exc
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("approved"), bool)
+        or not isinstance(data.get("reason"), str)
+    ):
+        raise OutreachModelContractError(
+            "主动外呼质量复核字段不符合契约",
+            error_type="contract_error",
+        )
+    return {
+        "approved": bool(data["approved"]),
+        "reason": str(data["reason"])[:500],
+    }
+
+
 __all__ = [
     "OutreachJudgeContractPolicy",
     "clamp_next_check_at",
@@ -294,4 +383,5 @@ __all__ = [
     "parse_generator_message",
     "parse_iso_datetime",
     "parse_outreach_judge_contract",
+    "parse_outreach_quality_contract",
 ]

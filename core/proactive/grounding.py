@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from core.database import SessionLocal
 from core.db.models.chat import ConversationTurn
-from core.db.models.persona import Persona
+from core.db.models.persona import Persona, PersonaFact
 from core.db.models.proactive import ProactiveOutreachLog
 from core.model_provider.response_normalization import strip_think_blocks
 from core.model_provider.route_runtime import call_model_route_response
@@ -35,6 +35,12 @@ from core.proactive_candidate import DEFAULT_ACTIVE_HOURS
 
 ACTIVE_HOURS_MIN_SAMPLES = 5
 ACTIVE_HOUR_WINDOW_RADIUS = 1
+RECENT_THREAD_STATUSES = frozenset({
+    "open",
+    "completed",
+    "dismissed",
+    "unknown",
+})
 
 
 @contextmanager
@@ -54,8 +60,8 @@ def extract_recent_threads(
     *,
     llm_call: Callable[..., Any] | None = None,
     diagnostics: dict[str, Any] | None = None,
-) -> list[str]:
-    """从最近对话中提炼可自然跟进的话题；失败时降级为空。"""
+) -> list[dict[str, Any]]:
+    """从最近对话中提炼带生命周期与证据位置的话题。"""
 
     def record(**values: Any) -> None:
         if diagnostics is None:
@@ -63,15 +69,16 @@ def extract_recent_threads(
         diagnostics.clear()
         diagnostics.update(values)
 
-    compact_messages = [
-        {
+    compact_messages: list[dict[str, Any]] = []
+    for item in recent_messages:
+        if not str(item.get("content") or "").strip():
+            continue
+        compact_messages.append({
+            "message_index": len(compact_messages),
             "role": str(item.get("role") or ""),
             "content": truncate_text(str(item.get("content") or ""), 240),
             "created_at": str(item.get("created_at") or ""),
-        }
-        for item in recent_messages
-        if str(item.get("content") or "").strip()
-    ]
+        })
     if not compact_messages:
         record(status="empty_input")
         return []
@@ -115,13 +122,48 @@ def extract_recent_threads(
         )
         return []
 
-    threads: list[str] = []
-    seen: set[str] = set()
+    threads: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
     for item in parsed:
-        text = truncate_text(str(item), 120)
-        if text and text not in seen:
-            seen.add(text)
-            threads.append(text)
+        if not isinstance(item, dict):
+            continue
+        topic_value = item.get("topic")
+        status_value = item.get("status")
+        indexes_value = item.get("evidence_message_indexes")
+        if (
+            not isinstance(topic_value, str)
+            or not isinstance(status_value, str)
+            or not isinstance(indexes_value, list)
+        ):
+            continue
+        topic = truncate_text(topic_value, 120)
+        status = status_value.strip().lower()
+        if not topic or status not in RECENT_THREAD_STATUSES:
+            continue
+        evidence_indexes = sorted({
+            index
+            for index in indexes_value
+            if type(index) is int and 0 <= index < len(compact_messages)
+        })
+        if not evidence_indexes or not any(
+            compact_messages[index].get("role") == "user"
+            for index in evidence_indexes
+        ):
+            continue
+        dedupe_key = (topic, status)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        latest_index = evidence_indexes[-1]
+        threads.append({
+            "evidence_id": f"recent_thread:{len(threads)}",
+            "topic": topic,
+            "status": status,
+            "evidence_message_indexes": evidence_indexes,
+            "updated_at": str(
+                compact_messages[latest_index].get("created_at") or ""
+            ),
+        })
         if len(threads) >= 3:
             break
     record(
@@ -145,7 +187,7 @@ class OutreachGroundingPort(Protocol):
         db: Session | None = None,
         recent_limit: int = 20,
         now: datetime | None = None,
-        thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
+        thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
     ) -> dict[str, Any]: ...
 
     def active_hours(
@@ -167,7 +209,7 @@ class SqlAlchemyOutreachGroundingService:
         db: Session | None = None,
         recent_limit: int = 20,
         now: datetime | None = None,
-        thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
+        thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
     ) -> dict[str, Any]:
         current = now or datetime.now()
         with _session_scope(db) as session:
@@ -175,6 +217,20 @@ class SqlAlchemyOutreachGroundingService:
                 Persona.user_id == user_id,
                 Persona.status == "active",
             ).first()
+            persona_fact_rows = (
+                session.query(PersonaFact)
+                .filter(
+                    PersonaFact.user_id == user_id,
+                    PersonaFact.status == "active",
+                    PersonaFact.inject_policy == "auto",
+                )
+                .order_by(
+                    PersonaFact.last_seen.desc(),
+                    PersonaFact.id.desc(),
+                )
+                .limit(12)
+                .all()
+            )
             recent_candidates = (
                 private_conversation_query(
                     session,
@@ -267,6 +323,18 @@ class SqlAlchemyOutreachGroundingService:
                     "hour": current.hour,
                 },
                 "persona": json_object(persona.persona_json if persona else "{}"),
+                "persona_facts": [
+                    {
+                        "evidence_id": f"persona_fact:{row.id}",
+                        "content": truncate_text(row.content or "", 240),
+                        "fact_type": row.fact_type or "",
+                        "confidence": row.confidence or "",
+                        "evidence_count": int(row.evidence_count or 0),
+                        "last_seen": iso_or_empty(row.last_seen),
+                    }
+                    for row in persona_fact_rows
+                    if str(row.content or "").strip()
+                ],
                 "recent_messages": recent_messages,
                 "recent_threads": recent_threads,
                 "recent_threads_diagnostics": recent_thread_diagnostics,
@@ -359,7 +427,7 @@ def build_outreach_grounding(
     db: Session | None = None,
     recent_limit: int = 20,
     now: datetime | None = None,
-    thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
+    thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
 ) -> dict[str, Any]:
     return DEFAULT_OUTREACH_GROUNDING.build(
         user_id,

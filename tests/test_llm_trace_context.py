@@ -1,6 +1,7 @@
 """测试 llm_trace_context ContextVar 传递与嵌套。"""
 
 from core.llm_trace_context import (
+    build_llm_cache_context,
     get_llm_cache_context,
     get_llm_trace_execution_vars,
     get_llm_trace_vars,
@@ -11,6 +12,34 @@ from core.llm_trace_context import (
     llm_trace_id,
     llm_trace_scope,
 )
+
+
+def test_build_llm_cache_context_filters_debug_fields():
+    context_debug = {
+        "prefix_epoch": "epoch-1",
+        "prefix_epoch_generation": 3,
+        "prefix_epoch_covered_until": None,
+        "untrusted_field": "ignored",
+    }
+
+    assert build_llm_cache_context("private_1", context_debug) == {
+        "session_id": "private_1",
+        "prefix_epoch": "epoch-1",
+        "prefix_epoch_generation": 3,
+        "prefix_epoch_covered_until": None,
+    }
+    assert build_llm_cache_context(
+        "private_1",
+        context_debug,
+        drop_none=True,
+    ) == {
+        "session_id": "private_1",
+        "prefix_epoch": "epoch-1",
+        "prefix_epoch_generation": 3,
+    }
+    assert build_llm_cache_context("private_1", "invalid") == {
+        "session_id": "private_1",
+    }
 
 
 def test_contextvar_default_empty():

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -40,7 +39,6 @@ from core.outbound.policy import (
 from core.outbound.projection import proactive_outreach_linkage_is_current
 from core.outbound.run_claims import claim_outbound_run, start_generation_attempt
 from core.proactive.config import (
-    FORCED_FALLBACK_MESSAGE,
     OUTREACH_CLAIM_LEASE_SECONDS,
     OUTREACH_DEFAULT_MAX_ATTEMPTS,
     OUTREACH_DEFAULT_RETRY_DEADLINE_SECONDS,
@@ -72,10 +70,6 @@ from core.proactive.serialization import (
     grounding_json as _grounding_json,
     grounding_json_for_model as _grounding_json_for_model,
 )
-from core.proactive_diagnostics import (
-    OutreachModelContractError,
-    generation_failure_from_exception,
-)
 from foundation.identity import RecipientIdentity
 from foundation.message_contract import (
     MessageAction,
@@ -83,10 +77,6 @@ from foundation.message_contract import (
     TextContent,
     TextFormat,
 )
-
-
-logger = logging.getLogger("nanobot.proactive.generation")
-
 
 @dataclass(frozen=True, slots=True)
 class _GeneratedOutreachWork:
@@ -888,56 +878,13 @@ async def _run_generated_outreach(
     legacy_deliverer: Callable[..., Any] = _deliver_legacy_outreach_leaf,
 ) -> dict[str, Any]:
     if work.kind == "forced":
-        reason = str(work.judge.get("reason") or "")
-        try:
-            message = generator_fn(work.input_grounding, reason)
-        except OutreachModelContractError as exc:
-            diagnostic = generation_failure_from_exception(exc)
-            error_type = diagnostic.error_type
-            error_reason = diagnostic.summary
-            logger.warning(
-                "主动外呼 forced Generator 契约失败，使用服务端安全兜底 "
-                "user_id=%s error_type=%s",
-                user_id,
-                error_type,
-            )
-            return await _commit_generated_outreach(
-                session,
-                work=work,
-                user_id=user_id,
-                message=FORCED_FALLBACK_MESSAGE,
-                evaluation_owner_token=evaluation_owner_token,
-                publisher=publisher,
-                forced_fallback={
-                    "error_type": error_type,
-                    "reason": error_reason,
-                },
-                generation_error_type=error_type,
-                generation_error_summary=error_reason,
-                commit_outbox=commit_outbox,
-                result_projector=result_projector,
-                legacy_deliverer=legacy_deliverer,
-            )
-        except Exception as exc:
-            diagnostic = generation_failure_from_exception(exc)
-            return _fail_generated_outreach(
-                session,
-                work=work,
-                user_id=user_id,
-                error_type=diagnostic.error_type,
-                error_summary=diagnostic.summary,
-                evaluation_owner_token=evaluation_owner_token,
-            )
-        return await _commit_generated_outreach(
+        return _fail_generated_outreach(
             session,
             work=work,
             user_id=user_id,
-            message=message,
+            error_type="forced_delivery_disabled",
+            error_summary="最长静默强制投递已停用，等待重新评估",
             evaluation_owner_token=evaluation_owner_token,
-            publisher=publisher,
-            commit_outbox=commit_outbox,
-            result_projector=result_projector,
-            legacy_deliverer=legacy_deliverer,
         )
 
     from core.proactive_candidate import materialize_outreach_candidate

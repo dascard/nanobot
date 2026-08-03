@@ -703,7 +703,7 @@
         "lifecycle": "active",
         "model_fallback_setting_key": null,
         "model_setting_key": "model.route.outreach_extract.model",
-        "output_contract_id": "outreach_threads_v1",
+        "output_contract_id": "outreach_threads_v2",
         "owner": "core.proactive",
         "required_provider_capabilities": [
           "chat_completion"
@@ -801,7 +801,7 @@
         "lifecycle": "active",
         "model_fallback_setting_key": null,
         "model_setting_key": "model.route.outreach_judge.model",
-        "output_contract_id": "outreach_judge_v1",
+        "output_contract_id": "outreach_judge_v2",
         "owner": "core.proactive",
         "required_provider_capabilities": [
           "chat_completion"
@@ -828,6 +828,55 @@
         ],
         "trace_policy_id": "model_route.metadata_only",
         "trace_source": "classifier.outreach_judge"
+      },
+      {
+        "aliases": [],
+        "candidate_policy_id": "configured_provider_then_model_catalog",
+        "circuit_breaker_policy_id": "model_failure_tracker.default",
+        "default_provider_id": "",
+        "defaults": {
+          "enable_thinking": "true",
+          "max_tokens": 4096,
+          "temperature": 0,
+          "timeout_seconds": 30
+        },
+        "domain": "proactive_outreach",
+        "execution_mode": "route_completion",
+        "fallback_route": null,
+        "fallback_scope": "none",
+        "inherit_thinking_when_unset": false,
+        "inherits_from": "reply",
+        "label": "主动外呼质量复核",
+        "lifecycle": "active",
+        "model_fallback_setting_key": null,
+        "model_setting_key": "model.route.outreach_quality.model",
+        "output_contract_id": "outreach_quality_v1",
+        "owner": "core.proactive",
+        "required_provider_capabilities": [
+          "chat_completion"
+        ],
+        "route_key": "outreach_quality",
+        "route_type": "classifier",
+        "runtime_task_key": "tasks/outreach_quality",
+        "setting_prefix": "model.route.outreach_quality",
+        "slo": {
+          "baseline_artifact": "docs/architecture/semantic-task-performance-baseline.json",
+          "daily_call_limit": null,
+          "daily_cost_limit": null,
+          "input_token_limit": null,
+          "max_calls_per_request": 1,
+          "output_token_limit": 4096,
+          "p50_latency_ms": null,
+          "p95_latency_ms": null,
+          "p99_latency_ms": null,
+          "status": "baseline_only",
+          "task_slo_descriptor_id": "model_route_slo.baseline.v1"
+        },
+        "task_contract_keys": [
+          "tasks/outreach_quality"
+        ],
+        "trace_policy_id": "model_route.metadata_only",
+        "trace_source": "classifier.outreach_quality"
       },
       {
         "aliases": [],
@@ -978,7 +1027,7 @@
         "trace_source": "classifier.timing_proactive"
       }
     ],
-    "sha256": "46b7b6eaa86a06dd43f56ff4c1c4b4047c05c26b433e4b8210ece2d00b504443"
+    "sha256": "70bdb61c2de2cf9f0224732c936b290ddb3f72cdf2543586771c8e599e2a78f6"
   },
   "news_source_registry": {
     "generation": 1,
@@ -1593,6 +1642,10 @@
     },
     "outreach_judge": {
       "label": "主动外呼决策",
+      "type": "classifier"
+    },
+    "outreach_quality": {
+      "label": "主动外呼质量复核",
       "type": "classifier"
     },
     "private_decision": {
@@ -4329,6 +4382,150 @@
       "default": 45,
       "env_name": "",
       "key": "model.route.outreach_judge.timeout",
+      "owner_module": "core.model_provider",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "model",
+      "dangerous": false,
+      "default": "",
+      "env_name": "",
+      "key": "model.route.outreach_quality",
+      "owner_module": "core.model_provider",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
+      "category": "model",
+      "dangerous": false,
+      "default": "",
+      "env_name": "",
+      "key": "model.route.outreach_quality.api_key",
+      "owner_module": "core.model_provider",
+      "restart_required": false,
+      "safety_class": "sensitive",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
+      "category": "model",
+      "dangerous": false,
+      "default": "true",
+      "env_name": "",
+      "key": "model.route.outreach_quality.enable_thinking",
+      "owner_module": "core.model_provider",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
+      "category": "model",
+      "dangerous": false,
+      "default": 4096,
+      "env_name": "",
+      "key": "model.route.outreach_quality.max_tokens",
+      "owner_module": "core.model_provider",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "model",
+      "dangerous": false,
+      "default": "",
+      "env_name": "",
+      "key": "model.route.outreach_quality.model",
+      "owner_module": "core.model_provider",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
+      "category": "model",
+      "dangerous": false,
+      "default": "",
+      "env_name": "",
+      "key": "model.route.outreach_quality.provider",
+      "owner_module": "core.model_provider",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
+      "category": "model",
+      "dangerous": false,
+      "default": 0,
+      "env_name": "",
+      "key": "model.route.outreach_quality.temperature",
+      "owner_module": "core.model_provider",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "float"
+    },
+    {
+      "category": "model",
+      "dangerous": false,
+      "default": 30,
+      "env_name": "",
+      "key": "model.route.outreach_quality.timeout",
       "owner_module": "core.model_provider",
       "restart_required": false,
       "safety_class": "ordinary",
@@ -8367,9 +8564,43 @@
       "non_empty_call_values": [
         "message"
       ],
-      "output_contract_id": "outreach_threads_v1",
+      "output_contract_id": "outreach_threads_v2",
       "output_failure_policy": "fail_closed",
-      "output_schema": {},
+      "output_schema": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_message_indexes": {
+              "items": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "status": {
+              "enum": [
+                "open",
+                "completed",
+                "dismissed",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "status",
+            "evidence_message_indexes"
+          ],
+          "type": "object"
+        },
+        "maxItems": 3,
+        "type": "array"
+      },
       "owner_module": "core.proactive",
       "payload_variables": [
         "message"
@@ -8417,7 +8648,7 @@
       "non_empty_call_values": [
         "message"
       ],
-      "output_contract_id": "outreach_judge_v1",
+      "output_contract_id": "outreach_judge_v2",
       "output_failure_policy": "fail_closed",
       "output_schema": {
         "additionalProperties": false,
@@ -8434,6 +8665,12 @@
           }
         ],
         "properties": {
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "next_check_at": {
             "type": "string"
           },
@@ -8459,6 +8696,18 @@
           },
           "should_reach_out": {
             "type": "boolean"
+          },
+          "topic": {
+            "type": "string"
+          },
+          "topic_type": {
+            "enum": [
+              "follow_up",
+              "discovery",
+              "status_check",
+              "none"
+            ],
+            "type": "string"
           }
         },
         "required": [
@@ -8466,7 +8715,10 @@
           "reason",
           "next_intent",
           "outreach_kind",
-          "research_query"
+          "research_query",
+          "topic_type",
+          "topic",
+          "evidence_ids"
         ],
         "type": "object"
       },
@@ -8484,6 +8736,46 @@
         "default"
       ],
       "task_key": "tasks/outreach_judge",
+      "template_failure_policy": "runtime_default_fail_closed"
+    },
+    {
+      "domain": "proactive_outreach",
+      "editable": true,
+      "non_empty_call_values": [
+        "message"
+      ],
+      "output_contract_id": "outreach_quality_v1",
+      "output_failure_policy": "fail_closed",
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "approved",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "owner_module": "core.proactive",
+      "payload_variables": [
+        "message"
+      ],
+      "render_mode": "system_with_user_ref",
+      "required_call_values": [
+        "message"
+      ],
+      "required_variables": [],
+      "source_precedence": [
+        "runtime",
+        "default"
+      ],
+      "task_key": "tasks/outreach_quality",
       "template_failure_policy": "runtime_default_fail_closed"
     },
     {

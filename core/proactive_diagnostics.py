@@ -11,6 +11,7 @@ _GENERATION_ERROR_SUMMARIES = {
     "model_finish_error": "主动外呼正文生成未正常结束",
     "empty_response": "主动外呼正文生成返回空正文",
     "contract_error": "主动外呼正文不符合生成契约",
+    "quality_rejected": "主动外呼正文未通过质量复核",
     "generation_timeout": "主动外呼正文生成超时",
     "generation_error": "主动外呼正文生成失败",
 }
@@ -19,6 +20,7 @@ _CONTRACT_ERROR_TYPES = frozenset({
     "model_finish_error",
     "empty_response",
     "contract_error",
+    "quality_rejected",
 })
 _JUDGEMENT_ERROR_SUMMARIES = {
     "model_error": "主动外呼 Judge 调用失败",

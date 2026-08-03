@@ -29,7 +29,6 @@ from core.proactive.config import (
 from core.proactive.delivery import deliver_outreach_once
 from core.proactive.evaluation_policy import (
     repeated_topic_guard as _repeated_topic_guard,
-    silence_anchor as _silence_anchor,
 )
 from core.proactive.generation import (
     _blocked_outreach_without_outbox_is_current,
@@ -53,10 +52,8 @@ from core.proactive.repository import (
     first_outreach_attempt as _first_outreach_attempt,
     history_clear_at as _history_clear_at,
     last_effective_outreach as _last_effective_outreach,
-    last_failed_forced_outreach as _last_failed_forced_outreach,
     latest_next_check_at as _latest_next_check_at,
     latest_outreach_row as _latest_outreach_row,
-    next_forced_attempt as _next_forced_attempt,
 )
 from core.proactive.runtime_support import (
     _outbound_occurrence_utc,
@@ -91,7 +88,7 @@ async def _run_outreach_once_acquired(
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
-    thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
+    thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
     publisher: Callable[[str, str, str], Any] | None = None,
     evaluation_owner_token: str | None = None,
     evaluation_generation_at: datetime | None = None,
@@ -102,7 +99,7 @@ async def _run_outreach_once_acquired(
     generated_runner: Callable[..., Any] = _run_generated_outreach,
     sanitize_text: Callable[[str], str] = strip_think_blocks,
 ) -> dict[str, Any]:
-    """执行一次主动外呼检查；超过最长沉默窗口时强制开口。"""
+    """执行一次主动外呼检查；超过最长沉默窗口时强制重新评估。"""
 
     current = now or datetime.now()
     generation_at = evaluation_generation_at or current
@@ -215,6 +212,55 @@ async def _run_outreach_once_acquired(
                     "forced": bool(latest_row.forced),
                 }
         schedule_row = _current_schedule_row(session, user_id)
+        if (
+            schedule_row is not None
+            and bool(schedule_row.forced)
+            and schedule_row.status in {"candidate", "blocked"}
+        ):
+            if schedule_row.outbound_run_id is not None:
+                return {
+                    "status": "state_error",
+                    "error_type": "forced_delivery_disabled",
+                    "reason": "遗留强制候选绑定了无法安全回收的 outbound run",
+                    "log_id": int(schedule_row.id),
+                    "forced": True,
+                }
+            if not _fence_evaluation_write(
+                session,
+                user_id=user_id,
+                owner_token=evaluation_owner_token,
+            ):
+                session.rollback()
+                return {
+                    "status": "lease_lost",
+                    "log_id": int(schedule_row.id),
+                    "forced": True,
+                }
+            retired = (
+                session.query(ProactiveOutreachLog)
+                .filter(
+                    ProactiveOutreachLog.id == schedule_row.id,
+                    ProactiveOutreachLog.user_id == user_id,
+                    ProactiveOutreachLog.status == schedule_row.status,
+                    ProactiveOutreachLog.forced.is_(True),
+                    ProactiveOutreachLog.outbound_run_id.is_(None),
+                )
+                .update(
+                    {ProactiveOutreachLog.status: "cancelled"},
+                    synchronize_session=False,
+                )
+            )
+            if retired != 1:
+                session.rollback()
+                return {
+                    "status": "state_error",
+                    "error_type": "forced_delivery_disabled",
+                    "reason": "遗留强制候选状态已变化",
+                    "log_id": int(schedule_row.id),
+                    "forced": True,
+                }
+            session.commit()
+            schedule_row = None
         if _blocked_outreach_without_outbox_is_current(session, schedule_row):
             candidate_message = sanitize_text(
                 schedule_row.message or ""
@@ -334,7 +380,7 @@ async def _run_outreach_once_acquired(
             min_interval_min=min_interval_min,
             max_silence_min=max_silence_min,
         )
-        force = bool(interval_decision["forced"])
+        force_evaluation = bool(interval_decision["forced"])
         if interval_decision["status"] == "skipped_min_interval":
             return {
                 "status": "skipped_min_interval",
@@ -374,71 +420,13 @@ async def _run_outreach_once_acquired(
         if thread_extractor is not None:
             grounding_kwargs["thread_extractor"] = thread_extractor
         grounding = grounding_builder(user_id, **grounding_kwargs)
-
-        if force:
-            last_failed_forced = _last_failed_forced_outreach(session, user_id)
-            if (
-                last_failed_forced is not None
-                and last_failed_forced.next_check_at is not None
-                and current < last_failed_forced.next_check_at
-            ):
-                return {
-                    "status": "skipped_retry_backoff",
-                    "next_check_at": last_failed_forced.next_check_at.isoformat(),
-                    "forced": True,
-                }
-            reason = "超过最长沉默窗口，主动问候一次"
-            anchor = _silence_anchor(session, user_id, last_effective=last_effective)
-            force_anchor = (
-                anchor.created_at
-                if anchor is not None and anchor.created_at is not None
-                else current
-            )
-            forced_attempt = _next_forced_attempt(session, user_id)
-            forced_key = _outreach_key(
-                user_id,
-                force_anchor,
-                forced=True,
-                attempt=forced_attempt,
-            )
-            next_check_at = current + timedelta(
-                minutes=max(1, min_interval_min)
-            )
-            forced_judge = {
-                "should_reach_out": True,
-                "reason": reason,
-                "next_check_at": next_check_at.isoformat(),
-                "next_intent": "",
-                "outreach_kind": "message",
-                "research_query": "",
-                "error_type": None,
+        if force_evaluation:
+            grounding = dict(grounding)
+            grounding["trigger"] = {
+                "kind": "max_silence_evaluation",
+                "requires_delivery": False,
+                "max_silence_min": max(1, int(max_silence_min)),
             }
-            work, preparation_result = _prepare_generated_outreach(
-                session,
-                user_id=user_id,
-                idempotency_key=forced_key,
-                grounding=grounding,
-                judge=forced_judge,
-                kind="forced",
-                next_check_at=next_check_at,
-                next_intent="",
-                created_at=generation_at,
-                schedule_row_id=None,
-                evaluation_owner_token=evaluation_owner_token,
-            )
-            if preparation_result is not None:
-                return preparation_result
-            if work is None:
-                raise RuntimeError("forced generated 准备未返回工作或结果")
-            return await generated_runner(
-                session,
-                work=work,
-                user_id=user_id,
-                generator_fn=generator_fn or generator_service,
-                research_fn=None,
-                publisher=publisher,
-                evaluation_owner_token=evaluation_owner_token,
-            )
 
         from core.proactive_candidate import evaluate_outreach_judgement
         from core.proactive_research import run_proactive_research
@@ -647,7 +635,7 @@ async def run_outreach_once(
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
-    thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
+    thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
     publisher: Callable[[str, str, str], Any] | None = None,
     acquired_runner: Callable[..., Any] = _run_outreach_once_acquired,
     acquire_lease: Callable[..., str | None] = _acquire_evaluation_lease,

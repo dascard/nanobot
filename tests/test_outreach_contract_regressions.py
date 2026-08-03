@@ -166,7 +166,7 @@ async def test_delivery_rechecks_research_control_syntax_before_state_or_publish
 
 
 @pytest.mark.asyncio
-async def test_truncated_initial_judge_creates_error_anchor_and_max_silence_forces(
+async def test_truncated_judge_remains_fail_closed_after_max_silence(
     db_session,
 ):
     from core import proactive_outreach
@@ -219,12 +219,11 @@ async def test_truncated_initial_judge_creates_error_anchor_and_max_silence_forc
     assert first["log_id"] == rows[0].id
     assert rows[0].status == "evaluation_error"
     assert "judge:model_truncated" in rows[0].judge_reason
-    assert second["status"] == "sent"
-    assert second["forced"] is True
-    assert judge_calls == [first_at]
-    assert published == [
-        ("private", "truncated-anchor-user", "最长沉默后的强制候选")
-    ]
+    assert second["status"] == "judge_error"
+    assert second["error_type"] == "model_truncated"
+    assert judge_calls == [first_at, first_at + timedelta(days=10)]
+    assert published == []
+    assert all(row.forced is False for row in rows)
 
 
 def test_call_model_route_response_preserves_openai_completion_metadata(monkeypatch):
@@ -517,7 +516,8 @@ def test_judge_outreach_accepts_complete_stop_contract():
         content=(
             '{"should_reach_out": false, "reason": "下午再问", '
             '"next_check_in_hours": 2, "next_intent": "问项目进度", '
-            '"outreach_kind": "message", "research_query": ""}'
+            '"outreach_kind": "message", "research_query": "", '
+            '"topic_type":"none","topic":"","evidence_ids":[]}'
         ),
     )
 
@@ -692,7 +692,7 @@ async def test_generator_runtime_error_uses_fixed_diagnostic_everywhere(
 
 
 @pytest.mark.asyncio
-async def test_forced_generator_truncation_uses_safe_fallback_once(db_session):
+async def test_max_silence_generator_truncation_fails_closed(db_session):
     from core import proactive_outreach
 
     now = datetime(2026, 7, 10, 12, 0, 0)
@@ -725,24 +725,30 @@ async def test_forced_generator_truncation_uses_safe_fallback_once(db_session):
         now=now,
         max_silence_min=48 * 60,
         thread_extractor=lambda _messages: [],
+        judge_fn=lambda *_args, **_kwargs: {
+            "should_reach_out": True,
+            "reason": "最长静默后仍有具体新话题",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        },
         generator_fn=truncated_generator,
         publisher=publisher,
     )
 
-    assert result["status"] == "sent"
-    assert result["forced"] is True
-    assert published == [(
-        "private",
-        "generator-truncated-forced",
-        "突然想起你了。最近过得怎么样？有空的话，和我说说这几天吧。",
-    )]
+    assert result["status"] == "generation_error"
+    assert result["error_type"] == "model_truncated"
+    assert result["forced"] is False
+    assert published == []
     row = db_session.query(ProactiveOutreachLog).filter_by(
         user_id="generator-truncated-forced",
-        status="sent",
+        status="failed",
     ).one()
     grounding = json.loads(row.grounding_json)
-    assert grounding["forced_fallback"]["error_type"] == "model_truncated"
-    assert "服务端安全兜底" in row.judge_reason
+    assert "forced_fallback" not in grounding
+    assert row.forced is False
     attempt = db_session.query(OutboundGenerationAttempt).one()
     assert attempt.status == "failed"
     assert attempt.error_type == "model_truncated"
@@ -750,7 +756,7 @@ async def test_forced_generator_truncation_uses_safe_fallback_once(db_session):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error_text,secret", _SENSITIVE_GENERATION_ERRORS)
-async def test_forced_generator_contract_error_uses_fixed_diagnostic_everywhere(
+async def test_max_silence_generator_contract_error_uses_fixed_diagnostic_everywhere(
     error_text,
     secret,
     db_session,
@@ -779,11 +785,20 @@ async def test_forced_generator_contract_error_uses_fixed_diagnostic_everywhere(
         now=now,
         max_silence_min=48 * 60,
         thread_extractor=lambda _messages: [],
+        judge_fn=lambda *_args, **_kwargs: {
+            "should_reach_out": True,
+            "reason": "最长静默后仍有具体新话题",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        },
         generator_fn=failed_generator,
         publisher=lambda *_args: True,
     )
 
-    row = db_session.query(ProactiveOutreachLog).filter_by(status="sent").one()
+    row = db_session.query(ProactiveOutreachLog).filter_by(status="failed").one()
     run = db_session.get(OutboundRun, row.outbound_run_id)
     attempt = db_session.query(OutboundGenerationAttempt).one()
     combined = json.dumps(
@@ -802,14 +817,14 @@ async def test_forced_generator_contract_error_uses_fixed_diagnostic_everywhere(
         ensure_ascii=False,
     )
 
-    assert result["status"] == "sent"
+    assert result["status"] == "generation_error"
+    assert result["error_type"] == "model_truncated"
+    assert result["forced"] is False
     assert attempt.status == "failed"
     assert attempt.error_type == "model_truncated"
     assert attempt.error_summary == "主动外呼正文生成被截断"
-    assert json.loads(row.grounding_json)["forced_fallback"] == {
-        "error_type": "model_truncated",
-        "reason": "主动外呼正文生成被截断",
-    }
+    assert "forced_fallback" not in json.loads(row.grounding_json)
+    assert row.forced is False
     assert secret not in combined
 
 
@@ -1464,7 +1479,7 @@ async def test_post_clear_run_cancels_old_candidate_before_judging(db_session):
 
 
 @pytest.mark.asyncio
-async def test_pending_refresh_preserves_first_silence_anchor_and_later_forces(
+async def test_pending_refresh_preserves_anchor_and_later_rejudges(
     monkeypatch,
     db_session,
 ):
@@ -1512,22 +1527,42 @@ async def test_pending_refresh_preserves_first_silence_anchor_and_later_forces(
         published.append(args)
         return True
 
-    forced = await proactive_outreach.run_outreach_once(
+    rejudged_groundings = []
+
+    def accept_after_silence(grounding, *, now, **_kwargs):
+        rejudged_groundings.append(grounding)
+        return {
+            "should_reach_out": True,
+            "reason": "出现了具体的新联系理由",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
+    evaluated = await proactive_outreach.run_outreach_once(
         "silence-user",
         db=db_session,
         now=first_check_at + timedelta(hours=2),
         max_silence_min=48 * 60,
+        judge_fn=accept_after_silence,
         generator_fn=lambda *_args, **_kwargs: "达到最长沉默后的候选",
         publisher=publisher,
     )
 
-    assert forced["status"] == "sent"
-    assert forced["forced"] is True
+    assert evaluated["status"] == "sent"
+    assert evaluated["forced"] is False
+    assert rejudged_groundings[0]["trigger"] == {
+        "kind": "max_silence_evaluation",
+        "requires_delivery": False,
+        "max_silence_min": 48 * 60,
+    }
     assert published == [("private", "silence-user", "达到最长沉默后的候选")]
 
 
 @pytest.mark.asyncio
-async def test_failed_forced_delivery_schedules_a_new_semantic_attempt(
+async def test_failed_judged_delivery_schedules_a_new_semantic_attempt(
     monkeypatch,
     db_session,
 ):
@@ -1555,11 +1590,23 @@ async def test_failed_forced_delivery_schedules_a_new_semantic_attempt(
         published.append(args)
         return next(outcomes)
 
+    def accept(grounding, *, now, **_kwargs):
+        return {
+            "should_reach_out": True,
+            "reason": "有具体的新联系理由",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
     first = await proactive_outreach.run_outreach_once(
         "retry-user",
         db=db_session,
         now=first_run_at,
         max_silence_min=48 * 60,
+        judge_fn=accept,
         generator_fn=lambda *_args, **_kwargs: "强制触达重试候选",
         publisher=publisher,
     )
@@ -1568,6 +1615,7 @@ async def test_failed_forced_delivery_schedules_a_new_semantic_attempt(
         db=db_session,
         now=first_run_at + timedelta(hours=1),
         max_silence_min=48 * 60,
+        judge_fn=accept,
         generator_fn=lambda *_args, **_kwargs: "强制触达重试候选",
         publisher=publisher,
     )
@@ -1577,7 +1625,7 @@ async def test_failed_forced_delivery_schedules_a_new_semantic_attempt(
     assert len(published) == 2
     attempts = (
         db_session.query(ProactiveOutreachLog)
-        .filter_by(user_id="retry-user", forced=True)
+        .filter_by(user_id="retry-user", forced=False)
         .order_by(ProactiveOutreachLog.id)
         .all()
     )
@@ -1670,7 +1718,7 @@ async def test_research_publisher_normalizes_verified_url_variant(db_session):
 
 
 @pytest.mark.asyncio
-async def test_unknown_forced_publish_uses_independent_ambiguity_hold(
+async def test_unknown_judged_publish_uses_independent_ambiguity_hold(
     monkeypatch,
     db_session,
 ):
@@ -1700,12 +1748,24 @@ async def test_unknown_forced_publish_uses_independent_ambiguity_hold(
         published.append(args)
         return None if len(published) == 1 else True
 
+    def accept(grounding, *, now, **_kwargs):
+        return {
+            "should_reach_out": True,
+            "reason": "有具体的新联系理由",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
     first = await proactive_outreach.run_outreach_once(
         "unknown-hold-user",
         db=db_session,
         now=first_run_at,
         max_silence_min=48 * 60,
         ambiguous_hold_min=120,
+        judge_fn=accept,
         generator_fn=lambda *_args, **_kwargs: "不确定投递候选",
         publisher=publisher,
     )
@@ -1715,6 +1775,7 @@ async def test_unknown_forced_publish_uses_independent_ambiguity_hold(
         now=first_run_at + timedelta(hours=1),
         max_silence_min=48 * 60,
         ambiguous_hold_min=120,
+        judge_fn=accept,
         generator_fn=lambda *_args, **_kwargs: "不应立即重发",
         publisher=publisher,
     )
@@ -1724,6 +1785,7 @@ async def test_unknown_forced_publish_uses_independent_ambiguity_hold(
         now=first_run_at + timedelta(minutes=121),
         max_silence_min=48 * 60,
         ambiguous_hold_min=120,
+        judge_fn=accept,
         generator_fn=lambda *_args, **_kwargs: "冻结结束后的新候选",
         publisher=publisher,
     )
@@ -1737,7 +1799,7 @@ async def test_unknown_forced_publish_uses_independent_ambiguity_hold(
     assert len(published) == 2
     rows = (
         db_session.query(ProactiveOutreachLog)
-        .filter_by(user_id="unknown-hold-user", forced=True)
+        .filter_by(user_id="unknown-hold-user", forced=False)
         .order_by(ProactiveOutreachLog.id)
         .all()
     )

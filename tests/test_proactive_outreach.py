@@ -1,3 +1,4 @@
+import json
 import threading
 from datetime import datetime, timedelta
 
@@ -8,6 +9,7 @@ from core.database import (
     ConversationTurn,
     OutboundDeliveryControl,
     Persona,
+    PersonaFact,
     ProactiveOutreachLog,
     User,
 )
@@ -142,6 +144,56 @@ def test_build_outreach_grounding_includes_precomputed_time_anchors(db_session):
     }]
 
 
+def test_build_outreach_grounding_includes_only_active_auto_persona_facts(
+    db_session,
+):
+    from core.proactive_outreach import build_outreach_grounding
+
+    now = datetime(2026, 7, 7, 15, 30, 0)
+    active_fact = PersonaFact(
+        user_id="persona-fact-user",
+        content="喜欢研究 Agent 长期记忆",
+        fact_type="preference",
+        confidence="确认",
+        evidence_count=3,
+        status="active",
+        inject_policy="auto",
+        last_seen=now - timedelta(days=1),
+    )
+    db_session.add_all([
+        active_fact,
+        PersonaFact(
+            user_id="persona-fact-user",
+            content="只允许人工使用的偏好",
+            status="active",
+            inject_policy="manual_only",
+        ),
+        PersonaFact(
+            user_id="persona-fact-user",
+            content="仍在审核的候选事实",
+            status="review",
+            inject_policy="auto",
+        ),
+    ])
+    db_session.commit()
+
+    grounding = build_outreach_grounding(
+        "persona-fact-user",
+        db=db_session,
+        now=now,
+        thread_extractor=lambda _messages: [],
+    )
+
+    assert grounding["persona_facts"] == [{
+        "evidence_id": f"persona_fact:{active_fact.id}",
+        "content": "喜欢研究 Agent 长期记忆",
+        "fact_type": "preference",
+        "confidence": "确认",
+        "evidence_count": 3,
+        "last_seen": "2026-07-06T15:30:00",
+    }]
+
+
 def test_grounding_keeps_last_sent_message_when_newer_pending_exists(db_session):
     from core.proactive_outreach import build_outreach_grounding
 
@@ -237,18 +289,98 @@ def test_extract_recent_threads_uses_injected_llm_call():
 
     def fake_llm_call(**kwargs):
         calls.append(kwargs)
-        return '["接口联调卡住，晚点继续看", "晚上可能去夜跑"]'
+        return (
+            '[{"topic":"接口联调卡住，晚点继续看","status":"open",'
+            '"evidence_message_indexes":[0,1]},'
+            '{"topic":"晚上可能去夜跑","status":"unknown",'
+            '"evidence_message_indexes":[0]}]'
+        )
 
     recent_messages = [
-        {"role": "user", "content": "接口联调卡住了，下午继续看。"},
-        {"role": "model", "content": "那我晚点想起来问问你。"},
+        {
+            "role": "user",
+            "content": "接口联调卡住了，下午继续看。",
+            "created_at": "2026-07-06T10:00:00",
+        },
+        {
+            "role": "model",
+            "content": "那我晚点想起来问问你。",
+            "created_at": "2026-07-06T10:05:00",
+        },
     ]
 
     threads = extract_recent_threads(recent_messages, llm_call=fake_llm_call)
 
-    assert threads == ["接口联调卡住，晚点继续看", "晚上可能去夜跑"]
+    assert threads == [
+        {
+            "evidence_id": "recent_thread:0",
+            "topic": "接口联调卡住，晚点继续看",
+            "status": "open",
+            "evidence_message_indexes": [0, 1],
+            "updated_at": "2026-07-06T10:05:00",
+        },
+        {
+            "evidence_id": "recent_thread:1",
+            "topic": "晚上可能去夜跑",
+            "status": "unknown",
+            "evidence_message_indexes": [0],
+            "updated_at": "2026-07-06T10:00:00",
+        },
+    ]
     assert calls[0]["route_key"] == "outreach_extract"
-    assert "JSON 数组" in calls[0]["system_prompt"]
+    assert "open|completed|dismissed|unknown" in calls[0]["system_prompt"]
+    payload = json.loads(calls[0]["user_message"])
+    assert payload[0]["message_index"] == 0
+    assert payload[1]["message_index"] == 1
+
+
+def test_extract_recent_threads_preserves_completed_and_dismissed_lifecycle():
+    from core.proactive_outreach import extract_recent_threads
+
+    response = (
+        '[{"topic":"接口调试","status":"completed",'
+        '"evidence_message_indexes":[0,1]},'
+        '{"topic":"状态文件排查","status":"dismissed",'
+        '"evidence_message_indexes":[2,3]}]'
+    )
+    threads = extract_recent_threads(
+        [
+            {"role": "user", "content": "接口还要调试", "created_at": "2026-07-06T09:00:00"},
+            {"role": "user", "content": "刚才已经调试好了", "created_at": "2026-07-06T10:00:00"},
+            {"role": "assistant", "content": "要继续看状态文件吗", "created_at": "2026-07-06T10:05:00"},
+            {"role": "user", "content": "先不管吧", "created_at": "2026-07-06T10:06:00"},
+        ],
+        llm_call=lambda **_kwargs: response,
+    )
+
+    assert [item["status"] for item in threads] == ["completed", "dismissed"]
+    assert threads[0]["updated_at"] == "2026-07-06T10:00:00"
+    assert threads[1]["updated_at"] == "2026-07-06T10:06:00"
+
+
+def test_extract_recent_threads_rejects_assistant_only_evidence():
+    from core.proactive_outreach import extract_recent_threads
+
+    threads = extract_recent_threads(
+        [
+            {
+                "role": "assistant",
+                "content": "我刚跑了几个实验，晚点继续告诉你结果。",
+                "created_at": "2026-07-06T10:00:00",
+            },
+            {
+                "role": "user",
+                "content": "好的。",
+                "created_at": "2026-07-06T10:01:00",
+            },
+        ],
+        llm_call=lambda **_kwargs: (
+            '[{"topic":"实验进展","status":"open",'
+            '"evidence_message_indexes":[0]}]'
+        ),
+    )
+
+    assert threads == []
 
 
 def test_extract_recent_threads_returns_empty_when_llm_fails():
@@ -341,11 +473,21 @@ def test_judge_outreach_uses_dedicated_route_and_clamps_next_check_at(monkeypatc
         return (
             '{"should_reach_out": true, "reason": "想问夜跑", '
             '"next_check_at": "2026-07-13T12:00:00", "next_intent": "问夜跑", '
-            '"outreach_kind": "message", "research_query": ""}'
+            '"outreach_kind": "message", "research_query": "", '
+            '"topic_type":"follow_up","topic":"今晚夜跑",'
+            '"evidence_ids":["recent_thread:0"]}'
         )
 
     result = proactive_outreach.judge_outreach(
-        {"user_id": "superuser", "recent_messages": []},
+        {
+            "user_id": "superuser",
+            "recent_messages": [],
+            "recent_threads": [{
+                "evidence_id": "recent_thread:0",
+                "topic": "今晚夜跑",
+                "status": "open",
+            }],
+        },
         now=now,
         min_interval_min=30,
         max_check_interval_min=1440,
@@ -355,8 +497,14 @@ def test_judge_outreach_uses_dedicated_route_and_clamps_next_check_at(monkeypatc
     assert result["should_reach_out"] is True
     assert result["reason"] == "想问夜跑"
     assert result["next_intent"] == "问夜跑"
+    assert result["topic_type"] == "follow_up"
+    assert result["topic"] == "今晚夜跑"
+    assert result["evidence_ids"] == ["recent_thread:0"]
     assert result["next_check_at"] == "2026-07-07T12:00:00"
     assert calls[0]["route_key"] == "outreach_judge"
+    assert "只表示最长静默已触发本轮强制评估" in calls[0]["system_prompt"]
+    assert "不表示必须发送" in calls[0]["system_prompt"]
+    assert "普通跟进只能选择 status=open" in calls[0]["system_prompt"]
     assert "禁止" not in calls[0]["system_prompt"]
     assert "黑名单" not in calls[0]["system_prompt"]
     assert "shadow" not in calls[0]["system_prompt"].lower()
@@ -379,6 +527,65 @@ def test_judge_outreach_rejects_prompt_example_multivalue_kind():
     assert result["error_type"] == "contract_error"
 
 
+def test_judge_outreach_rejects_completed_or_dismissed_topic_evidence():
+    from core import proactive_outreach
+
+    result = proactive_outreach.judge_outreach(
+        {
+            "user_id": "closed-topic-user",
+            "recent_threads": [{
+                "evidence_id": "recent_thread:0",
+                "topic": "状态文件排查",
+                "status": "dismissed",
+                "evidence_message_indexes": [0, 1],
+                "updated_at": "2026-07-06T10:06:00",
+            }],
+            "persona_facts": [],
+        },
+        now=datetime(2026, 7, 6, 12, 0, 0),
+        model_call=lambda **_kwargs: (
+            '{"should_reach_out":true,"reason":"继续检查状态文件",'
+            '"next_check_in_hours":2,"next_intent":"继续排查",'
+            '"outreach_kind":"message","research_query":"",'
+            '"topic_type":"follow_up","topic":"状态文件排查",'
+            '"evidence_ids":["recent_thread:0"]}'
+        ),
+    )
+
+    assert result["should_reach_out"] is None
+    assert result["error_type"] == "contract_error"
+    assert result["reason"] == "主动外呼 Judge 选择了无效或已关闭的事实依据"
+
+
+def test_judge_outreach_accepts_discovery_from_active_persona_fact():
+    from core import proactive_outreach
+
+    result = proactive_outreach.judge_outreach(
+        {
+            "user_id": "discovery-user",
+            "recent_threads": [],
+            "persona_facts": [{
+                "evidence_id": "persona_fact:42",
+                "content": "喜欢研究 Agent 长期记忆",
+                "fact_type": "preference",
+            }],
+        },
+        now=datetime(2026, 7, 6, 12, 0, 0),
+        model_call=lambda **_kwargs: (
+            '{"should_reach_out":true,"reason":"基于 persona_fact:42 分享新资料",'
+            '"next_check_in_hours":2,"next_intent":"询问是否想继续了解",'
+            '"outreach_kind":"research","research_query":"Agent 长期记忆最新实践",'
+            '"topic_type":"discovery","topic":"Agent 长期记忆的新实践",'
+            '"evidence_ids":["persona_fact:42"]}'
+        ),
+    )
+
+    assert result["should_reach_out"] is True
+    assert result["topic_type"] == "discovery"
+    assert result["evidence_ids"] == ["persona_fact:42"]
+    assert result["outreach_kind"] == "research"
+
+
 def test_judge_outreach_sends_compact_grounding_only_as_user_message(monkeypatch):
     from core import proactive_outreach
 
@@ -391,7 +598,8 @@ def test_judge_outreach_sends_compact_grounding_only_as_user_message(monkeypatch
         return (
             '{"should_reach_out": false, "reason": "晚点再问", '
             '"next_check_in_hours": 2, "next_intent": "问接口联调", '
-            '"outreach_kind": "message", "research_query": ""}'
+            '"outreach_kind": "message", "research_query": "", '
+            '"topic_type":"none","topic":"","evidence_ids":[]}'
         )
 
     result = proactive_outreach.judge_outreach(
@@ -432,13 +640,16 @@ def test_judge_outreach_converts_next_check_in_hours_to_iso_and_clamps(monkeypat
     responses = [
         '{"should_reach_out": false, "reason": "下午再想", '
         '"next_check_in_hours": 3, "next_intent": "问接口联调", '
-        '"outreach_kind": "message", "research_query": ""}',
+        '"outreach_kind": "message", "research_query": "", '
+        '"topic_type":"none","topic":"","evidence_ids":[]}',
         '{"should_reach_out": false, "reason": "太近了", '
         '"next_check_in_hours": 0.1, "next_intent": "稍后", '
-        '"outreach_kind": "message", "research_query": ""}',
+        '"outreach_kind": "message", "research_query": "", '
+        '"topic_type":"none","topic":"","evidence_ids":[]}',
         '{"should_reach_out": false, "reason": "太远了", '
         '"next_check_in_hours": 100, "next_intent": "明天", '
-        '"outreach_kind": "message", "research_query": ""}',
+        '"outreach_kind": "message", "research_query": "", '
+        '"topic_type":"none","topic":"","evidence_ids":[]}',
     ]
 
     def fake_call_model_route(**kwargs):
@@ -471,15 +682,30 @@ def test_judge_outreach_converts_next_check_in_hours_to_iso_and_clamps(monkeypat
     assert high["next_check_at"] == "2026-07-06T13:00:00"
 
 
-def test_generate_outreach_message_uses_reply_route_and_positive_prompt(monkeypatch):
+def test_generate_outreach_message_passes_full_decision_and_fact_policy(monkeypatch):
     from core import proactive_outreach
 
     calls = []
 
     def fake_call_model_route(**kwargs):
         calls.append(kwargs)
-        return "刚想起你说今晚要夜跑，想来问问风是不是舒服一点。"
+        if kwargs["route_key"] == "outreach_generate":
+            return "刚想起你说今晚要夜跑，想来问问风是不是舒服一点。"
+        assert kwargs["route_key"] == "outreach_quality"
+        return '{"approved":true,"reason":"所有事实均有 grounding 支持"}'
 
+    decision = {
+        "should_reach_out": True,
+        "reason": "想问夜跑",
+        "next_check_at": "2026-07-06T15:00:00",
+        "next_intent": "下次问夜跑后的感受",
+        "outreach_kind": "message",
+        "research_query": "",
+        "topic_type": "follow_up",
+        "topic": "今晚夜跑",
+        "evidence_ids": ["recent_thread:0"],
+        "error_type": None,
+    }
     message = proactive_outreach.generate_outreach_message(
         {
             "user_id": "superuser",
@@ -488,18 +714,130 @@ def test_generate_outreach_message_uses_reply_route_and_positive_prompt(monkeypa
             "last_outreach": {"message": "昨天已经问过接口联调了。"},
             "recent_messages": [{"content": "我今晚想去夜跑。"}],
         },
-        "想问夜跑",
+        decision,
         model_call=fake_call_model_route,
     )
 
     assert message == "刚想起你说今晚要夜跑，想来问问风是不是舒服一点。"
-    assert calls[0]["route_key"] == "outreach_generate"
-    assert "可以表达你自己的状态和情绪" in calls[0]["system_prompt"]
+    assert [call["route_key"] for call in calls] == [
+        "outreach_generate",
+        "outreach_quality",
+    ]
+    payload = json.loads(calls[0]["user_message"])
+    assert payload["decision"] == decision
+    assert "事实来源" in calls[0]["system_prompt"]
+    assert "没有调用工具" in calls[0]["system_prompt"]
+    assert "执行过检查、实验、脚本或文件处理" in calls[0]["system_prompt"]
+    assert "只有 status=open 的话题可用于继续跟进" in calls[0]["system_prompt"]
     assert "recent_threads" in calls[0]["system_prompt"]
     assert "recent_outreaches" in calls[0]["system_prompt"]
     assert "避免重复已发过的话题" in calls[0]["system_prompt"]
-    forbidden_markers = ["禁止", "黑名单", "语义越界", "情感依赖", "shadow", "dry-run"]
-    assert all(marker not in calls[0]["system_prompt"] for marker in forbidden_markers)
+    quality_payload = json.loads(calls[1]["user_message"])
+    assert quality_payload["candidate"] == message
+    assert quality_payload["decision"] == decision
+    assert "事实依据" in calls[1]["system_prompt"]
+    assert "语义重复" in calls[1]["system_prompt"]
+
+
+def test_generate_outreach_message_blocks_failed_quality_review():
+    from core import proactive_outreach
+
+    responses = iter([
+        "我刚又跑了几个实验，还写脚本检查了状态文件。",
+        '{"approved":false,"reason":"正文声称了没有工具证据的外部行动"}',
+    ])
+
+    with pytest.raises(proactive_outreach.OutreachModelContractError) as exc_info:
+        proactive_outreach.generate_outreach_message(
+            {
+                "user_id": "superuser",
+                "persona": {},
+                "persona_facts": [],
+                "recent_threads": [],
+                "recent_messages": [],
+                "recent_outreaches": [{
+                    "message": "我又看了一眼状态文件。",
+                    "status": "sent",
+                }],
+            },
+            {
+                "should_reach_out": True,
+                "reason": "普通问候",
+                "next_check_at": "2026-07-06T15:00:00",
+                "next_intent": "",
+                "outreach_kind": "message",
+                "research_query": "",
+                "error_type": None,
+            },
+            model_call=lambda **_kwargs: next(responses),
+        )
+
+    assert exc_info.value.error_type == "quality_rejected"
+
+
+@pytest.mark.asyncio
+async def test_failed_quality_review_never_reaches_publisher(
+    monkeypatch,
+    db_session,
+):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 6, 12, 0, 0)
+    responses = iter([
+        "我刚又跑了实验并检查了状态文件。",
+        '{"approved":false,"reason":"缺少本轮工具证据"}',
+    ])
+    original_generator = proactive_outreach.generate_outreach_message
+
+    def guarded_generator(grounding, decision):
+        return original_generator(
+            grounding,
+            decision,
+            model_call=lambda **_kwargs: next(responses),
+        )
+
+    monkeypatch.setattr(
+        proactive_outreach,
+        "generate_outreach_message",
+        guarded_generator,
+    )
+    published = []
+
+    async def publisher(*args):
+        published.append(args)
+        return True
+
+    result = await proactive_outreach.run_outreach_once(
+        "quality-rejected-user",
+        db=db_session,
+        now=now,
+        max_silence_min=999999,
+        thread_extractor=lambda _messages: [{
+            "topic": "状态文件",
+            "status": "open",
+            "evidence_message_indexes": [0],
+            "updated_at": now.isoformat(),
+        }],
+        judge_fn=lambda *_args, **_kwargs: {
+            "should_reach_out": True,
+            "reason": "跟进状态文件",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        },
+        publisher=publisher,
+    )
+
+    assert result["status"] == "generation_error"
+    assert result["error_type"] == "quality_rejected"
+    assert published == []
+    row = db_session.query(ProactiveOutreachLog).filter_by(
+        user_id="quality-rejected-user",
+    ).one()
+    assert row.status == "failed"
+    assert row.message == ""
 
 
 def test_generate_outreach_message_sends_compact_grounding_only_as_user_message(monkeypatch):
@@ -510,7 +848,9 @@ def test_generate_outreach_message_sends_compact_grounding_only_as_user_message(
 
     def fake_call_model_route(**kwargs):
         calls.append(kwargs)
-        return "刚想起你说项目收尾有点累，想来轻轻敲一下。"
+        if kwargs["route_key"] == "outreach_generate":
+            return "刚想起你说项目收尾有点累，想来轻轻敲一下。"
+        return '{"approved":true,"reason":"事实有据且不重复"}'
 
     message = proactive_outreach.generate_outreach_message(
         {
@@ -534,6 +874,8 @@ def test_generate_outreach_message_sends_compact_grounding_only_as_user_message(
     assert message == "刚想起你说项目收尾有点累，想来轻轻敲一下。"
     assert calls[0]["route_key"] == "outreach_generate"
     assert "用户消息" in calls[0]["system_prompt"]
+    assert "不得虚构自己的持续状态、情绪或线下经历" in calls[0]["system_prompt"]
+    assert "表达当下的内在感受" not in calls[0]["system_prompt"]
     assert "recent_threads" in calls[0]["user_message"]
     assert "项目收尾有点累" in calls[0]["user_message"]
     assert long_recent_message not in calls[0]["system_prompt"]
@@ -548,7 +890,9 @@ def test_generate_outreach_message_includes_bounded_recent_outreach_history():
 
     def fake_call_model_route(**kwargs):
         calls.append(kwargs)
-        return "这次换一个完全不同的话题。"
+        if kwargs["route_key"] == "outreach_generate":
+            return "这次换一个完全不同的话题。"
+        return '{"approved":true,"reason":"新话题与历史外呼不重复"}'
 
     proactive_outreach.generate_outreach_message(
         {
@@ -761,7 +1105,10 @@ async def test_deliver_outreach_once_skips_duplicate_idempotency_key(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_run_outreach_once_forces_message_after_max_silence(monkeypatch, db_session):
+async def test_run_outreach_once_max_silence_forces_judge_but_respects_rejection(
+    monkeypatch,
+    db_session,
+):
     from core import proactive_outreach
 
     now = datetime(2026, 7, 6, 12, 0, 0)
@@ -785,21 +1132,23 @@ async def test_run_outreach_once_forces_message_after_max_silence(monkeypatch, d
         judge_calls.append((args, kwargs))
         return {
             "should_reach_out": False,
-            "reason": "模型还想拖延",
+            "reason": "当前没有足够的新信息",
             "next_check_at": (now + timedelta(days=7)).isoformat(),
-            "next_intent": "继续拖延",
+            "next_intent": "等待用户产生新的上下文",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
         }
 
-    def fake_generate(grounding, reason):
-        assert reason == "超过最长沉默窗口，主动问候一次"
-        return "突然想起你，来敲一下门。"
+    def fail_generate(*_args, **_kwargs):
+        raise AssertionError("Judge 拒绝后不得生成正文")
 
     async def fake_push_to_qq(target_type, target_id, message):
         pushes.append((target_type, target_id, message))
         return True
 
     monkeypatch.setattr(proactive_outreach, "judge_outreach", fake_judge)
-    monkeypatch.setattr(proactive_outreach, "generate_outreach_message", fake_generate)
+    monkeypatch.setattr(proactive_outreach, "generate_outreach_message", fail_generate)
     result = await proactive_outreach.run_outreach_once(
         "superuser",
         db=db_session,
@@ -808,21 +1157,37 @@ async def test_run_outreach_once_forces_message_after_max_silence(monkeypatch, d
         publisher=fake_push_to_qq,
     )
 
-    assert result["status"] == "sent"
-    assert result["forced"] is True
-    assert judge_calls == []
-    assert pushes == [("private", "superuser", "突然想起你，来敲一下门。")]
+    assert result["status"] == "pending"
+    assert result["forced"] is False
+    assert len(judge_calls) == 1
+    assert judge_calls[0][0][0]["trigger"]["kind"] == "max_silence_evaluation"
+    assert judge_calls[0][0][0]["trigger"]["requires_delivery"] is False
+    assert pushes == []
 
-    forced_row = (
+    pending_row = (
         db_session.query(ProactiveOutreachLog)
-        .filter_by(user_id="superuser", forced=True, status="sent")
+        .filter_by(user_id="superuser", status="pending")
         .one()
     )
-    assert forced_row.message == "突然想起你，来敲一下门。"
+    assert pending_row.forced is False
+    assert pending_row.judge_reason == "当前没有足够的新信息"
+
+    due_result = await proactive_outreach.run_outreach_due_once(
+        "superuser",
+        db=db_session,
+        now=now + timedelta(hours=1),
+        max_silence_min=2880,
+    )
+
+    assert due_result["status"] == "skipped_not_due"
+    assert len(judge_calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_run_outreach_once_forces_message_when_never_sent_but_pending_is_stale(monkeypatch, db_session):
+async def test_run_outreach_once_max_silence_rechecks_stale_pending_with_judge(
+    monkeypatch,
+    db_session,
+):
     from core import proactive_outreach
 
     now = datetime(2026, 7, 6, 12, 0, 0)
@@ -841,21 +1206,30 @@ async def test_run_outreach_once_forces_message_when_never_sent_but_pending_is_s
     ))
     db_session.commit()
 
+    judge_calls = []
     pushes = []
 
-    def fail_judge(*args, **kwargs):
-        raise AssertionError("从未 sent 但 pending 已超过 max_silence 时应绕过 Judge")
+    def fake_judge(grounding, **_kwargs):
+        judge_calls.append(grounding)
+        return {
+            "should_reach_out": False,
+            "reason": "用户已经结束该话题",
+            "next_check_at": (now + timedelta(hours=6)).isoformat(),
+            "next_intent": "等待新话题",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
 
-    def fake_generate(grounding, reason):
-        assert reason == "超过最长沉默窗口，主动问候一次"
-        return "拖太久啦，忽然很想来问问你。"
+    def fail_generate(*_args, **_kwargs):
+        raise AssertionError("Judge 拒绝后不得生成正文")
 
     async def fake_push_to_qq(target_type, target_id, message):
         pushes.append((target_type, target_id, message))
         return True
 
-    monkeypatch.setattr(proactive_outreach, "judge_outreach", fail_judge)
-    monkeypatch.setattr(proactive_outreach, "generate_outreach_message", fake_generate)
+    monkeypatch.setattr(proactive_outreach, "judge_outreach", fake_judge)
+    monkeypatch.setattr(proactive_outreach, "generate_outreach_message", fail_generate)
     result = await proactive_outreach.run_outreach_once(
         "superuser",
         db=db_session,
@@ -864,9 +1238,28 @@ async def test_run_outreach_once_forces_message_when_never_sent_but_pending_is_s
         publisher=fake_push_to_qq,
     )
 
-    assert result["status"] == "sent"
-    assert result["forced"] is True
-    assert pushes == [("private", "superuser", "拖太久啦，忽然很想来问问你。")]
+    assert result["status"] == "pending"
+    assert result["forced"] is False
+    assert len(judge_calls) == 1
+    assert judge_calls[0]["trigger"]["kind"] == "max_silence_evaluation"
+    assert pushes == []
+    rows = db_session.query(ProactiveOutreachLog).filter_by(
+        user_id="superuser",
+        status="pending",
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].judge_reason == "用户已经结束该话题"
+    assert rows[0].forced is False
+
+    due_result = await proactive_outreach.run_outreach_due_once(
+        "superuser",
+        db=db_session,
+        now=now + timedelta(hours=1),
+        max_silence_min=2880,
+    )
+
+    assert due_result["status"] == "skipped_not_due"
+    assert len(judge_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -969,7 +1362,10 @@ async def test_run_outreach_due_once_skips_until_next_check_at(monkeypatch, db_s
 
 
 @pytest.mark.asyncio
-async def test_run_outreach_due_once_max_silence_overrides_future_next_check(monkeypatch, db_session):
+async def test_run_outreach_due_once_respects_future_check_after_silence_evaluation(
+    monkeypatch,
+    db_session,
+):
     from core import proactive_outreach
 
     now = datetime(2026, 7, 6, 12, 0, 0)
@@ -1015,12 +1411,16 @@ async def test_run_outreach_due_once_max_silence_overrides_future_next_check(mon
         max_silence_min=2880,
     )
 
-    assert result == {"status": "sent", "forced": True}
-    assert calls
+    assert result["status"] == "skipped_not_due"
+    assert result["next_check_at"] == "2026-07-06T14:00:00"
+    assert calls == []
 
 
 @pytest.mark.asyncio
-async def test_run_outreach_due_once_never_sent_stale_pending_overrides_future_next_check(monkeypatch, db_session):
+async def test_run_outreach_due_once_never_sent_stale_pending_forces_evaluation(
+    monkeypatch,
+    db_session,
+):
     from core import proactive_outreach
 
     now = datetime(2026, 7, 6, 12, 0, 0)
@@ -1042,7 +1442,7 @@ async def test_run_outreach_due_once_never_sent_stale_pending_overrides_future_n
 
     async def fake_run_outreach_once(*args, **kwargs):
         calls.append((args, kwargs))
-        return {"status": "sent", "forced": True}
+        return {"status": "pending", "forced": False}
 
     monkeypatch.setattr(proactive_outreach, "run_outreach_once", fake_run_outreach_once)
 
@@ -1053,7 +1453,7 @@ async def test_run_outreach_due_once_never_sent_stale_pending_overrides_future_n
         max_silence_min=2880,
     )
 
-    assert result == {"status": "sent", "forced": True}
+    assert result == {"status": "pending", "forced": False}
     assert calls
 
 
@@ -1092,8 +1492,8 @@ async def test_run_outreach_due_once_reuses_semantic_key_for_same_due_point(monk
             "error_type": None,
         }
 
-    def fake_generate(grounding, reason):
-        return f"生成：{reason}"
+    def fake_generate(grounding, decision):
+        return f"生成：{decision['reason']}"
 
     async def fake_push_to_qq(target_type, target_id, message):
         pushes.append((target_type, target_id, message))
@@ -1478,6 +1878,66 @@ async def test_max_silence_delivers_existing_candidate_once_without_forced_follo
     ]
     assert stored.status == "sent"
     assert stored.created_at == now
+
+
+@pytest.mark.asyncio
+async def test_legacy_forced_candidate_is_cancelled_and_rejudged(
+    monkeypatch,
+    db_session,
+):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    legacy = ProactiveOutreachLog(
+        user_id="legacy-forced-candidate-user",
+        idempotency_key="outreach:legacy-forced-candidate",
+        grounding_json='{"recent_threads":[]}',
+        judge_should=True,
+        judge_reason="旧强制发送",
+        next_check_at=now - timedelta(hours=48),
+        next_intent="",
+        message="不应投递的遗留强制候选",
+        status="candidate",
+        forced=True,
+        created_at=now - timedelta(hours=49),
+    )
+    db_session.add(legacy)
+    db_session.commit()
+    judge_calls = []
+    published = []
+
+    def reject_after_recheck(grounding, *, now, **_kwargs):
+        judge_calls.append(grounding)
+        return {
+            "should_reach_out": False,
+            "reason": "没有可靠的新选题",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
+    async def publisher(*args):
+        published.append(args)
+        return True
+
+    monkeypatch.setattr(proactive_outreach, "judge_outreach", reject_after_recheck)
+    result = await proactive_outreach.run_outreach_once(
+        "legacy-forced-candidate-user",
+        db=db_session,
+        now=now,
+        max_silence_min=2880,
+        publisher=publisher,
+    )
+
+    db_session.expire_all()
+    stored = db_session.get(ProactiveOutreachLog, legacy.id)
+    assert result["status"] == "pending"
+    assert result["forced"] is False
+    assert len(judge_calls) == 1
+    assert published == []
+    assert stored.status == "cancelled"
 
 
 def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):

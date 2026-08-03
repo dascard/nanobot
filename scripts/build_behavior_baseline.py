@@ -66,6 +66,12 @@ STAGE7C_RUNTIME_REGISTRY_BASELINE_SHA256 = (
 STAGE6_PROMPT_INVENTORY_BASELINE_SHA256 = (
     "5405407faf159d9d99209d7452213172c8aaca86228d2e52f6e7d70b6579c43e"
 )
+PROACTIVE_OUTREACH_PROMPT_BASELINE_SHA256 = (
+    "79a2d6dd773aeb8c314a610188eca9b88efafb1627c17eaf000dbbfe6bc9976d"
+)
+PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256 = (
+    "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552"
+)
 
 SNAPSHOT_CLASSIFICATIONS = {
     "group_analysis": "known_bad",
@@ -818,8 +824,8 @@ def _manifest(
                 "before_sha256": (
                     STAGE7C_PROMPT_RUNTIME_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["prompt_runtime"]
+                "after_sha256": (
+                    PROACTIVE_OUTREACH_PROMPT_BASELINE_SHA256
                 ),
                 "reason": (
                     "为 group_analysis 增加 Registry 驱动的可选 aspects，"
@@ -827,6 +833,22 @@ def _manifest(
                     "且无冲突的正式群体记忆作为不可信背景接入 canonical "
                     "Prompt Contribution，未选择方面不创建模型分支或报告"
                     "区块。"
+                ),
+            },
+            {
+                "id": "proactive_outreach_fact_guard_prompt",
+                "snapshot_id": "prompt_runtime",
+                "stage": "主动外呼事实性治理",
+                "before_sha256": (
+                    PROACTIVE_OUTREACH_PROMPT_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["prompt_runtime"]
+                ),
+                "reason": (
+                    "把主动外呼话题提取升级为带生命周期和证据的结构化"
+                    "合同，向正文传递完整选题依据，并新增生成后事实性与"
+                    "语义质量复核 Prompt。"
                 ),
             },
             {
@@ -876,13 +898,28 @@ def _manifest(
                 "before_sha256": (
                     STAGE7C_RUNTIME_REGISTRY_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["runtime_registries"]
+                "after_sha256": (
+                    PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256
                 ),
                 "reason": (
                     "登记 Web 群学习工作台使用的受管规则启停配置；默认值"
                     "为空且标记为危险设置，不创建白名单、不启用学习或"
                     " Prompt 注入。"
+                ),
+            },
+            {
+                "id": "proactive_outreach_fact_guard_registry",
+                "snapshot_id": "runtime_registries",
+                "stage": "主动外呼事实性治理",
+                "before_sha256": (
+                    PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["runtime_registries"]
+                ),
+                "reason": (
+                    "升级主动外呼话题与 Judge 输出合同，登记独立质量复核"
+                    "模型路由及其受管配置。"
                 ),
             },
         ],

@@ -398,7 +398,12 @@ def test_memory_candidates_output_contract_accepts_explicit_empty_list():
 
 @pytest.mark.parametrize(
     "task_key",
-    ["outreach_extract", "outreach_judge", "outreach_generate"],
+    [
+        "outreach_extract",
+        "outreach_judge",
+        "outreach_generate",
+        "outreach_quality",
+    ],
 )
 def test_existing_outreach_templates_remain_eligible_with_user_only_payload(task_key):
     from core.prompt_v2.task_templates import select_task_template

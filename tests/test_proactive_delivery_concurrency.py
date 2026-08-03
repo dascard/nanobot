@@ -929,6 +929,15 @@ def test_stale_ambiguous_sending_does_not_retry_old_key_or_block_new_outreach(
             now=current,
             max_silence_min=60,
             thread_extractor=lambda _messages: [],
+            judge_fn=lambda *_args, **_kwargs: {
+                "should_reach_out": True,
+                "reason": "旧的不确定投递已过冻结期，且存在新话题",
+                "next_check_at": (current + timedelta(hours=2)).isoformat(),
+                "next_intent": "",
+                "outreach_kind": "message",
+                "research_query": "",
+                "error_type": None,
+            },
             generator_fn=lambda *_args, **_kwargs: "新的最长沉默候选",
             publisher=publisher,
         ))
@@ -939,6 +948,7 @@ def test_stale_ambiguous_sending_does_not_retry_old_key_or_block_new_outreach(
         ).one()
         assert old_row.status == "ambiguous"
         assert result["status"] == "sent"
+        assert result["forced"] is False
         assert published == [
             ("private", "stale-sending-user", "新的最长沉默候选")
         ]

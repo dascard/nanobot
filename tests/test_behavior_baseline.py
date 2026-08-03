@@ -141,7 +141,14 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     assert group_analysis_prompt_change["before_sha256"] == (
         group_learning_prompt_change["after_sha256"]
     )
-    assert group_analysis_prompt_change["after_sha256"] == _sha256(
+    outreach_prompt_change = approved[
+        "proactive_outreach_fact_guard_prompt"
+    ]
+    assert outreach_prompt_change["snapshot_id"] == "prompt_runtime"
+    assert outreach_prompt_change["before_sha256"] == (
+        group_analysis_prompt_change["after_sha256"]
+    )
+    assert outreach_prompt_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "prompt_runtime.json"
     )
     news_registry_change = approved["stage6_news_registry"]
@@ -175,7 +182,16 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     assert group_learning_rule_controls_change["before_sha256"] == (
         group_learning_7b_registry_change["after_sha256"]
     )
-    assert group_learning_rule_controls_change["after_sha256"] == _sha256(
+    outreach_registry_change = approved[
+        "proactive_outreach_fact_guard_registry"
+    ]
+    assert outreach_registry_change["snapshot_id"] == (
+        "runtime_registries"
+    )
+    assert outreach_registry_change["before_sha256"] == (
+        group_learning_rule_controls_change["after_sha256"]
+    )
+    assert outreach_registry_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "runtime_registries.json"
     )
     prompt_snapshot = json.loads(

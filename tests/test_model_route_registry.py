@@ -10,6 +10,7 @@ EXPECTED_ROUTE_KEYS = {
     "outreach_extract",
     "outreach_judge",
     "outreach_generate",
+    "outreach_quality",
     "news_daily_quality",
     "news_relevance_review",
     "group_analysis_topics",

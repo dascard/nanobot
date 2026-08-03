@@ -60,12 +60,32 @@ def _silence_floor_reached(
     )
 
 
+def _silence_evaluation_due(
+    *,
+    now: datetime,
+    last_effective_at: datetime | None,
+    first_attempt_at: datetime | None,
+    last_evaluation_at: datetime | None,
+    max_silence_min: int,
+) -> bool:
+    """最长静默只强制一次到点评估，后续继续遵守 Judge 调度。"""
+
+    anchor = last_effective_at or first_attempt_at
+    if anchor is None:
+        return False
+    evaluation_due_at = anchor + timedelta(minutes=max_silence_min)
+    if now < evaluation_due_at:
+        return False
+    return last_evaluation_at is None or last_evaluation_at < evaluation_due_at
+
+
 def evaluate_outreach_due_gate(
     *,
     now: datetime,
     active_hours: set[int] | frozenset[int] = DEFAULT_ACTIVE_HOURS,
     last_effective_at: datetime | None = None,
     first_attempt_at: datetime | None = None,
+    last_evaluation_at: datetime | None = None,
     last_interaction_at: datetime | None = None,
     next_check_at: datetime | None = None,
     max_silence_min: int = DEFAULT_MAX_SILENCE_MIN,
@@ -74,20 +94,21 @@ def evaluate_outreach_due_gate(
     surge_roll: float | None = None,
     allow_early_surge: bool = False,
 ) -> dict[str, Any]:
-    """复现生产 due 阶段：安静时段、强制兜底、next-check 与 surge。"""
+    """复现生产 due 阶段：安静时段、静默评估、next-check 与 surge。"""
 
     if now.hour not in active_hours:
         return {"status": "skipped_quiet_hours", "forced": False}
 
-    forced = _silence_floor_reached(
+    forced = _silence_evaluation_due(
         now=now,
         last_effective_at=last_effective_at,
         first_attempt_at=first_attempt_at,
+        last_evaluation_at=last_evaluation_at,
         max_silence_min=max_silence_min,
     )
     if forced:
         return {
-            "status": "forced",
+            "status": "forced_evaluation",
             "forced": True,
             "surge_probability": 0.0,
             "surge_roll": surge_roll,
@@ -157,7 +178,7 @@ def evaluate_outreach_min_interval_gate(
                 "minutes_since_last": int(elapsed.total_seconds() // 60),
             }
     return {
-        "status": "forced" if forced else "due",
+        "status": "forced_evaluation" if forced else "due",
         "forced": forced,
     }
 
@@ -327,7 +348,7 @@ async def materialize_outreach_candidate(
         }
 
     try:
-        message = generator_fn(grounding, str(judge.get("reason") or ""))
+        message = generator_fn(grounding, judge)
     except OutreachModelContractError as exc:
         diagnostic = generation_failure_from_exception(exc)
         return {

@@ -6,8 +6,8 @@
       "match": {
         "category": "natural_language_semantic"
       },
-      "expected_count": 82,
-      "expected_rule_ids_sha256": "d2c731a2f3b3f03d6b51ff934d1fe8d387e81f46a0c1d9c6be89a47ede9bfc00",
+      "expected_count": 88,
+      "expected_rule_ids_sha256": "d84144c211a62a966e23de2328b2a5e9c72b317d675a03f4d6c7c1e3d565d2b6",
       "override": {
         "category": "natural_language_semantic",
         "disposition": "model_signal_only",
@@ -20,8 +20,8 @@
       "match": {
         "category": "compatibility"
       },
-      "expected_count": 141,
-      "expected_rule_ids_sha256": "c63542ec137fffb80008a9183f24c5e3b02a9c510615c9527bf1929d4b1415cd",
+      "expected_count": 142,
+      "expected_rule_ids_sha256": "89f3e4dbb52dbdb0c099dd08721d8bb98bd1daa44f70f608725900c75594e104",
       "override": {
         "category": "compatibility",
         "disposition": "compatibility_migration",
@@ -892,13 +892,49 @@
       "review_status": "reviewed",
       "reason": "人工复核：归档过滤属于画像事实状态机"
     },
-    "decision.27343a3750713218e28c": {
+    "decision.e161f66a15568b9830b8": {
       "category": "protocol_syntax",
       "disposition": "policy",
       "review_status": "reviewed",
       "reason": "人工复核：必填字段集合属于结构化模型输出合同"
     },
-    "decision.29a02e1fca6eb9c1d30f": {
+    "decision.56f170396e9f6c7e3dd4": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：主动外呼 topic_type 枚举属于结构化模型输出合同"
+    },
+    "decision.132f4f921a19ae74e294": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：不发送决策的空选题约束属于结构化模型输出合同"
+    },
+    "decision.b0243f617426b59b9b91": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：不发送决策的空选题约束属于结构化模型输出合同"
+    },
+    "decision.3720df5f37c7ecdc8ff1": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：跟进选题只能映射开放话题证据，属于服务端事实合同"
+    },
+    "decision.5b6d1854614be7084530": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：探索选题只能映射有效画像事实，属于服务端事实合同"
+    },
+    "decision.6c43c766f99b505f85ec": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：状态检查只能映射已核验行动，属于服务端事实合同"
+    },
+    "decision.72b67d4767c725caf6c6": {
       "category": "presentation",
       "disposition": "resource",
       "review_status": "reviewed",
@@ -1042,7 +1078,13 @@
       "review_status": "reviewed",
       "reason": "人工复核：只有结构化 clear_non_ai 高置信证据才允许删除候选，是审核后置门禁"
     },
-    "decision.bcb652b23577a49941f8": {
+    "decision.b373e07199e739e0b6b5": {
+      "category": "data_consistency",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：遗留强制候选的单行状态迁移必须满足 CAS，属于数据一致性合同"
+    },
+    "decision.8c15d5f61f464fc0f5b3": {
       "category": "protocol_syntax",
       "disposition": "policy",
       "review_status": "reviewed",

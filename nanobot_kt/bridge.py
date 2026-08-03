@@ -61,6 +61,7 @@ from core.agent_runtime import (
     RuntimeTurnKind,
 )
 from core.llm_sdk_tracing import install_openai_chat_completion_tracer
+from core.llm_trace_context import build_llm_cache_context
 from core.session_guidance import resolve_session_guidance
 from config import (
     NEW_API_KEY,
@@ -1135,22 +1136,7 @@ class NanobotBridge(MessageContractBridgeMixin):
         attempts = 0
         health_status = "pending"
         next_turn_kind = RuntimeTurnKind.USER_INPUT
-        context_debug = meta.get("context_debug")
-        context_debug = context_debug if isinstance(context_debug, dict) else {}
-        cache_context = {
-            "session_id": session_id,
-            **{
-                key: context_debug[key]
-                for key in (
-                    "prefix_epoch",
-                    "prefix_epoch_generation",
-                    "prefix_epoch_covered_until",
-                    "prefix_epoch_low_water_tokens",
-                    "prefix_epoch_high_water_tokens",
-                )
-                if key in context_debug
-            },
-        }
+        cache_context = build_llm_cache_context(session_id, meta.get("context_debug"))
 
         for attempt in range(max_attempts):
             self._output.clear()
@@ -1559,21 +1545,9 @@ class NanobotBridge(MessageContractBridgeMixin):
                 trace_id=trace_id,
                 run_id=run_id,
                 llm_source=reply_llm_source,
-                cache_context={
-                    "session_id": session_id,
-                    **{
-                        key: (meta.get("context_debug") or {}).get(key)
-                        for key in (
-                            "prefix_epoch",
-                            "prefix_epoch_generation",
-                            "prefix_epoch_covered_until",
-                            "prefix_epoch_low_water_tokens",
-                            "prefix_epoch_high_water_tokens",
-                        )
-                        if isinstance(meta.get("context_debug"), dict)
-                        and (meta.get("context_debug") or {}).get(key) is not None
-                    },
-                },
+                cache_context=build_llm_cache_context(
+                    session_id, meta.get("context_debug"), drop_none=True
+                ),
             )
             retry_buffer = (
                 self._output.get_response()

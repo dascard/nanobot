@@ -394,7 +394,7 @@ async def test_research_draft_starts_persisted_generation_attempt_before_workflo
 
 
 @pytest.mark.asyncio
-async def test_forced_generator_starts_persisted_generation_attempt_before_call(
+async def test_max_silence_judged_generator_starts_attempt_before_call(
     monkeypatch,
     db_session,
 ):
@@ -415,8 +415,21 @@ async def test_forced_generator_starts_persisted_generation_attempt_before_call(
     ))
     db_session.commit()
     observed: dict[str, object] = {}
+    judge_calls = []
 
-    def generator(_grounding, _reason):
+    def judge(grounding, **_kwargs):
+        judge_calls.append(grounding)
+        return {
+            "should_reach_out": True,
+            "reason": "仍有值得联系的新信息",
+            "next_check_at": (NOW + timedelta(hours=2)).isoformat(),
+            "next_intent": "等待新的自然话题",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
+    def generator(_grounding, decision):
         db_session.expire_all()
         run = db_session.query(OutboundRun).one_or_none()
         attempt = db_session.query(OutboundGenerationAttempt).one_or_none()
@@ -424,6 +437,7 @@ async def test_forced_generator_starts_persisted_generation_attempt_before_call(
             "run_status": run.status if run is not None else None,
             "attempt_status": attempt.status if attempt is not None else None,
         })
+        assert decision["reason"] == "仍有值得联系的新信息"
         return "最长沉默窗口触发的主动消息。"
 
     result = await proactive_outreach.run_outreach_once(
@@ -432,7 +446,7 @@ async def test_forced_generator_starts_persisted_generation_attempt_before_call(
         now=NOW,
         max_silence_min=60,
         thread_extractor=lambda _messages: [],
-        judge_fn=lambda *_args, **_kwargs: pytest.fail("forced 路径不得调用 Judge"),
+        judge_fn=judge,
         generator_fn=generator,
     )
 
@@ -442,8 +456,10 @@ async def test_forced_generator_starts_persisted_generation_attempt_before_call(
         "run_status": "generating",
         "attempt_status": "started",
     }
+    assert len(judge_calls) == 1
+    assert judge_calls[0]["trigger"]["kind"] == "max_silence_evaluation"
     assert result["status"] == "queued"
-    assert result["forced"] is True
+    assert result["forced"] is False
     assert attempt.status == "succeeded"
 
 

@@ -279,7 +279,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=2880,
         value_type="int",
         category="proactive",
-        description="超过该沉默窗口未真实发送时强制开口(分钟)",
+        description="超过该沉默窗口未真实发送时强制重新评估选题(分钟)",
         min_value=1,
         max_value=43200,
     ),

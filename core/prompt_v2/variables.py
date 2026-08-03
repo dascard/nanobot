@@ -101,6 +101,7 @@ def _scoped_variables(scope: str) -> tuple[VariableDef, ...]:
         "tasks/outreach_extract",
         "tasks/outreach_judge",
         "tasks/outreach_generate",
+        "tasks/outreach_quality",
         "tasks/proactive_research",
     }:
         return _CLASSIFIER_TASK_VARIABLES

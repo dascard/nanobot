@@ -98,6 +98,7 @@ _LEGACY_ALIASES = MappingProxyType({
     "outreach_extract": "tasks/outreach_extract",
     "outreach_judge": "tasks/outreach_judge",
     "outreach_generate": "tasks/outreach_generate",
+    "outreach_quality": "tasks/outreach_quality",
     "proactive_research": "tasks/proactive_research",
 })
 
@@ -124,6 +125,7 @@ _TASK_TOOL_NAMES = MappingProxyType({
     "tasks/outreach_extract": "outreach_extract",
     "tasks/outreach_judge": "outreach_judge",
     "tasks/outreach_generate": "outreach_generate",
+    "tasks/outreach_quality": "outreach_quality",
     "tasks/proactive_research": "web_search",
 })
 

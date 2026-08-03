@@ -50,6 +50,7 @@ from core.proactive.lease import (
 from core.proactive.model_service import (
     generate_outreach_message as generate_outreach_message,
     judge_outreach as judge_outreach,
+    review_outreach_message as review_outreach_message,
 )
 from core.proactive.orchestrator import (
     _run_outreach_once_acquired as _run_outreach_once_acquired_impl,
@@ -95,6 +96,7 @@ __all__ = [
     "extract_recent_threads",
     "generate_outreach_message",
     "judge_outreach",
+    "review_outreach_message",
     "proactive_outreach_scheduler",
     "push_to_qq",
     "run_outreach_dry_run_once",
@@ -174,7 +176,7 @@ async def _run_outreach_once_acquired(
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
-    thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
+    thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
     publisher: Callable[[str, str, str], Any] | None = None,
     evaluation_owner_token: str | None = None,
     evaluation_generation_at: datetime | None = None,
@@ -217,7 +219,7 @@ async def run_outreach_once(
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
-    thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
+    thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
     publisher: Callable[[str, str, str], Any] | None = None,
 ) -> dict[str, Any]:
     return await _run_outreach_once_impl(
@@ -250,7 +252,7 @@ async def run_outreach_dry_run_once(
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
-    thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
+    thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
 ) -> dict[str, Any]:
     return await _run_outreach_dry_run_once_impl(
         user_id,

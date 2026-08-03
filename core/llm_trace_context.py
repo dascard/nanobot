@@ -24,6 +24,14 @@ llm_cache_context: ContextVar[dict[str, Any] | None] = ContextVar(
     default=None,
 )
 
+_CACHE_CONTEXT_KEYS = (
+    "prefix_epoch",
+    "prefix_epoch_generation",
+    "prefix_epoch_covered_until",
+    "prefix_epoch_low_water_tokens",
+    "prefix_epoch_high_water_tokens",
+)
+
 
 def get_llm_trace_vars() -> tuple[str, str, str]:
     """返回当前上下文的 (trace_id, run_id, source)。"""
@@ -40,6 +48,25 @@ def get_llm_cache_context() -> dict[str, Any]:
     """返回当前请求的无正文 Prompt Cache epoch 上下文副本。"""
 
     return dict(llm_cache_context.get() or {})
+
+
+def build_llm_cache_context(
+    session_id: str,
+    context_debug: Any,
+    *,
+    drop_none: bool = False,
+) -> dict[str, Any]:
+    """从请求调试信息提取允许进入链路追踪的缓存字段。"""
+
+    debug = context_debug if isinstance(context_debug, dict) else {}
+    return {
+        "session_id": session_id,
+        **{
+            key: debug[key]
+            for key in _CACHE_CONTEXT_KEYS
+            if key in debug and (not drop_none or debug[key] is not None)
+        },
+    }
 
 
 @contextmanager
