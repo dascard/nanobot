@@ -91,6 +91,9 @@ RUN_EVIDENCE_RETENTION_REGISTRY_BASELINE_SHA256 = (
 RUN_EVIDENCE_GOVERNANCE_REGISTRY_BASELINE_SHA256 = (
     "fea0d0ef250eae8217fb4bbb84bf55f1ffdc99d442dcfecb3aa9d57afcd9c352"
 )
+AGENT_HARNESS_CHECKPOINT_REGISTRY_BASELINE_SHA256 = (
+    "ad1bb404996f61b0691eda339d77fb824d93c00ed02c013c5d32368a18553fef"
+)
 
 SNAPSHOT_CLASSIFICATIONS = {
     "agent_runtime": "preserve",
@@ -1352,6 +1355,21 @@ def _manifest(
                 ),
             },
             {
+                "id": "agent_harness_context_compaction_prompt",
+                "snapshot_id": "prompt_runtime",
+                "stage": "Agent Harness 阶段 5.3",
+                "before_sha256": (
+                    AGENT_HARNESS_CONTEXT_LAYER_PROMPT_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["prompt_runtime"]
+                ),
+                "reason": (
+                    "同步 canonical/runtime 工具结果 envelope、Unicode 边界、"
+                    "不可信数据和 owner-scoped Artifact 引用语义。"
+                ),
+            },
+            {
                 "id": "stage6_news_registry",
                 "snapshot_id": "runtime_registries",
                 "stage": "阶段 6",
@@ -1444,13 +1462,28 @@ def _manifest(
                 "before_sha256": (
                     RUN_EVIDENCE_GOVERNANCE_REGISTRY_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["runtime_registries"]
+                "after_sha256": (
+                    AGENT_HARNESS_CHECKPOINT_REGISTRY_BASELINE_SHA256
                 ),
                 "reason": (
                     "为每个工具冻结 read_only、local_write 或 external "
                     "副作用策略，使 Native Runtime 能在调用前持久化回执，"
                     "并在未知结果时阻断自动重放。"
+                ),
+            },
+            {
+                "id": "agent_harness_context_compaction_registry",
+                "snapshot_id": "runtime_registries",
+                "stage": "Agent Harness 阶段 5.3",
+                "before_sha256": (
+                    AGENT_HARNESS_CHECKPOINT_REGISTRY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["runtime_registries"]
+                ),
+                "reason": (
+                    "登记 notice、snip/prune、summary、hard limit 和工具结果"
+                    "摘录水位；设置由服务端校验并在重启时原子回滚。"
                 ),
             },
         ],

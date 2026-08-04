@@ -206,8 +206,26 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     assert context_layer_prompt_change["before_sha256"] == (
         outreach_prompt_change["after_sha256"]
     )
-    assert context_layer_prompt_change["after_sha256"] == _sha256(
+    context_compaction_prompt_change = approved[
+        "agent_harness_context_compaction_prompt"
+    ]
+    assert context_compaction_prompt_change["before_sha256"] == (
+        context_layer_prompt_change["after_sha256"]
+    )
+    assert context_compaction_prompt_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "prompt_runtime.json"
+    )
+    context_compaction_registry_change = approved[
+        "agent_harness_context_compaction_registry"
+    ]
+    checkpoint_registry_change = approved[
+        "agent_harness_checkpoint_recovery_registry"
+    ]
+    assert context_compaction_registry_change["before_sha256"] == (
+        checkpoint_registry_change["after_sha256"]
+    )
+    assert context_compaction_registry_change["after_sha256"] == _sha256(
+        GOLDEN_ROOT / "runtime_registries.json"
     )
     news_registry_change = approved["stage6_news_registry"]
     assert news_registry_change["before_sha256"] == (
@@ -263,7 +281,10 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
         recovery_registry_change["before_sha256"]
     )
     assert recovery_registry_change["snapshot_id"] == "runtime_registries"
-    assert recovery_registry_change["after_sha256"] == _sha256(
+    assert recovery_registry_change["after_sha256"] == (
+        context_compaction_registry_change["before_sha256"]
+    )
+    assert context_compaction_registry_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "runtime_registries.json"
     )
     prompt_snapshot = json.loads(

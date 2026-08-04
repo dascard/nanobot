@@ -55,6 +55,19 @@ def _text_fingerprint(value: object) -> tuple[int, int, str]:
     return len(encoded), len(text), hashlib.sha256(encoded).hexdigest()
 
 
+def _bounded_ids(values: tuple[str, ...], *, max_chars: int = 480) -> str:
+    selected: list[str] = []
+    used = 0
+    for value in values:
+        candidate = str(value or "").strip()
+        addition = len(candidate) + (1 if selected else 0)
+        if not candidate or used + addition > max_chars:
+            break
+        selected.append(candidate)
+        used += addition
+    return ",".join(selected)
+
+
 def _identity_from_runtime_event(event: RuntimeRunEvent) -> RunLedgerIdentity:
     return RunLedgerIdentity(
         actor_type=event.actor.actor_type.value,
@@ -107,6 +120,39 @@ def _runtime_run_event_payload(
                 "result_chars": result_chars,
                 "result_sha256": result_sha256,
             })
+    elif event.kind is RuntimeRunEventKind.CONTEXT_DECISION:
+        event_type = "context.compaction_decided"
+        decision = event.context_decision
+        assert decision is not None
+        payload.update({
+            "decision_id": decision.decision_id,
+            "policy_id": decision.policy_id,
+            "action": decision.action,
+            "cause_code": decision.cause_code,
+            "before_tokens": decision.before_tokens,
+            "after_tokens": decision.after_tokens,
+            "hard_limit_tokens": decision.hard_limit_tokens,
+            "before_message_count": decision.before_messages,
+            "after_message_count": decision.after_messages,
+            "protected_message_count": decision.protected_messages,
+            "tool_pair_count": decision.tool_pair_count,
+            "retained_count": len(decision.retained_item_ids),
+            "retained_ids": _bounded_ids(decision.retained_item_ids),
+            "retained_set_sha256": decision.retained_set_sha256,
+            "dropped_count": len(decision.dropped_item_ids),
+            "dropped_ids": _bounded_ids(decision.dropped_item_ids),
+            "dropped_set_sha256": decision.dropped_set_sha256,
+            "artifact_count": len(decision.artifact_ids),
+            "artifact_ids": _bounded_ids(decision.artifact_ids),
+            "artifact_set_sha256": decision.artifact_set_sha256,
+            "input_sha256": decision.input_sha256,
+            "output_sha256": decision.output_sha256,
+            "current_turn_retained": decision.current_request_retained,
+            "tool_pairing_valid": decision.tool_pairing_valid,
+            "quality_status": decision.quality_status,
+            "quality_sha256": decision.quality_sha256,
+            "decision_sha256": decision.decision_sha256,
+        })
     elif event.kind is RuntimeRunEventKind.USAGE:
         event_type = "usage.recorded"
         usage = event.usage

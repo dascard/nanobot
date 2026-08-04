@@ -792,11 +792,30 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 5.3 分层压缩和工具输出治理
 
-- [ ] 实现 `notice → snip/prune → summary → hard limit` 水位。
-- [ ] 保持 assistant tool call 与 tool result 配对。
-- [ ] 大结果先发布为 Artifact，再向 Context 注入摘要和引用。
-- [ ] 增加 Unicode 清洗、边界标记、注入风险标注和安全截断。
-- [ ] 保存压缩原因、前后 token、保留项和质量评测证据。
+- [x] 实现 `notice → snip/prune → summary → hard limit` 水位。
+- [x] 保持 assistant tool call 与 tool result 配对。
+- [x] 大结果先发布为 Artifact，再向 Context 注入摘要和引用。
+- [x] 增加 Unicode 清洗、边界标记、注入风险标注和安全截断。
+- [x] 保存压缩原因、前后 token、保留项和质量评测证据。
+
+实施记录（2026-08-04）：
+
+- Native 生产 Runtime 在每次模型调用前执行确定性 Context 投影；固定四级水位、目标水位和硬上限均由
+  受管设置解析。system 段、当前用户请求及其后消息为保护项，无法在不破坏保护项的前提下降至硬上限时
+  失败关闭，不改写 `ChatLog`、`ConversationTurn` 或 Runtime 原始消息事实。
+- assistant tool call 与对应 tool result 先校验为不可分割原子组；重复 call ID、孤立 result、名称不匹配和
+  未完成批次均拒绝进入模型上下文。裁剪和摘要只处理完整原子组，并保存配对数量与有效性证据。
+- 工具输出统一进入不可信结果信封，执行 NFC／换行规范化，清除 bidi、零宽和非法控制字符，并以固定
+  begin/end 边界、风险标签、来源／清洗摘要和安全首尾摘录注入。风险标签只作提示，不声称消除注入。
+- 超过字节或字符阈值的结果由生产 `SqlAlchemyToolResultArtifactPublisher` 在独立事务中发布为 owner
+  workspace 的不可变 Artifact；模型只看到安全摘录和 `artifact://` 引用。发布失败时禁止继续注入截断
+  结果；Artifact 事件在后续 tool activity／模型调用前进入 Event Ledger。
+- `context.compaction_decided` 保存策略、原因、前后 token／消息数、保护项、保留／删除集合摘要、Artifact
+  集合摘要和质量证明，不保存消息正文。Prompt Runtime 的 canonical／运行时模板已同步说明结果信封。
+- Context、生产 Artifact Adapter、Native Runtime、Bridge 恢复和 Ledger 定向回归为 55 passed；设置
+  兼容修复与原失败场景回归为 15 passed。最终完整 `python -m pytest tests/ -v` 为 6578 passed、
+  12 skipped、0 failed；架构边界、OpenAPI、行为 Golden、Release／Verification Golden、决策规则、
+  Task SLO、Ruff 致命规则、Python 编译和 `git diff --check` 均通过。
 
 #### 5.4 Session Goal 和 Plan Mode
 

@@ -15,8 +15,10 @@ from typing import Any, Protocol
 from core.agent_runtime.contracts import (
     AgentTurnRequest,
     AgentTurnResult,
+    RuntimeArtifactRef,
     RuntimeCapabilities,
     RuntimeCapability,
+    RuntimeContextDecision,
     RuntimeLifecycleEvent,
     RuntimeLifecycleEventSink,
     RuntimeLifecycleState,
@@ -56,6 +58,14 @@ from core.agent_runtime.event_stream import (
     relay_runtime_run_events,
 )
 from core.agent_runtime.lifecycle import RuntimeLifecycleMachine
+from core.context_compaction import (
+    ContextCompactionDecision,
+    ContextCompactionError,
+    ContextCompactionPolicy,
+    ToolResultArtifactPublisher,
+    govern_tool_result,
+    project_model_context,
+)
 from core.model_provider.chat_runtime import (
     ChatCompletionPort,
     ChatCompletionRequest,
@@ -82,6 +92,11 @@ NativeToolBindingResolver = Callable[[str], str]
 NativeToolEffectResolver = Callable[[str], RuntimeToolEffectClass]
 NativeTextDeltaHandler = Callable[[str], Awaitable[None]]
 NativeToolActivityHandler = Callable[[RuntimeToolCall], Awaitable[None]]
+NativeArtifactHandler = Callable[[RuntimeArtifactRef], Awaitable[None]]
+NativeContextDecisionHandler = Callable[
+    [RuntimeContextDecision],
+    Awaitable[None],
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +108,7 @@ class NativeAgentRuntimeConfig:
     max_tool_rounds: int = 6
     request_timeout_seconds: float = 120.0
     tool_timeout_seconds: float = 60.0
+    context_policy: ContextCompactionPolicy = ContextCompactionPolicy()
     terminal_tool_names: frozenset[str] = frozenset(
         {"reply", "no_reply", "ai_daily", "group_analysis"}
     )
@@ -134,6 +150,8 @@ class NativeAgentRuntimeConfig:
                 if str(name).strip()
             ),
         )
+        if not isinstance(self.context_policy, ContextCompactionPolicy):
+            raise ValueError("context_policy 必须是 ContextCompactionPolicy")
 
 
 @dataclass(frozen=True, slots=True)
@@ -523,6 +541,37 @@ def _tool_output_text(result: RuntimeToolExecutionResult) -> str:
     )
 
 
+def _runtime_context_decision(
+    decision: ContextCompactionDecision,
+) -> RuntimeContextDecision:
+    return RuntimeContextDecision(
+        decision_id=decision.decision_id,
+        policy_id=decision.policy_id,
+        action=decision.action.value,
+        cause_code=decision.cause_code,
+        before_tokens=decision.before_tokens,
+        after_tokens=decision.after_tokens,
+        hard_limit_tokens=decision.hard_limit_tokens,
+        before_messages=decision.before_messages,
+        after_messages=decision.after_messages,
+        protected_messages=decision.protected_messages,
+        tool_pair_count=decision.tool_pair_count,
+        retained_item_ids=decision.retained_item_ids,
+        dropped_item_ids=decision.dropped_item_ids,
+        artifact_ids=decision.artifact_ids,
+        input_sha256=decision.input_sha256,
+        output_sha256=decision.output_sha256,
+        retained_set_sha256=decision.retained_set_sha256,
+        dropped_set_sha256=decision.dropped_set_sha256,
+        artifact_set_sha256=decision.artifact_set_sha256,
+        quality_status=decision.quality_status,
+        quality_sha256=decision.quality_sha256,
+        decision_sha256=decision.sha256,
+        current_request_retained=decision.current_request_retained,
+        tool_pairing_valid=decision.tool_pairing_valid,
+    )
+
+
 def _runtime_context_payload(request: AgentTurnRequest) -> dict[str, object]:
     context = request.context
     actor = context.actor
@@ -571,6 +620,7 @@ class NativeAgentRuntime:
         tool_binding_resolver: NativeToolBindingResolver | None = None,
         tool_effect_resolver: NativeToolEffectResolver | None = None,
         recovery_port: RuntimeRecoveryPort | None = None,
+        tool_result_artifact_publisher: ToolResultArtifactPublisher | None = None,
         available_tool_names: tuple[str, ...] | None = None,
         event_sinks: tuple[RuntimeLifecycleEventSink, ...] = (),
         now: Callable[[], datetime] | None = None,
@@ -601,6 +651,14 @@ class NativeAgentRuntime:
         ):
             raise TypeError("recovery_port 未实现 RuntimeRecoveryPort")
         self._recovery_port = recovery_port
+        if tool_result_artifact_publisher is not None and not isinstance(
+            tool_result_artifact_publisher,
+            ToolResultArtifactPublisher,
+        ):
+            raise TypeError(
+                "tool_result_artifact_publisher 未实现 ToolResultArtifactPublisher"
+            )
+        self._tool_result_artifact_publisher = tool_result_artifact_publisher
         self._available_tool_names = tuple(
             sorted(
                 set(
@@ -684,15 +742,29 @@ class NativeAgentRuntime:
         self,
         request: AgentTurnRequest,
         plan: NativeToolPlan | None,
-    ) -> ChatCompletionRequest:
+    ) -> tuple[ChatCompletionRequest, RuntimeContextDecision | None]:
         route = self._route
-        return ChatCompletionRequest(
-            messages=tuple(_message_wire(message) for message in self._messages),
-            tools=(
-                tuple(plan.sent_tool_schemas)
-                if plan is not None and plan.sent_tool_schemas
-                else None
-            ),
+        tool_schemas = (
+            tuple(plan.sent_tool_schemas)
+            if plan is not None and plan.sent_tool_schemas
+            else ()
+        )
+        try:
+            projection = project_model_context(
+                messages=tuple(
+                    _message_wire(message) for message in self._messages
+                ),
+                tools=tool_schemas,
+                policy=self._config.context_policy,
+            )
+        except ContextCompactionError as exc:
+            raise AgentRuntimeExecutionError(
+                f"Native Context 治理失败：{exc}",
+                runtime_id=self.runtime_id,
+            ) from exc
+        completion = ChatCompletionRequest(
+            messages=projection.messages,
+            tools=tool_schemas or None,
             temperature=(
                 route.temperature
                 if route is not None and route.temperature is not None
@@ -709,6 +781,12 @@ class NativeAgentRuntime:
                 else "auto"
             ),
         )
+        decision = (
+            _runtime_context_decision(projection.decision)
+            if projection.decision is not None
+            else None
+        )
+        return completion, decision
 
     async def _complete_non_streaming(
         self,
@@ -863,8 +941,14 @@ class NativeAgentRuntime:
         *,
         model_step: int,
         on_text_delta: NativeTextDeltaHandler | None,
+        on_context_decision: NativeContextDecisionHandler | None,
     ) -> _CompletionTurn:
-        completion_request = self._completion_request(request, plan)
+        completion_request, context_decision = self._completion_request(
+            request,
+            plan,
+        )
+        if context_decision is not None and on_context_decision is not None:
+            await on_context_decision(context_decision)
         if request.stream:
             return await self._complete_streaming(
                 completion_request,
@@ -1264,12 +1348,53 @@ class NativeAgentRuntime:
             effect_class=effect_class,
         )
 
+    async def _tool_result_message(
+        self,
+        request: AgentTurnRequest,
+        result: RuntimeToolExecutionResult,
+        *,
+        inject_into_context: bool,
+        on_artifact: NativeArtifactHandler | None,
+    ) -> RuntimeMessage:
+        raw_output = _tool_output_text(result)
+        if not inject_into_context:
+            return RuntimeMessage(
+                "tool",
+                raw_output,
+                name=result.tool_call.name,
+                tool_call_id=result.tool_call_id,
+            )
+        try:
+            governed = await govern_tool_result(
+                tool_name=result.tool_call.name,
+                tool_call_id=result.tool_call_id,
+                output=raw_output,
+                request=request,
+                publisher=self._tool_result_artifact_publisher,
+                policy=self._config.context_policy,
+            )
+        except ContextCompactionError as exc:
+            raise AgentRuntimeExecutionError(
+                f"Native 工具结果治理失败：{exc}",
+                runtime_id=self.runtime_id,
+            ) from exc
+        if governed.artifact is not None and on_artifact is not None:
+            await on_artifact(governed.artifact)
+        return RuntimeMessage(
+            "tool",
+            governed.context_text,
+            name=result.tool_call.name,
+            tool_call_id=result.tool_call_id,
+        )
+
     async def _run_loop(
         self,
         request: AgentTurnRequest,
         *,
         on_text_delta: NativeTextDeltaHandler | None,
         on_tool_activity: NativeToolActivityHandler | None,
+        on_artifact: NativeArtifactHandler | None,
+        on_context_decision: NativeContextDecisionHandler | None,
     ) -> _NativeRunOutcome:
         plan = self._resolve_tool_plan(request)
         messages = list(self._messages)
@@ -1302,6 +1427,7 @@ class NativeAgentRuntime:
                 plan,
                 model_step=model_step,
                 on_text_delta=on_text_delta,
+                on_context_decision=on_context_decision,
             )
             turn_usage = _merge_usage(turn_usage, completion.usage)
             assistant = RuntimeMessage(
@@ -1414,14 +1540,16 @@ class NativeAgentRuntime:
                 if tool_outcome.receipt_id:
                     receipt_ids.append(tool_outcome.receipt_id)
                 turn_tool_calls.append(result.tool_call)
-                messages.append(
-                    RuntimeMessage(
-                        "tool",
-                        _tool_output_text(result),
-                        name=call.name,
-                        tool_call_id=call.call_id,
-                    )
+                stops_after_result = result.success and (
+                    call.name in self._config.terminal_tool_names
+                    or bool(result.metadata.get("stop", False))
                 )
+                messages.append(await self._tool_result_message(
+                    request,
+                    result,
+                    inject_into_context=not stops_after_result,
+                    on_artifact=on_artifact,
+                ))
                 self._messages = tuple(messages)
                 if on_tool_activity is not None:
                     await on_tool_activity(result.tool_call)
@@ -1444,13 +1572,7 @@ class NativeAgentRuntime:
                         f"最终动作工具执行失败：{call.name}",
                         runtime_id=self.runtime_id,
                     )
-                terminal = terminal or (
-                    result.success
-                    and (
-                        call.name in self._config.terminal_tool_names
-                        or bool(result.metadata.get("stop", False))
-                    )
-                )
+                terminal = terminal or stops_after_result
 
             self._tool_calls = tuple(turn_tool_calls)
             if terminal:
@@ -1495,6 +1617,8 @@ class NativeAgentRuntime:
         *,
         on_text_delta: NativeTextDeltaHandler | None = None,
         on_tool_activity: NativeToolActivityHandler | None = None,
+        on_artifact: NativeArtifactHandler | None = None,
+        on_context_decision: NativeContextDecisionHandler | None = None,
     ) -> _NativeRunOutcome:
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
         from core.agent_runtime.request_scope import runtime_context_scope
@@ -1511,6 +1635,8 @@ class NativeAgentRuntime:
                             request,
                             on_text_delta=on_text_delta,
                             on_tool_activity=on_tool_activity,
+                            on_artifact=on_artifact,
+                            on_context_decision=on_context_decision,
                         )
             finally:
                 if self._active_task is task:
@@ -1544,6 +1670,8 @@ class NativeAgentRuntime:
                 request,
                 on_text_delta=emitter.text_delta,
                 on_tool_activity=emitter.tool_activity,
+                on_artifact=emitter.artifact,
+                on_context_decision=emitter.context_decision,
             )
         except asyncio.CancelledError:
             await emitter.end(RuntimeRunStatus.CANCELLED)

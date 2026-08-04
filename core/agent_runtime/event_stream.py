@@ -13,6 +13,7 @@ from uuid import uuid4
 from core.agent_runtime.contracts import (
     RuntimeArtifactRef,
     RuntimeAttribute,
+    RuntimeContextDecision,
     RuntimeRunError,
     RuntimeRunEvent,
     RuntimeRunEventHandler,
@@ -74,6 +75,16 @@ class RuntimeRunEventEmitter:
             tool_call=tool_call,
         )
 
+    async def context_decision(
+        self,
+        decision: RuntimeContextDecision,
+    ) -> RuntimeRunEvent:
+        return await self._emit(
+            RuntimeRunEventKind.CONTEXT_DECISION,
+            self._active_status(),
+            context_decision=decision,
+        )
+
     async def usage(self, usage: RuntimeUsage) -> RuntimeRunEvent:
         return await self._emit(
             RuntimeRunEventKind.USAGE,
@@ -129,6 +140,7 @@ class RuntimeRunEventEmitter:
         *,
         text_delta: str = "",
         tool_call: RuntimeToolCall | None = None,
+        context_decision: RuntimeContextDecision | None = None,
         usage: RuntimeUsage | None = None,
         artifact: RuntimeArtifactRef | None = None,
         error: RuntimeRunError | None = None,
@@ -147,6 +159,7 @@ class RuntimeRunEventEmitter:
             occurred_at=self._clock(),
             text_delta=text_delta,
             tool_call=tool_call,
+            context_decision=context_decision,
             usage=usage,
             artifact=artifact,
             error=error,

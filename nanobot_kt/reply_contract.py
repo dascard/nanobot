@@ -68,9 +68,13 @@ def _message_role(msg: Any) -> str:
 
 
 def _message_content(msg: Any) -> str:
+    from core.context_compaction import unwrap_tool_result_content
+
     if isinstance(msg, dict):
-        return message_content_to_text(msg.get("content", ""))
-    return message_content_to_text(getattr(msg, "content", ""))
+        content = message_content_to_text(msg.get("content", ""))
+    else:
+        content = message_content_to_text(getattr(msg, "content", ""))
+    return unwrap_tool_result_content(content)
 
 
 def _message_field(msg: Any, key: str, default: Any = None) -> Any:

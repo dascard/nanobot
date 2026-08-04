@@ -21,6 +21,7 @@ from core.agent_runtime import (
     RequestRuntimeContext,
     RuntimeActor,
     RuntimeActorType,
+    RuntimeArtifactRef,
     RuntimeChatType,
     RuntimeLifecycleState,
     RuntimeMessage,
@@ -36,6 +37,11 @@ from core.agent_runtime import (
     RuntimeToolExecutionRequest,
     RuntimeToolExecutionResult,
     RuntimeTurnKind,
+)
+from core.context_compaction import (
+    ContextCompactionPolicy,
+    TOOL_RESULT_ENVELOPE_KEY,
+    unwrap_tool_result_content,
 )
 from core.model_provider.chat_runtime import ChatCompletionRequest
 from core.tool_plan import ToolPlan
@@ -251,6 +257,7 @@ def _runtime(
     plan: ToolPlan | None = None,
     handlers: Mapping[str, Any] | None = None,
     config: NativeAgentRuntimeConfig | None = None,
+    artifact_publisher: Any = None,
 ) -> NativeAgentRuntime:
     bindings = dict(handlers or {})
     tool_port = RegisteredToolExecutionPort(bindings)
@@ -261,8 +268,26 @@ def _runtime(
         config=config,
         tool_plan_resolver=lambda: plan,
         tool_binding_resolver=lambda name: f"tool.{name}.execute",
+        tool_result_artifact_publisher=artifact_publisher,
         available_tool_names=tuple(sorted(plan.executable_tool_names)) if plan else (),
     )
+
+
+class _ToolResultArtifactPublisher:
+    def __init__(self) -> None:
+        self.payloads: list[bytes] = []
+
+    async def publish_tool_result(self, **kwargs: Any) -> RuntimeArtifactRef:
+        payload = bytes(kwargs["payload"])
+        self.payloads.append(payload)
+        return RuntimeArtifactRef(
+            artifact_id="art_native_tool_1",
+            uri="artifact://art_native_tool_1",
+            sha256="b" * 64,
+            media_type=str(kwargs["media_type"]),
+            size_bytes=len(payload),
+            source_run_id="run-native-1",
+        )
 
 
 @pytest.mark.asyncio
@@ -334,6 +359,7 @@ async def test_native_runtime_satisfies_port_and_projects_prompt_route_and_usage
     assert runtime.install_tool_policy().ready is True
 
     await runtime.stop()
+
     assert runtime.state is RuntimeLifecycleState.STOPPED
 
 
@@ -384,7 +410,11 @@ async def test_native_runtime_runs_bounded_model_tool_loop_through_frozen_bindin
     ]
     assert second_messages[1]["tool_calls"][0]["function"]["name"] == "memory_query"
     assert second_messages[2]["tool_call_id"] == "call-native-1"
-    assert second_messages[2]["content"] == '{"items":["命中"]}'
+    envelope = json.loads(second_messages[2]["content"])
+    assert envelope[TOOL_RESULT_ENVELOPE_KEY]["trust"] == "untrusted_data"
+    assert unwrap_tool_result_content(
+        second_messages[2]["content"]
+    ) == '{"items":["命中"]}'
     assert seen[0].execution_port_id == "tool.memory_query.execute"
     assert seen[0].idempotency_key == "request-native-1:call-native-1"
     assert dict(seen[0].arguments) == {"query": "原生 Runtime"}
@@ -760,6 +790,107 @@ async def test_native_runtime_stop_waits_for_active_turn_cancellation():
 
     assert runtime.state is RuntimeLifecycleState.STOPPED
     assert task.cancelled() is True
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_publishes_large_tool_result_before_context_injection():
+    plan = _tool_plan("memory_query")
+    completion = _ScriptedCompletionPort(
+        responses=(
+            _tool_call_response("memory_query", {"query": "大结果"}),
+            _assistant_response("已基于 Artifact 摘录处理"),
+        )
+    )
+    publisher = _ToolResultArtifactPublisher()
+    raw_output = "检索结果" + "甲" * 400
+
+    async def execute_memory(
+        request: RuntimeToolExecutionRequest,
+    ) -> RuntimeToolExecutionResult:
+        return _completed_tool_result(request, raw_output)
+
+    runtime = _runtime(
+        completion,
+        plan=plan,
+        handlers={"tool.memory_query.execute": execute_memory},
+        config=NativeAgentRuntimeConfig(
+            context_policy=ContextCompactionPolicy(
+                tool_inline_max_bytes=120,
+                tool_inline_max_chars=120,
+                tool_snippet_head_chars=60,
+                tool_snippet_tail_chars=20,
+            )
+        ),
+        artifact_publisher=publisher,
+    )
+    await runtime.start()
+    sink = InMemoryRunEventSink()
+
+    await runtime.run_event(
+        AgentTurnRequest(_context(plan), "查询大结果"),
+        sink.append,
+    )
+
+    assert publisher.payloads == [raw_output.encode("utf-8")]
+    tool_message = completion.complete_requests[1].messages[-1]
+    envelope = json.loads(tool_message["content"])
+    assert envelope[TOOL_RESULT_ENVELOPE_KEY]["truncated"] is True
+    assert envelope[TOOL_RESULT_ENVELOPE_KEY]["artifact"]["uri"] == (
+        "artifact://art_native_tool_1"
+    )
+    kinds = [event.kind for event in sink.events]
+    assert kinds.index(RuntimeRunEventKind.ARTIFACT) < kinds.index(
+        RuntimeRunEventKind.TOOL_ACTIVITY
+    )
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_emits_context_decision_before_compacted_model_request():
+    completion = _ScriptedCompletionPort(
+        responses=(_assistant_response("压缩后完成"),)
+    )
+    policy = ContextCompactionPolicy(
+        notice_tokens=300,
+        snip_tokens=400,
+        summary_tokens=500,
+        hard_limit_tokens=2_000,
+        target_tokens=350,
+        recent_units_to_keep=2,
+        summary_chars=300,
+        snip_message_chars=120,
+    )
+    runtime = _runtime(
+        completion,
+        config=NativeAgentRuntimeConfig(context_policy=policy),
+    )
+    await runtime.start()
+    history: list[RuntimeMessage] = []
+    for index in range(6):
+        history.extend((
+            RuntimeMessage("user", f"旧问题{index}" + "甲" * 100),
+            RuntimeMessage("assistant", f"旧回答{index}" + "乙" * 100),
+        ))
+    runtime.replace_conversation(tuple(history))
+    sink = InMemoryRunEventSink()
+
+    await runtime.run_event(
+        AgentTurnRequest(_context(), "当前请求"),
+        sink.append,
+    )
+
+    decisions = [
+        event.context_decision
+        for event in sink.events
+        if event.kind is RuntimeRunEventKind.CONTEXT_DECISION
+    ]
+    assert len(decisions) == 1
+    assert decisions[0] is not None
+    assert decisions[0].action in {"summary", "hard_limit"}
+    assert decisions[0].current_request_retained is True
+    assert completion.complete_requests[0].messages[-1]["content"] == "当前请求"
+    assert len(completion.complete_requests[0].messages) < len(history) + 1
+    await runtime.stop()
 
 
 @pytest.mark.asyncio

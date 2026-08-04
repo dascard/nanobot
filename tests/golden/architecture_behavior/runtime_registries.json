@@ -1830,6 +1830,222 @@
       "value_type": "float"
     },
     {
+      "category": "agent",
+      "dangerous": true,
+      "default": 96000,
+      "env_name": "NANOBOT_CONTEXT_HARD_LIMIT_TOKENS",
+      "key": "context.compaction.hard_limit_tokens",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": true,
+      "default": 64000,
+      "env_name": "NANOBOT_CONTEXT_NOTICE_TOKENS",
+      "key": "context.compaction.notice_tokens",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": false,
+      "default": 6,
+      "env_name": "NANOBOT_CONTEXT_RECENT_UNITS",
+      "key": "context.compaction.recent_units_to_keep",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": false,
+      "default": 4000,
+      "env_name": "NANOBOT_CONTEXT_SNIP_MESSAGE_CHARS",
+      "key": "context.compaction.snip_message_chars",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": true,
+      "default": 72000,
+      "env_name": "NANOBOT_CONTEXT_SNIP_TOKENS",
+      "key": "context.compaction.snip_tokens",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": false,
+      "default": 8000,
+      "env_name": "NANOBOT_CONTEXT_SUMMARY_CHARS",
+      "key": "context.compaction.summary_chars",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": true,
+      "default": 80000,
+      "env_name": "NANOBOT_CONTEXT_SUMMARY_TOKENS",
+      "key": "context.compaction.summary_tokens",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": true,
+      "default": 68000,
+      "env_name": "NANOBOT_CONTEXT_TARGET_TOKENS",
+      "key": "context.compaction.target_tokens",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": true,
+      "default": 32768,
+      "env_name": "NANOBOT_TOOL_RESULT_INLINE_BYTES",
+      "key": "context.compaction.tool_inline_max_bytes",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": true,
+      "default": 12000,
+      "env_name": "NANOBOT_TOOL_RESULT_INLINE_CHARS",
+      "key": "context.compaction.tool_inline_max_chars",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": false,
+      "default": 6000,
+      "env_name": "NANOBOT_TOOL_RESULT_HEAD_CHARS",
+      "key": "context.compaction.tool_snippet_head_chars",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": false,
+      "default": 2000,
+      "env_name": "NANOBOT_TOOL_RESULT_TAIL_CHARS",
+      "key": "context.compaction.tool_snippet_tail_chars",
+      "owner_module": "core.context_compaction",
+      "restart_required": true,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
       "category": "system",
       "dangerous": false,
       "default": "*",

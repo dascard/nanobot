@@ -114,6 +114,7 @@ class RuntimeRunEventKind(str, Enum):
     STATUS = "status"
     TEXT_DELTA = "text_delta"
     TOOL_ACTIVITY = "tool_activity"
+    CONTEXT_DECISION = "context_decision"
     USAGE = "usage"
     ARTIFACT = "artifact"
     ERROR = "error"
@@ -502,6 +503,96 @@ class RuntimeUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeContextDecision:
+    """模型调用前的无正文 Context 治理证据。"""
+
+    decision_id: str
+    policy_id: str
+    action: str
+    cause_code: str
+    before_tokens: int
+    after_tokens: int
+    hard_limit_tokens: int
+    before_messages: int
+    after_messages: int
+    protected_messages: int
+    tool_pair_count: int
+    retained_item_ids: tuple[str, ...]
+    dropped_item_ids: tuple[str, ...]
+    artifact_ids: tuple[str, ...]
+    input_sha256: str
+    output_sha256: str
+    retained_set_sha256: str
+    dropped_set_sha256: str
+    artifact_set_sha256: str
+    quality_status: str
+    quality_sha256: str
+    decision_sha256: str
+    current_request_retained: bool
+    tool_pairing_valid: bool
+
+    def __post_init__(self) -> None:
+        for name in (
+            "decision_id",
+            "policy_id",
+            "action",
+            "cause_code",
+            "quality_status",
+        ):
+            value = _required(getattr(self, name), f"context.{name}")
+            if len(value) > 160:
+                raise ValueError(f"context.{name} 过长")
+            object.__setattr__(self, name, value)
+        for name in (
+            "before_tokens",
+            "after_tokens",
+            "hard_limit_tokens",
+            "before_messages",
+            "after_messages",
+            "protected_messages",
+            "tool_pair_count",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"context.{name} 必须是非负整数")
+        if self.hard_limit_tokens <= 0:
+            raise ValueError("context.hard_limit_tokens 必须是正整数")
+        for name in (
+            "retained_item_ids",
+            "dropped_item_ids",
+            "artifact_ids",
+        ):
+            values = tuple(
+                _required(item, f"context.{name}")
+                for item in getattr(self, name)
+            )
+            if len(values) != len(set(values)):
+                raise ValueError(f"context.{name} 不能重复")
+            if any(len(item) > 160 for item in values):
+                raise ValueError(f"context.{name} 包含过长标识")
+            object.__setattr__(self, name, values)
+        for name in (
+            "input_sha256",
+            "output_sha256",
+            "retained_set_sha256",
+            "dropped_set_sha256",
+            "artifact_set_sha256",
+            "quality_sha256",
+            "decision_sha256",
+        ):
+            digest = str(getattr(self, name) or "").strip().lower()
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError(f"context.{name} 必须是 SHA-256")
+            object.__setattr__(self, name, digest)
+        if type(self.current_request_retained) is not bool:
+            raise ValueError("context.current_request_retained 必须是 bool")
+        if type(self.tool_pairing_valid) is not bool:
+            raise ValueError("context.tool_pairing_valid 必须是 bool")
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeArtifactRef:
     artifact_id: str
     uri: str
@@ -668,6 +759,7 @@ class RuntimeRunEvent:
     artifact: RuntimeArtifactRef | None = None
     error: RuntimeRunError | None = None
     attributes: tuple[RuntimeAttribute, ...] = ()
+    context_decision: RuntimeContextDecision | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "event_id", _required(self.event_id, "event_id"))
@@ -693,6 +785,11 @@ class RuntimeRunEvent:
             raise ValueError("event.occurred_at 必须包含时区")
         object.__setattr__(self, "text_delta", str(self.text_delta or ""))
         object.__setattr__(self, "attributes", tuple(self.attributes))
+        if self.context_decision is not None and not isinstance(
+            self.context_decision,
+            RuntimeContextDecision,
+        ):
+            raise ValueError("event.context_decision 无效")
         attribute_keys = [attribute.key for attribute in self.attributes]
         if len(attribute_keys) != len(set(attribute_keys)):
             raise ValueError("event.attributes 不能包含重复 key")
@@ -700,6 +797,9 @@ class RuntimeRunEvent:
         payloads = {
             RuntimeRunEventKind.TEXT_DELTA: bool(self.text_delta),
             RuntimeRunEventKind.TOOL_ACTIVITY: self.tool_call is not None,
+            RuntimeRunEventKind.CONTEXT_DECISION: (
+                self.context_decision is not None
+            ),
             RuntimeRunEventKind.USAGE: self.usage is not None,
             RuntimeRunEventKind.ARTIFACT: self.artifact is not None,
             RuntimeRunEventKind.ERROR: self.error is not None,

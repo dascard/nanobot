@@ -17,6 +17,7 @@ from core.agent_runtime import (
     AgentRuntimeSelection,
     AgentRuntimeSelectionPolicy,
     NativeAgentRuntime,
+    NativeAgentRuntimeConfig,
     RequestRuntimeContext,
     RuntimeModelRoute,
     RuntimeOwnerType,
@@ -150,6 +151,12 @@ def build_native_bridge_runtime(
     )
     from core.runtime.event_bus import emit_agent_lifecycle_event
     from core.run_recovery import default_runtime_recovery_port
+    from core.context_compaction import (
+        context_compaction_policy_from_settings,
+    )
+    from core.tool_result_artifacts import (
+        SqlAlchemyToolResultArtifactPublisher,
+    )
     from core.tool_registration import list_active_tool_registrations
 
     resolved_completion = completion_port or ReplyRouteChatCompletionAdapter(
@@ -165,9 +172,15 @@ def build_native_bridge_runtime(
         resolved_completion,
         build_native_tool_execution_port(),
         runtime_id=f"native:{name}",
+        config=NativeAgentRuntimeConfig(
+            context_policy=context_compaction_policy_from_settings(),
+        ),
         available_tool_names=tool_names,
         event_sinks=(emit_agent_lifecycle_event,),
         recovery_port=default_runtime_recovery_port(),
+        tool_result_artifact_publisher=(
+            SqlAlchemyToolResultArtifactPublisher()
+        ),
     )
     return runtime, resolved_completion
 

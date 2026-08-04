@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from core.agent_runtime.contracts import (
     RuntimeActor,
     RuntimeActorType,
+    RuntimeContextDecision,
     RuntimePrincipal,
     RuntimeRunEvent,
     RuntimeRunEventKind,
@@ -310,6 +311,71 @@ def test_runtime_run_event_adapter_hashes_text_and_projects_usage(db_session):
     assert projection.cached_input_tokens == 6
     assert projection.reasoning_tokens == 2
     assert projection.cost_microunits == 30
+
+
+def test_runtime_context_decision_persists_body_free_compaction_evidence(db_session):
+    identity = RuntimeRunIdentity(
+        run_id="run-1",
+        turn_id="turn-1",
+        correlation_id="trace-1",
+        actor=RuntimeActor(RuntimeActorType.USER, "user-1"),
+        owner=RuntimePrincipal(
+            platform="qq",
+            owner_type=RuntimeOwnerType.USER,
+            owner_id="user-1",
+        ),
+    )
+    decision = RuntimeContextDecision(
+        decision_id="ctx-decision-1",
+        policy_id="native-context-v1",
+        action="summary",
+        cause_code="summary_watermark_reached",
+        before_tokens=90_000,
+        after_tokens=60_000,
+        hard_limit_tokens=96_000,
+        before_messages=30,
+        after_messages=12,
+        protected_messages=4,
+        tool_pair_count=2,
+        retained_item_ids=("msg_a", "pair_b"),
+        dropped_item_ids=("msg_c",),
+        artifact_ids=("art_1",),
+        input_sha256="1" * 64,
+        output_sha256="2" * 64,
+        retained_set_sha256="3" * 64,
+        dropped_set_sha256="4" * 64,
+        artifact_set_sha256="5" * 64,
+        quality_status="passed",
+        quality_sha256="6" * 64,
+        decision_sha256="7" * 64,
+        current_request_retained=True,
+        tool_pairing_valid=True,
+    )
+    event = RuntimeRunEvent(
+        event_id="runtime-context-1",
+        identity=identity,
+        sequence=1,
+        kind=RuntimeRunEventKind.CONTEXT_DECISION,
+        status=RuntimeRunStatus.RUNNING,
+        occurred_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
+        context_decision=decision,
+    )
+
+    draft = runtime_run_event_to_ledger(event)
+
+    assert draft.event_type == "context.compaction_decided"
+    assert draft.payload["retained_ids"] == "msg_a,pair_b"
+    assert draft.payload["dropped_ids"] == "msg_c"
+    assert draft.payload["before_tokens"] == 90_000
+    assert draft.payload["after_tokens"] == 60_000
+    assert draft.payload["current_turn_retained"] is True
+    assert "正文" not in str(dict(draft.payload))
+    ledger = SqlAlchemyRunEventLedger(db_session)
+    ledger.append(_event("event-accepted", "run.accepted", status="accepted"))
+    record = ledger.append(draft)
+    db_session.commit()
+    assert record.payload["quality_status"] == "passed"
+    assert record.payload["decision_sha256"] == "7" * 64
 
 
 def test_prompt_resolution_projection_and_legacy_readiness_are_body_free(
