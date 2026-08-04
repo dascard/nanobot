@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -230,10 +231,16 @@ async def execute_registered_tool(
             "platform": platform,
             "message_id": request_id,
             "tool_name": name,
+            "task_run_id": str(meta.get("task_run_id") or ""),
             "workflow_idempotency_key": str(idempotency_key or ""),
+            "run_timeout_seconds": timeout_seconds,
             "tool_plan_sha256": tool_plan.sha256,
         },
     )
+    from core.durable_tasks import RunTaskOwner
+
+    run_task_owner = RunTaskOwner(run_handle.task_lease)
+    await run_task_owner.start()
     trace_tokens = set_trace_context(
         resolved_trace_id,
         run_handle.run_id,
@@ -318,13 +325,21 @@ async def execute_registered_tool(
             if not finish_error and exit_code in {None, 0}
             else "error"
         )
+    except asyncio.CancelledError as exc:
+        from core.durable_tasks import durable_cancel_status
+
+        finish_status = durable_cancel_status(exc)
+        finish_error = f"{type(exc).__name__}: {exc}"
+        raise
     except BaseException as exc:
         finish_error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
         try:
+            await run_task_owner.stop()
             RunTracer.finish_run(
                 run_handle.run_id,
+                task_lease=run_task_owner.lease,
                 status=finish_status,
                 output_preview=(
                     result.output if result is not None else ""

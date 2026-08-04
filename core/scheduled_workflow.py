@@ -96,6 +96,8 @@ class ScheduledExecutionClaim:
     owner: str
     lease_token: str
     lease_expires_at: datetime
+    generation: int = 1
+    attempt_no: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -574,6 +576,8 @@ def claim_scheduled_task_executions(
             ScheduledTaskExecution.id,
             ScheduledTaskExecution.status,
             ScheduledTaskExecution.owner_chat_stream_id,
+            ScheduledTaskExecution.lease_generation,
+            ScheduledTaskExecution.attempt_count,
         )
         .filter(eligible)
         .order_by(
@@ -584,7 +588,13 @@ def claim_scheduled_task_executions(
         .all()
     )
     claims: list[ScheduledExecutionClaim] = []
-    for execution_id, observed_status, owner_chat_stream_id in candidates:
+    for (
+        execution_id,
+        observed_status,
+        owner_chat_stream_id,
+        observed_generation,
+        observed_attempt_count,
+    ) in candidates:
         token = secrets.token_hex(32)
         expires_at = current + timedelta(seconds=float(lease_seconds))
         normalized_stream_id = str(owner_chat_stream_id or "").strip()
@@ -619,6 +629,10 @@ def claim_scheduled_task_executions(
             db.query(ScheduledTaskExecution)
             .filter(
                 ScheduledTaskExecution.id == int(execution_id),
+                ScheduledTaskExecution.lease_generation
+                == int(observed_generation or 0),
+                ScheduledTaskExecution.attempt_count
+                == int(observed_attempt_count or 0),
                 status_guard,
             )
             .update(
@@ -627,6 +641,10 @@ def claim_scheduled_task_executions(
                     ScheduledTaskExecution.lease_owner: normalized_owner,
                     ScheduledTaskExecution.lease_token: token,
                     ScheduledTaskExecution.lease_expires_at: expires_at,
+                    ScheduledTaskExecution.lease_generation:
+                        ScheduledTaskExecution.lease_generation + 1,
+                    ScheduledTaskExecution.attempt_count:
+                        ScheduledTaskExecution.attempt_count + 1,
                     ScheduledTaskExecution.wake_at: None,
                     ScheduledTaskExecution.started_at: func.coalesce(
                         ScheduledTaskExecution.started_at,
@@ -645,6 +663,8 @@ def claim_scheduled_task_executions(
                     owner=normalized_owner,
                     lease_token=token,
                     lease_expires_at=expires_at,
+                    generation=int(observed_generation or 0) + 1,
+                    attempt_no=int(observed_attempt_count or 0) + 1,
                 )
             )
         else:
@@ -675,6 +695,8 @@ def renew_scheduled_task_execution_lease(
             ScheduledTaskExecution.status == "running",
             ScheduledTaskExecution.lease_owner == claim.owner,
             ScheduledTaskExecution.lease_token == claim.lease_token,
+            ScheduledTaskExecution.lease_generation == claim.generation,
+            ScheduledTaskExecution.attempt_count == claim.attempt_no,
             ScheduledTaskExecution.lease_expires_at > current,
         )
         .update(
@@ -1139,6 +1161,8 @@ def _require_claim(
             ScheduledTaskExecution.status == "running",
             ScheduledTaskExecution.lease_owner == claim.owner,
             ScheduledTaskExecution.lease_token == claim.lease_token,
+            ScheduledTaskExecution.lease_generation == claim.generation,
+            ScheduledTaskExecution.attempt_count == claim.attempt_no,
             ScheduledTaskExecution.lease_expires_at > now,
         )
         .first()
@@ -1202,6 +1226,8 @@ def _finish_execution(
             ScheduledTaskExecution.status == "running",
             ScheduledTaskExecution.lease_owner == claim.owner,
             ScheduledTaskExecution.lease_token == claim.lease_token,
+            ScheduledTaskExecution.lease_generation == claim.generation,
+            ScheduledTaskExecution.attempt_count == claim.attempt_no,
             ScheduledTaskExecution.lease_expires_at > now,
         )
         .update(values, synchronize_session=False)
@@ -1241,6 +1267,8 @@ def _park_execution_until(
             ScheduledTaskExecution.status == "running",
             ScheduledTaskExecution.lease_owner == claim.owner,
             ScheduledTaskExecution.lease_token == claim.lease_token,
+            ScheduledTaskExecution.lease_generation == claim.generation,
+            ScheduledTaskExecution.attempt_count == claim.attempt_no,
             ScheduledTaskExecution.lease_expires_at > now,
         )
         .update(
@@ -2312,6 +2340,53 @@ async def run_scheduled_task_workflow_worker(
                     else None
                 ),
             )
+        except asyncio.CancelledError as exc:
+            from core.durable_tasks import durable_cancel_status
+
+            durable_status = durable_cancel_status(exc)
+            if str(exc) not in {
+                "durable_task_cancelled",
+                "durable_task_timed_out",
+                "durable_task_lease_lost",
+            }:
+                raise
+            current = _utc_naive(now)
+            try:
+                execution = _require_claim(db, claim, now=current)
+                (
+                    db.query(ScheduledTaskStepAttempt)
+                    .filter(
+                        ScheduledTaskStepAttempt.execution_id
+                        == claim.execution_id,
+                        ScheduledTaskStepAttempt.status == "started",
+                    )
+                    .update(
+                        {
+                            ScheduledTaskStepAttempt.status: "blocked",
+                            ScheduledTaskStepAttempt.error_type:
+                                durable_status,
+                            ScheduledTaskStepAttempt.error_summary:
+                                "Agent Run 已取消或失去执行租约",
+                            ScheduledTaskStepAttempt.completed_at: current,
+                        },
+                        synchronize_session=False,
+                    )
+                )
+                _finish_execution(
+                    db,
+                    claim,
+                    status="blocked",
+                    state_json=str(execution.state_json or "{}"),
+                    current_step_id=str(
+                        execution.current_step_id or ""
+                    ),
+                    error_code=f"agent_run_{durable_status}",
+                    error_summary="Agent Run 已取消或失去执行租约",
+                    now=current,
+                )
+            except ScheduledWorkflowFencingError:
+                return "ambiguous"
+            return "blocked"
         except ScheduledWorkflowFencingError:
             return "ambiguous"
         except ScheduledWorkflowStateError as exc:

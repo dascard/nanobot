@@ -63,6 +63,8 @@ class RunClaimDecision:
     owner: str
     claim_token: str
     claim_expires_at: datetime | None
+    generation: int
+    attempt_no: int
     delivery_mode: str
     cutover_epoch: int
     source_snapshot_json: str

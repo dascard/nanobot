@@ -237,8 +237,11 @@ def _retry(
 _RETRY_REGISTRY = _PolicyRegistry(
     "job_retry_policy",
     (
+        _retry("agent_run.v1", 1, categories=frozenset()),
         _retry("group_memory_learning.v1", 5),
+        _retry("inbound_chat.v1", 1, categories=frozenset()),
         _retry("memory_digest.v1", 3),
+        _retry("outbound_generation.v1", 1, categories=frozenset()),
         _retry(
             "outbound_delivery.v1",
             1,
@@ -247,6 +250,7 @@ _RETRY_REGISTRY = _PolicyRegistry(
         _retry("sandbox_admin_operation.v1", 5),
         _retry("semantic_index.v1", 3),
         _retry("session_summary.v1", 3),
+        _retry("scheduled_workflow.v1", 1, categories=frozenset()),
     ),
 )
 

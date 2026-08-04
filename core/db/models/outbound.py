@@ -79,6 +79,18 @@ class OutboundRun(Base):
     claim_owner = Column(String(128), nullable=True)
     claim_token = Column(String(64), nullable=True)
     claim_expires_at = Column(DateTime, nullable=True)
+    claim_generation = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    attempt_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     attempted_at = Column(DateTime, nullable=True)
     generated_at = Column(DateTime, nullable=True)
     succeeded_at = Column(DateTime, nullable=True)

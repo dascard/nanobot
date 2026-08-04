@@ -63,7 +63,12 @@ class BridgeRequestScope:
                 exc_type is not None
                 and issubclass(exc_type, asyncio.CancelledError)
             ):
-                self.finish("cancelled", error=str(exc or "request cancelled"))
+                from core.durable_tasks import durable_cancel_status
+
+                self.finish(
+                    durable_cancel_status(exc or asyncio.CancelledError()),
+                    error=str(exc or "request cancelled"),
+                )
             else:
                 failure = cleanup_failure or exc
                 ambiguous = False

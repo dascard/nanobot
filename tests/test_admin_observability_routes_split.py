@@ -4,6 +4,7 @@ from __future__ import annotations
 _TRACE_ROUTE_SIGNATURES = (
     ("GET", "/api/v1/admin/agent-runs"),
     ("GET", "/api/v1/admin/agent-runs/{run_id}"),
+    ("POST", "/api/v1/admin/agent-runs/{run_id}/cancel"),
     ("GET", "/api/v1/admin/tool-calls"),
     ("GET", "/api/v1/admin/tool-calls/{tool_call_id}"),
     ("GET", "/api/v1/admin/llm-api-logs"),
@@ -30,6 +31,8 @@ _LOG_ROUTE_SIGNATURES = (
 
 
 _TRACE_ROUTE_EXPORTS = (
+    "RunTaskCancelRequest",
+    "cancel_agent_run_task",
     "list_agent_runs",
     "get_agent_run",
     "list_tool_calls",

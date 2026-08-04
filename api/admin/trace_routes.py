@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,10 @@ from core.run_ledger.read_model import (
 )
 
 router = APIRouter(tags=["admin-trace"])
+
+
+class RunTaskCancelRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=128)
 
 
 def _load_run_view(
@@ -286,8 +291,14 @@ def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(veri
         if run is not None and ledger_view is not None
         else None
     )
+    from core.durable_tasks import SqlAlchemyRunTaskService
+
+    task_view = SqlAlchemyRunTaskService(db).get(run_id)
     return {
         "run": _run_read_model(run, ledger_view),
+        "durable_task": (
+            task_view.to_dict() if task_view is not None else None
+        ),
         "ledger": {
             "available": ledger_view is not None,
             "authoritative": ledger_view is not None,
@@ -317,6 +328,35 @@ def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(veri
         "llm_api_request_logs": [row_to_dict(x) for x in llm_logs],
         "reply_contract_check_logs": [row_to_dict(x) for x in reply_contract_logs],
     }
+
+
+@router.post("/agent-runs/{run_id}/cancel")
+def cancel_agent_run_task(
+    run_id: str,
+    body: RunTaskCancelRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """幂等请求当前执行 owner 取消；不在重连或读取时启动新任务。"""
+
+    from core.durable_tasks import (
+        RunTaskConflict,
+        SqlAlchemyRunTaskService,
+    )
+
+    service = SqlAlchemyRunTaskService(db)
+    if service.get(run_id) is None:
+        raise HTTPException(404, "Run Durable Task 不存在")
+    try:
+        view = service.request_cancel(
+            run_id,
+            reason=body.reason,
+        )
+        db.commit()
+    except RunTaskConflict as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return view.to_dict()
 
 
 @router.get("/agent-runs/{run_id}/events")

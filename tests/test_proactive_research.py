@@ -117,8 +117,9 @@ class CancellationResistantBridge(FakeBridge):
         self.calls.append({"query": query, **kwargs})
         try:
             await asyncio.sleep(10)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
             self.events.append("cancel_suppressed")
+            self.events.append(f"cancel_reason:{exc}")
             await asyncio.sleep(0.2)
         return "超过总时限后才形成的迟到正文"
 
@@ -609,6 +610,7 @@ async def test_run_proactive_research_timeout_rejects_cancellation_resistant_lat
     await asyncio.sleep(0.25)
     assert bridge.events[:2] == ["start", "handle"]
     assert "cancel_suppressed" in bridge.events
+    assert "cancel_reason:durable_task_timed_out" in bridge.events
     assert "stop" in bridge.events
 
 

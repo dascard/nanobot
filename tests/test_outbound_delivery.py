@@ -520,6 +520,19 @@ def test_generation_takeover_is_monotonic_and_stale_owner_is_fenced(db_session):
     )
     assert second.acquired is True
     assert second.claim_token != first.claim_token
+    assert first.generation == 1
+    assert first.attempt_no == 1
+    assert second.generation == 2
+    assert second.attempt_no == 2
+    stale_renewal = renew_outbound_run_claim(
+        db_session,
+        run_id=first.run_id,
+        owner=first.owner,
+        claim_token=first.claim_token,
+        lease_seconds=60,
+        now=takeover_time,
+    )
+    assert stale_renewal.applied is False
     attempt_two = start_generation_attempt(
         db_session,
         run_id=second.run_id,

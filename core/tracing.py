@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from core.durable_tasks.contracts import RunTaskLease
 from foundation.llm.cache_usage import (
     CACHE_STATUS_MISS,
     CACHE_STATUS_PENDING,
@@ -56,6 +57,10 @@ MAX_SANDBOX_TRACE_COMMAND_BYTES = 16 * 1024
 class RunHandle:
     run_id: str
     trace_id: str
+    task_lease: RunTaskLease
+
+
+_RUN_TASK_LEASE_CACHE: dict[str, RunTaskLease] = {}
 
 
 def new_trace_id() -> str:
@@ -760,6 +765,32 @@ class RunTracer:
         trace_id = trace_id or new_trace_id()
         accepted_at = datetime.now().astimezone()
         normalized_meta = dict(meta or {})
+        from core.durable_tasks import (
+            DEFAULT_RUN_TASK_TIMEOUT_SECONDS,
+            SqlAlchemyRunTaskService,
+            classify_run_task,
+            default_run_task_owner,
+        )
+
+        task_kind, source_type, source_id = classify_run_task(
+            run_type=run_type,
+            meta=normalized_meta,
+        )
+        request_id = str(normalized_meta.get("message_id") or run_id)
+        idempotency_key = str(
+            normalized_meta.get("workflow_idempotency_key")
+            or request_id
+        )
+        try:
+            timeout_seconds = float(
+                normalized_meta.get("run_timeout_seconds")
+                or DEFAULT_RUN_TASK_TIMEOUT_SECONDS
+            )
+        except (TypeError, ValueError):
+            timeout_seconds = DEFAULT_RUN_TASK_TIMEOUT_SECONDS
+        if not 0 < timeout_seconds <= 86_400:
+            timeout_seconds = DEFAULT_RUN_TASK_TIMEOUT_SECONDS
+        lease_box: dict[str, RunTaskLease] = {}
         try:
             from core.database import AgentRun
             from core.run_ledger.adapters import (
@@ -829,6 +860,25 @@ class RunTracer:
                         meta_json=_json_dumps(normalized_meta, max_chars=3000),
                         started_at=to_db_naive(accepted_at),
                     ))
+                    receipt_digest = hashlib.sha256(
+                        idempotency_key.encode("utf-8")
+                    ).hexdigest()
+                    lease_box["lease"] = (
+                        SqlAlchemyRunTaskService(db).admit_running(
+                            run_id=run_id,
+                            task_kind=task_kind,
+                            source_type=source_type,
+                            source_id=source_id,
+                            request_id=request_id,
+                            idempotency_key=idempotency_key,
+                            owner=default_run_task_owner(),
+                            timeout_seconds=timeout_seconds,
+                            delivery_receipt_ref=(
+                                f"{source_type}://sha256/{receipt_digest}"
+                            ),
+                            now=accepted_at,
+                        )
+                    )
                     db.commit()
 
                 _run_db_write(db, operation, label="agent_run_start")
@@ -845,7 +895,15 @@ class RunTracer:
                 event_type="run.accepted",
                 code="run_admission_failed",
             ) from e
-        return RunHandle(run_id=run_id, trace_id=trace_id)
+        task_lease = lease_box.get("lease")
+        if task_lease is None:
+            raise RuntimeError("Run Durable Task 租约未创建")
+        _RUN_TASK_LEASE_CACHE[run_id] = task_lease
+        return RunHandle(
+            run_id=run_id,
+            trace_id=trace_id,
+            task_lease=task_lease,
+        )
 
     @staticmethod
     def update_prompt_source(
@@ -943,6 +1001,7 @@ class RunTracer:
     def finish_run(
         run_id: str,
         *,
+        task_lease: RunTaskLease | None = None,
         status: str = "success",
         output_preview: Any = "",
         error: str = "",
@@ -958,6 +1017,11 @@ class RunTracer:
             event_finished_at = event_finished_at.astimezone()
         try:
             from core.database import AgentRun
+            from core.durable_tasks import (
+                RunTaskLeaseLost,
+                SqlAlchemyRunTaskService,
+                run_status_to_task_status,
+            )
             from core.run_ledger.adapters import run_terminated_event
             from core.run_ledger.persistence import SqlAlchemyRunEventLedger
 
@@ -975,6 +1039,23 @@ class RunTracer:
                             run_id=run_id,
                             event_type="run.terminated",
                             code="run_not_admitted",
+                        )
+                    control_service = SqlAlchemyRunTaskService(db)
+                    control = control_service.get(run_id)
+                    effective_lease = (
+                        task_lease or _RUN_TASK_LEASE_CACHE.get(run_id)
+                    )
+                    if control is not None:
+                        if effective_lease is None:
+                            raise RunTaskLeaseLost(
+                                "Run 终结缺少 Durable Task fencing lease"
+                            )
+                        control_service.settle(
+                            effective_lease,
+                            status=run_status_to_task_status(status),
+                            terminal_reason=str(status or "")[:128],
+                            result_ref=f"run-ledger://{run_id}",
+                            now=event_finished_at,
                         )
                     terminal_event = run_terminated_event(
                         run_id=run_id,
@@ -1003,6 +1084,7 @@ class RunTracer:
                 _run_db_write(db, operation, label="agent_run_finish")
             finally:
                 db.close()
+            _RUN_TASK_LEASE_CACHE.pop(run_id, None)
         except Exception as e:
             from core.run_ledger.contracts import RunLedgerAuthorityError
 

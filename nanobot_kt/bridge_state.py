@@ -19,6 +19,42 @@ from nanobot_kt.reply_contract import RichTerminalOutput
 logger = logging.getLogger("nanobot.kt.bridge")
 
 
+def build_bridge_run_meta(
+    meta: dict[str, Any],
+    *,
+    sender_name: str,
+    is_group: bool,
+    prompt_engine: str,
+    platform: str,
+    chat_type: str,
+) -> dict[str, Any]:
+    """构造 Trace 与 Durable Task 共用的有界请求元数据。"""
+
+    return {
+        "sender_name": sender_name,
+        "is_group": is_group,
+        "message_id": meta.get("message_id", ""),
+        "prompt_engine": prompt_engine,
+        "platform": platform,
+        "chat_type": chat_type,
+        "source": meta.get("source", ""),
+        "runtime_preset": meta.get("runtime_preset", ""),
+        "task_run_id": meta.get("task_run_id", ""),
+        "workflow_idempotency_key": meta.get("workflow_idempotency_key", ""),
+        "run_timeout_seconds": meta.get("run_timeout_seconds", ""),
+    }
+
+
+async def bind_run_task_owner(request_scope: Any, task_lease: Any) -> None:
+    """启动 Agent Run heartbeat，并把停止动作绑定到请求清理。"""
+
+    from core.durable_tasks import RunTaskOwner
+
+    owner = RunTaskOwner(task_lease)
+    await owner.start()
+    request_scope.bind_async_cleanup(owner.stop)
+
+
 @dataclass(frozen=True)
 class PromptRuntimeAssemblyContext:
     prompt_engine: str
@@ -104,6 +140,7 @@ class BridgeTraceFinalizer:
     run_meta: dict[str, Any]
     started_at: float
     now: Any
+    task_lease: Any = None
     correlation_tokens: Any = None
     final_tools_token: Any = None
     tool_plan_token: Any = None
@@ -161,6 +198,7 @@ class BridgeTraceFinalizer:
 
             RunTracer.finish_run(
                 self.run_id,
+                task_lease=self.task_lease,
                 status=status,
                 output_preview=output_preview,
                 error=error,
@@ -233,4 +271,6 @@ __all__ = [
     "ModelLoopResult",
     "PromptRuntimeAssemblyContext",
     "ReplyResolution",
+    "bind_run_task_owner",
+    "build_bridge_run_meta",
 ]

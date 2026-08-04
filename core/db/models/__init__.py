@@ -12,6 +12,7 @@ from core.db.models.admin import (
     WebSearchProviderUsage,
 )
 from core.db.models.chat import ChatLog, ConversationTurn, SensitiveData, User
+from core.db.models.durable_task import RunTaskControl
 from core.db.models.evaluation import (
     EvalCandidate,
     EvalRun,
@@ -176,6 +177,7 @@ __all__ = [
     "RunCheckpointRow",
     "RunRecoveryOperation",
     "RunSideEffectReceipt",
+    "RunTaskControl",
     "SANDBOX_EXECUTION_PROFILES",
     "SANDBOX_LEASE_NONTERMINAL_STATUSES",
     "SANDBOX_LEASE_STATUSES",

@@ -24,10 +24,14 @@ def test_builtin_job_descriptors_cover_registered_execution_modes():
     }
 
     assert tuple(descriptors) == (
+        "agent_run",
         "group_memory_learning",
+        "inbound_chat",
         "memory_digest",
         "outbound_delivery",
+        "outbound_generation",
         "sandbox_admin_operation",
+        "scheduled_workflow",
         "semantic_index",
         "session_summary",
     )
@@ -39,6 +43,16 @@ def test_builtin_job_descriptors_cover_registered_execution_modes():
     )
     assert descriptors["outbound_delivery"].repository_mode is (
         JobRepositoryMode.PORT_ADAPTER
+    )
+    assert all(
+        descriptors[job_type].repository_mode
+        is JobRepositoryMode.PORT_ADAPTER
+        for job_type in (
+            "agent_run",
+            "inbound_chat",
+            "outbound_generation",
+            "scheduled_workflow",
+        )
     )
     assert all(descriptor.owner_module for descriptor in descriptors.values())
     assert all(descriptor.retry_policy_id for descriptor in descriptors.values())
@@ -697,13 +711,66 @@ def test_production_job_lease_adapters_cover_existing_state_machines():
         GroupLearningScheduleClaim,
     )
     from core.jobs import JobLease
-    from core.outbound.contracts import DeliveryClaimHandle
+    from core.durable_tasks import RunTaskLease
+    from core.inbound_idempotency import (
+        InboundClaimHandle,
+        InboundClaimKey,
+    )
+    from core.outbound.contracts import (
+        DeliveryClaimHandle,
+        RunClaimDecision,
+    )
     from core.sandbox.admin_operations import ClaimedSandboxOperation
+    from core.scheduled_workflow import ScheduledExecutionClaim
     from core.semantic.jobs import SemanticJobLease
 
     expires_at = datetime(2026, 7, 23, 13, 0, 0)
     registry = build_job_lease_adapter_registry()
     sources = {
+        "agent_run": RunTaskLease(
+            run_id="run-agent-1",
+            owner="agent-worker",
+            token="4" * 64,
+            generation=2,
+            attempt_no=3,
+            expires_at=expires_at,
+        ),
+        "inbound_chat": InboundClaimHandle(
+            key=InboundClaimKey(
+                platform="qq",
+                chat_type="private",
+                session_id="private_10001",
+                message_id="message-1",
+            ),
+            owner_token="5" * 64,
+            lease_expires_at=expires_at,
+            attempt_count=4,
+        ),
+        "scheduled_workflow": ScheduledExecutionClaim(
+            execution_id=16,
+            owner_chat_stream_id="qq:10001:private",
+            owner="scheduled-worker",
+            lease_token="6" * 64,
+            lease_expires_at=expires_at,
+            generation=5,
+            attempt_no=6,
+        ),
+        "outbound_generation": RunClaimDecision(
+            acquired=True,
+            run_id=17,
+            status="claimed",
+            owner="generation-worker",
+            claim_token="7" * 64,
+            claim_expires_at=expires_at,
+            generation=7,
+            attempt_no=8,
+            delivery_mode="outbox",
+            cutover_epoch=1,
+            source_snapshot_json="{}",
+            source_snapshot_sha256="8" * 64,
+            delivery_contract_json="{}",
+            delivery_contract_sha256="9" * 64,
+        ),
         "group_memory_learning": GroupLearningScheduleClaim(
             chat_stream_id="qq:42:group",
             aspects=(
@@ -785,11 +852,15 @@ def test_production_job_lease_adapters_cover_existing_state_machines():
         ),
     }
 
-    assert registry.job_types() == tuple(sources)
+    assert set(registry.job_types()) == set(sources)
     projected = {
         job_type: registry.require(job_type).project_lease(source)
         for job_type, source in sources.items()
     }
+    assert projected["agent_run"].generation == 2
+    assert projected["inbound_chat"].attempt_no == 4
+    assert projected["scheduled_workflow"].generation == 5
+    assert projected["outbound_generation"].attempt_no == 8
     assert projected["session_summary"].generation == 3
     assert projected["session_summary"].attempt_no == 4
     assert projected["memory_digest"].worker_id == "memory-worker"

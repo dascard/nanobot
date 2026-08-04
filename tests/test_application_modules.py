@@ -287,10 +287,14 @@ async def test_builtin_modules_start_and_stop_owned_resources():
     assert app.state.new_api_session is fake.session
     assert app.state.bridge is fake.bridge
     assert app.state.job_lease_adapters.job_types() == (
+        "agent_run",
         "group_memory_learning",
         "session_summary",
+        "inbound_chat",
         "memory_digest",
+        "scheduled_workflow",
         "semantic_index",
+        "outbound_generation",
         "sandbox_admin_operation",
         "outbound_delivery",
     )

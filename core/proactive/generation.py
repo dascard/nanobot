@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -889,15 +890,35 @@ async def _run_generated_outreach(
 
     from core.proactive_candidate import materialize_outreach_candidate
 
-    evaluation = await materialize_outreach_candidate(
-        user_id=user_id,
-        request_id=work.idempotency_key,
-        grounding=work.input_grounding,
-        judge=work.judge,
-        generator_fn=generator_fn,
-        research_fn=research_fn,
-        context_summary=_grounding_json_for_model(work.input_grounding),
-    )
+    try:
+        evaluation = await materialize_outreach_candidate(
+            user_id=user_id,
+            request_id=work.idempotency_key,
+            grounding=work.input_grounding,
+            judge=work.judge,
+            generator_fn=generator_fn,
+            research_fn=research_fn,
+            context_summary=_grounding_json_for_model(work.input_grounding),
+        )
+    except asyncio.CancelledError as exc:
+        durable_reason = {
+            "durable_task_cancelled": ("agent_run_cancelled", "研究 Run 已取消"),
+            "durable_task_timed_out": ("agent_run_timed_out", "研究 Run 已超时"),
+            "durable_task_lease_lost": (
+                "agent_run_ambiguous",
+                "研究 Run 执行租约已失效",
+            ),
+        }.get(str(exc))
+        if durable_reason is None:
+            raise
+        return _fail_generated_outreach(
+            session,
+            work=work,
+            user_id=user_id,
+            error_type=durable_reason[0],
+            error_summary=durable_reason[1],
+            evaluation_owner_token=evaluation_owner_token,
+        )
     status = str(evaluation.get("status") or "")
     research_payload = (
         dict(evaluation.get("research") or {})

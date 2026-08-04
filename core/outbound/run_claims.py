@@ -63,6 +63,8 @@ def _run_decision(
         owner=owner if acquired else "",
         claim_token=claim_token if acquired else "",
         claim_expires_at=row.claim_expires_at if acquired else None,
+        generation=int(row.claim_generation or 0),
+        attempt_no=int(row.attempt_count or 0),
         delivery_mode=str(row.delivery_mode),
         cutover_epoch=int(row.cutover_epoch),
         source_snapshot_json=str(row.source_snapshot_json),
@@ -360,6 +362,10 @@ def claim_outbound_run(
                         OutboundRun.claim_owner: normalized_owner,
                         OutboundRun.claim_token: claim_token,
                         OutboundRun.claim_expires_at: claim_expires_at,
+                        OutboundRun.claim_generation:
+                            OutboundRun.claim_generation + 1,
+                        OutboundRun.attempt_count:
+                            OutboundRun.attempt_count + 1,
                         OutboundRun.failure_type: "",
                         OutboundRun.failure_summary: "",
                         OutboundRun.writer_owner: normalized_writer_owner,
@@ -411,6 +417,8 @@ def claim_outbound_run(
             claim_owner=normalized_owner if status == "claimed" else None,
             claim_token=claim_token if status == "claimed" else None,
             claim_expires_at=claim_expires_at if status == "claimed" else None,
+            claim_generation=1 if status == "claimed" else 0,
+            attempt_count=1 if status == "claimed" else 0,
             attempted_at=None,
             generated_at=None,
             succeeded_at=None,

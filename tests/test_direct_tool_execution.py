@@ -55,16 +55,36 @@ async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
         ensure_executable=executable_names.append,
     )
     finish_runs = []
+    task_lease = object()
+
+    class FakeRunTaskOwner:
+        def __init__(self, lease):
+            assert lease is task_lease
+            self.lease = lease
+
+        async def start(self):
+            captured["task_owner_started"] = True
+
+        async def stop(self):
+            captured["task_owner_stopped"] = True
+
     monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
     monkeypatch.setattr("core.tool_plan.build_tool_plan", lambda **_kwargs: tool_plan)
     monkeypatch.setattr("core.tracing.new_trace_id", lambda: "trace-direct")
     monkeypatch.setattr(
         "core.tracing.RunTracer.start_run",
-        lambda **_kwargs: SimpleNamespace(run_id="run-direct"),
+        lambda **_kwargs: SimpleNamespace(
+            run_id="run-direct",
+            task_lease=task_lease,
+        ),
     )
     monkeypatch.setattr(
         "core.tracing.RunTracer.finish_run",
         lambda run_id, **kwargs: finish_runs.append((run_id, kwargs)),
+    )
+    monkeypatch.setattr(
+        "core.durable_tasks.RunTaskOwner",
+        FakeRunTaskOwner,
     )
     monkeypatch.setattr(
         "core.tracing_context.set_trace_context",
@@ -143,5 +163,8 @@ async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
     }
     assert finish_runs[0][0] == "run-direct"
     assert finish_runs[0][1]["status"] == "success"
+    assert finish_runs[0][1]["task_lease"] is task_lease
+    assert captured["task_owner_started"] is True
+    assert captured["task_owner_stopped"] is True
     assert captured["trace_reset"] == "trace-token"
     assert captured["correlation_reset"] == "correlation-token"

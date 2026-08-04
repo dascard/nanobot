@@ -654,11 +654,39 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 4.4 Durable Task 和租约恢复
 
-- [ ] 统一聊天长任务、定时任务、主动外呼、research 和后台 Agent Run。
-- [ ] 使用 lease、heartbeat、owner fencing、cancel、timeout 和 reconcile。
-- [ ] 同一 Run 只能有一个有效执行 owner。
-- [ ] 客户端重连只恢复视图，不重复启动任务。
-- [ ] 投递使用幂等 receipt。
+- [x] 统一聊天长任务、定时任务、主动外呼、research 和后台 Agent Run。
+- [x] 使用 lease、heartbeat、owner fencing、cancel、timeout 和 reconcile。
+- [x] 同一 Run 只能有一个有效执行 owner。
+- [x] 客户端重连只恢复视图，不重复启动任务。
+- [x] 投递使用幂等 receipt。
+
+实现与验证证据：
+
+- 新增框架无关的 `RunTaskControl`、`RunTaskLease`、`SqlAlchemyRunTaskService` 和公共 Job
+  Adapter，把聊天、定时执行、主动外呼、research、恢复以及后台 Agent Run 投影到同一执行
+  控制面。各领域原有任务状态机和幂等键仍是领域事实源，公共层不复制或合并它们。
+- `RunTracer.start_run()` 现在于同一短事务创建 Agent Run、Ledger 接纳事实与执行租约；
+  终态写入前必须同时匹配 owner、token、generation、attempt 和未过期 lease。`RunTaskOwner`
+  在独立 Session 中持续 heartbeat，在取消、超时、丢失租约或心跳异常时使用稳定 reason code
+  取消当前执行协程；无权旧 owner 不能续租或结算。
+- 生产定时 worker 在现有单一调度循环中执行过期 Run reconcile，不新增第二个调度器。
+  reconcile 使用 CAS 终结过期 owner，已存在 prepared／ambiguous 外部副作用回执时收敛为
+  `ambiguous`，不猜测重放。Recovery child Run 采用先 prepared、后唯一 claim 的路径，
+  Scheduled Workflow 和 Outbound Generation 的领域 claim 也补齐 generation／attempt fencing。
+- 管理端 `GET /agent-runs/{run_id}` 只读返回 Durable Task 投影，不执行 claim 或重启；
+  `POST /agent-runs/{run_id}/cancel` 只幂等记录取消请求，由现有 owner 心跳或 reconcile
+  完成收敛。因此刷新或重连只恢复视图，不会产生第二个执行 owner。
+- Durable Task 只保存可安全引用的 receipt ref；Outbound 实际投递仍由现有 Outbox／
+  Delivery Attempt 的幂等 receipt 保护。重复绑定同一 receipt 是幂等操作，改绑其他
+  receipt 会 fail closed；外部结果未知时不把已请求投递误报为 exactly-once 成功。
+- Durable Task 与相关 Runtime／Bridge／Scheduled／Outbound／Proactive／Recovery 联合定向回归
+  336 passed，Prompt Runtime 审计 414 passed；架构边界、OpenAPI 生成物、行为基线、
+  Release／Verification Golden、决策规则清单、Task SLO Manifest、Ruff、Python 编译和
+  `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 为 6534 passed、
+  12 skipped、0 failed。
+- 已逐项检查 canonical Prompt Runtime 默认／运行时模板、变量表和注册表。本阶段
+  没有改变 `enriched_query`、历史注入、conversation 排列、模型可见工具输出或模板变量
+  合同，因此无需修改 `prompts.v2.default/*` 与 `data/prompts_v2/` 运行时副本。
 
 #### 4.5 Artifact 生命周期
 

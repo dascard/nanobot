@@ -266,6 +266,8 @@ from api.admin.system_routes import router as system_router
 from api.admin.sandbox_routes import router as sandbox_router
 from api.admin.scheduled_task_routes import router as scheduled_task_router
 from api.admin.trace_routes import (
+    RunTaskCancelRequest as RunTaskCancelRequest,
+    cancel_agent_run_task as cancel_agent_run_task,
     get_agent_run as get_agent_run,
     get_llm_api_log as get_llm_api_log,
     get_tool_call as get_tool_call,

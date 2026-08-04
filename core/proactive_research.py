@@ -840,6 +840,7 @@ async def run_proactive_research(
                 "is_superuser": False,
                 "user_id": request.user_id,
                 "runtime_preset": "research",
+                "run_timeout_seconds": request.budget.timeout_seconds,
                 "dry_run": True,
             },
         )
@@ -855,7 +856,7 @@ async def run_proactive_research(
             timeout=timeout_seconds,
         )
         if lifecycle_task not in done:
-            lifecycle_task.cancel()
+            lifecycle_task.cancel("durable_task_timed_out")
             return _result(
                 request,
                 trace_id,

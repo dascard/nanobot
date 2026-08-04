@@ -84,10 +84,22 @@ def _make_request_scope_bridge(monkeypatch, *, prompt_error, finish_calls):
     async def fail_prompt_runtime(_prompt_input):
         raise prompt_error
 
+    task_lease = object()
+
+    async def bind_task_owner(_request_scope, lease):
+        assert lease is task_lease
+
     monkeypatch.setattr("core.tracing.new_trace_id", lambda: "trace-request")
     monkeypatch.setattr(
         "core.tracing.RunTracer.start_run",
-        lambda **_kwargs: SimpleNamespace(run_id="run-request"),
+        lambda **_kwargs: SimpleNamespace(
+            run_id="run-request",
+            task_lease=task_lease,
+        ),
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.bind_run_task_owner",
+        bind_task_owner,
     )
     monkeypatch.setattr(
         "core.tracing.RunTracer.finish_run",
@@ -483,9 +495,21 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
             )
 
     monkeypatch.setattr("core.tracing.new_trace_id", lambda: "trace-stream")
+    task_lease = object()
+
+    async def bind_task_owner(_request_scope, lease):
+        assert lease is task_lease
+
     monkeypatch.setattr(
         "core.tracing.RunTracer.start_run",
-        lambda **_kwargs: SimpleNamespace(run_id="run-stream"),
+        lambda **_kwargs: SimpleNamespace(
+            run_id="run-stream",
+            task_lease=task_lease,
+        ),
+    )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.bind_run_task_owner",
+        bind_task_owner,
     )
     finish_calls = []
     monkeypatch.setattr(

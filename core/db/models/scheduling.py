@@ -209,6 +209,18 @@ class ScheduledTaskExecution(Base):
     lease_owner = Column(String(128), nullable=True)
     lease_token = Column(String(64), nullable=True)
     lease_expires_at = Column(DateTime, nullable=True)
+    lease_generation = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    attempt_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     wake_at = Column(DateTime, nullable=True)
     agent_trace_id = Column(
         String(128),
@@ -257,6 +269,10 @@ class ScheduledTaskExecution(Base):
             "'pending','running','waiting','succeeded','failed',"
             "'blocked','ambiguous')",
             name="ck_scheduled_task_execution_status",
+        ),
+        CheckConstraint(
+            "lease_generation >= 0 AND attempt_count >= 0",
+            name="ck_scheduled_task_execution_fencing_counts",
         ),
         Index(
             "uq_scheduled_task_execution_occurrence",

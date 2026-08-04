@@ -97,6 +97,42 @@ def _descriptor(
 
 JOB_DESCRIPTOR_REGISTRY = JobDescriptorRegistry((
     _descriptor(
+        "agent_run",
+        owner="core.durable_tasks",
+        domain="agent_execution",
+        schedule="background.long.v1",
+        retry="agent_run.v1",
+        repository_mode=JobRepositoryMode.PORT_ADAPTER,
+        external_side_effects=True,
+    ),
+    _descriptor(
+        "inbound_chat",
+        owner="core.inbound_idempotency",
+        domain="chat",
+        schedule="background.long.v1",
+        retry="inbound_chat.v1",
+        repository_mode=JobRepositoryMode.PORT_ADAPTER,
+        external_side_effects=True,
+    ),
+    _descriptor(
+        "outbound_generation",
+        owner="core.outbound",
+        domain="proactive_research",
+        schedule="background.long.v1",
+        retry="outbound_generation.v1",
+        repository_mode=JobRepositoryMode.PORT_ADAPTER,
+        external_side_effects=True,
+    ),
+    _descriptor(
+        "scheduled_workflow",
+        owner="core.scheduled_workflow",
+        domain="scheduled_agent",
+        schedule="background.long.v1",
+        retry="scheduled_workflow.v1",
+        repository_mode=JobRepositoryMode.PORT_ADAPTER,
+        external_side_effects=True,
+    ),
+    _descriptor(
         "group_memory_learning",
         owner="app.group_learning",
         domain="group_memory_learning",

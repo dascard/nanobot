@@ -1710,6 +1710,16 @@ async def _scheduled_task_workflow_loop(
     while not stop_event.is_set():
         worked = False
         try:
+            from core.durable_tasks import reconcile_expired_run_tasks
+
+            run_task_db = SessionLocal()
+            try:
+                reconciled_run_tasks = reconcile_expired_run_tasks(
+                    run_task_db
+                )
+            finally:
+                run_task_db.close()
+            worked = reconciled_run_tasks > 0
             if legacy_recovery_due:
                 recovered = await recover_expired_scheduled_task_occurrences(
                     session_factory=SessionLocal,

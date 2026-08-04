@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timedelta
 
@@ -218,6 +219,58 @@ async def test_blocked_research_stays_pending_and_never_publishes(monkeypatch, d
     assert run.failure_type == "insufficient_sources"
     assert attempt.status == "failed"
     assert attempt.error_type == "insufficient_sources"
+    assert db_session.query(OutboundDeliveryOutbox).count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cancel_reason,error_type",
+    (
+        ("durable_task_cancelled", "agent_run_cancelled"),
+        ("durable_task_timed_out", "agent_run_timed_out"),
+        ("durable_task_lease_lost", "agent_run_ambiguous"),
+    ),
+)
+async def test_durable_research_cancellation_settles_parent_generation(
+    monkeypatch,
+    db_session,
+    cancel_reason,
+    error_type,
+):
+    from core import proactive_outreach
+
+    _seed_delivery_control(db_session)
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    monkeypatch.setattr(
+        proactive_outreach,
+        "build_outreach_grounding",
+        lambda *_args, **_kwargs: {
+            "user_id": "research-durable-cancel",
+            "recent_messages": [],
+        },
+    )
+
+    async def research_fn(_request):
+        raise asyncio.CancelledError(cancel_reason)
+
+    result = await proactive_outreach.run_outreach_once(
+        "research-durable-cancel",
+        db=db_session,
+        now=now,
+        max_silence_min=999999,
+        judge_fn=lambda *_args, **_kwargs: _research_judge(now),
+        research_fn=research_fn,
+    )
+
+    assert result["status"] == "generation_error"
+    assert result["error_type"] == error_type
+    run = db_session.get(OutboundRun, result["run_id"])
+    attempt = db_session.query(OutboundGenerationAttempt).one()
+    assert run is not None
+    assert run.status == "failed"
+    assert run.failure_type == error_type
+    assert attempt.status == "failed"
+    assert attempt.error_type == error_type
     assert db_session.query(OutboundDeliveryOutbox).count() == 0
 
 

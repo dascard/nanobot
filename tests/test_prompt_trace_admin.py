@@ -693,3 +693,72 @@ def test_admin_reads_independent_delivery_run_without_legacy_header(
         "run.accepted",
         "run.terminated",
     ]
+
+
+def test_agent_run_reconnect_is_read_only_and_cancel_is_idempotent(
+    client,
+    auth_header,
+    db_session,
+):
+    from core.database import RunTaskControl
+    from core.tracing import RunTracer
+
+    handle = RunTracer.start_run(
+        trace_id="trace-durable-reconnect",
+        session_id="private_durable",
+        user_id="durable-user",
+        run_type="chat",
+        input_preview="长任务",
+        meta={
+            "platform": "qq",
+            "chat_type": "private",
+            "message_id": "durable-message-1",
+        },
+    )
+    path = f"/api/v1/admin/agent-runs/{handle.run_id}"
+
+    first = client.get(path, headers=auth_header)
+    second = client.get(path, headers=auth_header)
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["durable_task"] == second.json()["durable_task"]
+    assert first.json()["durable_task"]["status"] == "running"
+    assert first.json()["durable_task"]["lease"]["generation"] == 1
+    assert "token" not in first.json()["durable_task"]["lease"]
+    db_session.expire_all()
+    task_row = db_session.get(RunTaskControl, handle.run_id)
+    assert task_row is not None
+    assert task_row.attempt_count == 1
+
+    first_cancel = client.post(
+        f"{path}/cancel",
+        json={"reason": "管理员取消"},
+        headers=auth_header,
+    )
+    repeated_cancel = client.post(
+        f"{path}/cancel",
+        json={"reason": "管理员取消"},
+        headers=auth_header,
+    )
+    conflict = client.post(
+        f"{path}/cancel",
+        json={"reason": "不同原因"},
+        headers=auth_header,
+    )
+    missing = client.post(
+        "/api/v1/admin/agent-runs/missing-run/cancel",
+        json={"reason": "管理员取消"},
+        headers=auth_header,
+    )
+    assert first_cancel.status_code == 200, first_cancel.text
+    assert repeated_cancel.status_code == 200, repeated_cancel.text
+    assert first_cancel.json() == repeated_cancel.json()
+    assert conflict.status_code == 409
+    assert missing.status_code == 404
+
+    RunTracer.finish_run(
+        handle.run_id,
+        task_lease=handle.task_lease,
+        status="cancelled",
+        error="管理员取消",
+    )

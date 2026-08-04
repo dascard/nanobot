@@ -28,6 +28,7 @@ from core.db.models import (
     RunCheckpointRow,
     RunRecoveryOperation,
     RunSideEffectReceipt,
+    RunTaskControl,
     RuntimeTelemetryEvent,
     ToolCall,
 )
@@ -84,6 +85,7 @@ _LEGACY_EVIDENCE_MODELS = (
     ("run_checkpoints", RunCheckpointRow),
     ("run_side_effect_receipts", RunSideEffectReceipt),
     ("run_recovery_operations", RunRecoveryOperation),
+    ("run_task_controls", RunTaskControl),
 )
 
 

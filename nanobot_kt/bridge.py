@@ -43,6 +43,8 @@ from nanobot_kt.bridge_state import (
     ModelLoopResult,
     PromptRuntimeAssemblyContext,
     ReplyResolution,
+    bind_run_task_owner,
+    build_bridge_run_meta,
 )
 from nanobot_kt.direct_tool_execution import (
     DirectToolExecutionResult,
@@ -1597,14 +1599,14 @@ class NanobotBridge(MessageContractBridgeMixin):
 
             trace_id = str(meta.get("trace_id") or new_trace_id())
             meta["trace_id"] = trace_id
-            run_meta = {
-                "sender_name": sender_name,
-                "is_group": is_group,
-                "message_id": meta.get("message_id", ""),
-                "prompt_engine": prompt_engine,
-                "platform": platform,
-                "chat_type": chat_type,
-            }
+            run_meta = build_bridge_run_meta(
+                meta,
+                sender_name=sender_name,
+                is_group=is_group,
+                prompt_engine=prompt_engine,
+                platform=platform,
+                chat_type=chat_type,
+            )
             run_handle = RunTracer.start_run(
                 trace_id=trace_id,
                 session_id=session_id,
@@ -1632,8 +1634,10 @@ class NanobotBridge(MessageContractBridgeMixin):
                 run_meta=run_meta,
                 started_at=t_start,
                 now=_time.time,
+                task_lease=run_handle.task_lease,
             )
             request_scope.bind_trace_finalizer(trace_finalizer)
+            await bind_run_task_owner(request_scope, run_handle.task_lease)
             from core.tool_execution_policy import (
                 ToolExecutionState,
                 set_current_tool_execution_state,

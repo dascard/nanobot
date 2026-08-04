@@ -360,9 +360,10 @@ def test_export_manifest_is_stable_verifiable_and_contains_no_raw_bodies(db_sess
         "prompt_render_logs": 1,
         "reply_contract_check_logs": 1,
         "run_checkpoints": 0,
-        "run_recovery_operations": 0,
-        "run_side_effect_receipts": 0,
-        "runtime_telemetry_events": 1,
+            "run_recovery_operations": 0,
+            "run_side_effect_receipts": 0,
+            "run_task_controls": 0,
+            "runtime_telemetry_events": 1,
         "tool_calls": 1,
     }
     assert all(

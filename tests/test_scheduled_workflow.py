@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta
 
@@ -22,9 +23,12 @@ from core.scheduled_task_contract import (
 )
 from core.scheduled_workflow import (
     ScheduledWorkflowStepOutcome,
+    ScheduledWorkflowFencingError,
     claim_scheduled_task_executions,
     enqueue_scheduled_task_execution,
     execute_claimed_scheduled_task,
+    renew_scheduled_task_execution_lease,
+    run_scheduled_task_workflow_worker,
 )
 from tests.async_helpers import run_async
 
@@ -1026,6 +1030,17 @@ def test_safe_retry_reuses_stable_step_idempotency_key_after_takeover(
         lease_seconds=60,
         now=takeover_at,
     )
+    assert first_claim.generation == 1
+    assert first_claim.attempt_no == 1
+    assert claims[0].generation == 2
+    assert claims[0].attempt_no == 2
+    with pytest.raises(ScheduledWorkflowFencingError):
+        renew_scheduled_task_execution_lease(
+            db_session,
+            first_claim,
+            lease_seconds=60,
+            now=takeover_at,
+        )
     recovered = _CrashCallbacks(crash=False)
     status = run_async(execute_claimed_scheduled_task(
         db_session,
@@ -1120,3 +1135,50 @@ def test_claims_serialize_same_owner_but_allow_different_owners(db_session):
         "qq:same-owner:private",
         "qq:other-owner:private",
     }
+
+
+@pytest.mark.asyncio
+async def test_worker_contains_durable_child_cancellation(db_session):
+    class CancelledModelCallbacks(_Callbacks):
+        async def execute_model(
+            self,
+            _context,
+            *,
+            prompt,
+            idempotency_key,
+        ):
+            self.model_calls.append((prompt, idempotency_key))
+            raise asyncio.CancelledError("durable_task_cancelled")
+
+    task = _seed_task(db_session, {
+        "version": 1,
+        "steps": [{"id": "model", "op": "model", "prompt": "执行长任务"}],
+    })
+    queued = enqueue_scheduled_task_execution(
+        db_session,
+        task_id=task.id,
+        trigger_type="manual",
+        manual_idempotency_key="durable-cancel",
+        now=NOW,
+    )
+    db_session.commit()
+
+    result = await run_scheduled_task_workflow_worker(
+        session_factory=_factory(db_session),
+        callbacks=CancelledModelCallbacks(),
+        owner="durable-cancel-worker",
+        max_concurrency=1,
+        lease_seconds=60,
+        now=NOW,
+    )
+
+    db_session.expire_all()
+    execution = db_session.get(ScheduledTaskExecution, queued.execution_id)
+    attempt = db_session.query(ScheduledTaskStepAttempt).one()
+    assert result.blocked == 1
+    assert result.ambiguous == 0
+    assert execution is not None
+    assert execution.status == "blocked"
+    assert execution.last_error_code == "agent_run_cancelled"
+    assert attempt.status == "blocked"
+    assert attempt.error_type == "cancelled"

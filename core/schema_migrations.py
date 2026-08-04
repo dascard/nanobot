@@ -101,6 +101,7 @@ _LLM_CACHE_DIAGNOSTICS_V2_VERSION = (
 _RUN_LEDGER_V1_VERSION = "20260804_run_event_ledger_v1"
 _RUN_EVIDENCE_GOVERNANCE_V1_VERSION = "20260804_run_evidence_governance_v1"
 _RUN_RECOVERY_V1_VERSION = "20260804_run_checkpoint_recovery_v1"
+_RUN_DURABLE_TASK_V1_VERSION = "20260804_run_durable_task_v1"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3672,6 +3673,34 @@ def _run_checkpoint_recovery_v1(
         ))
 
 
+def _run_durable_task_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建所有 Agent Run 共用的执行租约与只读任务投影。"""
+
+    from core.db.models.durable_task import RunTaskControl
+
+    _add_missing_columns(
+        conn,
+        "scheduled_task_executions",
+        {
+            "lease_generation": "INTEGER NOT NULL DEFAULT 0",
+            "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
+    _add_missing_columns(
+        conn,
+        "outbound_runs",
+        {
+            "claim_generation": "INTEGER NOT NULL DEFAULT 0",
+            "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
+    RunTaskControl.__table__.create(bind=conn, checkfirst=True)
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -4308,6 +4337,8 @@ def _scheduled_task_workflow_execution(
         "lease_owner VARCHAR(128), "
         "lease_token VARCHAR(64), "
         "lease_expires_at DATETIME, "
+        "lease_generation INTEGER NOT NULL DEFAULT 0, "
+        "attempt_count INTEGER NOT NULL DEFAULT 0, "
         "wake_at DATETIME, "
         "agent_trace_id VARCHAR(128) NOT NULL DEFAULT '', "
         "agent_run_id VARCHAR(128) NOT NULL DEFAULT '', "
@@ -4634,6 +4665,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _RUN_RECOVERY_V1_VERSION,
         "run checkpoint recovery lineage and side effect receipts",
         _run_checkpoint_recovery_v1,
+    ),
+    (
+        _RUN_DURABLE_TASK_V1_VERSION,
+        "run durable task lease heartbeat fencing and reconciliation",
+        _run_durable_task_v1,
     ),
 ]
 

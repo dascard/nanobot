@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from hmac import compare_digest
 from typing import Any, Protocol
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from core.agent_runtime import (
     AgentRuntimeAmbiguousError,
@@ -40,6 +40,16 @@ from core.db.models import (
     RunRecoveryOperation,
     RunSideEffectReceipt,
     WorkspaceAsset,
+)
+from core.durable_tasks import (
+    RunTaskKind,
+    RunTaskLease,
+    RunTaskLeaseLost,
+    RunTaskOwner,
+    RunTaskStatus,
+    SqlAlchemyRunTaskService,
+    default_run_task_owner,
+    durable_cancel_status,
 )
 from core.run_ledger import (
     RunLedgerEventDraft,
@@ -163,12 +173,18 @@ class SqlAlchemyRunRecoveryService:
         *,
         file_verifier: RunRecoveryFileVerifier | None = None,
         now: Callable[[], datetime] | None = None,
+        session_factory: Callable[[], Session] | None = None,
     ) -> None:
         if not isinstance(db, Session):
             raise TypeError("db 必须是 SQLAlchemy Session")
         self._db = db
         self._file_verifier = file_verifier
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self._session_factory = session_factory or sessionmaker(
+            bind=db.get_bind(),
+            autocommit=False,
+            autoflush=False,
+        )
 
     @staticmethod
     def _authorize(
@@ -987,6 +1003,15 @@ class SqlAlchemyRunRecoveryService:
             started_at=_utc_naive(now),
             finished_at=None,
         ))
+        SqlAlchemyRunTaskService(self._db).admit_prepared(
+            run_id=child_identity.run_id,
+            task_kind=RunTaskKind.RECOVERY,
+            source_type="recovery_operation",
+            source_id=operation_id,
+            request_id=request_id,
+            idempotency_key=operation_id,
+            now=now,
+        )
         try:
             self._db.commit()
         except Exception:
@@ -1044,7 +1069,12 @@ class SqlAlchemyRunRecoveryService:
         self,
         operation: RunRecoveryOperation,
         identity: RuntimeRunIdentity,
-    ) -> None:
+    ) -> RunTaskLease:
+        lease = SqlAlchemyRunTaskService(self._db).claim_prepared(
+            identity.run_id,
+            owner=default_run_task_owner(),
+            now=self._now(),
+        )
         ledger = SqlAlchemyRunEventLedger(self._db)
         accepted = ledger.read(identity.run_id, limit=1)[0].event
         ledger.append(run_status_changed_event(
@@ -1059,12 +1089,14 @@ class SqlAlchemyRunRecoveryService:
             raise RunRecoveryIntegrityError("恢复子 Run 兼容投影不存在")
         legacy.status = "running"
         self._db.commit()
+        return lease
 
     def _mark_terminal(
         self,
         operation_id: str,
         identity: RuntimeRunIdentity,
         *,
+        lease: RunTaskLease,
         status: str,
         result: AgentTurnResult | None,
         error: BaseException | None,
@@ -1077,6 +1109,20 @@ class SqlAlchemyRunRecoveryService:
         error_value = str(error or "")
         route_row = self._db.get(AgentRun, identity.run_id)
         model = str(route_row.model if route_row is not None else "")
+        task_status = RunTaskStatus(status)
+        try:
+            SqlAlchemyRunTaskService(self._db).settle(
+                lease,
+                status=task_status,
+                terminal_reason=status,
+                result_ref=f"run-ledger://{identity.run_id}",
+                now=now,
+            )
+        except RunTaskLeaseLost:
+            current = SqlAlchemyRunTaskService(self._db).get(identity.run_id)
+            if current is None or not current.status.terminal:
+                raise
+            return
         SqlAlchemyRunEventLedger(self._db).append(run_terminated_event(
             run_id=identity.run_id,
             trace_id=identity.correlation_id,
@@ -1126,7 +1172,15 @@ class SqlAlchemyRunRecoveryService:
             or _plan_map(request.context.plans) != _plan_map(state.plans)
         ):
             raise RunRecoveryConflict("恢复继续请求与冻结 Checkpoint 不一致")
-        self._mark_running(operation, request.context.execution_identity())
+        lease = self._mark_running(
+            operation,
+            request.context.execution_identity(),
+        )
+        run_task_owner = RunTaskOwner(
+            lease,
+            session_factory=self._session_factory,
+        )
+        await run_task_owner.start()
         result: AgentTurnResult | None = None
         failure: BaseException | None = None
         status = "succeeded"
@@ -1134,7 +1188,7 @@ class SqlAlchemyRunRecoveryService:
             result = await runtime.run_event(request, handler)
             return result
         except asyncio.CancelledError as exc:
-            status = "cancelled"
+            status = durable_cancel_status(exc)
             failure = exc
             raise
         except TimeoutError as exc:
@@ -1150,9 +1204,11 @@ class SqlAlchemyRunRecoveryService:
             failure = exc
             raise
         finally:
+            await run_task_owner.stop()
             self._mark_terminal(
                 operation_id,
                 request.context.execution_identity(),
+                lease=run_task_owner.lease,
                 status=status,
                 result=result,
                 error=failure,

@@ -7181,6 +7181,21 @@
         "title": "RouteModelOverridesBody",
         "type": "object"
       },
+      "RunTaskCancelRequest": {
+        "properties": {
+          "reason": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "RunTaskCancelRequest",
+        "type": "object"
+      },
       "RuntimeModuleContributionResponse": {
         "properties": {
           "contribution_id": {
@@ -9108,6 +9123,81 @@
           }
         },
         "summary": "Get Agent Run",
+        "tags": [
+          "admin-trace"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/agent-runs/{run_id}/cancel": {
+      "post": {
+        "description": "幂等请求当前执行 owner 取消；不在重连或读取时启动新任务。",
+        "operationId": "post_api_v1_admin_agent_runs_run_id_cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunTaskCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Cancel Agent Run Task",
         "tags": [
           "admin-trace"
         ],
