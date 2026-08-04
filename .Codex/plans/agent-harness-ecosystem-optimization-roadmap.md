@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 6.3 已完成，准备阶段 6.4）
+> 状态：执行中（阶段 6.4 已完成，准备阶段 6.5）
 >
 > 建立日期：2026-08-03
 >
@@ -943,10 +943,34 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 6.4 Hook / Plugin 生命周期
 
-- [ ] 支持 pre/post model、pre/post tool、event、interrupt 和 completion Hook。
-- [ ] 声明顺序、超时、失败策略、可读字段和可修改字段。
-- [ ] Hook 默认不能绕过 ToolPlan、Permission、Prompt Runtime 和 Event Ledger。
-- [ ] 插件异常必须形成可诊断事件。
+- [x] 支持 pre/post model、pre/post tool、event、interrupt 和 completion Hook。
+- [x] 声明顺序、超时、失败策略、可读字段和可修改字段。
+- [x] Hook 默认不能绕过 ToolPlan、Permission、Prompt Runtime 和 Event Ledger。
+- [x] 插件异常必须形成可诊断事件。
+
+实施记录（2026-08-04）：
+
+- 新增显式组合、启动期冻结的异步 Plugin Manager，覆盖 pre/post model、pre/post tool、event、interrupt
+  和 completion 七个切点。Plugin 与 Hook 均声明稳定 ID、SemVer、顺序、生命周期／调用超时、必需性、
+  fail-open／fail-closed 策略及可读／可修改字段；加载按声明顺序、卸载按逆序执行。同名覆盖、目录扫描、
+  动态导入和隐式第三方加载均不存在，可修改 Hook 只接受显式标记的受信内建实现。
+- Native Runtime 的模型、工具、输入／输出事件、完成和中断链路直接执行受管 Hook；KT Runtime 只通过
+  KT 1.4 公开 `BasePlugin` 与 `PluginManager.get_plugin()/register()` 接入模型和工具切点，并把 KT 会隔离的
+  post Hook fail-closed 异常保存到请求上下文后重新抛出。显式启动和接管已运行 KT Agent 都会启动同一个
+  Plugin Manager；Bridge 的实际 Native／KT 组合根均注入请求 Runtime 对应的 Manager，不存在 shadow 分流。
+- Hook 输入是深度只读投影，身份、ToolPlan、Permission、Prompt Runtime 和 Event Ledger 只保存在宿主侧。
+  Event 输入不暴露身份、计划或用户正文，输出事件不暴露 identity、正文、工具参数／结果，completion 不暴露
+  raw result 或消息正文。Event Ledger 始终先提交再调用不可改写的 Event Hook；Event／Interrupt 强制 fail open。
+- Pre Tool 只能改写 arguments，工具名不可改；每次补丁都按本轮冻结 ToolPlan 和 Draft 2020-12 JSON Schema
+  复验，非法补丁按声明策略丢弃或阻断。Post Tool 只能在副作用结算完成后改写模型可见 output，不能改变
+  receipt、状态或错误事实；模型切点保持观察模式，不能改写 Prompt Runtime 产物。
+- Plugin 的加载、卸载、超时、执行、返回类型、未声明字段和宿主合同失败均归一为类型化错误，并通过新增的
+  `agent.plugin_hook.failed` Runtime Event 写入权威 Ledger；诊断只保留稳定错误类型和分类，不记录异常正文、
+  参数值或秘密。Agent Manifest 同步声明新切点、超时、失败策略和字段边界。
+- Hook 生命周期、Native／KT 真实链路、接管已运行 Agent、冻结 Schema、Ledger 顺序、只读／脱敏投影和诊断
+  事件专项回归通过；最终完整 `python -m pytest tests/ -v` 为 6637 passed、12 skipped、0 failed。架构边界、
+  OpenAPI、行为 Golden、Release／Verification Golden、决策规则、Task SLO、Ruff 致命规则、Python 编译、
+  canonical／runtime Prompt 模板一致性和 `git diff --check` 均通过。
 
 #### 6.5 ACP、A2A 和 Headless 互操作试验
 

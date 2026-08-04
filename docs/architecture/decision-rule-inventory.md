@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`060a944fdf1393d8989bb5d536508aa72fe04b0e`
-- 规则总数：8088
+- 源提交：`dd8f9f412c06a4ddf2b1e0ad0be0afbc7f70bcd6`
+- 规则总数：8097
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1506 |
+| `configurable_policy` | 1511 |
 | `data_consistency` | 476 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4318 |
-| `security_invariant` | 1614 |
+| `protocol_syntax` | 4321 |
+| `security_invariant` | 1615 |
 
 ## 文件汇总
 
@@ -64,10 +64,10 @@
 | `core/persona_preprocess.py` | 41 |
 | `sandboxd/network_policy.py` | 41 |
 | `core/context_engine.py` | 40 |
-| `nanobot_kt/bridge.py` | 40 |
 | `api/admin/chat_config_routes.py` | 39 |
 | `app/session_memory/llm_summarizer.py` | 39 |
 | `core/memory_cleanup.py` | 39 |
+| `nanobot_kt/bridge.py` | 39 |
 | `creatures/nanobot/prompts/skills/news_search/evidence.py` | 38 |
 | `scripts/assign-sandbox-project-quota.sh` | 38 |
 | `app/session_memory/admin_browser.py` | 37 |
@@ -281,6 +281,7 @@
 | `core/mcp/config_service.py` | 9 |
 | `core/outbound/replay.py` | 9 |
 | `core/prompt_v2/contribution_registry.py` | 9 |
+| `core/runtime/plugin_lifecycle.py` | 9 |
 | `core/semantic/reranker.py` | 9 |
 | `core/skills/discovery.py` | 9 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/normalize_v2.py` | 9 |
@@ -416,6 +417,7 @@
 | `app/group_memory/query_service.py` | 4 |
 | `app/prompt_runtime/preview_service.py` | 4 |
 | `clients/mcp.py` | 4 |
+| `core/agent_manifest/values.py` | 4 |
 | `core/agent_runtime/recovery.py` | 4 |
 | `core/json_utils.py` | 4 |
 | `core/model_provider/response_normalization.py` | 4 |
@@ -460,7 +462,6 @@
 | `app/tool_services/knowledge_query.py` | 3 |
 | `bootstrap/prompt_runtime.py` | 3 |
 | `core/agent_manifest/compiler.py` | 3 |
-| `core/agent_manifest/values.py` | 3 |
 | `core/build_info.py` | 3 |
 | `core/db/group_memory_adapter.py` | 3 |
 | `core/durable_tasks/owner.py` | 3 |
@@ -2514,13 +2515,13 @@
 | `decision.bd7f7e2691a0a9215955` | `creatures/nanobot/prompts/skills/news_search/search_backend.py:346` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 6 | `reviewed` |
 |  | 摘要：request.freshness == "week" |  |  |  |  |  |
 |  | 原因：人工复核：搜索后端仅按 NewsRequest 的显式 freshness 和执行模式分支 |  |  |  |  |  |
-| `decision.78f31fa69b408682a975` | `nanobot_kt/bridge.py:119` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.78f31fa69b408682a975` | `nanobot_kt/bridge.py:120` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：direct_markers = ( "群聊总结", "群总结", "群日报", "分析群", "总结群", "分析这个群", "总结这个群", ) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.280f1c6b1ad6514eccc2` | `nanobot_kt/bridge.py:1132` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.280f1c6b1ad6514eccc2` | `nanobot_kt/bridge.py:1117` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：'[系统内部错误]' in response |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.beeb1c3552646a5db389` | `nanobot_kt/bridge.py:1133` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.beeb1c3552646a5db389` | `nanobot_kt/bridge.py:1118` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：'[工具错误]' in response |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.8475c5c4d0fc9bdcd380` | `nanobot_kt/codex_admin_adapter.py:14` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |

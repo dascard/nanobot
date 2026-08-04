@@ -258,6 +258,7 @@ def _runtime(
     handlers: Mapping[str, Any] | None = None,
     config: NativeAgentRuntimeConfig | None = None,
     artifact_publisher: Any = None,
+    plugin_manager: Any = None,
 ) -> NativeAgentRuntime:
     bindings = dict(handlers or {})
     tool_port = RegisteredToolExecutionPort(bindings)
@@ -270,6 +271,7 @@ def _runtime(
         tool_binding_resolver=lambda name: f"tool.{name}.execute",
         tool_result_artifact_publisher=artifact_publisher,
         available_tool_names=tuple(sorted(plan.executable_tool_names)) if plan else (),
+        plugin_manager=plugin_manager,
     )
 
 
@@ -287,7 +289,205 @@ class _ToolResultArtifactPublisher:
             media_type=str(kwargs["media_type"]),
             size_bytes=len(payload),
             source_run_id="run-native-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_executes_managed_hooks_in_live_model_tool_event_path():
+    from core.runtime.extensions import RuntimeFailurePolicy
+    from core.runtime.plugin_lifecycle import (
+        RuntimeHookPatch,
+        RuntimeHookPoint,
+        RuntimePluginBinding,
+        RuntimePluginDescriptor,
+        RuntimePluginHookDescriptor,
+        RuntimePluginManager,
+    )
+
+    trace: list[str] = []
+    diagnostics: list[object] = []
+    hook_projections: list[tuple[str, object]] = []
+
+    class ManagedPlugin:
+        async def on_load(self, context):
+            trace.append(f"load:{context['runtime_id']}")
+
+        async def on_unload(self):
+            trace.append("unload")
+
+        async def invoke(self, invocation):
+            direction = str(invocation.fields.get("direction", ""))
+            trace.append(
+                f"hook:{invocation.point.value}:{direction or invocation.hook_id}"
+            )
+            if invocation.point is RuntimeHookPoint.EVENT:
+                hook_projections.append((direction, invocation.fields["event"]))
+            if invocation.point is RuntimeHookPoint.COMPLETION:
+                hook_projections.append(("completion", invocation.fields["result"]))
+            if invocation.point is RuntimeHookPoint.PRE_TOOL:
+                return RuntimeHookPatch({"arguments": {"value": 2}})
+            if invocation.point is RuntimeHookPoint.POST_TOOL:
+                return RuntimeHookPatch({"output": "Hook 已封装"})
+            return None
+
+    def hook(
+        hook_id: str,
+        point: RuntimeHookPoint,
+        fields: tuple[str, ...],
+        *,
+        mutable: tuple[str, ...] = (),
+        order: int = 0,
+    ) -> RuntimePluginHookDescriptor:
+        return RuntimePluginHookDescriptor(
+            hook_id=hook_id,
+            point=point,
+            order=order,
+            timeout_seconds=1,
+            failure_policy=RuntimeFailurePolicy.FAIL_OPEN,
+            readable_fields=fields,
+            mutable_fields=mutable,
+            trusted_builtin=bool(mutable),
         )
+
+    manager = RuntimePluginManager(
+        "native:test",
+        (
+            RuntimePluginBinding(
+                RuntimePluginDescriptor(
+                    plugin_id="builtin.integration",
+                    version="1.0.0",
+                    order=0,
+                    required=True,
+                    lifecycle_timeout_seconds=1,
+                    hooks=(
+                        hook(
+                            "pre.model",
+                            RuntimeHookPoint.PRE_MODEL,
+                            ("model", "model_step"),
+                        ),
+                        hook(
+                            "post.model",
+                            RuntimeHookPoint.POST_MODEL,
+                            ("response", "tool_calls"),
+                        ),
+                        hook(
+                            "pre.tool",
+                            RuntimeHookPoint.PRE_TOOL,
+                            ("tool_name", "arguments"),
+                            mutable=("arguments",),
+                        ),
+                        hook(
+                            "post.tool",
+                            RuntimeHookPoint.POST_TOOL,
+                            ("tool_name", "output"),
+                            mutable=("output",),
+                        ),
+                        hook(
+                            "event",
+                            RuntimeHookPoint.EVENT,
+                            ("direction", "event"),
+                        ),
+                        hook(
+                            "complete",
+                            RuntimeHookPoint.COMPLETION,
+                            ("result", "tool_call_count"),
+                        ),
+                    ),
+                ),
+                ManagedPlugin(),
+            ),
+        ),
+        diagnostic_emitter=diagnostics.append,
+    )
+    plan = ToolPlan.from_effective_tools(
+        enabled={"echo": True},
+        chat_type="private",
+        tool_schemas=[{
+            "type": "function",
+            "function": {
+                "name": "echo",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "integer"}},
+                    "required": ["value"],
+                    "additionalProperties": False,
+                },
+            },
+        }],
+    )
+    completion = _ScriptedCompletionPort(
+        responses=(
+            _tool_call_response("echo", {"value": 1}),
+            _assistant_response("完成"),
+        )
+    )
+    seen_arguments: list[dict[str, object]] = []
+
+    async def execute_echo(request: RuntimeToolExecutionRequest):
+        seen_arguments.append(dict(request.arguments))
+        return _completed_tool_result(request, "原始结果")
+
+    runtime = _runtime(
+        completion,
+        plan=plan,
+        handlers={"tool.echo.execute": execute_echo},
+        plugin_manager=manager,
+    )
+    await runtime.start()
+
+    async def ledger_handler(event):
+        trace.append(f"ledger:{event.kind.value}")
+
+    result = await runtime.run_event(
+        AgentTurnRequest(_context(plan), "执行 echo"),
+        ledger_handler,
+    )
+    await runtime.stop()
+
+    assert seen_arguments == [{"value": 2}]
+    assert result.tool_calls[0].result == "Hook 已封装"
+    assert diagnostics == []
+    assert "hook:pre_model:pre.model" in trace
+    assert "hook:post_model:post.model" in trace
+    assert "hook:pre_tool:pre.tool" in trace
+    assert "hook:post_tool:post.tool" in trace
+    assert "hook:event:input" in trace
+    assert "hook:completion:complete" in trace
+    first_ledger = trace.index("ledger:status")
+    first_output_hook = trace.index("hook:event:output")
+    assert first_ledger < first_output_hook
+    input_projection = next(
+        projection
+        for direction, projection in hook_projections
+        if direction == "input"
+    )
+    assert set(input_projection) == {
+        "attribute_keys",
+        "content_type",
+        "kind",
+        "stream",
+    }
+    assert "context" not in input_projection
+    output_projection = next(
+        projection
+        for direction, projection in hook_projections
+        if direction == "output"
+    )
+    assert "identity" not in output_projection
+    assert "text_delta" not in output_projection
+    completion_projection = next(
+        projection
+        for direction, projection in hook_projections
+        if direction == "completion"
+    )
+    assert set(completion_projection) == {
+        "message_roles",
+        "raw_result_type",
+        "tool_calls",
+    }
+    assert "messages" not in completion_projection
+    assert "raw_result" not in completion_projection
+    assert trace[-1] == "unload"
 
 
 @pytest.mark.asyncio

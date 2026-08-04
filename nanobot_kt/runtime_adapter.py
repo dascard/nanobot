@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import AsyncIterator, Callable, Iterable
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import replace
 from typing import Protocol
 
@@ -43,6 +43,20 @@ from core.agent_runtime.event_stream import (
     relay_runtime_run_events,
 )
 from core.agent_runtime.lifecycle import RuntimeLifecycleMachine
+from core.agent_runtime.plugin_hooks import (
+    dispatch_runtime_completion,
+    dispatch_runtime_input_event,
+    dispatch_runtime_interrupt_nowait,
+    ledger_first_runtime_event_handler,
+)
+from core.runtime.plugin_lifecycle import (
+    RuntimeHookPoint,
+    RuntimePluginContractError,
+    RuntimePluginExecutionError,
+    RuntimePluginManager,
+    RuntimePluginState,
+    build_runtime_plugin_manager,
+)
 
 
 _OUTPUT_SIGNAL_END = object()
@@ -170,6 +184,7 @@ class KtRuntimeAdapter:
         event_sinks: tuple[RuntimeLifecycleEventSink, ...] = (),
         initially_started: bool | None = None,
         output_sink: object | None = None,
+        plugin_manager: RuntimePluginManager | None = None,
     ) -> None:
         self._agent = agent
         self._output_sink = output_sink
@@ -193,6 +208,19 @@ class KtRuntimeAdapter:
             event_sinks=event_sinks,
         )
         self._route_applier = route_applier or _default_route_applier
+        if plugin_manager is not None and not isinstance(
+            plugin_manager,
+            RuntimePluginManager,
+        ):
+            raise TypeError("plugin_manager 必须是 RuntimePluginManager")
+        self._plugin_manager = plugin_manager or build_runtime_plugin_manager(
+            runtime_id
+        )
+        if self._plugin_manager.runtime_id != runtime_id:
+            raise ValueError("Plugin Manager runtime_id 与 KT Runtime 不一致")
+        self._plugin_start_lock = asyncio.Lock()
+        self._managed_kt_plugin: object | None = None
+        self._active_request: AgentTurnRequest | None = None
 
     @property
     def runtime_id(self) -> str:
@@ -205,6 +233,43 @@ class KtRuntimeAdapter:
     @property
     def lifecycle_events(self) -> tuple[RuntimeLifecycleEvent, ...]:
         return self._lifecycle.events
+
+    def _install_managed_kt_plugin(self) -> None:
+        if self._managed_kt_plugin is not None:
+            return
+        if not any(
+            self._plugin_manager.has_hooks(point)
+            for point in (
+                RuntimeHookPoint.PRE_MODEL,
+                RuntimeHookPoint.POST_MODEL,
+                RuntimeHookPoint.PRE_TOOL,
+                RuntimeHookPoint.POST_TOOL,
+            )
+        ):
+            return
+        from nanobot_kt.plugin_runtime import (
+            ManagedKtRuntimePlugin,
+            install_managed_runtime_plugin,
+        )
+
+        managed_plugin = ManagedKtRuntimePlugin(
+            self._plugin_manager,
+            lambda: self._active_request,
+        )
+        install_managed_runtime_plugin(self._agent, managed_plugin)
+        self._managed_kt_plugin = managed_plugin
+
+    async def _ensure_plugin_runtime_started(self) -> None:
+        async with self._plugin_start_lock:
+            self._install_managed_kt_plugin()
+            state = self._plugin_manager.state
+            if state is RuntimePluginState.NEW:
+                await self._plugin_manager.start()
+                return
+            if state is not RuntimePluginState.RUNNING:
+                raise RuntimePluginContractError(
+                    f"KT Plugin Manager 状态不可执行：{state.value}"
+                )
 
     @property
     def runtime_capabilities(self) -> RuntimeCapabilities:
@@ -221,10 +286,13 @@ class KtRuntimeAdapter:
         self._lifecycle.ensure(RuntimeLifecycleState.NEW)
         self._lifecycle.transition(RuntimeLifecycleState.STARTING)
         try:
+            await self._ensure_plugin_runtime_started()
             self._install_executor_tracing()
             await _await_call(self._agent, "start", runtime_id=self.runtime_id)
             self._disable_framework_compaction()
         except Exception as exc:
+            with suppress(Exception):
+                await self._plugin_manager.stop()
             self._lifecycle.fail(type(exc).__name__)
             raise AgentRuntimeAdapterError(
                 "KT Agent 启动失败",
@@ -339,6 +407,7 @@ class KtRuntimeAdapter:
         if self.state is RuntimeLifecycleState.STOPPED:
             return
         if self.state is RuntimeLifecycleState.NEW:
+            await self._plugin_manager.stop()
             self._lifecycle.transition(RuntimeLifecycleState.STOPPED)
             return
         self._lifecycle.ensure(
@@ -346,14 +415,22 @@ class KtRuntimeAdapter:
             RuntimeLifecycleState.FAILED,
         )
         self._lifecycle.transition(RuntimeLifecycleState.STOPPING)
+        first_error: BaseException | None = None
         try:
             await _await_call(self._agent, "stop", runtime_id=self.runtime_id)
-        except Exception as exc:
-            self._lifecycle.fail(type(exc).__name__)
+        except BaseException as exc:
+            first_error = exc
+        try:
+            await self._plugin_manager.stop()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+        if first_error is not None:
+            self._lifecycle.fail(type(first_error).__name__)
             raise AgentRuntimeAdapterError(
                 "KT Agent 停止失败",
                 runtime_id=self.runtime_id,
-            ) from exc
+            ) from first_error
         self._lifecycle.transition(RuntimeLifecycleState.STOPPED)
 
     def _conversation(self) -> object:
@@ -385,6 +462,7 @@ class KtRuntimeAdapter:
 
     async def run(self, request: AgentTurnRequest) -> AgentTurnResult:
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
+        await self._ensure_plugin_runtime_started()
         from core.agent_runtime.request_scope import runtime_context_scope
         from kohakuterrarium.core.events import create_user_input_event
 
@@ -399,8 +477,17 @@ class KtRuntimeAdapter:
             event = TriggerEvent(type="user_input", content=request.content)
         else:
             event = create_user_input_event(request.content, **event_context)
+        managed_plugin = self._managed_kt_plugin
+        begin_turn = getattr(managed_plugin, "begin_turn", None)
+        end_turn = getattr(managed_plugin, "end_turn", None)
+        turn_tokens = begin_turn() if callable(begin_turn) else None
+        self._active_request = request
         try:
             with runtime_context_scope(runtime_context):
+                await dispatch_runtime_input_event(
+                    self._plugin_manager,
+                    request,
+                )
                 inject_event = _required_callable(
                     self._agent,
                     "inject_event",
@@ -409,20 +496,47 @@ class KtRuntimeAdapter:
                 raw_result = inject_event(event)
                 if inspect.isawaitable(raw_result):
                     raw_result = await raw_result
+                raise_deferred = getattr(
+                    managed_plugin,
+                    "raise_deferred_failure",
+                    None,
+                )
+                if callable(raise_deferred):
+                    raise_deferred()
+                result = AgentTurnResult(
+                    raw_result=raw_result,
+                    messages=self.read_conversation(),
+                    tool_calls=self.inspect_tool_calls(),
+                )
+                await dispatch_runtime_completion(
+                    self._plugin_manager,
+                    request,
+                    result,
+                )
+                return result
         except asyncio.CancelledError:
             raise
         except TimeoutError:
             raise
+        except RuntimePluginExecutionError:
+            raise
         except Exception as exc:
+            from core.run_ledger.contracts import (
+                find_run_ledger_authority_error,
+            )
+
+            authority_failure = find_run_ledger_authority_error(exc)
+            if authority_failure is not None:
+                raise authority_failure
             raise AgentRuntimeExecutionError(
                 "KT Agent 单轮执行失败",
                 runtime_id=self.runtime_id,
             ) from exc
-        return AgentTurnResult(
-            raw_result=raw_result,
-            messages=self.read_conversation(),
-            tool_calls=self.inspect_tool_calls(),
-        )
+        finally:
+            if turn_tokens is not None and callable(end_turn):
+                end_turn(turn_tokens)
+            if self._active_request is request:
+                self._active_request = None
 
     def run_stream(
         self,
@@ -438,9 +552,16 @@ class KtRuntimeAdapter:
         request: AgentTurnRequest,
         handler: RuntimeRunEventHandler,
     ) -> AgentTurnResult:
+        self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
+        await self._ensure_plugin_runtime_started()
+        managed_handler = ledger_first_runtime_event_handler(
+            self._plugin_manager,
+            request,
+            handler,
+        )
         emitter = RuntimeRunEventEmitter(
             request.context.execution_identity(),
-            handler,
+            managed_handler,
         )
         await emitter.status_changed(RuntimeRunStatus.ACCEPTED)
         await emitter.status_changed(RuntimeRunStatus.RUNNING)
@@ -699,7 +820,6 @@ class KtRuntimeAdapter:
         return tuple(sorted(names))
 
     def interrupt(self, *, reason: str = "") -> bool:
-        del reason  # 原因由调用侧事件记录，不能注入 KT 控制流。
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
         interrupt = _required_callable(
             self._agent,
@@ -707,6 +827,12 @@ class KtRuntimeAdapter:
             runtime_id=self.runtime_id,
         )
         interrupt()
+        # 原因只进入受管只读 Hook，不注入 KT 控制流。
+        dispatch_runtime_interrupt_nowait(
+            self._plugin_manager,
+            reason=reason,
+            request=self._active_request,
+        )
         return True
 
 
@@ -718,6 +844,7 @@ def build_kt_runtime(
     event_sinks: tuple[RuntimeLifecycleEventSink, ...] = (),
     initially_started: bool | None = None,
     output_sink: object | None = None,
+    plugin_manager: RuntimePluginManager | None = None,
 ) -> AgentRuntimePort:
     """显式 composition factory；不读取或写入模块级单例。"""
 
@@ -733,6 +860,7 @@ def build_kt_runtime(
         event_sinks=event_sinks,
         initially_started=initially_started,
         output_sink=output_sink,
+        plugin_manager=plugin_manager,
     )
 
 

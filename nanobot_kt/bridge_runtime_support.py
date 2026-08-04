@@ -26,6 +26,10 @@ from core.agent_runtime import (
     RuntimePrincipal,
     runtime_model_route_sha256,
 )
+from core.runtime.plugin_lifecycle import (
+    RuntimePluginManager,
+    build_runtime_plugin_manager,
+)
 
 
 logger = logging.getLogger("nanobot.kt.bridge")
@@ -139,10 +143,54 @@ def build_child_bridge(
     return bridge_type(creature_path, runtime_kind=runtime_kind)
 
 
+def build_bridge_agent_runtime(
+    bridge: Any,
+    *,
+    initially_started: bool,
+) -> AgentRuntimePort:
+    """在兼容 Bridge 外组合 Native／KT 与受管 Plugin Manager。"""
+
+    from core.runtime.event_bus import emit_agent_lifecycle_event
+
+    manager_factory = (
+        getattr(bridge, "_runtime_plugin_manager_factory", None)
+        or build_runtime_plugin_manager
+    )
+    runtime_kind = getattr(bridge, "runtime_kind", AgentRuntimeKind.KT)
+    if runtime_kind is AgentRuntimeKind.NATIVE:
+        runtime_id = f"native:{bridge._runtime_name}"
+        runtime, completion_port = build_native_bridge_runtime(
+            name=bridge._runtime_name,
+            completion_port=bridge._native_completion_port,
+            plugin_manager=manager_factory(runtime_id),
+        )
+        bridge._native_completion_port = completion_port
+        return runtime
+
+    agent = getattr(bridge, "_agent", None)
+    if agent is None:
+        raise RuntimeError("KT Agent 尚未创建")
+    config = getattr(agent, "config", None)
+    name = str(getattr(config, "name", "") or "agent")
+    runtime_id = f"kt:{name}"
+    from nanobot_kt.runtime_adapter import build_kt_runtime
+
+    return build_kt_runtime(
+        agent,
+        runtime_id=runtime_id,
+        route_applier=bridge._apply_runtime_model_route,
+        event_sinks=(emit_agent_lifecycle_event,),
+        initially_started=initially_started,
+        output_sink=bridge._output,
+        plugin_manager=manager_factory(runtime_id),
+    )
+
+
 def build_native_bridge_runtime(
     *,
     name: str,
     completion_port: ReplyRouteChatCompletionAdapter | None = None,
+    plugin_manager: RuntimePluginManager | None = None,
 ) -> tuple[AgentRuntimePort, ReplyRouteChatCompletionAdapter]:
     """组合 Native 主循环与框架无关的注册工具执行 Port。"""
 
@@ -181,6 +229,7 @@ def build_native_bridge_runtime(
         tool_result_artifact_publisher=(
             SqlAlchemyToolResultArtifactPublisher()
         ),
+        plugin_manager=plugin_manager,
     )
     return runtime, resolved_completion
 

@@ -58,6 +58,13 @@ from core.agent_runtime.event_stream import (
     relay_runtime_run_events,
 )
 from core.agent_runtime.lifecycle import RuntimeLifecycleMachine
+from core.agent_runtime.plugin_hooks import (
+    dispatch_runtime_completion,
+    dispatch_runtime_input_event,
+    dispatch_runtime_interrupt_nowait,
+    ledger_first_runtime_event_handler,
+    runtime_hook_invariants,
+)
 from core.context_compaction import (
     ContextCompactionDecision,
     ContextCompactionError,
@@ -69,6 +76,12 @@ from core.context_compaction import (
 from core.model_provider.chat_runtime import (
     ChatCompletionPort,
     ChatCompletionRequest,
+)
+from core.runtime.plugin_lifecycle import (
+    RuntimeHookPoint,
+    RuntimePluginManager,
+    build_runtime_plugin_manager,
+    thaw_runtime_hook_value,
 )
 
 
@@ -85,6 +98,12 @@ class NativeToolPlan(Protocol):
     def executable_tool_names(self) -> frozenset[str]: ...
 
     def ensure_executable(self, tool_name: str) -> None: ...
+
+    def validate_arguments(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, object],
+    ) -> None: ...
 
 
 NativeToolPlanResolver = Callable[[], NativeToolPlan | None]
@@ -671,6 +690,7 @@ class NativeAgentRuntime:
         tool_result_artifact_publisher: ToolResultArtifactPublisher | None = None,
         available_tool_names: tuple[str, ...] | None = None,
         event_sinks: tuple[RuntimeLifecycleEventSink, ...] = (),
+        plugin_manager: RuntimePluginManager | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         if not isinstance(completion_port, ChatCompletionPort):
@@ -722,6 +742,17 @@ class NativeAgentRuntime:
         self._tool_guards: list[object] = []
         self._run_lock = asyncio.Lock()
         self._active_task: asyncio.Task[Any] | None = None
+        if plugin_manager is not None and not isinstance(
+            plugin_manager,
+            RuntimePluginManager,
+        ):
+            raise TypeError("plugin_manager 必须是 RuntimePluginManager")
+        self._plugin_manager = plugin_manager or build_runtime_plugin_manager(
+            runtime_id
+        )
+        if self._plugin_manager.runtime_id != runtime_id:
+            raise ValueError("Plugin Manager runtime_id 与 Native Runtime 不一致")
+        self._active_request: AgentTurnRequest | None = None
 
     @property
     def runtime_id(self) -> str:
@@ -748,12 +779,18 @@ class NativeAgentRuntime:
     async def start(self) -> None:
         self._lifecycle.ensure(RuntimeLifecycleState.NEW)
         self._lifecycle.transition(RuntimeLifecycleState.STARTING)
+        try:
+            await self._plugin_manager.start()
+        except BaseException as exc:
+            self._lifecycle.fail(type(exc).__name__)
+            raise
         self._lifecycle.transition(RuntimeLifecycleState.RUNNING)
 
     async def stop(self) -> None:
         if self.state is RuntimeLifecycleState.STOPPED:
             return
         if self.state is RuntimeLifecycleState.NEW:
+            await self._plugin_manager.stop()
             self._lifecycle.transition(RuntimeLifecycleState.STOPPED)
             return
         self._lifecycle.ensure(
@@ -767,6 +804,11 @@ class NativeAgentRuntime:
             if task is not asyncio.current_task():
                 with suppress(asyncio.CancelledError):
                     await task
+        try:
+            await self._plugin_manager.stop()
+        except BaseException as exc:
+            self._lifecycle.fail(type(exc).__name__)
+            raise
         self._lifecycle.transition(RuntimeLifecycleState.STOPPED)
 
     def _resolve_tool_plan(self, request: AgentTurnRequest) -> NativeToolPlan | None:
@@ -995,18 +1037,52 @@ class NativeAgentRuntime:
             request,
             plan,
         )
+        hook_invariants = runtime_hook_invariants(
+            self.runtime_id,
+            request,
+            tool_plan_sha256=(str(plan.sha256) if plan is not None else ""),
+        )
+        if self._plugin_manager.has_hooks(RuntimeHookPoint.PRE_MODEL):
+            await self._plugin_manager.dispatch(
+                RuntimeHookPoint.PRE_MODEL,
+                {
+                    "messages": completion_request.messages,
+                    "model": completion_request.manual_model,
+                    "model_step": model_step,
+                    "runtime_id": self.runtime_id,
+                    "stream": request.stream,
+                    "tools": completion_request.tools or (),
+                },
+                protected_invariants=hook_invariants,
+            )
         if context_decision is not None and on_context_decision is not None:
             await on_context_decision(context_decision)
         if request.stream:
-            return await self._complete_streaming(
+            completion = await self._complete_streaming(
                 completion_request,
                 model_step=model_step,
                 on_text_delta=on_text_delta,
             )
-        return await self._complete_non_streaming(
-            completion_request,
-            model_step=model_step,
-        )
+        else:
+            completion = await self._complete_non_streaming(
+                completion_request,
+                model_step=model_step,
+            )
+        if self._plugin_manager.has_hooks(RuntimeHookPoint.POST_MODEL):
+            await self._plugin_manager.dispatch(
+                RuntimeHookPoint.POST_MODEL,
+                {
+                    "model": completion_request.manual_model,
+                    "model_step": model_step,
+                    "response": completion.content,
+                    "runtime_id": self.runtime_id,
+                    "stream": request.stream,
+                    "tool_calls": completion.tool_calls,
+                    "usage": completion.usage,
+                },
+                protected_invariants=hook_invariants,
+            )
+        return completion
 
     async def _save_checkpoint(
         self,
@@ -1118,6 +1194,7 @@ class NativeAgentRuntime:
         self,
         request: AgentTurnRequest,
         call: RuntimeToolCall,
+        plan: NativeToolPlan,
         *,
         model_step: int,
         tool_round: int,
@@ -1145,6 +1222,48 @@ class NativeAgentRuntime:
                         runtime_id=self.runtime_id,
                     )
                 arguments = dict(guarded)
+        if self._plugin_manager.has_hooks(RuntimeHookPoint.PRE_TOOL):
+            def validate_hook_fields(
+                candidate: Mapping[str, object],
+            ) -> None:
+                raw_arguments = thaw_runtime_hook_value(
+                    candidate["arguments"]
+                )
+                if not isinstance(raw_arguments, Mapping):
+                    raise TypeError("Pre Tool Hook 返回了无效参数合同")
+                plan.validate_arguments(call.name, raw_arguments)
+
+            hook_result = await self._plugin_manager.dispatch(
+                RuntimeHookPoint.PRE_TOOL,
+                {
+                    "arguments": arguments,
+                    "model_step": model_step,
+                    "runtime_id": self.runtime_id,
+                    "tool_call_id": call.call_id,
+                    "tool_name": call.name,
+                    "tool_round": tool_round,
+                },
+                protected_invariants=runtime_hook_invariants(
+                    self.runtime_id,
+                    request,
+                    tool_plan_sha256=str(plan.sha256),
+                ),
+                validate_fields=validate_hook_fields,
+            )
+            hook_arguments = hook_result.fields["arguments"]
+            if not isinstance(hook_arguments, Mapping):
+                raise AgentRuntimeCapabilityError(
+                    "Pre Tool Hook 返回了无效参数合同",
+                    runtime_id=self.runtime_id,
+                )
+            arguments = dict(thaw_runtime_hook_value(hook_arguments))
+            try:
+                plan.validate_arguments(call.name, arguments)
+            except Exception as exc:
+                raise AgentRuntimeCapabilityError(
+                    f"Pre Tool Hook 参数未通过冻结 Schema：{call.name}",
+                    runtime_id=self.runtime_id,
+                ) from exc
         if arguments != call.arguments:
             call = RuntimeToolCall(
                 call_id=call.call_id,
@@ -1396,6 +1515,37 @@ class NativeAgentRuntime:
                 error_code=(result.error.code if result.error is not None else ""),
             )
             receipt_id = side_effect_guard.receipt_id
+        if self._plugin_manager.has_hooks(RuntimeHookPoint.POST_TOOL):
+            hook_result = await self._plugin_manager.dispatch(
+                RuntimeHookPoint.POST_TOOL,
+                {
+                    "arguments": result.tool_call.arguments,
+                    "error_code": (
+                        result.error.code if result.error is not None else ""
+                    ),
+                    "output": result.output,
+                    "runtime_id": self.runtime_id,
+                    "status": result.tool_call.status.value,
+                    "tool_call_id": result.tool_call.call_id,
+                    "tool_name": result.tool_call.name,
+                },
+                protected_invariants=runtime_hook_invariants(
+                    self.runtime_id,
+                    request,
+                    tool_plan_sha256=str(plan.sha256),
+                ),
+            )
+            transformed_output = thaw_runtime_hook_value(
+                hook_result.fields["output"]
+            )
+            if transformed_output != result.output:
+                result = replace(
+                    result,
+                    tool_call=replace(
+                        result.tool_call,
+                        result=transformed_output,
+                    ),
+                )
         return _NativeToolOutcome(
             result=result,
             receipt_id=receipt_id,
@@ -1547,6 +1697,7 @@ class NativeAgentRuntime:
                     tool_outcome = await self._execute_tool(
                         request,
                         call,
+                        plan,
                         model_step=model_step,
                         tool_round=tool_rounds,
                         receipt_ids=receipt_ids,
@@ -1681,20 +1832,32 @@ class NativeAgentRuntime:
             self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
             task = asyncio.current_task()
             self._active_task = task
+            self._active_request = request
             try:
                 timeout = self._request_timeout(request)
                 with runtime_context_scope(_runtime_context_payload(request)):
                     async with asyncio.timeout(timeout):
-                        return await self._run_loop(
+                        await dispatch_runtime_input_event(
+                            self._plugin_manager,
+                            request,
+                        )
+                        outcome = await self._run_loop(
                             request,
                             on_text_delta=on_text_delta,
                             on_tool_activity=on_tool_activity,
                             on_artifact=on_artifact,
                             on_context_decision=on_context_decision,
                         )
+                        await dispatch_runtime_completion(
+                            self._plugin_manager,
+                            request,
+                            outcome.result,
+                        )
+                        return outcome
             finally:
                 if self._active_task is task:
                     self._active_task = None
+                    self._active_request = None
 
     async def run(self, request: AgentTurnRequest) -> AgentTurnResult:
         return (await self._execute(request)).result
@@ -1713,9 +1876,14 @@ class NativeAgentRuntime:
         request: AgentTurnRequest,
         handler: RuntimeRunEventHandler,
     ) -> AgentTurnResult:
+        managed_handler = ledger_first_runtime_event_handler(
+            self._plugin_manager,
+            request,
+            handler,
+        )
         emitter = RuntimeRunEventEmitter(
             request.context.execution_identity(),
-            handler,
+            managed_handler,
         )
         await emitter.status_changed(RuntimeRunStatus.ACCEPTED)
         await emitter.status_changed(RuntimeRunStatus.RUNNING)
@@ -1846,12 +2014,16 @@ class NativeAgentRuntime:
         return self._available_tool_names
 
     def interrupt(self, *, reason: str = "") -> bool:
-        del reason
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
         task = self._active_task
         if task is None or task.done():
             return False
         task.cancel()
+        dispatch_runtime_interrupt_nowait(
+            self._plugin_manager,
+            reason=reason,
+            request=self._active_request,
+        )
         return True
 
 

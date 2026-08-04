@@ -16,6 +16,9 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+
 from core.runtime_tool_service import (
     build_sandbox_tool_schema_guidance,
     resolve_effective_tools,
@@ -176,6 +179,51 @@ class ToolPlan:
         if not name or name not in self.executable_tool_names:
             raise ToolPlanExecutionError(
                 f"Tool '{name}' is disabled for this request: {self.disabled_reason(name)}"
+            )
+
+    def validate_arguments(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, object],
+    ) -> None:
+        """按本轮冻结 Schema 复验 Hook 或模型产生的工具参数。"""
+
+        name = str(tool_name or "").strip()
+        self.ensure_executable(name)
+        if not isinstance(arguments, Mapping):
+            raise ToolPlanExecutionError(
+                f"Tool '{name}' arguments must be an object"
+            )
+        schema = next(
+            (
+                item.get("function", {}).get("parameters")
+                for item in self._sent_tool_schemas
+                if _tool_name(item) == name
+            ),
+            None,
+        )
+        if not isinstance(schema, Mapping):
+            raise ToolPlanExecutionError(
+                f"Tool '{name}' has no frozen argument schema"
+            )
+        try:
+            frozen_schema = dict(schema)
+            Draft202012Validator.check_schema(frozen_schema)
+            validator = Draft202012Validator(frozen_schema)
+        except SchemaError as exc:
+            raise ToolPlanExecutionError(
+                f"Tool '{name}' frozen argument schema is invalid"
+            ) from exc
+        errors = sorted(
+            validator.iter_errors(dict(arguments)),
+            key=lambda error: tuple(str(item) for item in error.absolute_path),
+        )
+        if errors:
+            first = errors[0]
+            path = ".".join(str(item) for item in first.absolute_path) or "<root>"
+            raise ToolPlanExecutionError(
+                f"Tool '{name}' arguments violate frozen schema at {path}: "
+                f"{first.validator}"
             )
 
     @classmethod

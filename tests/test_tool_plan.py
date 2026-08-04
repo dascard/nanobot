@@ -93,6 +93,34 @@ def test_tool_plan_normalizes_wire_schema_and_returns_defensive_copies():
     assert second[0]["function"]["parameters"]["properties"]["content"]["type"] == "string"
 
 
+def test_tool_plan_revalidates_arguments_against_frozen_schema_without_values():
+    from core.tool_plan import ToolPlan, ToolPlanExecutionError
+
+    plan = ToolPlan.from_effective_tools(
+        enabled={"reply": True},
+        chat_type="private",
+        tool_schemas=[{
+            "type": "function",
+            "function": {
+                "name": "reply",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"content": {"type": "string"}},
+                    "required": ["content"],
+                    "additionalProperties": False,
+                },
+            },
+        }],
+    )
+
+    plan.validate_arguments("reply", {"content": "合法"})
+    with pytest.raises(ToolPlanExecutionError) as raised:
+        plan.validate_arguments("reply", {"content": 42, "secret": "不得泄漏"})
+
+    assert "不得泄漏" not in str(raised.value)
+    assert "frozen schema" in str(raised.value)
+
+
 @pytest.mark.parametrize(
     "schema",
     [

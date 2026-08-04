@@ -902,6 +902,181 @@ def test_kt_runtime_adapter_wraps_turn_conversation_route_and_interrupt():
     assert runtime.state is RuntimeLifecycleState.STOPPED
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_started", (False, True))
+async def test_kt_runtime_adapter_uses_managed_hooks_on_public_plugin_path(
+    already_started: bool,
+):
+    from core.runtime.extensions import RuntimeFailurePolicy
+    from core.runtime.plugin_lifecycle import (
+        RuntimeHookPatch,
+        RuntimeHookPoint,
+        RuntimePluginBinding,
+        RuntimePluginDescriptor,
+        RuntimePluginHookDescriptor,
+        RuntimePluginManager,
+    )
+    from nanobot_kt.runtime_adapter import build_kt_runtime
+
+    trace: list[str] = []
+
+    class Plugin:
+        async def on_load(self, context):
+            trace.append(f"load:{context['runtime_id']}")
+
+        async def on_unload(self):
+            trace.append("unload")
+
+        async def invoke(self, invocation):
+            direction = str(invocation.fields.get("direction", ""))
+            trace.append(
+                f"hook:{invocation.point.value}:{direction or invocation.hook_id}"
+            )
+            if invocation.point is RuntimeHookPoint.PRE_TOOL:
+                return RuntimeHookPatch({"arguments": {"value": 2}})
+            if invocation.point is RuntimeHookPoint.POST_TOOL:
+                return RuntimeHookPatch({"output": "KT Hook 已封装"})
+            return None
+
+    def hook(
+        hook_id: str,
+        point: RuntimeHookPoint,
+        fields: tuple[str, ...],
+        *,
+        mutable: tuple[str, ...] = (),
+    ) -> RuntimePluginHookDescriptor:
+        return RuntimePluginHookDescriptor(
+            hook_id=hook_id,
+            point=point,
+            order=0,
+            timeout_seconds=1,
+            failure_policy=RuntimeFailurePolicy.FAIL_OPEN,
+            readable_fields=fields,
+            mutable_fields=mutable,
+            trusted_builtin=bool(mutable),
+        )
+
+    manager = RuntimePluginManager(
+        "kt:test-creature",
+        (
+            RuntimePluginBinding(
+                RuntimePluginDescriptor(
+                    plugin_id="builtin.kt-integration",
+                    version="1.0.0",
+                    order=0,
+                    required=True,
+                    lifecycle_timeout_seconds=1,
+                    hooks=(
+                        hook(
+                            "pre.model",
+                            RuntimeHookPoint.PRE_MODEL,
+                            ("model", "messages"),
+                        ),
+                        hook(
+                            "post.model",
+                            RuntimeHookPoint.POST_MODEL,
+                            ("model", "response"),
+                        ),
+                        hook(
+                            "pre.tool",
+                            RuntimeHookPoint.PRE_TOOL,
+                            ("tool_name", "arguments"),
+                            mutable=("arguments",),
+                        ),
+                        hook(
+                            "post.tool",
+                            RuntimeHookPoint.POST_TOOL,
+                            ("tool_name", "output"),
+                            mutable=("output",),
+                        ),
+                        hook(
+                            "event",
+                            RuntimeHookPoint.EVENT,
+                            ("direction", "event"),
+                        ),
+                        hook(
+                            "interrupt",
+                            RuntimeHookPoint.INTERRUPT,
+                            ("reason",),
+                        ),
+                        hook(
+                            "complete",
+                            RuntimeHookPoint.COMPLETION,
+                            ("result", "message_count"),
+                        ),
+                    ),
+                ),
+                Plugin(),
+            ),
+        ),
+        diagnostic_emitter=lambda diagnostic: None,
+    )
+    agent = _KtAgent()
+    agent._running = already_started
+    transformed: dict[str, object] = {}
+
+    async def inject_event(event: object) -> str:
+        managed = agent.plugins.get_plugin("nanobot_managed_runtime_plugins")
+        assert managed is not None
+        messages = [{"role": "user", "content": getattr(event, "content", "")}]
+        await managed.pre_llm_call(messages, model="kt-model", tools=[])
+        args = await managed.pre_tool_execute(
+            {"value": 1},
+            tool_name="echo",
+            job_id="call-kt-1",
+        )
+        transformed["arguments"] = args
+        transformed["output"] = await managed.post_tool_execute(
+            "原始结果",
+            tool_name="echo",
+            job_id="call-kt-1",
+            args=args,
+        )
+        await managed.post_llm_call(
+            messages,
+            "KT 完成",
+            {},
+            model="kt-model",
+        )
+        agent.controller.conversation.append(
+            "user",
+            getattr(event, "content", ""),
+        )
+        agent.controller.conversation.append("assistant", "KT 完成")
+        return "raw-managed"
+
+    agent.inject_event = inject_event
+    runtime = build_kt_runtime(agent, plugin_manager=manager)
+    if not already_started:
+        await runtime.start()
+
+    async def ledger_handler(event):
+        trace.append(f"ledger:{event.kind.value}")
+
+    result = await runtime.run_event(
+        AgentTurnRequest(_request_context(), "执行 KT Hook"),
+        ledger_handler,
+    )
+    runtime.interrupt(reason="用户取消")
+    await manager.drain_background_tasks()
+    await runtime.stop()
+
+    assert result.raw_result == "raw-managed"
+    assert transformed == {
+        "arguments": {"value": 2},
+        "output": "KT Hook 已封装",
+    }
+    assert "hook:pre_model:pre.model" in trace
+    assert "hook:post_model:post.model" in trace
+    assert "hook:pre_tool:pre.tool" in trace
+    assert "hook:post_tool:post.tool" in trace
+    assert "hook:event:input" in trace
+    assert "hook:completion:complete" in trace
+    assert "hook:interrupt:interrupt" in trace
+    assert trace.index("ledger:status") < trace.index("hook:event:output")
+    assert trace[-1] == "unload"
+
+
 def test_kt_runtime_adapter_run_stream_forwards_real_output_and_usage():
     from nanobot_kt.output import BufferedOutput
     from nanobot_kt.runtime_adapter import build_kt_runtime

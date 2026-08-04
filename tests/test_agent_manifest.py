@@ -397,6 +397,43 @@ def test_manifest_rejects_duplicate_bindings_and_wrong_extension_kind() -> None:
         )
 
 
+def test_manifest_hook_declares_timeout_failure_and_field_boundaries():
+    from core.agent_manifest import AgentHookEvent, AgentHookRef
+    from core.runtime.extensions import RuntimeFailurePolicy
+
+    hook = AgentHookRef(
+        provider_id="builtin",
+        hook_id="tool-envelope",
+        event=AgentHookEvent.PRE_TOOL,
+        version="1.0.0",
+        order=10,
+        timeout_seconds=0.5,
+        failure_policy=RuntimeFailurePolicy.FAIL_CLOSED,
+        readable_fields=("tool_name", "arguments"),
+        mutable_fields=("arguments",),
+        trusted_builtin=True,
+    )
+
+    assert hook.timeout_seconds == 0.5
+    assert hook.readable_fields == ("arguments", "tool_name")
+    assert hook.mutable_fields == ("arguments",)
+    with pytest.raises(ValueError, match="同时声明为可读"):
+        replace(
+            hook,
+            readable_fields=("tool_name",),
+            mutable_fields=("arguments",),
+        )
+    with pytest.raises(ValueError, match="必须 fail open"):
+        AgentHookRef(
+            provider_id="builtin",
+            hook_id="event-closed",
+            event=AgentHookEvent.EVENT,
+            version="1.0.0",
+            failure_policy=RuntimeFailurePolicy.FAIL_CLOSED,
+            readable_fields=("event",),
+        )
+
+
 def test_manifest_requires_runnable_runtime_and_bounded_budgets() -> None:
     from core.agent_manifest import AgentBudget, AgentRolloutPolicy, AgentRuntimeSpec
     from core.agent_runtime import RuntimeCapability

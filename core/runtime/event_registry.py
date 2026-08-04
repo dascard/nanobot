@@ -55,6 +55,22 @@ def build_runtime_event_registry() -> RuntimeEventRegistry:
             ),
         ),
         RuntimeEventDescriptor(
+            name="agent.plugin_hook",
+            domain="agent",
+            owner_module="runtime.agent",
+            phases=("failed",),
+            fields=(
+                _field("runtime_id", "identifier", required=True, max_chars=192),
+                _field("plugin_id", "identifier", required=True),
+                _field("hook_id", "identifier", required=True),
+                _field("hook_point", "label", required=True),
+                _field("failure_code", "label", required=True),
+                _field("failure_policy", "label", required=True),
+                _field("error_type", "label", required=True),
+                _field("timeout_ms", "duration_ms", required=True),
+            ),
+        ),
+        RuntimeEventDescriptor(
             name="prompt.compile",
             domain="prompt",
             owner_module="prompt.runtime",

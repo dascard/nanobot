@@ -9,6 +9,7 @@ from core.agent_runtime import (
     RuntimeCapability,
     RuntimePrincipal,
 )
+from core.runtime.extensions import RuntimeFailurePolicy
 
 from .validation import (
     enum_value,
@@ -43,6 +44,13 @@ class AgentHookEvent(str, Enum):
     AFTER_TOOL = "after_tool"
     ON_ERROR = "on_error"
     ON_COMPLETE = "on_complete"
+    PRE_MODEL = "pre_model"
+    POST_MODEL = "post_model"
+    PRE_TOOL = "pre_tool"
+    POST_TOOL = "post_tool"
+    EVENT = "event"
+    INTERRUPT = "interrupt"
+    COMPLETION = "completion"
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +275,11 @@ class AgentHookRef:
     event: AgentHookEvent
     version: str
     order: int = 0
+    timeout_seconds: float = 5.0
+    failure_policy: RuntimeFailurePolicy = RuntimeFailurePolicy.FAIL_CLOSED
+    readable_fields: tuple[str, ...] = ()
+    mutable_fields: tuple[str, ...] = ()
+    trusted_builtin: bool = False
     content_sha256: str = ""
     required: bool = True
 
@@ -289,6 +302,36 @@ class AgentHookRef:
         object.__setattr__(self, "version", version(self.version, "hook.version"))
         if type(self.order) is not int or not -10_000 <= self.order <= 10_000:
             raise ValueError("hook.order 必须是 -10000 到 10000 的整数")
+        timeout = self.timeout_seconds
+        if (
+            not isinstance(timeout, (int, float))
+            or isinstance(timeout, bool)
+            or not 0.001 <= float(timeout) <= 60.0
+        ):
+            raise ValueError("hook.timeout_seconds 必须在 0.001 到 60 秒之间")
+        object.__setattr__(self, "timeout_seconds", float(timeout))
+        if not isinstance(self.failure_policy, RuntimeFailurePolicy):
+            raise ValueError("hook.failure_policy 无效")
+        readable = unique_identifiers(
+            self.readable_fields,
+            "hook.readable_field",
+        )
+        mutable = unique_identifiers(
+            self.mutable_fields,
+            "hook.mutable_field",
+        )
+        if not set(mutable) <= set(readable):
+            raise ValueError("hook.mutable_fields 必须同时声明为可读")
+        if mutable and not self.trusted_builtin:
+            raise ValueError("可修改 Hook 只能引用受信内建实现")
+        if type(self.trusted_builtin) is not bool:
+            raise ValueError("hook.trusted_builtin 必须是 bool")
+        if self.event in {AgentHookEvent.EVENT, AgentHookEvent.INTERRUPT} and (
+            self.failure_policy is not RuntimeFailurePolicy.FAIL_OPEN
+        ):
+            raise ValueError("Event 与 Interrupt Hook 必须 fail open")
+        object.__setattr__(self, "readable_fields", readable)
+        object.__setattr__(self, "mutable_fields", mutable)
         object.__setattr__(
             self,
             "content_sha256",

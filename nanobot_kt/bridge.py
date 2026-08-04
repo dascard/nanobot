@@ -87,6 +87,7 @@ if TYPE_CHECKING:
         ReplyRouteChatCompletionAdapter,
     )
     from core.model_provider.route_plan import ReplyRoutePlan
+    from core.runtime.plugin_lifecycle import RuntimePluginManager
     from nanobot_kt.prompt_runtime import PromptRuntimeInput
 
 
@@ -183,6 +184,9 @@ class NanobotBridge(MessageContractBridgeMixin):
         creature_path: str = "creatures/nanobot",
         *,
         runtime_kind: AgentRuntimeKind | str = AgentRuntimeKind.KT,
+        runtime_plugin_manager_factory: (
+            Callable[[str], RuntimePluginManager] | None
+        ) = None,
     ):
         try:
             self.runtime_kind = AgentRuntimeKind(runtime_kind)
@@ -200,35 +204,16 @@ class NanobotBridge(MessageContractBridgeMixin):
         self._last_prompt_render_meta: dict[str, Any] = {}
         self._kt_session_key = f"nanobot-bridge-{uuid4().hex}"
         self._run_event_sink = create_default_run_event_sink()
+        self._runtime_plugin_manager_factory = runtime_plugin_manager_factory
 
     def _build_runtime(self, *, initially_started: bool) -> AgentRuntimePort:
-        from core.runtime.event_bus import emit_agent_lifecycle_event
+        from nanobot_kt.bridge_runtime_support import (
+            build_bridge_agent_runtime,
+        )
 
-        if getattr(self, "runtime_kind", AgentRuntimeKind.KT) is AgentRuntimeKind.NATIVE:
-            from nanobot_kt.bridge_runtime_support import (
-                build_native_bridge_runtime,
-            )
-
-            runtime, completion_port = build_native_bridge_runtime(
-                name=self._runtime_name,
-                completion_port=self._native_completion_port,
-            )
-            self._native_completion_port = completion_port
-            return runtime
-
-        if self._agent is None:
-            raise RuntimeError("KT Agent 尚未创建")
-        config = getattr(self._agent, "config", None)
-        name = str(getattr(config, "name", "") or "agent")
-        from nanobot_kt.runtime_adapter import build_kt_runtime
-
-        return build_kt_runtime(
-            self._agent,
-            runtime_id=f"kt:{name}",
-            route_applier=self._apply_runtime_model_route,
-            event_sinks=(emit_agent_lifecycle_event,),
+        return build_bridge_agent_runtime(
+            self,
             initially_started=initially_started,
-            output_sink=self._output,
         )
 
     def _require_runtime(self) -> AgentRuntimePort:

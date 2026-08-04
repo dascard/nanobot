@@ -163,6 +163,7 @@ def test_default_runtime_event_registry_covers_cross_cutting_boundaries():
 
     assert {descriptor.name for descriptor in RUNTIME_EVENT_REGISTRY.list()} == {
         "agent.lifecycle",
+        "agent.plugin_hook",
         "agent.runtime_selection",
         "compatibility.alias_used",
         "delivery.attempt",
@@ -173,4 +174,66 @@ def test_default_runtime_event_registry_covers_cross_cutting_boundaries():
         "prompt.compile",
         "task.execute",
         "tool.execute",
+    }
+
+
+def test_plugin_failure_diagnostic_reaches_authoritative_event_ledger():
+    from core.runtime.event_bus import (
+        LoggingRuntimeEventSink,
+        install_runtime_event_sinks,
+    )
+    from core.runtime.events import InMemoryRuntimeEventSink
+    from core.runtime.extensions import RuntimeFailurePolicy
+    from core.runtime.plugin_lifecycle import (
+        RuntimePluginDiagnostic,
+        RuntimePluginFailure,
+        RuntimePluginFailureCode,
+        emit_runtime_plugin_diagnostic,
+    )
+    from core.tracing_context import (
+        reset_runtime_correlation,
+        set_runtime_correlation,
+    )
+
+    observed = InMemoryRuntimeEventSink()
+    authoritative = InMemoryRuntimeEventSink()
+    install_runtime_event_sinks(
+        (observed,),
+        authoritative_sinks=(authoritative,),
+    )
+    tokens = set_runtime_correlation(
+        run_id="run-plugin-diagnostic",
+        turn_id="turn-plugin-diagnostic",
+    )
+    try:
+        emit_runtime_plugin_diagnostic(RuntimePluginDiagnostic(
+            runtime_id="native:test",
+            failure=RuntimePluginFailure(
+                plugin_id="builtin.audit",
+                hook_id="pre.tool",
+                point="pre_tool",
+                code=RuntimePluginFailureCode.EXECUTION_FAILED,
+                error_type="RuntimeError",
+                failure_policy=RuntimeFailurePolicy.FAIL_CLOSED,
+            ),
+            timeout_ms=500,
+        ))
+    finally:
+        reset_runtime_correlation(tokens)
+        install_runtime_event_sinks((LoggingRuntimeEventSink(),))
+
+    assert len(observed.events) == 1
+    assert len(authoritative.events) == 1
+    event = authoritative.events[0]
+    assert event.name == "agent.plugin_hook"
+    assert event.context.run_id == "run-plugin-diagnostic"
+    assert dict(event.attributes) == {
+        "runtime_id": "native:test",
+        "plugin_id": "builtin.audit",
+        "hook_id": "pre.tool",
+        "hook_point": "pre_tool",
+        "failure_code": "execution_failed",
+        "failure_policy": "fail_closed",
+        "error_type": "RuntimeError",
+        "timeout_ms": 500,
     }
