@@ -18,6 +18,8 @@ from nanobot_kt.output import BufferedOutput
 from nanobot_kt.bridge_runtime_support import (
     bind_bridge_runtime_correlation,
     bind_native_recovery_model_plan,
+    build_attempt_cache_context,
+    build_bridge_llm_cache_context,
     build_child_bridge,
     build_native_request_recovery_plans,
     compatibility_runtime_selection_policy,
@@ -72,7 +74,6 @@ from core.agent_runtime import (
     RuntimeTurnKind,
 )
 from core.llm_sdk_tracing import install_openai_chat_completion_tracer
-from core.llm_trace_context import build_llm_cache_context
 from core.session_guidance import resolve_session_guidance
 from config import (
     NEW_API_KEY,
@@ -1020,7 +1021,7 @@ class NanobotBridge(MessageContractBridgeMixin):
         attempts = 0
         health_status = "pending"
         next_turn_kind = RuntimeTurnKind.USER_INPUT
-        cache_context = build_llm_cache_context(session_id, meta.get("context_debug"))
+        cache_context = build_bridge_llm_cache_context(meta, session_id)
 
         runtime_event_handler = build_runtime_event_handler(
             self,
@@ -1046,6 +1047,8 @@ class NanobotBridge(MessageContractBridgeMixin):
             health_status = "pending"
 
             candidate_route_plan = candidate.get("_route_plan") or route_plan
+            attempt_cache_context = build_attempt_cache_context(cache_context, candidate_route_plan)
+            meta["_prompt_cache_context"] = attempt_cache_context
             runtime_route = self._set_runtime_model_route(
                 target_model,
                 candidate_route_plan,
@@ -1080,7 +1083,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                         else "model.route_retry"
                     ),
                     route_attempt_index=attempt + 1,
-                    cache_context=cache_context,
+                    cache_context=attempt_cache_context,
                 ):
                     turn_request = AgentTurnRequest(
                         context=attempt_context,
@@ -1459,9 +1462,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 trace_id=trace_id,
                 run_id=run_id,
                 llm_source=reply_llm_source,
-                cache_context=build_llm_cache_context(
-                    session_id, meta.get("context_debug"), drop_none=True
-                ),
+                cache_context=build_bridge_llm_cache_context(meta, session_id, drop_none=True),
             )
             retry_buffer = (
                 self._output.get_response()
@@ -1876,6 +1877,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 trace_finalizer.finish("error", error=str(e))
                 return ""
             run_meta.update(prompt_build.meta_update)
+            meta["_prompt_cache_context"] = dict(prompt_build.cache_context)
             self._last_prompt_render_meta = prompt_build.trace_fields
             RunTracer.update_prompt_source(
                 run_handle.run_id,

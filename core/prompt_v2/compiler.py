@@ -36,6 +36,10 @@ from core.prompt_v2.context_adapters import (
 from core.prompt_v2.flow import load_flow, ordered_nodes_for_chat
 from core.prompt_v2.flow_storage import template_governance_read_lock
 from core.prompt_v2.request_metrics import calculate_request_metrics
+from core.prompt_v2.prefix_cache import (
+    build_prompt_prefix_cache_manifest,
+    canonicalize_tool_schemas,
+)
 from core.prompt_v2.schema import (
     PromptCompileRequest,
     PromptFlowOrigin,
@@ -720,19 +724,21 @@ async def _compile_prompt_plan_locked(
 
     from core.prompt_v2.tool_templates import collect_tool_template_resolutions
 
+    tool_schemas = canonicalize_tool_schemas(request.tool_schemas)
+
     template_resolutions.update(
-        collect_tool_template_resolutions(request.tool_schemas)
+        collect_tool_template_resolutions(tool_schemas)
     )
     metrics = calculate_request_metrics(
         messages=messages,
-        tools=list(request.tool_schemas or []),
+        tools=tool_schemas,
     )
     context_debug = dict(
         (request.debug or {}).get("context_debug") or {}
     )
     context_manifest = build_prompt_context_manifest(
         messages=messages,
-        tool_schemas=list(request.tool_schemas or []),
+        tool_schemas=tool_schemas,
         flow_sections=flow_sections,
         section_hashes=section_hashes,
         request_prompt_sha256=metrics.prompt_sha256,
@@ -740,6 +746,13 @@ async def _compile_prompt_plan_locked(
         provenance=_context_provenance(request, context_debug),
     )
     context_manifest_dict = context_manifest.to_dict()
+    prefix_cache_manifest = build_prompt_prefix_cache_manifest(
+        messages=messages,
+        tool_schemas=tool_schemas,
+        flow_sections=flow_sections,
+        context_manifest=context_manifest_dict,
+    )
+    prefix_cache_manifest_dict = prefix_cache_manifest.to_dict()
     session_guidance_configured = bool(normalized_session_guidance)
     session_guidance_status = "emitted" if session_guidance_configured else "empty"
     debug = {
@@ -755,7 +768,7 @@ async def _compile_prompt_plan_locked(
         "policy_profile": policy_profile,
         "history_message_count": len(history_messages),
         "has_group_context": bool(group_context),
-        "tool_schema_count": len(request.tool_schemas or []),
+        "tool_schema_count": len(tool_schemas),
         "template_resolutions": template_resolutions,
         "prompt_contribution_registry": {
             "namespace": contribution_resolution.registry_snapshot.namespace,
@@ -773,6 +786,14 @@ async def _compile_prompt_plan_locked(
         "context_manifest_sha256": context_manifest.sha256,
         "context_manifest_entry_count": len(context_manifest.entries),
         "context_manifest_token_estimate": context_manifest.total_tokens,
+        "prefix_cache_manifest_sha256": prefix_cache_manifest.sha256,
+        "prefix_cache_key": prefix_cache_manifest.cache_key,
+        "prefix_cache_stable_message_count": (
+            prefix_cache_manifest.stable_message_count
+        ),
+        "prefix_cache_stable_token_estimate": (
+            prefix_cache_manifest.stable_prefix_token_estimate
+        ),
         "session_guidance_chat_stream_id": str(
             request.session_guidance_chat_stream_id or ""
         ).strip(),
@@ -793,13 +814,14 @@ async def _compile_prompt_plan_locked(
         chat_type=chat_type,
         prompt_key=prompt_key,
         messages=messages,
-        tool_schemas=list(request.tool_schemas or []),
+        tool_schemas=tool_schemas,
         section_hashes=section_hashes,
         prompt_sha256=metrics.prompt_sha256,
         token_estimate=metrics.token_estimate,
         warnings=warnings,
         debug=jsonable(debug),
         context_manifest=context_manifest_dict,
+        prefix_cache_manifest=prefix_cache_manifest_dict,
         platform=platform,
         policy_profile=policy_profile,
         flow_sections=flow_sections,
@@ -823,6 +845,7 @@ async def _compile_prompt_plan_locked(
         warnings=list(plan.warnings) + audit.issues,
         debug=plan.debug,
         context_manifest=plan.context_manifest,
+        prefix_cache_manifest=plan.prefix_cache_manifest,
         platform=plan.platform,
         policy_profile=plan.policy_profile,
         flow_sections=plan.flow_sections,

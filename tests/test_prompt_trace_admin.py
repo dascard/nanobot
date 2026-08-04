@@ -382,7 +382,8 @@ def test_admin_prompt_and_trace_endpoints(
     assert "name_hint" in variable_names
     assert "alias_names" in variable_names
     assert "super_user_id" not in variable_names
-    assert "is_super_user" in variable_names
+    assert "is_super_user" not in variable_names
+    assert "platform" in variable_names
     assert "user_input" not in variable_names
 
     run = RunTracer.start_run(
@@ -592,12 +593,26 @@ def test_admin_prompt_and_trace_endpoints(
     assert llm_logs_resp.json()["stats"]["cache_hit_tokens"] == 16
     assert llm_logs_resp.json()["stats"]["cache_miss_tokens"] == 4
     assert llm_logs_resp.json()["stats"]["cache_hit_token_ratio"] == 0.8
+    assert llm_logs_resp.json()["stats"]["input_tokens"] == 20
+    assert llm_logs_resp.json()["stats"]["output_tokens"] == 0
+    assert llm_logs_resp.json()["stats"]["cost_microusd"] == 0
+    assert llm_logs_resp.json()["stats"]["by_provider"]["unknown"] == {
+        "requests": 1,
+        "cache_hit_tokens": 16,
+        "cache_miss_tokens": 4,
+        "cache_hit_token_ratio": 0.8,
+        "avg_first_token_latency_ms": 0,
+        "cost_microusd": 0,
+    }
     llm_list_item = llm_logs_resp.json()["items"][0]
     assert llm_list_item["summary_only"] is True
     assert llm_list_item["cache_status"] == "hit"
     assert llm_list_item["cache_hit"] is True
     assert llm_list_item["cache_hit_tokens"] == 16
     assert llm_list_item["cache_miss_tokens"] == 4
+    assert llm_list_item["input_tokens"] == 20
+    assert llm_list_item["first_token_latency_ms"] == 0
+    assert llm_list_item["cost_source"] == "not_available"
     assert "request_json" not in llm_list_item
     assert "response_json" not in llm_list_item
 

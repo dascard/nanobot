@@ -162,28 +162,10 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             "character_name",
             "name_hint",
             "alias_names",
-            "sender_id",
-            "is_super_user",
             "chat_type",
             "platform",
-            "session_id",
-            "group_id",
-            "user_id",
-            "sender_name",
             "bot_name",
             "bot_aliases",
-            "current_time",
-            "timezone",
-            "messages_text",
-            "style_messages_text",
-            "users_text",
-            "instructions",
-            "evidence_cards",
-            "candidate_cards",
-            "mode_hint",
-            "card_count",
-            "image_count",
-            "focus",
         }
 
         sql_detail = client.get("/api/v1/admin/prompt-v2/templates/tools/sql_analysis/usage", headers=_auth_header())
@@ -195,13 +177,13 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
 
         saved = client.put(
             "/api/v1/admin/prompt-v2/templates/chat/identity_context",
-            json={"content": "你叫 {{ character_name }}\nsuper: {{ is_super_user }}"},
+            json={"content": "你叫 {{ character_name }}\n平台: {{ platform }}"},
             headers=_auth_header(),
         )
         assert saved.status_code == 200, saved.text
         assert saved.json()["saved"] is True
         assert (runtime_dir / "chat" / "identity_context.md").read_text(encoding="utf-8") == (
-            "你叫 {{ character_name }}\nsuper: {{ is_super_user }}\n"
+            "你叫 {{ character_name }}\n平台: {{ platform }}\n"
         )
 
         rejected = client.put(
@@ -211,6 +193,14 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         )
         assert rejected.status_code == 400
         assert "unsupported variables" in rejected.text
+
+        volatile_rejected = client.put(
+            "/api/v1/admin/prompt-v2/templates/chat/identity_context",
+            json={"content": "当前时间 {{ current_time }}"},
+            headers=_auth_header(),
+        )
+        assert volatile_rejected.status_code == 400
+        assert "current_time" in volatile_rejected.text
 
         flow = client.get("/api/v1/admin/prompt-v2/flow", headers=_auth_header())
         assert flow.status_code == 200, flow.text

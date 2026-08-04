@@ -114,6 +114,8 @@ class PromptRuntimeResult:
     event_content: Any
     prompt_template_resolutions: dict[str, dict[str, Any]] = field(default_factory=dict)
     context_manifest: dict[str, Any] = field(default_factory=dict)
+    prefix_cache_manifest: dict[str, Any] = field(default_factory=dict)
+    cache_context: dict[str, Any] = field(default_factory=dict)
     meta_update: dict[str, Any] = field(default_factory=dict)
     message_token_estimate: int = 0
     tool_schema_token_estimate: int = 0
@@ -260,6 +262,15 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         context_manifest=prompt_plan.context_manifest,
     )
     context_debug = dict(prompt_plan.debug.get("context_debug", {}) or {})
+    from core.llm_trace_context import (
+        attach_prompt_prefix_cache_context,
+        build_llm_cache_context,
+    )
+
+    cache_context = attach_prompt_prefix_cache_context(
+        build_llm_cache_context(input.session_id, context_debug),
+        prompt_plan.prefix_cache_manifest,
+    )
     meta_update = {
         "prompt_engine": "prompt",
         "group_memory": context_debug,
@@ -271,6 +282,20 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         ),
         "context_manifest_token_estimate": int(
             prompt_plan.context_manifest.get("total_tokens") or 0
+        ),
+        "prefix_cache_manifest_sha256": str(
+            prompt_plan.prefix_cache_manifest.get("sha256") or ""
+        ),
+        "prefix_cache_key": str(
+            prompt_plan.prefix_cache_manifest.get("cache_key") or ""
+        ),
+        "prefix_cache_stable_message_count": int(
+            prompt_plan.prefix_cache_manifest.get("stable_message_count") or 0
+        ),
+        "prefix_cache_stable_token_estimate": int(
+            prompt_plan.prefix_cache_manifest.get(
+                "stable_prefix_token_estimate"
+            ) or 0
         ),
     }
     if context_debug.get("group_memory_injected") and context_debug.get("group_memory_ids"):
@@ -352,6 +377,9 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         pre_event_messages=prompt_plan.messages_without_current_user,
         event_content=prompt_plan.current_user_content,
         prompt_template_resolutions=template_resolutions,
+        context_manifest=prompt_plan.context_manifest,
+        prefix_cache_manifest=prompt_plan.prefix_cache_manifest,
+        cache_context=cache_context,
         meta_update=meta_update,
         message_token_estimate=prompt_plan.message_token_estimate,
         tool_schema_token_estimate=prompt_plan.tool_schema_token_estimate,

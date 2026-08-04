@@ -52,6 +52,25 @@ _GLOBAL_VARIABLES: tuple[VariableDef, ...] = (
     VariableDef("focus", "global", "工具运行时注入的图片摘要重点", "OCR"),
 )
 
+_STABLE_PREFIX_SCOPES = frozenset({
+    "chat/main",
+    "chat/platform/qq/common",
+    "chat/branch_group",
+    "chat/platform/qq/group",
+    "chat/branch_private",
+    "chat/identity_context",
+    "identity_context",
+})
+_STABLE_PREFIX_VARIABLE_NAMES = frozenset({
+    "character_name",
+    "name_hint",
+    "alias_names",
+    "bot_name",
+    "bot_aliases",
+    "chat_type",
+    "platform",
+})
+
 _MEMORY_DIGEST_VARIABLES: tuple[VariableDef, ...] = (
     VariableDef("date", "memory_digest", "摘要 source 日期", "2026-06-01"),
     VariableDef("source_id", "memory_digest", "摘要 source 稳定 ID", "20260601_group_1001_1_20_v2"),
@@ -111,11 +130,22 @@ def _scoped_variables(scope: str) -> tuple[VariableDef, ...]:
 
 
 def list_variables(scope: str = "") -> list[dict[str, str]]:
-    return [item.to_dict() for item in (*_GLOBAL_VARIABLES, *_scoped_variables(scope))]
+    return [item.to_dict() for item in _variables_for_scope(scope)]
 
 
 def allowed_variable_names(scope: str) -> set[str]:
-    return {item.name for item in (*_GLOBAL_VARIABLES, *_scoped_variables(scope))}
+    return {item.name for item in _variables_for_scope(scope)}
+
+
+def _variables_for_scope(scope: str) -> tuple[VariableDef, ...]:
+    normalized = normalize_scope(scope)
+    if normalized in _STABLE_PREFIX_SCOPES:
+        return tuple(
+            item
+            for item in _GLOBAL_VARIABLES
+            if item.name in _STABLE_PREFIX_VARIABLE_NAMES
+        )
+    return (*_GLOBAL_VARIABLES, *_scoped_variables(normalized))
 
 
 def referenced_variable_names(template_text: str) -> set[str]:

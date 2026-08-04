@@ -62,6 +62,13 @@ _METRIC_PATHS = (
     _MetricPath("write", ("usage", "cache_write_tokens")),
 )
 
+_TOTAL_INPUT_PATHS = (
+    ("usage", "prompt_tokens"),
+    ("usage", "input_tokens"),
+    ("usage_metadata", "prompt_token_count"),
+    ("usageMetadata", "promptTokenCount"),
+)
+
 
 def _value_at_path(value: Any, parts: tuple[str, ...]) -> tuple[bool, Any]:
     current = value
@@ -150,6 +157,43 @@ def normalize_llm_cache_usage(
     hit_tokens = max(values_by_kind["read"], default=0)
     miss_tokens = max(values_by_kind["miss"], default=0)
     write_tokens = max(values_by_kind["write"], default=0)
+    if not values_by_kind["miss"]:
+        total_inputs: list[int] = []
+
+        def collect_total(payload: Any) -> None:
+            for parts in _TOTAL_INPUT_PATHS:
+                present, raw_value = _value_at_path(payload, parts)
+                if not present:
+                    continue
+                count = _token_count(raw_value)
+                if count is not None:
+                    total_inputs.append(count)
+
+        collect_total(response)
+        if isinstance(response, Mapping):
+            for chunk in response.get("chunks_sample") or []:
+                collect_total(chunk)
+        if total_inputs:
+            total_input = max(total_inputs)
+            anthropic_cache = any(
+                metric["source"].endswith(
+                    (
+                        "usage.cache_read_input_tokens",
+                        "usage.cache_creation_input_tokens",
+                    )
+                )
+                for metric in reported
+            )
+            miss_tokens = (
+                total_input
+                if anthropic_cache
+                else max(0, total_input - hit_tokens)
+            )
+            reported.append({
+                "kind": "miss_derived",
+                "source": "usage.total_input",
+                "count": miss_tokens,
+            })
     cache_hit = hit_tokens > 0
     return LLMCacheUsage(
         status=CACHE_STATUS_HIT if cache_hit else CACHE_STATUS_MISS,

@@ -761,11 +761,34 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 5.2 前缀缓存稳定
 
-- [ ] 固定 Prompt section 和工具 schema 顺序。
-- [ ] 将请求级动态内容放在稳定前缀之后。
-- [ ] 避免时间戳、随机排序和无意义 request metadata 破坏缓存。
-- [ ] 按 Provider 记录 cached/uncached token、命中率、首 token 延迟和成本。
-- [ ] 缓存优化不得改变权限、事实和 Prompt Runtime 的 canonical 顺序。
+- [x] 固定 Prompt section 和工具 schema 顺序。
+- [x] 将请求级动态内容放在稳定前缀之后。
+- [x] 避免时间戳、随机排序和无意义 request metadata 破坏缓存。
+- [x] 按 Provider 记录 cached/uncached token、命中率、首 token 延迟和成本。
+- [x] 缓存优化不得改变权限、事实和 Prompt Runtime 的 canonical 顺序。
+
+实现与验证证据：
+
+- canonical Prompt 编译器在生产路径统一按工具名和完整 schema 摘要冻结 Tool Schema 顺序，并从
+  已审计 Flow、Context Manifest 和最终 messages 生成不含正文的签名 Prefix Cache Manifest。
+  Manifest 明确稳定 message 数量、动态后缀起点、稳定前缀／工具／canonical 顺序摘要和 cache key；
+  编译审计会重建并逐字段比对，篡改、重复工具名或非 canonical 顺序均在模型请求前 fail closed。
+- 稳定前缀只覆盖 canonical system、安全和稳定策略段，身份模板也只允许角色名、别名、平台和会话类型等
+  稳定变量；时间、用户／会话 ID、超级用户事实和请求正文继续由后续 runtime context 表达。原有
+  `prompts.v2.default/chat/flow.json`、各分支模板和模型可见 canonical 顺序未移动，权限与超级用户事实
+  仍由服务端运行时合同决定。
+- Native Chat Completion Adapter 已直接接入生产 `LLMRequestTracer`，KT／SDK 路径继续使用同一追踪器；
+  Codex Provider 使用当前签名前缀 cache key。缓存形状 v2 以 manifest 边界计算稳定前缀，忽略仅用于
+  trace 的 request/run/trace metadata，并从 OpenAI、Anthropic、DeepSeek 等兼容 usage 归一化
+  cached／uncached／write token。
+- `llm_api_request_logs` 通过增量迁移新增输入／输出 token、首 token 延迟、微美元成本和成本来源；成本
+  优先采用 Provider 报告，否则只在冻结输入／输出单价齐全时估算。管理接口直接按 Provider 聚合请求数、
+  cache token 命中率、首 token 延迟和成本；Native Runtime 的 Usage 同步携带成本且不会重复写入 Ledger。
+- Prompt／Context／缓存／成本／追踪／迁移定向回归分别完成 155 passed、130 passed，生产 Bridge、
+  Streaming、Native Runtime、KT 兼容和行为基线联合回归 167 passed，迁移架构后生产路径回归 47 passed，
+  指标语义回归 55 passed。最终完整 `python -m pytest tests/ -v` 为 6559 passed、12 skipped、
+  0 failed；架构边界、OpenAPI、行为 Golden、Release／Verification Golden、决策规则、Task SLO、
+  Ruff 致命规则、Python 编译和 `git diff --check` 均通过。
 
 #### 5.3 分层压缩和工具输出治理
 

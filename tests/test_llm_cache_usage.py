@@ -93,6 +93,24 @@ def test_normalize_llm_cache_usage_keeps_deepseek_miss_tokens_separate():
     assert result.write_tokens == 0
 
 
+def test_normalize_llm_cache_usage_derives_openai_uncached_tokens():
+    result = normalize_llm_cache_usage(
+        {
+            "usage": {
+                "prompt_tokens": 1000,
+                "prompt_tokens_details": {"cached_tokens": 640},
+            },
+        },
+        successful=True,
+    )
+
+    assert result.hit_tokens == 640
+    assert result.miss_tokens == 360
+    assert {
+        metric["kind"] for metric in result.details["reported_metrics"]
+    } == {"read", "miss_derived"}
+
+
 def test_normalize_llm_cache_usage_distinguishes_miss_from_not_reported():
     missed = normalize_llm_cache_usage(
         {

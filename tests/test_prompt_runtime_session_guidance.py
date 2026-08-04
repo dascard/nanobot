@@ -4,6 +4,44 @@ import json
 import pytest
 
 
+def _prefix_cache_manifest(stable_message: dict) -> dict:
+    """为编译器测试桩生成与稳定 system message 一致的签名。"""
+
+    from core.prompt_v2.prefix_cache import PromptPrefixCacheManifest
+    from core.prompt_v2.section_renderer import (
+        estimate_tokens,
+        sha256_text,
+        stable_json,
+    )
+
+    stable_payload = stable_json([stable_message])
+    stable_sha256 = sha256_text(stable_payload)
+    tool_schema_sha256 = sha256_text(stable_json([]))
+    return PromptPrefixCacheManifest(
+        policy_id="prompt-prefix-cache-v1",
+        stable_entry_ids=("base_contract",),
+        stable_message_count=1,
+        dynamic_suffix_start_index=1,
+        stable_prefix_sha256=stable_sha256,
+        stable_prefix_token_estimate=estimate_tokens(stable_payload),
+        tool_schema_sha256=tool_schema_sha256,
+        tool_names=(),
+        canonical_order_sha256=sha256_text(stable_json({
+            "flow_node_ids": [
+                "base_contract",
+                "session_guidance",
+                "current_user_event",
+            ],
+            "tool_names": [],
+        })),
+        cache_key=sha256_text(stable_json({
+            "policy_id": "prompt-prefix-cache-v1",
+            "stable_prefix_sha256": stable_sha256,
+            "tool_schema_sha256": tool_schema_sha256,
+        })),
+    ).to_dict()
+
+
 def _runtime_facts(messages):
     content = next(
         str(message.get("content") or "")
@@ -149,12 +187,17 @@ async def test_prompt_runtime_forwards_guidance_and_redacts_prompt_trace(monkeyp
         captured["request"] = request
         assert strict_audit is True
         assert request.debug["session_guidance_resolution_status"] == "configured"
+        stable_message = {
+            "role": "system",
+            "content": "STABLE_BASE_CONTRACT",
+        }
         return PromptPlan(
             engine="prompt",
             chat_type="private",
             platform="qq",
             prompt_key="chat_private",
             messages=[
+                stable_message,
                 {
                     "role": "system",
                     "content": (
@@ -195,6 +238,7 @@ async def test_prompt_runtime_forwards_guidance_and_redacts_prompt_trace(monkeyp
                 "session_guidance_resolution_status": "configured",
                 "session_guidance_status": "emitted",
             },
+            prefix_cache_manifest=_prefix_cache_manifest(stable_message),
         )
 
     recorded_render = {}
@@ -228,7 +272,11 @@ async def test_prompt_runtime_forwards_guidance_and_redacts_prompt_trace(monkeyp
     assert guidance_body not in recorded_render["rendered_content"]
     assert guidance_sha in recorded_render["rendered_content"]
     assert guidance_body not in json.dumps(result.meta_update, ensure_ascii=False)
-    assert guidance_body in result.pre_event_messages[0]["content"]
+    assert guidance_body in result.pre_event_messages[1]["content"]
+    assert guidance_body not in json.dumps(
+        result.prefix_cache_manifest,
+        ensure_ascii=False,
+    )
 
 
 def test_session_guidance_is_removed_with_other_dynamic_system_contexts():

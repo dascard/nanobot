@@ -510,6 +510,43 @@ def list_llm_api_logs(
         .with_entities(func.avg(LLMApiRequestLog.latency_ms))
         .scalar()
     )
+    avg_first_token_latency = q.with_entities(
+        func.avg(func.nullif(LLMApiRequestLog.first_token_latency_ms, 0))
+    ).scalar()
+    performance_totals = q.with_entities(
+        func.sum(LLMApiRequestLog.input_tokens),
+        func.sum(LLMApiRequestLog.output_tokens),
+        func.sum(LLMApiRequestLog.cost_microusd),
+    ).one()
+    provider_name_expr = func.coalesce(
+        func.nullif(LLMApiRequestLog.provider, ""),
+        "unknown",
+    )
+    provider_rows = q.with_entities(
+        provider_name_expr,
+        func.count(LLMApiRequestLog.id),
+        func.sum(LLMApiRequestLog.cache_hit_tokens),
+        func.sum(LLMApiRequestLog.cache_miss_tokens),
+        func.avg(func.nullif(LLMApiRequestLog.first_token_latency_ms, 0)),
+        func.sum(LLMApiRequestLog.cost_microusd),
+    ).group_by(provider_name_expr).all()
+    by_provider = {}
+    for provider_row in provider_rows:
+        provider_name = str(provider_row[0] or "unknown")
+        hit_tokens = int(provider_row[2] or 0)
+        miss_tokens = int(provider_row[3] or 0)
+        cache_tokens = hit_tokens + miss_tokens
+        by_provider[provider_name] = {
+            "requests": int(provider_row[1] or 0),
+            "cache_hit_tokens": hit_tokens,
+            "cache_miss_tokens": miss_tokens,
+            "cache_hit_token_ratio": (
+                round(hit_tokens / cache_tokens, 6)
+                if cache_tokens > 0 else None
+            ),
+            "avg_first_token_latency_ms": int(provider_row[4] or 0),
+            "cost_microusd": int(provider_row[5] or 0),
+        }
     unbound_run_count = q.filter(
         (LLMApiRequestLog.run_id.is_(None)) | (LLMApiRequestLog.run_id == "")
     ).count()
@@ -545,6 +582,11 @@ def list_llm_api_logs(
                 LLMApiRequestLog.cache_hit_tokens,
                 LLMApiRequestLog.cache_miss_tokens,
                 LLMApiRequestLog.cache_write_tokens,
+                LLMApiRequestLog.input_tokens,
+                LLMApiRequestLog.output_tokens,
+                LLMApiRequestLog.first_token_latency_ms,
+                LLMApiRequestLog.cost_microusd,
+                LLMApiRequestLog.cost_source,
                 LLMApiRequestLog.error,
                 LLMApiRequestLog.latency_ms,
                 LLMApiRequestLog.created_at,
@@ -579,6 +621,7 @@ def list_llm_api_logs(
             "failed_error": failed_error_count,
             "created": created_count,
             "avg_latency_ms": int(avg_latency or 0),
+            "avg_first_token_latency_ms": int(avg_first_token_latency or 0),
             "unbound_run_count": unbound_run_count,
             "by_status": by_status,
             "cache_hit": by_cache_status.get("hit", 0),
@@ -594,6 +637,10 @@ def list_llm_api_logs(
                 if cache_prompt_token_total > 0 else None
             ),
             "by_cache_status": by_cache_status,
+            "input_tokens": int(performance_totals[0] or 0),
+            "output_tokens": int(performance_totals[1] or 0),
+            "cost_microusd": int(performance_totals[2] or 0),
+            "by_provider": by_provider,
         },
     }
 

@@ -119,6 +119,59 @@ def _prompt_template_resolutions() -> dict:
     }
 
 
+def _prompt_plan_with_cache(**kwargs):
+    """构造符合当前编译器输出合同的 PromptPlan 测试桩。"""
+
+    from core.prompt_v2.prefix_cache import (
+        PromptPrefixCacheManifest,
+        canonicalize_tool_schemas,
+    )
+    from core.prompt_v2.schema import PromptPlan
+    from core.prompt_v2.section_renderer import (
+        estimate_tokens,
+        sha256_text,
+        stable_json,
+    )
+
+    messages = list(kwargs.get("messages") or [])
+    if not messages:
+        raise AssertionError("PromptPlan 测试桩必须包含 message")
+    canonical_tools = canonicalize_tool_schemas(
+        list(kwargs.get("tool_schemas") or [])
+    )
+    kwargs["tool_schemas"] = canonical_tools
+    stable_prefix_payload = stable_json(messages[:1])
+    tool_payload = stable_json(canonical_tools)
+    stable_prefix_sha256 = sha256_text(stable_prefix_payload)
+    tool_schema_sha256 = sha256_text(tool_payload)
+    tool_names = tuple(
+        str((schema.get("function") or {}).get("name") or "")
+        for schema in canonical_tools
+    )
+    kwargs["prefix_cache_manifest"] = PromptPrefixCacheManifest(
+        policy_id="prompt-prefix-cache-v1",
+        stable_entry_ids=("base_contract",),
+        stable_message_count=1,
+        dynamic_suffix_start_index=1,
+        stable_prefix_sha256=stable_prefix_sha256,
+        stable_prefix_token_estimate=estimate_tokens(
+            stable_prefix_payload
+        ),
+        tool_schema_sha256=tool_schema_sha256,
+        tool_names=tool_names,
+        canonical_order_sha256=sha256_text(stable_json({
+            "flow_node_ids": ["base_contract", "current_user_event"],
+            "tool_names": list(tool_names),
+        })),
+        cache_key=sha256_text(stable_json({
+            "policy_id": "prompt-prefix-cache-v1",
+            "stable_prefix_sha256": stable_prefix_sha256,
+            "tool_schema_sha256": tool_schema_sha256,
+        })),
+    ).to_dict()
+    return PromptPlan(**kwargs)
+
+
 def test_bridge_prompt_runtime_engine_defaults_to_prompt_and_invalid_falls_back(monkeypatch):
     from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
@@ -403,7 +456,7 @@ async def test_build_prompt_runtime_passes_super_user_fact_to_compile_request(mo
 
     async def fake_compile_prompt_plan(request, *, strict_audit=False):
         captured["is_super_user"] = request.is_super_user
-        return PromptPlan(
+        return _prompt_plan_with_cache(
             engine="prompt",
             chat_type="private",
             platform="qq",
@@ -484,7 +537,7 @@ async def test_build_prompt_runtime_rejects_missing_base_template_resolution(mon
 
     async def fake_compile_prompt_plan(_request, *, strict_audit=False):
         assert strict_audit is True
-        return PromptPlan(
+        return _prompt_plan_with_cache(
             engine="prompt",
             chat_type="private",
             platform="qq",
@@ -623,7 +676,7 @@ async def test_build_prompt_runtime_passes_platform_to_compile_request(monkeypat
     async def fake_compile_prompt_plan(request, *, strict_audit=False):
         captured["platform"] = request.platform
         captured["normalized_platform"] = request.normalized_platform
-        return PromptPlan(
+        return _prompt_plan_with_cache(
             engine="prompt",
             chat_type="private",
             platform=request.normalized_platform,
@@ -881,7 +934,7 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
         assert isinstance(request, PromptCompileRequest)
         assert strict_audit is True
         captured_requests.append(request)
-        return PromptPlan(
+        return _prompt_plan_with_cache(
             engine="v2",
             chat_type="group",
             prompt_key="chat_group",
@@ -998,14 +1051,40 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     assert [call["chat_type"] for call in captured_tool_plan_calls] == ["group"]
     assert [call["group_id"] for call in captured_tool_plan_calls] == ["1001"]
     assert len(seen_runtime_contexts) == 1
-    assert seen_cache_contexts == [{
+    assert len(seen_cache_contexts) == 1
+    cache_context = seen_cache_contexts[0]
+    assert {
+        key: cache_context[key]
+        for key in (
+            "session_id",
+            "prefix_epoch",
+            "prefix_epoch_generation",
+            "prefix_epoch_covered_until",
+            "prefix_epoch_low_water_tokens",
+            "prefix_epoch_high_water_tokens",
+        )
+    } == {
         "session_id": "group_1001",
         "prefix_epoch": "epoch-group-3",
         "prefix_epoch_generation": 3,
         "prefix_epoch_covered_until": 120,
         "prefix_epoch_low_water_tokens": 6000,
         "prefix_epoch_high_water_tokens": 16000,
-    }]
+    }
+    for digest_key in (
+        "prefix_cache_key",
+        "prefix_cache_manifest_sha256",
+        "stable_prefix_sha256",
+        "tool_schema_sha256",
+        "canonical_order_sha256",
+    ):
+        assert len(cache_context[digest_key]) == 64
+    assert cache_context["stable_prefix_message_count"] == 1
+    assert cache_context["stable_prefix_token_estimate"] > 0
+    assert "V2_SYSTEM_ONLY" not in json.dumps(
+        cache_context,
+        ensure_ascii=False,
+    )
     runtime_context = seen_runtime_contexts[0]
     assert runtime_context["is_super_user"] is True
     assert runtime_context["runtime_chat_type"] == "group"
@@ -1169,7 +1248,7 @@ async def test_bridge_engine_v2_maps_private_runtime_metadata(
     async def fake_compile(request, *, strict_audit=False):
         assert isinstance(request, PromptCompileRequest)
         captured_requests.append(request)
-        return PromptPlan(
+        return _prompt_plan_with_cache(
             engine="v2",
             chat_type="private",
             prompt_key="chat_private",
@@ -1587,7 +1666,7 @@ async def test_bridge_tool_plan_does_not_mutate_registry_tools(monkeypatch, db_s
 
     async def fake_compile(request, *, strict_audit=False):
         assert isinstance(request, PromptCompileRequest)
-        return PromptPlan(
+        return _prompt_plan_with_cache(
             engine="v2",
             chat_type="group",
             prompt_key="chat_group",

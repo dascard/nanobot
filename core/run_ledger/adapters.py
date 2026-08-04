@@ -597,6 +597,7 @@ def usage_recorded_event(
     reasoning_tokens: int,
     cache_miss_tokens: int = 0,
     cache_write_tokens: int = 0,
+    cost_microunits: int = 0,
     occurred_at: datetime | None = None,
 ) -> RunLedgerEventDraft:
     return RunLedgerEventDraft(
@@ -624,6 +625,7 @@ def usage_recorded_event(
             ),
             "cache_miss_tokens": max(0, int(cache_miss_tokens or 0)),
             "cache_write_tokens": max(0, int(cache_write_tokens or 0)),
+            "cost_microunits": max(0, int(cost_microunits or 0)),
         },
         source_event_id=source_event_id,
     )

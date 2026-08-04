@@ -329,9 +329,19 @@ class AccountBoundCodexOAuthProvider:
                 image_output_format = str(spec.get("output_format") or "png")
 
         instruction_text = instructions or "You are a helpful assistant."
-        cache_key = self.prompt_cache_key or hashlib.sha256(
-            instruction_text.encode("utf-8")
-        ).hexdigest()[:32]
+        try:
+            from core.llm_trace_context import get_llm_cache_context
+
+            runtime_cache_key = str(
+                get_llm_cache_context().get("prefix_cache_key") or ""
+            )
+        except Exception:
+            runtime_cache_key = ""
+        cache_key = (
+            self.prompt_cache_key
+            or runtime_cache_key
+            or hashlib.sha256(instruction_text.encode("utf-8")).hexdigest()
+        )[:64]
         extra_params: dict[str, Any] = {}
         if self.reasoning_effort and self.reasoning_effort != "none":
             extra_params["reasoning"] = {"effort": self.reasoning_effort}

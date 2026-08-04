@@ -20,6 +20,8 @@ from core.model_provider.chat_runtime import (
 from core.model_provider.route_plan import ReplyRoutePlan
 from core.runtime.event_bus import emit_runtime_event
 from foundation.llm.model_options import apply_enable_thinking_to_payload
+from foundation.llm.stream_trace import LLMStreamTraceAccumulator
+from foundation.llm.cost_usage import normalize_llm_cost_usage
 
 
 _RESERVED_EXTRA_BODY_FIELDS = frozenset({
@@ -31,6 +33,10 @@ _RESERVED_EXTRA_BODY_FIELDS = frozenset({
     "max_tokens",
     "tools",
     "tool_choice",
+    "metadata",
+    "request_id",
+    "run_id",
+    "trace_id",
 })
 _ALLOWED_DRIVER_OPTIONS = frozenset({"echo_reasoning"})
 _DETERMINISTIC_HTTP_STATUS = {
@@ -76,6 +82,40 @@ def _response_error(status: int) -> dict[str, object]:
             "message": f"{label} (HTTP {status})",
         }
     }
+
+
+def _runtime_cost_usage(
+    route: ReplyRoutePlan,
+    response: Mapping[str, Any],
+) -> dict[str, Any]:
+    """仅为 Runtime Usage 补充成本，不改写 Provider 原始 Trace。"""
+
+    result = dict(response)
+    raw_usage = result.get("usage")
+    if not isinstance(raw_usage, Mapping):
+        return result
+    usage = dict(raw_usage)
+
+    def tokens(*keys: str) -> int:
+        for key in keys:
+            value = usage.get(key)
+            if type(value) is int and value >= 0:
+                return value
+        return 0
+
+    cost = normalize_llm_cost_usage(
+        result,
+        successful=True,
+        input_tokens=tokens("prompt_tokens", "input_tokens"),
+        output_tokens=tokens("completion_tokens", "output_tokens"),
+        cost_input_1m=route.cost_input_1m,
+        cost_output_1m=route.cost_output_1m,
+    )
+    if cost.source == "not_available":
+        return result
+    usage["cost_microunits"] = cost.cost_microusd
+    result["usage"] = usage
+    return result
 
 
 def _validate_header(name: object, value: object) -> tuple[str, str]:
@@ -258,6 +298,55 @@ class ReplyRouteChatCompletionAdapter:
             "request_sha256": _payload_sha256(payload),
         }
 
+    @staticmethod
+    def _start_trace(
+        route: ReplyRoutePlan,
+        request: ChatCompletionRequest,
+        payload: Mapping[str, Any],
+    ) -> int:
+        try:
+            from core.tracing import LLMRequestTracer
+
+            return LLMRequestTracer.record_request(
+                trace_id=request.trace_id,
+                run_id=request.run_id,
+                source=request.trace_source or "native_agent",
+                provider=route.provider_id or route.registry_provider,
+                model=str(payload.get("model") or ""),
+                url=f"{route.base_url.rstrip('/')}/chat/completions",
+                method="POST",
+                headers=ReplyRouteChatCompletionAdapter._headers(route),
+                request=dict(payload),
+                status="created",
+            )
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _finish_trace(
+        log_id: int,
+        *,
+        response: Mapping[str, Any],
+        response_status: int,
+        status: str,
+        latency_ms: int,
+        error: str = "",
+    ) -> None:
+        try:
+            from core.tracing import LLMRequestTracer
+
+            LLMRequestTracer.finish_request(
+                log_id=log_id,
+                response=dict(response),
+                response_status=response_status,
+                status=status,
+                error=error,
+                latency_ms=latency_ms,
+                record_ledger_usage=False,
+            )
+        except Exception:
+            return
+
     async def complete_chat(
         self,
         request: ChatCompletionRequest,
@@ -266,6 +355,8 @@ class ReplyRouteChatCompletionAdapter:
         payload = self._payload(route, request, stream=False)
         attributes = self._event_attributes(route, request, payload)
         started = time.monotonic()
+        log_id = self._start_trace(route, request, payload)
+        response_status = 0
         emit_runtime_event("model.request", "started", attributes=attributes)
         try:
             async with self._request_session() as session:
@@ -276,8 +367,18 @@ class ReplyRouteChatCompletionAdapter:
                     timeout=aiohttp.ClientTimeout(total=float(route.timeout)),
                 ) as response:
                     status = int(response.status)
+                    response_status = status
                     raw_body = await response.read()
             if status != 200:
+                error_response = _response_error(status)
+                self._finish_trace(
+                    log_id,
+                    response=error_response,
+                    response_status=status,
+                    status="failed",
+                    error=f"HTTP {status}",
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
                 emit_runtime_event(
                     "model.request",
                     "failed",
@@ -288,13 +389,21 @@ class ReplyRouteChatCompletionAdapter:
                         "error_type": "http_status",
                     },
                 )
-                return _response_error(status)
+                return error_response
             if len(raw_body) > self._response_max_bytes:
                 raise ValueError("模型响应超过大小上限")
             decoded = json.loads(raw_body.decode("utf-8"))
             if not isinstance(decoded, Mapping):
                 raise ValueError("模型响应根节点必须是对象")
             result = dict(decoded)
+            self._finish_trace(
+                log_id,
+                response=result,
+                response_status=status,
+                status="success",
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
+            result = _runtime_cost_usage(route, result)
             emit_runtime_event(
                 "model.request",
                 "succeeded",
@@ -308,6 +417,14 @@ class ReplyRouteChatCompletionAdapter:
             )
             return result
         except BaseException as exc:
+            self._finish_trace(
+                log_id,
+                response={},
+                response_status=response_status,
+                status="error",
+                error=type(exc).__name__,
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
             emit_runtime_event(
                 "model.request",
                 "failed",
@@ -328,6 +445,9 @@ class ReplyRouteChatCompletionAdapter:
         payload = self._payload(route, request, stream=True)
         attributes = self._event_attributes(route, request, payload)
         started = time.monotonic()
+        log_id = self._start_trace(route, request, payload)
+        response_status = 0
+        stream_trace = LLMStreamTraceAccumulator()
         emit_runtime_event("model.request", "started", attributes=attributes)
         response_bytes = 0
         response_digest = hashlib.sha256()
@@ -340,8 +460,20 @@ class ReplyRouteChatCompletionAdapter:
                     timeout=aiohttp.ClientTimeout(total=float(route.timeout)),
                 ) as response:
                     status = int(response.status)
+                    response_status = status
                     if status != 200:
                         await response.read()
+                        error_response = _response_error(status)
+                        self._finish_trace(
+                            log_id,
+                            response=error_response,
+                            response_status=status,
+                            status="stream_error",
+                            error=f"HTTP {status}",
+                            latency_ms=int(
+                                (time.monotonic() - started) * 1000
+                            ),
+                        )
                         emit_runtime_event(
                             "model.request",
                             "failed",
@@ -352,14 +484,23 @@ class ReplyRouteChatCompletionAdapter:
                                 "error_type": "http_status",
                             },
                         )
-                        yield _response_error(status)
+                        yield error_response
                         return
                     async for raw_event, decoded in self._iter_sse(response):
                         response_bytes += len(raw_event)
                         if response_bytes > self._response_max_bytes:
                             raise ValueError("模型流响应超过大小上限")
                         response_digest.update(raw_event)
-                        yield decoded
+                        stream_trace.record_chunk(dict(decoded))
+                        yield _runtime_cost_usage(route, decoded)
+            stream_response = stream_trace.build_response()
+            self._finish_trace(
+                log_id,
+                response=stream_response,
+                response_status=response_status,
+                status="stream_success",
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
             emit_runtime_event(
                 "model.request",
                 "succeeded",
@@ -372,6 +513,14 @@ class ReplyRouteChatCompletionAdapter:
                 },
             )
         except BaseException as exc:
+            self._finish_trace(
+                log_id,
+                response={},
+                response_status=response_status,
+                status="stream_error",
+                error=type(exc).__name__,
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
             emit_runtime_event(
                 "model.request",
                 "failed",

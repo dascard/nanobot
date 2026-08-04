@@ -141,6 +141,36 @@ class LLMApiRequestLog(Base):
         default="{}",
         server_default=text("'{}'"),
     )
+    input_tokens = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    output_tokens = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    first_token_latency_ms = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    cost_microusd = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    cost_source = Column(
+        String,
+        nullable=False,
+        default="not_available",
+        server_default=text("'not_available'"),
+    )
     response_status = Column(Integer, default=0)
     response_json = Column(Text, default="{}")
     response_preview = Column(Text, default="")

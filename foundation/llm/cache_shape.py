@@ -9,6 +9,12 @@ from typing import Any
 
 
 HISTORY_SAMPLE_BYTES = 4096
+_TRACE_ONLY_OPTION_KEYS = frozenset({
+    "metadata",
+    "request_id",
+    "run_id",
+    "trace_id",
+})
 
 
 def _stable_json(value: Any) -> str:
@@ -27,6 +33,18 @@ def _sha256_bytes(value: bytes) -> str:
 
 def _sha256(value: Any) -> str:
     return _sha256_bytes(_stable_json(value).encode("utf-8", errors="replace"))
+
+
+def _prompt_sha256(value: Any) -> str:
+    """与 canonical Prompt Runtime 的 stable_json 编码保持一致。"""
+
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    ).encode("utf-8", errors="replace")
+    return _sha256_bytes(encoded)
 
 
 def _message_role(message: Any) -> str:
@@ -80,20 +98,32 @@ def build_llm_cache_shape(
     messages = list(raw_messages) if isinstance(raw_messages, (list, tuple)) else []
     raw_tools = payload.get("tools")
     tools = list(raw_tools) if isinstance(raw_tools, (list, tuple)) else []
-    leading_system, history = _split_prompt_messages(messages)
-    history_head, history_tail, history_bytes = _sample_hashes(history)
     context = dict(cache_context or {})
+    leading_system, history = _split_prompt_messages(messages)
+    explicit_prefix_count = context.get("stable_prefix_message_count")
+    if (
+        type(explicit_prefix_count) is int
+        and 0 < explicit_prefix_count <= len(messages)
+    ):
+        stable_prefix = messages[:explicit_prefix_count]
+        stable_prefix_source = "manifest"
+    else:
+        stable_prefix = leading_system
+        stable_prefix_source = "derived"
+    history_head, history_tail, history_bytes = _sample_hashes(history)
 
     options = {
         key: value
         for key, value in payload.items()
         if key not in {"messages", "tools", "input"}
+        and key not in _TRACE_ONLY_OPTION_KEYS
     }
     leading_system_sha256 = _sha256(leading_system)
-    tools_sha256 = _sha256(tools)
+    stable_prefix_sha256 = _prompt_sha256(stable_prefix)
+    tools_sha256 = _prompt_sha256(tools)
     explicit_epoch = str(context.get("prefix_epoch") or "").strip()[:96]
     derived_epoch = _sha256({
-        "leading_system": leading_system_sha256,
+        "stable_prefix": stable_prefix_sha256,
         "tools": tools_sha256,
         "history_head": history_head,
     })[:24]
@@ -104,13 +134,31 @@ def build_llm_cache_shape(
     )
 
     result: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "prefix_epoch": explicit_epoch or derived_epoch,
         "prefix_epoch_source": "runtime" if explicit_epoch else "derived",
         "scope_sha256": _sha256(scope_key) if scope_key else "",
         "leading_system_sha256": leading_system_sha256,
         "leading_system_messages": len(leading_system),
+        "stable_prefix_sha256": stable_prefix_sha256,
+        "stable_prefix_messages": len(stable_prefix),
+        "stable_prefix_source": stable_prefix_source,
+        "stable_prefix_contract_match": (
+            not context.get("stable_prefix_sha256")
+            or str(context.get("stable_prefix_sha256")) == stable_prefix_sha256
+        ),
+        "prefix_cache_key": str(context.get("prefix_cache_key") or "")[:64],
+        "prefix_cache_manifest_sha256": str(
+            context.get("prefix_cache_manifest_sha256") or ""
+        )[:64],
+        "canonical_order_sha256": str(
+            context.get("canonical_order_sha256") or ""
+        )[:64],
         "tools_sha256": tools_sha256,
+        "tool_schema_contract_match": (
+            not context.get("tool_schema_sha256")
+            or str(context.get("tool_schema_sha256")) == tools_sha256
+        ),
         "tool_count": len(tools),
         "history_sha256": _sha256(history),
         "history_head_sha256": history_head,
@@ -140,8 +188,9 @@ def infer_cache_miss_reason(
     if not previous:
         return "cold_start"
     comparisons = (
+        ("prefix_cache_key", "prefix_cache_key_changed"),
         ("prefix_epoch", "prefix_epoch_changed"),
-        ("leading_system_sha256", "system_changed"),
+        ("stable_prefix_sha256", "stable_prefix_changed"),
         ("tools_sha256", "tools_changed"),
         ("history_head_sha256", "history_head_changed"),
         ("request_options_sha256", "request_options_changed"),

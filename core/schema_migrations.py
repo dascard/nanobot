@@ -103,6 +103,9 @@ _RUN_EVIDENCE_GOVERNANCE_V1_VERSION = "20260804_run_evidence_governance_v1"
 _RUN_RECOVERY_V1_VERSION = "20260804_run_checkpoint_recovery_v1"
 _RUN_DURABLE_TASK_V1_VERSION = "20260804_run_durable_task_v1"
 _ARTIFACT_LIFECYCLE_V1_VERSION = "20260804_artifact_lifecycle_v1"
+_LLM_PROVIDER_CACHE_PERFORMANCE_VERSION = (
+    "20260804_llm_provider_cache_performance"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -997,6 +1000,94 @@ def _llm_cache_diagnostics_v2(
                 ),
             })
         conn.execute(update_statement, updates)
+        last_id = int(rows[-1]["id"])
+
+
+def _llm_provider_cache_performance(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """补齐 Provider 级 token、首 token 延迟和成本字段。"""
+
+    from foundation.llm.cost_usage import normalize_llm_cost_usage
+
+    _add_missing_columns(conn, "llm_api_request_logs", {
+        "input_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "output_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "first_token_latency_ms": "INTEGER NOT NULL DEFAULT 0",
+        "cost_microusd": "INTEGER NOT NULL DEFAULT 0",
+        "cost_source": "TEXT NOT NULL DEFAULT 'not_available'",
+    })
+    if "llm_api_request_logs" not in _table_names(conn):
+        return
+    required = {"id", "status", "response_json"}
+    if not required <= _columns(conn, "llm_api_request_logs"):
+        return
+
+    def metric(usage: dict[str, Any], *keys: str) -> int:
+        for key in keys:
+            value = usage.get(key)
+            if type(value) is int and value >= 0:
+                return value
+        return 0
+
+    statement = text(
+        "UPDATE llm_api_request_logs SET input_tokens=:input_tokens, "
+        "output_tokens=:output_tokens, "
+        "first_token_latency_ms=:first_token_latency_ms, "
+        "cost_microusd=:cost_microusd, cost_source=:cost_source "
+        "WHERE id=:id"
+    )
+    last_id = -(2**63)
+    while True:
+        rows = conn.execute(text(
+            "SELECT id, status, response_json FROM llm_api_request_logs "
+            "WHERE id > :last_id ORDER BY id LIMIT 500"
+        ), {"last_id": last_id}).mappings().all()
+        if not rows:
+            break
+        updates: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                response = json.loads(str(row.get("response_json") or "{}"))
+                if not isinstance(response, dict):
+                    response = {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                response = {}
+            raw_usage = response.get("usage")
+            usage = raw_usage if isinstance(raw_usage, dict) else {}
+            input_tokens = metric(usage, "prompt_tokens", "input_tokens")
+            output_tokens = metric(
+                usage, "completion_tokens", "output_tokens"
+            )
+            raw_stream = response.get("stream_metrics")
+            stream = raw_stream if isinstance(raw_stream, dict) else {}
+            first_token = metric(
+                stream,
+                "first_content_ms",
+                "first_reasoning_ms",
+                "first_chunk_ms",
+            )
+            successful = str(row.get("status") or "") in {
+                "success",
+                "stream_success",
+            }
+            cost = normalize_llm_cost_usage(
+                response,
+                successful=successful,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+            updates.append({
+                "id": row["id"],
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "first_token_latency_ms": first_token,
+                "cost_microusd": cost.cost_microusd,
+                "cost_source": cost.source,
+            })
+        conn.execute(statement, updates)
         last_id = int(rows[-1]["id"])
 
 
@@ -4944,6 +5035,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _ARTIFACT_LIFECYCLE_V1_VERSION,
         "owner scoped immutable artifact versions",
         _artifact_lifecycle_v1,
+    ),
+    (
+        _LLM_PROVIDER_CACHE_PERFORMANCE_VERSION,
+        "llm provider cache token latency and cost metrics",
+        _llm_provider_cache_performance,
     ),
 ]
 

@@ -128,6 +128,11 @@ def test_schema_migrations_records_applied_versions():
         "cache_miss_tokens",
         "cache_write_tokens",
         "cache_details_json",
+        "input_tokens",
+        "output_tokens",
+        "first_token_latency_ms",
+        "cost_microusd",
+        "cost_source",
     } <= llm_log_columns
     reply_contract_columns = [col["name"] for col in inspector.get_columns("reply_contract_check_logs")]
     assert "reply_tool_call_count" in reply_contract_columns
@@ -623,6 +628,44 @@ def test_llm_cache_diagnostics_v2_backfills_deepseek_miss_and_shape():
     details = json.loads(row["cache_details_json"])
     assert details["cache_shape"]["leading_system_sha256"]
     assert details["cache_shape"]["scope_sha256"]
+
+
+def test_llm_provider_cache_performance_backfills_safe_metrics():
+    from core.schema_migrations import _llm_provider_cache_performance
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE llm_api_request_logs ("
+            "id INTEGER PRIMARY KEY, status TEXT, response_json TEXT)"
+        ))
+        conn.execute(text(
+            "INSERT INTO llm_api_request_logs(id, status, response_json) "
+            "VALUES (1, 'stream_success', :response_json)"
+        ), {
+            "response_json": json.dumps({
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 30,
+                    "cost": 0.00042,
+                },
+                "stream_metrics": {"first_content_ms": 55},
+            }),
+        })
+
+        _llm_provider_cache_performance(conn, engine, None)
+        row = conn.execute(text(
+            "SELECT input_tokens, output_tokens, first_token_latency_ms, "
+            "cost_microusd, cost_source FROM llm_api_request_logs WHERE id=1"
+        )).mappings().one()
+
+    assert dict(row) == {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "first_token_latency_ms": 55,
+        "cost_microusd": 420,
+        "cost_source": "provider_reported",
+    }
 
 
 def test_block_session_memory_migration_adds_table_and_column():

@@ -125,11 +125,14 @@ async def test_reply_route_adapter_sends_frozen_openai_payload_and_keeps_raw_too
         service_tier="priority",
         extra_headers={"X-Route": "main"},
         extra_body={"parallel_tool_calls": False},
+        cost_input_1m=0.5,
+        cost_output_1m=2.0,
     ))
 
     result = await adapter.complete_chat(_request())
 
     assert result["choices"][0]["message"]["tool_calls"][0]["id"] == "call-1"
+    assert result["usage"]["cost_microunits"] == 6
     call = session.calls[0]
     assert call["url"] == "http://model.test/v1/chat/completions"
     assert call["headers"]["Authorization"] == "Bearer secret-key"
@@ -168,6 +171,50 @@ async def test_reply_route_adapter_stream_decodes_fragmented_sse_and_http_error(
     error = await adapter.complete_chat(_request())
     assert error["error"]["code"] == "http_401"
     assert "unauthorized" in error["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_reply_route_adapter_records_native_provider_stream_metrics(
+    monkeypatch,
+):
+    recorded: list[dict] = []
+    finished: list[dict] = []
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **kwargs: recorded.append(kwargs) or 91),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **kwargs: finished.append(kwargs)),
+    )
+    chunks = [
+        b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+        b'data: {"usage":{"prompt_tokens":10,"completion_tokens":2},'
+        b'"choices":[]}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+    session = _FakeSession(_FakeResponse(chunks=chunks))
+    adapter = ReplyRouteChatCompletionAdapter(session_provider=lambda: session)
+    adapter.bind_route(_route())
+    request = ChatCompletionRequest(
+        messages=({"role": "user", "content": "你好"},),
+        manual_model="model-a",
+        trace_id="trace-native",
+        run_id="run-native",
+        trace_source="native_agent",
+    )
+
+    events = [event async for event in adapter.stream_chat(request)]
+
+    assert len(events) == 2
+    assert recorded[0]["trace_id"] == "trace-native"
+    assert recorded[0]["run_id"] == "run-native"
+    assert recorded[0]["provider"] == "team_gateway"
+    assert recorded[0]["model"] == "model-a"
+    assert finished[0]["log_id"] == 91
+    assert finished[0]["status"] == "stream_success"
+    assert finished[0]["response"]["usage"]["prompt_tokens"] == 10
+    assert finished[0]["response"]["stream_metrics"]["first_content_ms"] >= 0
 
 
 @pytest.mark.asyncio

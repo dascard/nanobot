@@ -16,6 +16,12 @@ from core.prompt_v2.flow_contract import (
     reserved_contract_by_template_key,
 )
 from core.prompt_v2.context_adapters import SESSION_GUIDANCE_NOTICE
+from core.prompt_v2.prefix_cache import (
+    PromptPrefixCacheError,
+    build_prompt_prefix_cache_manifest,
+    canonicalize_tool_schemas,
+    validate_prompt_prefix_cache_manifest,
+)
 from core.prompt_v2.section_descriptors import descriptor_for_node
 from core.session_guidance import (
     SessionGuidanceValidationError,
@@ -756,6 +762,42 @@ def _audit_context_manifest(plan, issues: list[str]) -> None:
         issues.append("context manifest prompt sha256 does not match plan")
 
 
+def _audit_prefix_cache_manifest(plan, issues: list[str]) -> None:
+    if not hasattr(plan, "prefix_cache_manifest"):
+        return
+    manifest = getattr(plan, "prefix_cache_manifest", None)
+    if not isinstance(manifest, dict):
+        issues.append("prefix cache manifest must be an object")
+        return
+    try:
+        validate_prompt_prefix_cache_manifest(manifest)
+    except PromptPrefixCacheError as exc:
+        issues.append(f"prefix cache manifest is invalid: {exc}")
+        return
+    try:
+        canonical_tools = canonicalize_tool_schemas(
+            getattr(plan, "tool_schemas", None) or []
+        )
+    except PromptPrefixCacheError as exc:
+        issues.append(f"tool schema order is invalid: {exc}")
+        return
+    if canonical_tools != list(getattr(plan, "tool_schemas", None) or []):
+        issues.append("tool schemas do not use canonical order")
+        return
+    try:
+        expected = build_prompt_prefix_cache_manifest(
+            messages=getattr(plan, "messages", None) or [],
+            tool_schemas=canonical_tools,
+            flow_sections=getattr(plan, "flow_sections", None) or [],
+            context_manifest=getattr(plan, "context_manifest", None) or {},
+        ).to_dict()
+    except PromptPrefixCacheError as exc:
+        issues.append(f"prefix cache manifest cannot be rebuilt: {exc}")
+        return
+    if expected != manifest:
+        issues.append("prefix cache manifest does not match plan")
+
+
 def audit_prompt_plan(plan, *, audit_messages: bool = True) -> PromptAuditResult:
     issues: list[str] = []
     sections: list[dict] = []
@@ -774,6 +816,7 @@ def audit_prompt_plan(plan, *, audit_messages: bool = True) -> PromptAuditResult
         issues=issues,
     )
     _audit_context_manifest(plan, issues)
+    _audit_prefix_cache_manifest(plan, issues)
 
     if audit_messages:
         _audit_all_message_indexes(plan, sections, issues)

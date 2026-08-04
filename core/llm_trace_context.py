@@ -32,6 +32,16 @@ _CACHE_CONTEXT_KEYS = (
     "prefix_epoch_high_water_tokens",
 )
 
+_PREFIX_CACHE_MANIFEST_FIELDS = {
+    "prefix_cache_key": "cache_key",
+    "prefix_cache_manifest_sha256": "sha256",
+    "stable_prefix_sha256": "stable_prefix_sha256",
+    "stable_prefix_message_count": "stable_message_count",
+    "stable_prefix_token_estimate": "stable_prefix_token_estimate",
+    "tool_schema_sha256": "tool_schema_sha256",
+    "canonical_order_sha256": "canonical_order_sha256",
+}
+
 
 def get_llm_trace_vars() -> tuple[str, str, str]:
     """返回当前上下文的 (trace_id, run_id, source)。"""
@@ -67,6 +77,23 @@ def build_llm_cache_context(
             if key in debug and (not drop_none or debug[key] is not None)
         },
     }
+
+
+def attach_prompt_prefix_cache_context(
+    cache_context: dict[str, Any],
+    manifest: Any,
+) -> dict[str, Any]:
+    """把已签名的 Prefix Cache Manifest 收窄为链路上下文。"""
+
+    from core.prompt_v2.prefix_cache import (
+        validate_prompt_prefix_cache_manifest,
+    )
+
+    validate_prompt_prefix_cache_manifest(manifest)
+    result = dict(cache_context or {})
+    for target, source in _PREFIX_CACHE_MANIFEST_FIELDS.items():
+        result[target] = manifest[source]
+    return result
 
 
 @contextmanager

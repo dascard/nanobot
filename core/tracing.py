@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import math
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from foundation.llm.cache_shape import (
     build_llm_cache_shape,
     infer_cache_miss_reason,
 )
+from foundation.llm.cost_usage import normalize_llm_cost_usage
 
 from core.prompt_v2.template_resolution import serialize_template_resolutions_json
 from core.safe_diagnostics import safe_response_summary, safe_url_for_logging
@@ -685,6 +687,35 @@ def _llm_usage_ledger_metrics(
             )
         ),
     }
+
+
+def _first_token_latency_ms(response: Any) -> int:
+    response_mapping = response if isinstance(response, Mapping) else {}
+    raw_metrics = response_mapping.get("stream_metrics")
+    metrics = raw_metrics if isinstance(raw_metrics, Mapping) else {}
+    token_latencies: list[int] = []
+    for key in ("first_content_ms", "first_reasoning_ms"):
+        value = metrics.get(key)
+        if type(value) is int and value >= 0:
+            token_latencies.append(value)
+    if token_latencies:
+        return min(token_latencies)
+    first_chunk = metrics.get("first_chunk_ms")
+    if type(first_chunk) is int and first_chunk >= 0:
+        return first_chunk
+    return 0
+
+
+def _cache_pricing_context(value: Mapping[str, Any]) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for key in ("cost_input_1m", "cost_output_1m"):
+        raw = value.get(key)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            continue
+        parsed = float(raw)
+        if math.isfinite(parsed) and parsed >= 0:
+            result[key] = parsed
+    return result
 
 
 def _bounded_payload_json(value: Any, *, max_chars: int) -> str:
@@ -1418,7 +1449,12 @@ class LLMRequestTracer:
                         cache_miss_tokens=0,
                         cache_write_tokens=0,
                         cache_details_json=json.dumps(
-                            {"cache_shape": cache_shape},
+                            {
+                                "cache_shape": cache_shape,
+                                "pricing": _cache_pricing_context(
+                                    cache_context
+                                ),
+                            },
                             ensure_ascii=False,
                             separators=(",", ":"),
                         ),
@@ -1455,6 +1491,7 @@ class LLMRequestTracer:
         error: str = "",
         latency_ms: int = 0,
         phase: str | None = None,
+        record_ledger_usage: bool = True,
     ) -> None:
         if not log_id:
             return
@@ -1510,6 +1547,21 @@ class LLMRequestTracer:
                     except (TypeError, ValueError, json.JSONDecodeError):
                         cache_details = {}
                     cache_details.update(cache_usage.details)
+                    pricing = cache_details.get("pricing")
+                    pricing = pricing if isinstance(pricing, dict) else {}
+                    cost_usage = normalize_llm_cost_usage(
+                        response or {},
+                        successful=successful,
+                        input_tokens=usage_metrics["input_tokens"],
+                        output_tokens=usage_metrics["output_tokens"],
+                        cost_input_1m=pricing.get("cost_input_1m"),
+                        cost_output_1m=pricing.get("cost_output_1m"),
+                    )
+                    cache_details["cost"] = {
+                        "source": cost_usage.source,
+                        "estimated": cost_usage.estimated,
+                        **cost_usage.details,
+                    }
                     cache_shape = cache_details.get("cache_shape")
                     cache_shape = (
                         cache_shape if isinstance(cache_shape, dict) else {}
@@ -1543,9 +1595,16 @@ class LLMRequestTracer:
                         log.phase = str(phase or "")[:64]
                     log.error = safe_response_summary(error, max_chars=2000)
                     log.latency_ms = int(latency_ms or 0)
+                    log.input_tokens = usage_metrics["input_tokens"]
+                    log.output_tokens = usage_metrics["output_tokens"]
+                    log.first_token_latency_ms = _first_token_latency_ms(
+                        response or {}
+                    )
+                    log.cost_microusd = cost_usage.cost_microusd
+                    log.cost_source = cost_usage.source
                     ledger_occurred_at = datetime.now().astimezone()
                     log.finished_at = to_db_naive(ledger_occurred_at)
-                    if str(log.run_id or ""):
+                    if record_ledger_usage and str(log.run_id or ""):
                         from core.run_ledger.adapters import (
                             usage_recorded_event,
                         )
@@ -1574,6 +1633,7 @@ class LLMRequestTracer:
                                 ],
                                 cache_miss_tokens=cache_usage.miss_tokens,
                                 cache_write_tokens=cache_usage.write_tokens,
+                                cost_microunits=cost_usage.cost_microusd,
                                 occurred_at=ledger_occurred_at,
                             ))
                     db.commit()

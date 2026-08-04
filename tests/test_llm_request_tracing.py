@@ -171,6 +171,56 @@ def test_request_trace_records_cache_shape_epoch_and_deepseek_miss(db_session):
     assert "group_cache_shape" not in row.cache_details_json
 
 
+def test_finish_request_records_provider_cache_latency_and_cost(db_session):
+    from core.llm_trace_context import llm_trace_scope
+    from core.tracing import LLMRequestTracer
+
+    with llm_trace_scope(cache_context={
+        "cost_input_1m": 0.5,
+        "cost_output_1m": 2.0,
+    }):
+        log_id = LLMRequestTracer.record_request(
+            source="provider-performance",
+            provider="provider-a",
+            model="model-a",
+            request={
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+    LLMRequestTracer.finish_request(
+        log_id=log_id,
+        response={
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 200,
+                "prompt_tokens_details": {"cached_tokens": 400},
+            },
+            "stream_metrics": {
+                "first_chunk_ms": 60,
+                "first_reasoning_ms": 72,
+                "first_content_ms": 87,
+            },
+        },
+        response_status=200,
+        status="stream_success",
+        latency_ms=240,
+    )
+
+    row = db_session.query(LLMApiRequestLog).filter_by(id=log_id).one()
+    assert row.provider == "provider-a"
+    assert row.input_tokens == 1000
+    assert row.output_tokens == 200
+    assert row.cache_hit_tokens == 400
+    assert row.cache_miss_tokens == 600
+    assert row.first_token_latency_ms == 72
+    assert row.cost_microusd == 900
+    assert row.cost_source == "pricing_estimate"
+    details = json.loads(row.cache_details_json)
+    assert details["cache_hit_ratio"] == 0.4
+    assert details["cost"]["estimated"] is True
+
+
 def test_finish_request_records_error_status(db_session):
     from core.tracing import LLMRequestTracer
 

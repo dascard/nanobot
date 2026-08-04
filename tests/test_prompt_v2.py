@@ -2047,15 +2047,22 @@ def test_prompt_v2_section_variables_are_whitelisted_by_scope():
 
     rendered = render_scoped_template(
         "identity_context",
-        "你叫 {{character_name}}\n{{ name_hint }}\n{{ alias_names }}\n{{is_super_user}}",
+        "你叫 {{character_name}}\n{{ name_hint }}\n{{ alias_names }}\n{{platform}}",
         {
             "character_name": "七濑",
             "name_hint": "小七",
             "alias_names": "小七\n七七",
-            "is_super_user": "true",
+            "platform": "qq",
         },
     )
-    assert rendered == "你叫 七濑\n小七\n小七\n七七\ntrue"
+    assert rendered == "你叫 七濑\n小七\n小七\n七七\nqq"
+
+    with pytest.raises(PromptVariableError):
+        render_scoped_template(
+            "identity_context",
+            "{{ is_super_user }}",
+            {"is_super_user": "true"},
+        )
 
     with pytest.raises(PromptVariableError):
         render_scoped_template("identity_context", "{{ user_input }}", {"user_input": "禁止"})

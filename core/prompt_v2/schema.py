@@ -62,6 +62,7 @@ class PromptPlan:
     warnings: list[str]
     debug: dict[str, Any]
     context_manifest: dict[str, Any] = field(default_factory=dict)
+    prefix_cache_manifest: dict[str, Any] = field(default_factory=dict)
     platform: str = "qq"
     policy_profile: str = "qq"
     flow_sections: list[PromptFlowSection] = field(default_factory=list)
@@ -79,6 +80,11 @@ class PromptPlan:
             self,
             "context_manifest",
             copy.deepcopy(dict(self.context_manifest or {})),
+        )
+        object.__setattr__(
+            self,
+            "prefix_cache_manifest",
+            copy.deepcopy(dict(self.prefix_cache_manifest or {})),
         )
 
     @property

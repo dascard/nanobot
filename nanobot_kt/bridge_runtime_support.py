@@ -53,6 +53,39 @@ def bind_bridge_runtime_correlation(
     )
 
 
+def build_bridge_llm_cache_context(
+    meta: Mapping[str, Any],
+    session_id: str,
+    *,
+    drop_none: bool = False,
+) -> dict[str, Any]:
+    """优先读取已审计的 Prompt 前缀上下文，并兼容旧入口。"""
+
+    cached = meta.get("_prompt_cache_context")
+    if isinstance(cached, Mapping):
+        return dict(cached)
+    from core.llm_trace_context import build_llm_cache_context
+
+    return build_llm_cache_context(
+        session_id,
+        meta.get("context_debug"),
+        drop_none=drop_none,
+    )
+
+
+def build_attempt_cache_context(
+    cache_context: Mapping[str, Any],
+    route_plan: Any,
+) -> dict[str, Any]:
+    """为单次模型路由附加仅供计量使用的冻结定价。"""
+
+    return {
+        **dict(cache_context),
+        "cost_input_1m": getattr(route_plan, "cost_input_1m", None),
+        "cost_output_1m": getattr(route_plan, "cost_output_1m", None),
+    }
+
+
 def build_native_tool_registry_runtime_info(
     loaded_names: Iterable[str],
 ) -> dict[str, object]:

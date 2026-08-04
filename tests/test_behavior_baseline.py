@@ -136,7 +136,14 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     admin_change = approved["stage1_admin_structured_views"]
     assert admin_change["snapshot_id"] == "security_invariants"
     assert len(admin_change["before_sha256"]) == 64
-    assert admin_change["after_sha256"] == _sha256(
+    prefix_cache_change = approved[
+        "agent_harness_prefix_cache_provider_metrics"
+    ]
+    assert prefix_cache_change["snapshot_id"] == "security_invariants"
+    assert prefix_cache_change["before_sha256"] == (
+        admin_change["after_sha256"]
+    )
+    assert prefix_cache_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "security_invariants.json"
     )
     slo_change = approved["stage47_task_slo_registry"]

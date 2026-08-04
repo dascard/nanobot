@@ -17,6 +17,14 @@
       "stage": "阶段 1.1"
     },
     {
+      "after_sha256": "06347983ab524eb77fedb3e7b27ebd78f96f6c08cf78a1d94975921da733466e",
+      "before_sha256": "04889c5b873921f3ca330e5803b7c5f3ed894f6c50acb7a32f773073491ba533",
+      "id": "agent_harness_prefix_cache_provider_metrics",
+      "reason": "为结构化 LLM 请求日志追加输入、输出、首 token 延迟、成本和成本来源列，以便按 Provider 审计前缀缓存效果；管理端仍只能访问登记的只读表视图。",
+      "snapshot_id": "security_invariants",
+      "stage": "Agent Harness 阶段 5.2"
+    },
+    {
       "after_sha256": "b88655df8155786208304d2252574f03995a25fb07d27ab1b2087653b907871c",
       "before_sha256": "24a8ea0718109500b32a1284ca7c1b810c47ad372bbebf752d4c9e2fd09cad5d",
       "id": "stage47_task_slo_registry",
@@ -161,7 +169,7 @@
       "stage": "Agent Harness 阶段 4.3"
     }
   ],
-  "baseline_git_commit": "3d05a6d3f683db25189731d7e6a02ede485fb1d2",
+  "baseline_git_commit": "317c91a63d0be72f752cc014028ca4b9b29d59b6",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -229,7 +237,7 @@
       "id": "security_invariants",
       "note": "Sandbox 路径、Admin 结构化视图、URL、CQ 和 Prompt 权威边界不得削弱。",
       "path": "tests/golden/architecture_behavior/security_invariants.json",
-      "sha256": "04889c5b873921f3ca330e5803b7c5f3ed894f6c50acb7a32f773073491ba533"
+      "sha256": "06347983ab524eb77fedb3e7b27ebd78f96f6c08cf78a1d94975921da733466e"
     }
   ]
 }

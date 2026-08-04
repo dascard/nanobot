@@ -31,6 +31,9 @@ MANIFEST_RELATIVE_PATH = Path("docs/architecture/behavior-baseline.json")
 ADMIN_SQL_SECURITY_BASELINE_SHA256 = (
     "5f369375cd179c523d77fc5728228fa1f6d70ef5d68b40f8dc55935213a4dbed"
 )
+AGENT_HARNESS_PREFIX_CACHE_SECURITY_BASELINE_SHA256 = (
+    "04889c5b873921f3ca330e5803b7c5f3ed894f6c50acb7a32f773073491ba533"
+)
 STAGE47_RUNTIME_REGISTRY_BASELINE_SHA256 = (
     "24a8ea0718109500b32a1284ca7c1b810c47ad372bbebf752d4c9e2fd09cad5d"
 )
@@ -1177,13 +1180,29 @@ def _manifest(
                 "snapshot_id": "security_invariants",
                 "stage": "阶段 1.1",
                 "before_sha256": ADMIN_SQL_SECURITY_BASELINE_SHA256,
-                "after_sha256": _sha256_file(
-                    snapshot_paths["security_invariants"]
+                "after_sha256": (
+                    AGENT_HARNESS_PREFIX_CACHE_SECURITY_BASELINE_SHA256
                 ),
                 "reason": (
                     "删除 Admin 任意 SQL 产品入口，改为代码所有的结构化 "
                     "Table View Registry；Sandbox、URL、CQ 和 Prompt "
                     "安全基线保持不变。"
+                ),
+            },
+            {
+                "id": "agent_harness_prefix_cache_provider_metrics",
+                "snapshot_id": "security_invariants",
+                "stage": "Agent Harness 阶段 5.2",
+                "before_sha256": (
+                    AGENT_HARNESS_PREFIX_CACHE_SECURITY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["security_invariants"]
+                ),
+                "reason": (
+                    "为结构化 LLM 请求日志追加输入、输出、首 token 延迟、"
+                    "成本和成本来源列，以便按 Provider 审计前缀缓存效果；"
+                    "管理端仍只能访问登记的只读表视图。"
                 ),
             },
             {
