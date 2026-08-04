@@ -35,40 +35,52 @@ def begin_tool_trace(
     tool_call_id: str = "",
 ) -> tuple[str, float]:
     started = time.time()
-    try:
-        from core.tracing import ToolTracer
-        from core.tracing_context import get_trace_context
+    from core.tracing import ToolTracer, new_tool_call_id
+    from core.tracing_context import get_trace_context
 
-        trace_id, run_id = get_trace_context()
-        tool_call_id = ToolTracer.start_tool_call(
+    trace_id, run_id = get_trace_context()
+    resolved_tool_call_id = str(tool_call_id or "").strip()[:80]
+    if not resolved_tool_call_id and run_id:
+        resolved_tool_call_id = new_tool_call_id()
+    if not resolved_tool_call_id:
+        return "", started
+    try:
+        legacy_tool_call_id = ToolTracer.start_tool_call(
             trace_id,
             run_id,
             tool_name,
             args,
-            tool_call_id=tool_call_id,
+            tool_call_id=resolved_tool_call_id,
         )
     except Exception:
-        return "", started
+        legacy_tool_call_id = ""
+    if legacy_tool_call_id:
+        resolved_tool_call_id = legacy_tool_call_id
     args_bytes, args_sha256 = _payload_fingerprint(args)
     with _EVENT_STATE_LOCK:
-        _EVENT_TOOL_STATE[tool_call_id] = (
+        _EVENT_TOOL_STATE[resolved_tool_call_id] = (
             str(tool_name or ""),
             args_bytes,
             args_sha256,
         )
     from core.runtime.event_bus import emit_runtime_event
 
-    emit_runtime_event(
-        "tool.execute",
-        "started",
-        context=_tool_event_context(tool_call_id),
-        attributes={
-            "tool_name": str(tool_name or ""),
-            "args_bytes": args_bytes,
-            "args_sha256": args_sha256,
-        },
-    )
-    return tool_call_id, started
+    try:
+        emit_runtime_event(
+            "tool.execute",
+            "started",
+            context=_tool_event_context(resolved_tool_call_id),
+            attributes={
+                "tool_name": str(tool_name or ""),
+                "args_bytes": args_bytes,
+                "args_sha256": args_sha256,
+            },
+        )
+    except BaseException:
+        with _EVENT_STATE_LOCK:
+            _EVENT_TOOL_STATE.pop(resolved_tool_call_id, None)
+        raise
+    return resolved_tool_call_id, started
 
 
 def finish_tool_trace(

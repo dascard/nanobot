@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`95ea1bc2991516b8f20b30ba261a95e5f9c2a418`
-- 规则总数：7506
+- 源提交：`6f62e90474175490aaaf06f47fa0703077be55d6`
+- 规则总数：7528
 - 扫描错误：0
 - 人工复核队列：713
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 136 |
-| `configurable_policy` | 1346 |
+| `configurable_policy` | 1351 |
 | `data_consistency` | 456 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4013 |
-| `security_invariant` | 1519 |
+| `protocol_syntax` | 4029 |
+| `security_invariant` | 1520 |
 
 ## 文件汇总
 
@@ -181,6 +181,7 @@
 | `scripts/cleanup-sandbox-runtime.sh` | 15 |
 | `webui/src/features/sandbox/SandboxFilesPage.test.jsx` | 15 |
 | `api/admin/log_routes.py` | 14 |
+| `api/admin/trace_routes.py` | 14 |
 | `api/chat_response_contract.py` | 14 |
 | `app/session_memory/summarizer.py` | 14 |
 | `config.py` | 14 |
@@ -189,6 +190,7 @@
 | `core/eval_sampling/store.py` | 14 |
 | `core/group_learning/rules.py` | 14 |
 | `core/outbound/control.py` | 14 |
+| `core/run_ledger/persistence.py` | 14 |
 | `core/sandbox/asset_store.py` | 14 |
 | `core/sandbox/paths.py` | 14 |
 | `core/sandbox/run_ledger.py` | 14 |
@@ -204,7 +206,6 @@
 | `core/group_runtime/state.py` | 13 |
 | `core/prompt_v2/template_baseline.py` | 13 |
 | `core/prompt_v2/tool_templates.py` | 13 |
-| `core/run_ledger/persistence.py` | 13 |
 | `core/task_runtime/runtime.py` | 13 |
 | `core/telemetry/contracts.py` | 13 |
 | `core/text_style.py` | 13 |
@@ -232,13 +233,13 @@
 | `core/proactive/serialization.py` | 11 |
 | `core/prompt_v2/task_templates.py` | 11 |
 | `core/reply_postprocess.py` | 11 |
+| `core/run_ledger/adapters.py` | 11 |
 | `core/schedule_spec.py` | 11 |
 | `core/settings_service.py` | 11 |
 | `nanobot_kt/tools/ai_daily.py` | 11 |
 | `sandboxd/quota.py` | 11 |
 | `webui/src/features/rag/RagBenchmarkPage.jsx` | 11 |
 | `api/admin/scheduled_task_routes.py` | 10 |
-| `api/admin/trace_routes.py` | 10 |
 | `api/chat_persistence.py` | 10 |
 | `app/group_learning/review_service.py` | 10 |
 | `app/session_config/discovery_service.py` | 10 |
@@ -307,6 +308,7 @@
 | `core/release/impact.py` | 7 |
 | `core/release/verification.py` | 7 |
 | `core/route_metadata.py` | 7 |
+| `core/run_ledger/read_model.py` | 7 |
 | `core/semantic/provider_factory.py` | 7 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/htmllist.py` | 7 |
 | `creatures/nanobot/prompts/skills/news_search/runtime_cache.py` | 7 |
@@ -393,7 +395,6 @@
 | `core/prompt_v2/context_adapters.py` | 4 |
 | `core/prompt_v2/schema.py` | 4 |
 | `core/prompt_v2/template_validation.py` | 4 |
-| `core/run_ledger/adapters.py` | 4 |
 | `core/sandbox/identity.py` | 4 |
 | `core/sandbox/workspace_service.py` | 4 |
 | `core/tool_execution_policy.py` | 4 |
@@ -478,6 +479,7 @@
 | `core/private_timing_contracts.py` | 2 |
 | `core/prompt_v2/policy_profiles.py` | 2 |
 | `core/registry/validation.py` | 2 |
+| `core/run_ledger/sinks.py` | 2 |
 | `core/sandbox/execution_profiles.py` | 2 |
 | `core/sandbox/quota_service.py` | 2 |
 | `core/sqlite_maintenance.py` | 2 |
@@ -544,6 +546,7 @@
 | `core/release/runtime_verify.py` | 1 |
 | `core/repositories/chat_logs.py` | 1 |
 | `core/retrieval/contracts.py` | 1 |
+| `core/runtime/event_bus.py` | 1 |
 | `core/runtime_paths.py` | 1 |
 | `core/settings_admin_service.py` | 1 |
 | `core/sqlite_retry.py` | 1 |
@@ -2217,7 +2220,7 @@
 | `decision.384d1bec4bfe2f1324dc` | `core/tool_registration.py:184` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 8 | `reviewed` |
 |  | 摘要：lifecycle == "retired" |  |  |  |  |  |
 |  | 原因：人工复核：retired 是 ToolRegistration 的类型化生命周期状态，必须与 Feature tombstone 一致 |  |  |  |  |  |
-| `decision.cdaec5e6db56a86a5263` | `core/tool_tracing.py:118` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 8 | `reviewed` |
+| `decision.cdaec5e6db56a86a5263` | `core/tool_tracing.py:130` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 8 | `reviewed` |
 |  | 摘要：status != "success" |  |  |  |  |  |
 |  | 原因：人工复核：Tool 执行状态到稳定 failure code 的映射属于工具追踪协议 |  |  |  |  |  |
 | `decision.ac1e7a8e9d2a4332ba9a` | `core/user_block_rules.py:46` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
@@ -2445,13 +2448,13 @@
 | `decision.bd7f7e2691a0a9215955` | `creatures/nanobot/prompts/skills/news_search/search_backend.py:346` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 6 | `reviewed` |
 |  | 摘要：request.freshness == "week" |  |  |  |  |  |
 |  | 原因：人工复核：搜索后端仅按 NewsRequest 的显式 freshness 和执行模式分支 |  |  |  |  |  |
-| `decision.78f31fa69b408682a975` | `nanobot_kt/bridge.py:110` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.78f31fa69b408682a975` | `nanobot_kt/bridge.py:112` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：direct_markers = ( "群聊总结", "群总结", "群日报", "分析群", "总结群", "分析这个群", "总结这个群", ) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.280f1c6b1ad6514eccc2` | `nanobot_kt/bridge.py:1149` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.280f1c6b1ad6514eccc2` | `nanobot_kt/bridge.py:1145` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：'[系统内部错误]' in response |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.beeb1c3552646a5db389` | `nanobot_kt/bridge.py:1150` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.beeb1c3552646a5db389` | `nanobot_kt/bridge.py:1146` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：'[工具错误]' in response |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.8475c5c4d0fc9bdcd380` | `nanobot_kt/codex_admin_adapter.py:14` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |

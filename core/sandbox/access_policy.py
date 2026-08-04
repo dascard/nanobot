@@ -129,7 +129,7 @@ class SandboxAccessPolicy:
             str(tool_name or ""),
             SandboxCapability.OFF,
         )
-        return execute_policy(
+        decision = execute_policy(
             SANDBOX_ACCESS_POLICY_DESCRIPTOR,
             lambda: self._evaluate(
                 tool_name,
@@ -142,6 +142,51 @@ class SandboxAccessPolicy:
                 required=required,
             ),
         ).value
+        self._record_runtime_decision(tool_name, decision)
+        return decision
+
+    def _record_runtime_decision(
+        self,
+        tool_name: str,
+        decision: SandboxAccessDecision,
+    ) -> None:
+        """在返回真实工具调用前提交权限事实；ToolPlan 预检不重复入账。"""
+
+        if self.db is None:
+            return
+        from core.runtime.event_bus import current_runtime_event_context
+
+        correlation = current_runtime_event_context()
+        if not correlation.run_id or not correlation.tool_call_id:
+            return
+        from core.run_ledger.adapters import (
+            sandbox_permission_decision_event,
+        )
+        from core.run_ledger.contracts import RunLedgerAuthorityError
+        from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+
+        event = sandbox_permission_decision_event(
+            correlation=correlation,
+            tool_name=tool_name,
+            allowed=decision.allowed,
+            reason_code=decision.code or "allowed",
+            capability=decision.required_capability.value_name,
+        )
+        try:
+            SqlAlchemyRunEventLedger(self.db).append(event)
+            # 权限决定是工具副作用前的权威屏障；拒绝路径随后即使回滚，
+            # 也不能抹去已经向调用方生效的决定。
+            self.db.commit()
+        except Exception as exc:
+            self.db.rollback()
+            if isinstance(exc, RunLedgerAuthorityError):
+                raise
+            raise RunLedgerAuthorityError(
+                "Sandbox 权限决定权威入账失败",
+                run_id=event.run_id,
+                event_type=event.event_type,
+                code="permission_decision_write_failed",
+            ) from exc
 
     @staticmethod
     def _failure_decision(

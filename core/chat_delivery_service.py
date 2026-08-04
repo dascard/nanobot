@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -26,7 +26,10 @@ from core.chat_delivery_outbox import (
 from core.db.models.inbound import ChatDeliveryOutbox
 from core.fencing import require_lease_exceeds_operation
 from core.inbound_idempotency import InboundClaimKey
-from core.runtime.event_bus import emit_runtime_event
+from core.runtime.event_bus import (
+    current_runtime_event_context,
+    emit_runtime_event,
+)
 
 
 ChatDeliveryPublisher = Callable[
@@ -259,10 +262,24 @@ async def deliver_chat_delivery(
         "payload_bytes": len(payload_bytes),
         "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
     }
+    current_event_context = current_runtime_event_context()
+    event_context = replace(
+        current_event_context,
+        run_id=(
+            f"delivery:chat:{claimed.row_id}:{claimed.attempt_no}"
+        ),
+        task_run_id=(
+            current_event_context.run_id
+            or current_event_context.task_run_id
+        ),
+        job_id=str(claimed.row_id),
+        delivery_id=f"{claimed.row_id}:{claimed.attempt_no}",
+    )
     event_started = time.perf_counter()
     emit_runtime_event(
         "delivery.attempt",
         "started",
+        context=event_context,
         attributes=event_attributes,
     )
 
@@ -281,6 +298,7 @@ async def deliver_chat_delivery(
             emit_runtime_event(
                 "delivery.attempt",
                 "failed",
+                context=event_context,
                 attributes={
                     **event_attributes,
                     "latency_ms": (time.perf_counter() - event_started) * 1000,
@@ -315,6 +333,7 @@ async def deliver_chat_delivery(
         emit_runtime_event(
             "delivery.attempt",
             "failed",
+            context=event_context,
             attributes={
                 **event_attributes,
                 "latency_ms": (time.perf_counter() - event_started) * 1000,
@@ -335,6 +354,7 @@ async def deliver_chat_delivery(
     emit_runtime_event(
         "delivery.attempt",
         "succeeded" if status == "delivered" else "failed",
+        context=event_context,
         attributes={
             **event_attributes,
             "latency_ms": (time.perf_counter() - event_started) * 1000,

@@ -230,3 +230,57 @@ async def test_delivery_database_sessions_run_outside_event_loop_thread(
     assert result.status == "delivered"
     assert len(session_threads) >= 3
     assert all(thread_id != event_loop_thread for thread_id in session_threads)
+
+
+@pytest.mark.asyncio
+async def test_delivery_attempt_uses_independent_run_identity(
+    delivery_session_factory,
+    monkeypatch,
+):
+    from core import chat_delivery_service
+    from core.chat_delivery_service import enqueue_and_deliver_chat_response
+    from core.telemetry.contracts import TelemetryCorrelation
+    from core.tracing_context import (
+        reset_runtime_correlation,
+        set_runtime_event_context,
+    )
+
+    emitted = []
+
+    def capture_event(name, phase, **kwargs):
+        emitted.append((name, phase, kwargs))
+
+    monkeypatch.setattr(
+        chat_delivery_service,
+        "emit_runtime_event",
+        capture_event,
+    )
+    tokens = set_runtime_event_context(TelemetryCorrelation(
+        run_id="source-chat-run",
+        trace_id="source-trace",
+    ))
+    try:
+        result = await enqueue_and_deliver_chat_response(
+            key=_key("independent-ledger-run"),
+            target_type="private",
+            target_id="delivery-service-user",
+            envelope=_envelope(),
+            publisher=lambda *_args: asyncio.sleep(0, result=True),
+            session_factory=delivery_session_factory,
+            owner_token="owner-independent-run",
+        )
+    finally:
+        reset_runtime_correlation(tokens)
+
+    assert result.status == "delivered"
+    contexts = [entry[2]["context"] for entry in emitted]
+    assert len(contexts) == 2
+    assert {context.run_id for context in contexts} == {
+        f"delivery:chat:{result.row_id}:1"
+    }
+    assert {context.task_run_id for context in contexts} == {
+        "source-chat-run"
+    }
+    assert {context.delivery_id for context in contexts} == {
+        f"{result.row_id}:1"
+    }

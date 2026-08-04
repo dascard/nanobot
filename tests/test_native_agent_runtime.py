@@ -531,6 +531,71 @@ async def test_native_runtime_retries_only_before_irreversible_model_output():
 
 
 @pytest.mark.asyncio
+async def test_native_runtime_never_retries_run_ledger_authority_failure():
+    from core.run_ledger.contracts import RunLedgerAuthorityError
+
+    completion = _ScriptedCompletionPort(
+        responses=(
+            RunLedgerAuthorityError(
+                "model event ledger failed",
+                run_id="run-native-1",
+                event_type="model.request.started",
+            ),
+            _assistant_response("不应重试"),
+        )
+    )
+    runtime = _runtime(completion)
+    await runtime.start()
+
+    with pytest.raises(
+        RunLedgerAuthorityError,
+        match="model event ledger failed",
+    ):
+        await runtime.run(AgentTurnRequest(_context(), "不要重试"))
+
+    assert len(completion.complete_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_does_not_normalize_tool_ledger_failure():
+    from core.run_ledger.contracts import RunLedgerAuthorityError
+
+    plan = _tool_plan("memory_query")
+    completion = _ScriptedCompletionPort(
+        responses=(
+            _tool_call_response("memory_query", {"query": "ledger"}),
+        )
+    )
+
+    async def fail_authority(_request):
+        raise RunLedgerAuthorityError(
+            "tool event ledger failed",
+            run_id="run-native-1",
+            event_type="tool.execute.started",
+        )
+
+    runtime = _runtime(
+        completion,
+        plan=plan,
+        handlers={"tool.memory_query.execute": fail_authority},
+    )
+    await runtime.start()
+    events = []
+
+    with pytest.raises(
+        RunLedgerAuthorityError,
+        match="tool event ledger failed",
+    ):
+        await runtime.run_event(
+            AgentTurnRequest(_context(plan), "查询"),
+            events.append,
+        )
+
+    assert events[-1].kind is RuntimeRunEventKind.END
+    assert events[-1].status is RuntimeRunStatus.FAILED
+
+
+@pytest.mark.asyncio
 async def test_native_runtime_rejects_tool_plan_digest_mismatch_before_model_call():
     plan = _tool_plan("memory_query")
     completion = _ScriptedCompletionPort(responses=(_assistant_response("不应调用"),))
@@ -803,6 +868,7 @@ async def test_native_runtime_completes_bridge_reply_contract_main_path():
     bridge = NanobotBridge(runtime_kind=AgentRuntimeKind.NATIVE)
     bridge._agent = object()
     bridge._runtime = runtime
+    bridge._run_event_sink = InMemoryRunEventSink()
     bridge._native_completion_port = completion
     bridge._record_reply_contract_check = lambda **_kwargs: None
     bridge._log_agent_result = lambda *_args, **_kwargs: None

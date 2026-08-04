@@ -19,6 +19,7 @@ from core.sandbox.contracts import (
     SandboxErrorCode,
     SandboxServiceError,
 )
+from core.run_ledger.contracts import RunLedgerAuthorityError
 from core.sandbox.tool_service import SandboxToolService
 from core.tool_registry import get_tool_def
 from core.uow import UnitOfWork
@@ -212,6 +213,8 @@ class SandboxToolBase(BaseTool):
                 normalized,
                 runtime_context,
             )
+        except RunLedgerAuthorityError:
+            raise
         except SandboxServiceError as error:
             result = error.to_result()
         except Exception:

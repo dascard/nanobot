@@ -142,6 +142,68 @@ def test_asset_registration_recovers_from_concurrent_sha_insert(db_session):
     assert db_session.query(Asset).filter_by(sha256=digest).count() == 1
 
 
+def test_asset_registration_appends_body_free_run_ledger_fact(db_session):
+    from core.run_ledger.adapters import run_accepted_event
+    from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+    from core.tracing_context import (
+        reset_runtime_correlation,
+        set_runtime_correlation,
+    )
+
+    principal = _principal("owner-ledger")
+    workspace_service = WorkspaceService(db_session)
+    workspace = workspace_service.ensure_default(principal)
+    digest = "c" * 64
+    ledger = SqlAlchemyRunEventLedger(db_session)
+    ledger.append(run_accepted_event(
+        run_id="run-asset-ledger",
+        trace_id="trace-asset-ledger",
+        session_id="qq:owner-ledger:private",
+        user_id="owner-ledger",
+        chat_type="private",
+        group_id="",
+        run_type="chat",
+        prompt_mode="prompt",
+        prompt_key="chat_private",
+        prompt_sha256="",
+        model="",
+        input_value="asset publish",
+        platform="qq",
+    ))
+    db_session.commit()
+
+    tokens = set_runtime_correlation(
+        run_id="run-asset-ledger",
+        trace_id="trace-asset-ledger",
+        tool_call_id="tool-asset-publish",
+    )
+    try:
+        asset, _link = AssetService(
+            db_session,
+            workspace_service=workspace_service,
+            max_asset_bytes=1024,
+        ).register_published_for_workspace(
+            workspace.id,
+            PublishedAsset(
+                sha256=digest,
+                size_bytes=4,
+                media_type="text/plain",
+                storage_key=SandboxStorageLayout.asset_storage_key(digest),
+            ),
+            logical_name="private/report.txt",
+        )
+        db_session.commit()
+    finally:
+        reset_runtime_correlation(tokens)
+
+    records = ledger.read("run-asset-ledger")
+    artifact = records[-1]
+    assert artifact.event_type == "artifact.recorded"
+    assert artifact.event.payload["artifact_sha256"] == asset.sha256
+    assert artifact.event.payload["workspace_id"] == workspace.id
+    assert "private/report.txt" not in str(dict(artifact.event.payload))
+
+
 def test_asset_registration_maps_concurrent_logical_name_conflict(db_session):
     principal = _principal("owner-A")
     workspace_service = WorkspaceService(db_session)

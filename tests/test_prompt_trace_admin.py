@@ -1,6 +1,6 @@
 import json
 from tests.async_helpers import run_async
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -284,7 +284,14 @@ def test_executor_records_tool_call_with_contextvars(tmp_path, monkeypatch):
         db.close()
 
 
-def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeypatch):
+def test_admin_prompt_and_trace_endpoints(
+    client,
+    auth_header,
+    tmp_path,
+    monkeypatch,
+    db_session,
+):
+    from core import database
     from core.tracing import LLMRequestTracer, ReplyContractTracer, RunTracer, ToolTracer
 
     legacy_prompt = tmp_path / "runtime_prompt.md"
@@ -468,6 +475,8 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
         "prompt_sha256"
     ]
     assert detail_resp.json()["ledger"]["available"] is True
+    assert detail_resp.json()["ledger"]["authoritative"] is True
+    assert detail_resp.json()["ledger"]["source"] == "run_ledger"
     assert detail_resp.json()["ledger"]["projection_complete"] is True
     assert detail_resp.json()["ledger"]["projection"]["status"] == "failed"
     assert detail_resp.json()["ledger"]["projection"]["event_count"] == 5
@@ -490,6 +499,10 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
         "terminal_event_count": 1,
         "high_water_sequence": 5,
     }
+    assert detail_resp.json()["run"]["status"] == "failed"
+    assert detail_resp.json()["run"]["legacy_status"] == "error"
+    assert detail_resp.json()["run"]["status_source"] == "run_ledger"
+    assert detail_resp.json()["run"]["ledger_authoritative"] is True
     assert detail_resp.json()["ledger"]["projection"]["usage"] == {
         "input_tokens": 20,
         "output_tokens": 0,
@@ -536,6 +549,40 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
         "run.terminated",
     ]
 
+    legacy_row = db_session.get(database.AgentRun, run.run_id)
+    assert legacy_row is not None
+    legacy_row.status = "success"
+    legacy_row.started_at = datetime(2035, 1, 1)
+    legacy_row.finished_at = None
+    db_session.commit()
+
+    drifted_detail = client.get(
+        f"/api/v1/admin/agent-runs/{run.run_id}",
+        headers=auth_header,
+    )
+    assert drifted_detail.status_code == 200, drifted_detail.text
+    assert drifted_detail.json()["run"]["status"] == "failed"
+    assert drifted_detail.json()["run"]["legacy_status"] == "success"
+    assert drifted_detail.json()["run"]["started_at"] != "2035-01-01T00:00:00"
+    assert drifted_detail.json()["ledger"]["legacy_audit"][
+        "projection_consistent"
+    ] is False
+    authority_filtered = client.get(
+        "/api/v1/admin/agent-runs",
+        params={"status": "failed", "trace_id": "trace-admin"},
+        headers=auth_header,
+    )
+    assert authority_filtered.status_code == 200, authority_filtered.text
+    assert authority_filtered.json()["total"] == 1
+    assert authority_filtered.json()["items"][0]["status"] == "failed"
+    stale_legacy_filtered = client.get(
+        "/api/v1/admin/agent-runs",
+        params={"status": "success", "trace_id": "trace-admin"},
+        headers=auth_header,
+    )
+    assert stale_legacy_filtered.status_code == 200, stale_legacy_filtered.text
+    assert stale_legacy_filtered.json()["total"] == 0
+
     llm_logs_resp = client.get("/api/v1/admin/llm-api-logs", params={"trace_id": "trace-admin"}, headers=auth_header)
     assert llm_logs_resp.status_code == 200, llm_logs_resp.text
     assert llm_logs_resp.json()["stats"]["total"] == 1
@@ -573,3 +620,76 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     tools_resp = client.get("/api/v1/admin/tool-calls", headers=auth_header)
     assert tools_resp.status_code == 200, tools_resp.text
     assert tools_resp.json()["items"][0]["status"] == "error"
+
+
+def test_admin_reads_independent_delivery_run_without_legacy_header(
+    client,
+    auth_header,
+    db_session,
+):
+    from core.run_ledger.contracts import RunLedgerEventDraft
+    from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+    from core.telemetry.contracts import TelemetryCorrelation
+
+    run_id = "delivery:admin:test-1"
+    occurred_at = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    correlation = TelemetryCorrelation(
+        run_id=run_id,
+        task_run_id="source-run-1",
+        job_id="outbox-1",
+        delivery_id="attempt-1",
+    )
+    ledger = SqlAlchemyRunEventLedger(db_session)
+    ledger.append(RunLedgerEventDraft(
+        event_id="delivery-admin-accepted",
+        run_id=run_id,
+        event_type="run.accepted",
+        occurred_at=occurred_at,
+        source="test.admin",
+        correlation=correlation,
+        status="accepted",
+        payload={"run_type": "delivery", "event_name": "delivery.attempt"},
+    ))
+    ledger.append(RunLedgerEventDraft(
+        event_id="delivery-admin-terminal",
+        run_id=run_id,
+        event_type="run.terminated",
+        occurred_at=occurred_at,
+        source="test.admin",
+        correlation=correlation,
+        status="ambiguous",
+        payload={"failure_code": "transport_unknown"},
+    ))
+    db_session.commit()
+
+    detail = client.get(
+        f"/api/v1/admin/agent-runs/{run_id}",
+        headers=auth_header,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["run"]["run_id"] == run_id
+    assert detail.json()["run"]["run_type"] == "delivery"
+    assert detail.json()["run"]["status"] == "ambiguous"
+    assert detail.json()["run"]["legacy_status"] is None
+    assert detail.json()["ledger"]["authoritative"] is True
+    assert detail.json()["ledger"]["legacy_audit"] is None
+
+    listed = client.get(
+        "/api/v1/admin/agent-runs",
+        params={"run_type": "delivery"},
+        headers=auth_header,
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["total"] == 1
+    assert listed.json()["items"][0]["run_id"] == run_id
+    assert listed.json()["items"][0]["status_source"] == "run_ledger"
+
+    events = client.get(
+        f"/api/v1/admin/agent-runs/{run_id}/events",
+        headers=auth_header,
+    )
+    assert events.status_code == 200, events.text
+    assert [item["event_type"] for item in events.json()["items"]] == [
+        "run.accepted",
+        "run.terminated",
+    ]

@@ -835,7 +835,16 @@ class RunTracer:
             finally:
                 db.close()
         except Exception as e:
-            logger.warning("agent_run start failed: %s", e)
+            from core.run_ledger.contracts import RunLedgerAuthorityError
+
+            if isinstance(e, RunLedgerAuthorityError):
+                raise
+            raise RunLedgerAuthorityError(
+                "Run 接纳事实与兼容投影写入失败",
+                run_id=run_id,
+                event_type="run.accepted",
+                code="run_admission_failed",
+            ) from e
         return RunHandle(run_id=run_id, trace_id=trace_id)
 
     @staticmethod
@@ -870,25 +879,44 @@ class RunTracer:
                 def operation() -> None:
                     row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
                     if not row:
-                        return
+                        from core.run_ledger.contracts import (
+                            RunLedgerAuthorityError,
+                        )
+
+                        raise RunLedgerAuthorityError(
+                            "Prompt 固定点对应的 Run 不存在",
+                            run_id=run_id,
+                            event_type="run.prompt_resolved",
+                            code="run_not_admitted",
+                        )
                     ledger = SqlAlchemyRunEventLedger(db)
                     head = ledger.head(run_id)
-                    if head is not None and head.terminal_sequence is None:
-                        ledger.append(
-                            run_prompt_resolved_event(
-                                run_id=run_id,
-                                trace_id=str(row.trace_id or ""),
-                                session_id=str(row.session_id or ""),
-                                prompt_mode=str(row.prompt_mode or ""),
-                                prompt_key=str(row.prompt_key or ""),
-                                prompt_source=prompt_source,
-                                prompt_sha256=prompt_sha256,
-                                resolution_manifest_json=(
-                                    resolution_manifest_json
-                                ),
-                                resolution_count=resolution_count,
-                            )
+                    if head is None or head.terminal_sequence is not None:
+                        from core.run_ledger.contracts import (
+                            RunLedgerAuthorityError,
                         )
+
+                        raise RunLedgerAuthorityError(
+                            "Prompt 固定点只能写入已接纳且未终止的 Run",
+                            run_id=run_id,
+                            event_type="run.prompt_resolved",
+                            code="run_not_active",
+                        )
+                    ledger.append(
+                        run_prompt_resolved_event(
+                            run_id=run_id,
+                            trace_id=str(row.trace_id or ""),
+                            session_id=str(row.session_id or ""),
+                            prompt_mode=str(row.prompt_mode or ""),
+                            prompt_key=str(row.prompt_key or ""),
+                            prompt_source=prompt_source,
+                            prompt_sha256=prompt_sha256,
+                            resolution_manifest_json=(
+                                resolution_manifest_json
+                            ),
+                            resolution_count=resolution_count,
+                        )
+                    )
                     row.prompt_source = str(prompt_source or "")[:96]
                     row.prompt_runtime_path = str(prompt_runtime_path or "")
                     row.prompt_default_path = str(prompt_default_path or "")
@@ -900,7 +928,16 @@ class RunTracer:
             finally:
                 db.close()
         except Exception as e:
-            logger.warning("agent_run prompt source update failed: %s", e)
+            from core.run_ledger.contracts import RunLedgerAuthorityError
+
+            if isinstance(e, RunLedgerAuthorityError):
+                raise
+            raise RunLedgerAuthorityError(
+                "Prompt 固定点与兼容投影写入失败",
+                run_id=run_id,
+                event_type="run.prompt_resolved",
+                code="prompt_resolution_write_failed",
+            ) from e
 
     @staticmethod
     def finish_run(
@@ -929,7 +966,16 @@ class RunTracer:
                 def operation() -> None:
                     row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
                     if not row:
-                        return
+                        from core.run_ledger.contracts import (
+                            RunLedgerAuthorityError,
+                        )
+
+                        raise RunLedgerAuthorityError(
+                            "终止事实对应的 Run 不存在",
+                            run_id=run_id,
+                            event_type="run.terminated",
+                            code="run_not_admitted",
+                        )
                     terminal_event = run_terminated_event(
                         run_id=run_id,
                         trace_id=str(row.trace_id or ""),
@@ -958,7 +1004,16 @@ class RunTracer:
             finally:
                 db.close()
         except Exception as e:
-            logger.warning("agent_run finish failed: %s", e)
+            from core.run_ledger.contracts import RunLedgerAuthorityError
+
+            if isinstance(e, RunLedgerAuthorityError):
+                raise
+            raise RunLedgerAuthorityError(
+                "Run 终止事实与兼容投影写入失败",
+                run_id=run_id,
+                event_type="run.terminated",
+                code="run_termination_failed",
+            ) from e
 
 
 class ToolTracer:

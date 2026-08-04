@@ -214,6 +214,159 @@ def runtime_event_to_ledger(
     )
 
 
+def runtime_event_admission_events(
+    event: RuntimeEvent,
+) -> tuple[RunLedgerEventDraft, RunLedgerEventDraft]:
+    """为独立领域 Attempt Run 生成确定性的接纳与运行事实。"""
+
+    if not isinstance(event, RuntimeEvent):
+        raise TypeError("event 必须是 RuntimeEvent")
+    run_id = str(event.context.run_id or "").strip()
+    if not run_id:
+        raise ValueError("领域 Run 必须声明 run_id")
+    empty_bytes, empty_chars, empty_sha256 = _text_fingerprint("")
+    accepted = RunLedgerEventDraft(
+        event_id=_bounded_event_id("run", run_id, "accepted"),
+        run_id=run_id,
+        event_type="run.accepted",
+        occurred_at=event.occurred_at,
+        source="runtime.event_bus",
+        correlation=event.context,
+        status="accepted",
+        payload={
+            "run_type": event.domain,
+            "event_name": event.name,
+            "input_bytes": empty_bytes,
+            "input_chars": empty_chars,
+            "input_sha256": empty_sha256,
+        },
+        source_event_id=event.event_id,
+    )
+    running = run_status_changed_event(
+        accepted_event=accepted,
+        status="running",
+        previous_status="accepted",
+    )
+    return accepted, running
+
+
+def runtime_event_terminal_event(
+    event: RuntimeEvent,
+) -> RunLedgerEventDraft | None:
+    """把一次独立领域 Attempt 的结束投影为该 Run 的唯一终态。"""
+
+    if event.name != "delivery.attempt" or event.phase not in {
+        "succeeded",
+        "failed",
+    }:
+        return None
+    failure_type = str(event.attributes.get("error_type") or "").lower()
+    failure_code = str(event.attributes.get("failure_code") or "").lower()
+    if event.phase == "succeeded":
+        status = "succeeded"
+    elif "cancel" in failure_type or "cancel" in failure_code:
+        status = "cancelled"
+    elif "ambiguous" in failure_type or "ambiguous" in failure_code:
+        status = "ambiguous"
+    else:
+        status = "failed"
+    latency_ms = event.attributes.get("latency_ms")
+    return RunLedgerEventDraft(
+        event_id=_bounded_event_id("run", event.context.run_id, "terminated"),
+        run_id=event.context.run_id,
+        event_type="run.terminated",
+        occurred_at=event.occurred_at,
+        source="runtime.event_bus",
+        correlation=event.context,
+        status=status,
+        payload={
+            "event_name": event.name,
+            "latency_ms": (
+                max(0, int(latency_ms))
+                if type(latency_ms) in {int, float}
+                else 0
+            ),
+            "failure_code": failure_code,
+            "error_type": failure_type,
+        },
+        source_event_id=event.event_id,
+    )
+
+
+def artifact_published_event(
+    *,
+    correlation: TelemetryCorrelation,
+    workspace_id: str,
+    sha256: str,
+    size_bytes: int,
+    media_type: str,
+    occurred_at: datetime | None = None,
+) -> RunLedgerEventDraft:
+    """记录不可变资产版本，不保存逻辑文件名、宿主路径或下载 URI。"""
+
+    if not correlation.run_id:
+        raise ValueError("Artifact Ledger 事件必须关联 run_id")
+    return RunLedgerEventDraft(
+        event_id=_bounded_event_id(
+            "artifact",
+            correlation.run_id,
+            workspace_id,
+            sha256,
+        ),
+        run_id=correlation.run_id,
+        event_type="artifact.recorded",
+        occurred_at=occurred_at or _now(),
+        source="asset.service",
+        correlation=correlation,
+        status="published",
+        payload={
+            "artifact_id": f"sha256:{sha256}",
+            "artifact_sha256": sha256,
+            "workspace_id": str(workspace_id or ""),
+            "media_type": str(media_type or "application/octet-stream"),
+            "size_bytes": max(0, int(size_bytes or 0)),
+        },
+    )
+
+
+def sandbox_permission_decision_event(
+    *,
+    correlation: TelemetryCorrelation,
+    tool_name: str,
+    allowed: bool,
+    reason_code: str,
+    capability: str,
+    occurred_at: datetime | None = None,
+) -> RunLedgerEventDraft:
+    """把生产 Sandbox Policy 决定写入 Ledger，不记录 session 或资源正文。"""
+
+    if not correlation.run_id:
+        raise ValueError("Permission Ledger 事件必须关联 run_id")
+    outcome = "allow" if allowed else "deny"
+    return RunLedgerEventDraft(
+        event_id=_bounded_event_id(
+            "permission",
+            correlation.run_id,
+            correlation.tool_call_id or correlation.request_id,
+            tool_name,
+            outcome,
+            reason_code,
+        ),
+        run_id=correlation.run_id,
+        event_type="permission.decided",
+        occurred_at=occurred_at or _now(),
+        source="sandbox.access_policy",
+        correlation=correlation,
+        status=outcome,
+        payload={
+            "action": str(tool_name or ""),
+            "outcome": outcome,
+            "reason_code": str(reason_code or "unknown"),
+            "capability": str(capability or "off"),
+        },
+    )
+
+
 def run_accepted_event(
     *,
     run_id: str,
@@ -503,12 +656,16 @@ def permission_decision_event(
 
 
 __all__ = [
+    "artifact_published_event",
     "permission_decision_event",
     "run_accepted_event",
     "run_prompt_resolved_event",
     "run_status_changed_event",
     "run_terminated_event",
     "runtime_event_to_ledger",
+    "runtime_event_admission_events",
+    "runtime_event_terminal_event",
     "runtime_run_event_to_ledger",
+    "sandbox_permission_decision_event",
     "usage_recorded_event",
 ]

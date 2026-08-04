@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
@@ -14,18 +14,168 @@ from core.database import (
     LLMApiRequestLog,
     PromptRenderLog,
     ReplyContractCheckLog,
+    RunLedgerStreamHead,
     ToolCall,
     get_db,
+)
+from core.run_ledger.contracts import (
+    RunLedgerContractError,
+    RunLedgerIntegrityError,
+    canonical_run_status,
 )
 from core.tracing import row_to_dict, sanitize_llm_log_payload
 from core.run_ledger.persistence import SqlAlchemyRunEventLedger
 from core.run_ledger.projection import (
     assess_run_ledger_readiness,
-    project_run_ledger,
     run_ledger_record_to_dict,
+)
+from core.run_ledger.read_model import (
+    AuthoritativeRunLedgerView,
+    load_authoritative_run_view,
 )
 
 router = APIRouter(tags=["admin-trace"])
+
+
+def _load_run_view(
+    ledger: SqlAlchemyRunEventLedger,
+    run_id: str,
+) -> AuthoritativeRunLedgerView | None:
+    try:
+        return load_authoritative_run_view(ledger, run_id)
+    except (RunLedgerContractError, RunLedgerIntegrityError) as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "run_ledger_projection_unavailable",
+                "run_id": run_id,
+                "message": "Run Ledger 无法生成完整权威投影",
+            },
+        ) from exc
+
+
+def _ledger_head_dict(view: AuthoritativeRunLedgerView) -> dict[str, object]:
+    head = view.head
+    return {
+        "run_id": head.run_id,
+        "last_sequence": head.last_sequence,
+        "last_event_id": head.last_event_id,
+        "last_event_sha256": head.last_event_sha256,
+        "terminal_sequence": head.terminal_sequence,
+    }
+
+
+def _run_read_model(
+    run: AgentRun | None,
+    view: AuthoritativeRunLedgerView | None,
+) -> dict[str, object]:
+    """以 Ledger 为当前事实源；只为迁移前记录保留显式 legacy 回退。"""
+
+    legacy = row_to_dict(run) if run is not None else {}
+    if view is None:
+        legacy["status_source"] = "legacy_compat"
+        legacy["ledger_authoritative"] = False
+        legacy["ledger_high_water_sequence"] = 0
+        return legacy
+
+    accepted = view.accepted.event
+    projection = view.projection
+    item: dict[str, object] = dict(legacy)
+    if run is None:
+        item.update({
+            "run_id": projection.run_id,
+            "trace_id": accepted.correlation.trace_id,
+            "session_id": accepted.correlation.session_id,
+            "user_id": (
+                accepted.identity.actor_id
+                if accepted.identity.actor_type == "user"
+                else ""
+            ),
+            "chat_type": str(accepted.payload.get("chat_type") or ""),
+            "group_id": (
+                accepted.identity.owner_id
+                if accepted.identity.owner_type == "group"
+                else ""
+            ),
+            "run_type": str(accepted.payload.get("run_type") or ""),
+            "prompt_source": "",
+            "prompt_runtime_path": "",
+            "prompt_default_path": "",
+            "prompt_template_resolutions_json": "{}",
+            "input_preview": "",
+            "output_preview": "",
+            "error": "",
+            "latency_ms": 0,
+            "meta_json": "{}",
+        })
+    item["legacy_status"] = legacy.get("status")
+    item["status"] = projection.status
+    item["status_source"] = "run_ledger"
+    item["ledger_authoritative"] = True
+    item["ledger_high_water_sequence"] = projection.high_water_sequence
+    item["started_at"] = (
+        projection.started_at.isoformat() if projection.started_at else None
+    )
+    item["finished_at"] = (
+        projection.finished_at.isoformat() if projection.finished_at else None
+    )
+    item["updated_at"] = (
+        projection.updated_at.isoformat() if projection.updated_at else None
+    )
+    item["prompt_mode"] = projection.prompt_mode or str(
+        legacy.get("prompt_mode") or ""
+    )
+    item["prompt_key"] = projection.prompt_key or str(
+        legacy.get("prompt_key") or ""
+    )
+    item["prompt_sha256"] = projection.prompt_sha256 or str(
+        legacy.get("prompt_sha256") or ""
+    )
+    if projection.model_ids:
+        item["model"] = projection.model_ids[-1]
+    return item
+
+
+def _matches_run_filters(
+    item: dict[str, object],
+    *,
+    status: str,
+    session_id: str,
+    group_id: str,
+    chat_type: str,
+    trace_id: str,
+    user_id: str,
+    prompt_key: str,
+    prompt_mode: str,
+    run_type: str,
+) -> bool:
+    if status and canonical_run_status(item.get("status")) != (
+        canonical_run_status(status)
+    ):
+        return False
+    for field, expected in (
+        ("session_id", session_id),
+        ("group_id", group_id),
+        ("chat_type", chat_type),
+        ("trace_id", trace_id),
+        ("user_id", user_id),
+        ("prompt_key", prompt_key),
+        ("prompt_mode", prompt_mode),
+        ("run_type", run_type),
+    ):
+        if expected and str(item.get(field) or "") != expected:
+            return False
+    return True
+
+
+def _run_started_sort_value(item: dict[str, object]) -> float:
+    try:
+        value = datetime.fromisoformat(str(item.get("started_at") or ""))
+    except ValueError:
+        return 0.0
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
 
 
 @router.get("/agent-runs")
@@ -45,35 +195,43 @@ def list_agent_runs(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    q = db.query(AgentRun)
-    if status:
-        q = q.filter(AgentRun.status == status)
-    if session_id:
-        q = q.filter(AgentRun.session_id == session_id)
-    if group_id:
-        q = q.filter(AgentRun.group_id == group_id)
-    if chat_type:
-        q = q.filter(AgentRun.chat_type == chat_type)
-    if trace_id:
-        q = q.filter(AgentRun.trace_id == trace_id)
-    if user_id:
-        q = q.filter(AgentRun.user_id == user_id)
-    if prompt_key:
-        q = q.filter(AgentRun.prompt_key == prompt_key)
-    if prompt_mode:
-        q = q.filter(AgentRun.prompt_mode == prompt_mode)
-    if run_type:
-        q = q.filter(AgentRun.run_type == run_type)
-    total = q.count()
     row_offset = offset if offset is not None else (page - 1) * limit
-    rows = (
-        q.order_by(AgentRun.started_at.desc())
-        .offset(row_offset)
-        .limit(limit)
-        .all()
-    )
+    ledger = SqlAlchemyRunEventLedger(db)
+    legacy_rows = db.query(AgentRun).all()
+    rows_by_run_id = {str(row.run_id): row for row in legacy_rows}
+    ledger_run_ids = {
+        str(run_id)
+        for run_id, in db.query(RunLedgerStreamHead.run_id).all()
+    }
+    all_run_ids = set(rows_by_run_id) | ledger_run_ids
+    projected_rows = [
+        _run_read_model(
+            rows_by_run_id.get(run_id),
+            _load_run_view(ledger, run_id),
+        )
+        for run_id in all_run_ids
+    ]
+    matched = [
+        item
+        for item in projected_rows
+        if _matches_run_filters(
+            item,
+            status=status,
+            session_id=session_id,
+            group_id=group_id,
+            chat_type=chat_type,
+            trace_id=trace_id,
+            user_id=user_id,
+            prompt_key=prompt_key,
+            prompt_mode=prompt_mode,
+            run_type=run_type,
+        )
+    ]
+    matched.sort(key=_run_started_sort_value, reverse=True)
+    total = len(matched)
+    items = matched[row_offset:row_offset + limit]
     return {
-        "items": [row_to_dict(row) for row in rows],
+        "items": items,
         "total": total,
         "page": page,
         "limit": limit,
@@ -84,7 +242,9 @@ def list_agent_runs(
 @router.get("/agent-runs/{run_id}")
 def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     run = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
-    if not run:
+    ledger = SqlAlchemyRunEventLedger(db)
+    ledger_view = _load_run_view(ledger, run_id)
+    if run is None and ledger_view is None:
         raise HTTPException(404, "Agent run not found")
     tool_calls = (
         db.query(ToolCall)
@@ -110,53 +270,47 @@ def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(veri
         .order_by(ReplyContractCheckLog.created_at.asc())
         .all()
     )
-    ledger = SqlAlchemyRunEventLedger(db)
-    ledger_head = ledger.head(run_id)
-    ledger_records = ()
-    ledger_projection = None
-    ledger_projection_complete = True
-    if ledger_head is not None:
-        ledger_records = ledger.read(
-            run_id,
-            limit=min(5000, max(1, ledger_head.last_sequence)),
+    ledger_records = ledger_view.records if ledger_view is not None else ()
+    ledger_projection = (
+        ledger_view.projection if ledger_view is not None else None
+    )
+    ledger_readiness = (
+        assess_run_ledger_readiness(
+            ledger_records,
+            run_id=run_id,
+            legacy_status=str(run.status or ""),
+            legacy_finished_at=run.finished_at,
+            projection_complete=True,
+            high_water_sequence=ledger_view.head.last_sequence,
         )
-        ledger_projection_complete = (
-            len(ledger_records) == ledger_head.last_sequence
-        )
-        if ledger_projection_complete:
-            ledger_projection = project_run_ledger(ledger_records)
-    ledger_readiness = assess_run_ledger_readiness(
-        ledger_records,
-        run_id=run_id,
-        legacy_status=str(run.status or ""),
-        legacy_finished_at=run.finished_at,
-        projection_complete=ledger_projection_complete,
-        high_water_sequence=(
-            ledger_head.last_sequence if ledger_head is not None else 0
-        ),
+        if run is not None and ledger_view is not None
+        else None
     )
     return {
-        "run": row_to_dict(run),
+        "run": _run_read_model(run, ledger_view),
         "ledger": {
-            "available": ledger_head is not None,
-            "projection_complete": ledger_projection_complete,
-            "head": (
-                {
-                    "run_id": ledger_head.run_id,
-                    "last_sequence": ledger_head.last_sequence,
-                    "last_event_id": ledger_head.last_event_id,
-                    "last_event_sha256": ledger_head.last_event_sha256,
-                    "terminal_sequence": ledger_head.terminal_sequence,
-                }
-                if ledger_head is not None
-                else None
+            "available": ledger_view is not None,
+            "authoritative": ledger_view is not None,
+            "source": (
+                "run_ledger" if ledger_view is not None else "legacy_compat"
             ),
+            "projection_complete": ledger_view is not None,
+            "head": _ledger_head_dict(ledger_view) if ledger_view else None,
             "projection": (
                 ledger_projection.to_dict()
                 if ledger_projection is not None
                 else None
             ),
-            "readiness": ledger_readiness.to_dict(),
+            "legacy_audit": (
+                ledger_readiness.to_dict()
+                if ledger_readiness is not None
+                else None
+            ),
+            "readiness": (
+                ledger_readiness.to_dict()
+                if ledger_readiness is not None
+                else None
+            ),
         },
         "tool_calls": [row_to_dict(row) for row in tool_calls],
         "prompt_render_logs": [row_to_dict(row) for row in prompt_logs],
@@ -173,10 +327,16 @@ def list_agent_run_events(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    if db.query(AgentRun.run_id).filter(AgentRun.run_id == run_id).first() is None:
-        raise HTTPException(404, "Agent run not found")
     ledger = SqlAlchemyRunEventLedger(db)
     head = ledger.head(run_id)
+    if (
+        head is None
+        and db.query(AgentRun.run_id)
+        .filter(AgentRun.run_id == run_id)
+        .first()
+        is None
+    ):
+        raise HTTPException(404, "Agent run not found")
     if head is None:
         return {
             "items": [],

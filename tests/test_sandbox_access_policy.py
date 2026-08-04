@@ -418,3 +418,62 @@ def test_host_hard_ceiling_precedes_database_feature_flags(db_session):
     assert decision.allowed is False
     assert decision.code == "sandbox_not_enabled"
     assert "硬上限" in decision.reason
+
+
+def test_runtime_permission_decision_is_committed_before_tool_access(
+    db_session,
+    infrastructure_allowed,
+):
+    from core.run_ledger.adapters import run_accepted_event
+    from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+    from core.tracing_context import (
+        reset_runtime_correlation,
+        set_runtime_correlation,
+    )
+
+    _set_bool(db_session, "sandbox.enabled", True)
+    _set_bool(db_session, "sandbox.exec_enabled", False)
+    _grant_session(db_session, session_id="ledger-user")
+    ledger = SqlAlchemyRunEventLedger(db_session)
+    ledger.append(run_accepted_event(
+        run_id="run-permission-ledger",
+        trace_id="trace-permission-ledger",
+        session_id="qq:ledger-user:private",
+        user_id="ledger-user",
+        chat_type="private",
+        group_id="",
+        run_type="chat",
+        prompt_mode="prompt",
+        prompt_key="chat_private",
+        prompt_sha256="",
+        model="",
+        input_value="workspace read",
+    ))
+    db_session.commit()
+
+    tokens = set_runtime_correlation(
+        run_id="run-permission-ledger",
+        trace_id="trace-permission-ledger",
+        tool_call_id="tool-workspace-read",
+    )
+    try:
+        decision = SandboxAccessPolicy(db_session).evaluate(
+            "workspace_read",
+            platform="qq",
+            chat_type="private",
+            session_id="private_ledger-user",
+        )
+    finally:
+        reset_runtime_correlation(tokens)
+
+    assert decision.allowed is True
+    records = ledger.read("run-permission-ledger")
+    permission = records[-1]
+    assert permission.event_type == "permission.decided"
+    assert permission.status == "allow"
+    assert permission.event.payload == {
+        "action": "workspace_read",
+        "outcome": "allow",
+        "reason_code": "allowed",
+        "capability": "workspace",
+    }

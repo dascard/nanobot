@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections.abc import Mapping
 
@@ -89,6 +90,7 @@ LOGGING_RUNTIME_EVENT_OBSERVER_DESCRIPTOR = RuntimeHookDescriptor(
 
 
 _LOCK = threading.Lock()
+_AUTHORITATIVE_SINKS: tuple[RuntimeEventSink, ...] = ()
 _EMITTER = RuntimeEventEmitter(
     RUNTIME_EVENT_REGISTRY,
     observer_dispatcher=RuntimeObserverDispatcher((
@@ -102,19 +104,27 @@ _EMITTER = RuntimeEventEmitter(
 
 def install_runtime_event_sinks(
     sinks: tuple[RuntimeEventSink, ...],
+    *,
+    authoritative_sinks: tuple[RuntimeEventSink, ...] = (),
 ) -> RuntimeEventEmitter:
-    """由组合根一次性替换 Sink；返回新的 emitter 便于测试保存引用。"""
+    """由组合根原子替换观测与权威 Sink。"""
 
-    global _EMITTER
+    global _AUTHORITATIVE_SINKS, _EMITTER
     emitter = RuntimeEventEmitter(RUNTIME_EVENT_REGISTRY, sinks)
     with _LOCK:
         _EMITTER = emitter
+        _AUTHORITATIVE_SINKS = tuple(authoritative_sinks)
     return emitter
 
 
 def get_runtime_event_emitter() -> RuntimeEventEmitter:
     with _LOCK:
         return _EMITTER
+
+
+def get_authoritative_runtime_event_sinks() -> tuple[RuntimeEventSink, ...]:
+    with _LOCK:
+        return _AUTHORITATIVE_SINKS
 
 
 def current_runtime_event_context() -> RuntimeEventContext:
@@ -130,18 +140,57 @@ def emit_runtime_event(
     attributes: Mapping[str, object] | None = None,
     context: RuntimeEventContext | None = None,
 ) -> RuntimeEvent | None:
-    """业务边界的 fail-open 迁移入口；事件故障不得改变主业务结果。"""
+    """无 Run 事件可降级；关联 Run 的权威入账失败必须中止业务。"""
 
+    resolved_context = context or current_runtime_event_context()
     try:
-        return get_runtime_event_emitter().emit(
+        event = get_runtime_event_emitter().emit(
             name,
             phase,
-            context=context or current_runtime_event_context(),
+            context=resolved_context,
             attributes=attributes,
         )
-    except Exception:
+    except Exception as exc:
+        if resolved_context.run_id:
+            from core.run_ledger.contracts import RunLedgerAuthorityError
+
+            raise RunLedgerAuthorityError(
+                "关联 Run 的 RuntimeEvent 合同或观测投递失败",
+                run_id=resolved_context.run_id,
+                event_type=f"{name}.{phase}",
+                code="runtime_event_invalid",
+            ) from exc
         logger.exception("RuntimeEvent 投递失败", extra={"event_name": name})
         return None
+    authoritative_sinks = get_authoritative_runtime_event_sinks()
+    if (
+        resolved_context.run_id
+        and not authoritative_sinks
+        and os.environ.get("NANOBOT_TESTING") != "1"
+    ):
+        from core.run_ledger.contracts import RunLedgerAuthorityError
+
+        raise RunLedgerAuthorityError(
+            "关联 Run 的权威 RuntimeEvent Sink 未安装",
+            run_id=resolved_context.run_id,
+            event_type=f"{name}.{phase}",
+            code="ledger_sink_unavailable",
+        )
+    if resolved_context.run_id:
+        for sink in authoritative_sinks:
+            try:
+                sink.emit(event)
+            except Exception as exc:
+                from core.run_ledger.contracts import RunLedgerAuthorityError
+
+                if isinstance(exc, RunLedgerAuthorityError):
+                    raise
+                raise RunLedgerAuthorityError(
+                    "关联 Run 的 RuntimeEvent 权威入账失败",
+                    run_id=resolved_context.run_id,
+                    event_type=f"{name}.{phase}",
+                ) from exc
+    return event
 
 
 def emit_agent_lifecycle_event(event: object) -> None:

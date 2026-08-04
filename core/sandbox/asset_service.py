@@ -152,6 +152,7 @@ class AssetService:
                     "当前 Workspace 已存在同名的其他资产",
                     hint="请使用新的逻辑文件名",
                 )
+            self._record_published_asset(workspace, asset)
             return asset, existing_link
 
         candidate_link = WorkspaceAsset(
@@ -177,7 +178,43 @@ class AssetService:
                     "当前 Workspace 已存在同名的其他资产",
                     hint="请使用新的逻辑文件名",
                 ) from None
+        self._record_published_asset(workspace, asset)
         return asset, link
+
+    def _record_published_asset(
+        self,
+        workspace: Workspace,
+        asset: Asset,
+    ) -> None:
+        """与资产登记共用事务写入不可变版本事实，不保存路径或 URI。"""
+
+        from core.runtime.event_bus import current_runtime_event_context
+
+        correlation = current_runtime_event_context()
+        if not correlation.run_id:
+            return
+        from core.run_ledger.adapters import artifact_published_event
+        from core.run_ledger.contracts import RunLedgerAuthorityError
+        from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+
+        event = artifact_published_event(
+            correlation=correlation,
+            workspace_id=str(workspace.id),
+            sha256=str(asset.sha256),
+            size_bytes=int(asset.size_bytes),
+            media_type=str(asset.media_type),
+        )
+        try:
+            SqlAlchemyRunEventLedger(self.db).append(event)
+        except Exception as exc:
+            if isinstance(exc, RunLedgerAuthorityError):
+                raise
+            raise RunLedgerAuthorityError(
+                "Artifact 权威入账失败",
+                run_id=event.run_id,
+                event_type=event.event_type,
+                code="artifact_write_failed",
+            ) from exc
 
     def require_authorized(
         self,

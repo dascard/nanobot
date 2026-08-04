@@ -115,6 +115,49 @@ def test_runtime_event_sink_failure_isolated_by_default():
     assert event.name == "test.operation"
 
 
+def test_runtime_event_authority_failure_only_blocks_correlated_run():
+    from core.run_ledger.contracts import RunLedgerAuthorityError
+    from core.runtime.event_bus import (
+        LoggingRuntimeEventSink,
+        emit_runtime_event,
+        install_runtime_event_sinks,
+    )
+    from core.runtime.events import RuntimeEventContext
+
+    calls = []
+
+    class BrokenAuthoritySink:
+        def emit(self, event):
+            calls.append(event.context.run_id)
+            raise RuntimeError("ledger unavailable")
+
+    install_runtime_event_sinks(
+        (),
+        authoritative_sinks=(BrokenAuthoritySink(),),
+    )
+    try:
+        event = emit_runtime_event(
+            "http.request",
+            "started",
+            attributes={"method": "GET", "route": "/health"},
+        )
+        assert event is not None
+        assert calls == []
+
+        with pytest.raises(RunLedgerAuthorityError) as raised:
+            emit_runtime_event(
+                "http.request",
+                "started",
+                context=RuntimeEventContext(run_id="run-authoritative"),
+                attributes={"method": "GET", "route": "/runs/1"},
+            )
+        assert raised.value.run_id == "run-authoritative"
+        assert raised.value.event_type == "http.request.started"
+        assert calls == ["run-authoritative"]
+    finally:
+        install_runtime_event_sinks((LoggingRuntimeEventSink(),))
+
+
 def test_default_runtime_event_registry_covers_cross_cutting_boundaries():
     from core.runtime.event_registry import RUNTIME_EVENT_REGISTRY
 

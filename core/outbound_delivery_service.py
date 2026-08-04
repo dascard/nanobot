@@ -555,12 +555,14 @@ async def _deliver_claim(
     current_event_context = current_runtime_event_context()
     event_context = replace(
         current_event_context,
-        run_id=(
-            current_event_context.run_id
-            or f"outbound:{claim.run_id}"
+        run_id=f"delivery:outbound:{claim.attempt_id}",
+        task_run_id=(
+            str(claim.run_id)
+            or current_event_context.run_id
+            or current_event_context.task_run_id
         ),
         job_id=str(claim.outbox_id),
-        delivery_id=str(claim.outbox_id),
+        delivery_id=str(claim.attempt_id),
     )
     event_attributes = {
         "channel": "qq",

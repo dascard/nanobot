@@ -33,10 +33,12 @@ from core.run_ledger.adapters import (
 )
 from core.run_ledger.contracts import (
     RUN_LEDGER_SCHEMA_VERSION,
+    RunLedgerAuthorityError,
     RunLedgerConflictError,
     RunLedgerContractError,
     RunLedgerEventDraft,
     RunLedgerIdentity,
+    RunLedgerIntegrityError,
     UnsupportedRunLedgerSchemaError,
     decode_run_ledger_payload,
 )
@@ -48,9 +50,11 @@ from core.run_ledger.projection import (
     assess_run_ledger_readiness,
     project_run_ledger,
 )
+from core.run_ledger.read_model import load_authoritative_run_view
 from core.run_ledger.sinks import (
     LedgeredPermissionPort,
     SqlAlchemyRuntimeEventLedgerSink,
+    SqlAlchemyRuntimeRunEventSink,
 )
 from core.telemetry.contracts import TelemetryCorrelation
 from tests.sqlite_test_utils import install_base_schema
@@ -412,6 +416,177 @@ def test_writer_recovers_successful_commit_with_unknown_outcome(tmp_path):
     with session_factory() as db:
         assert SqlAlchemyRunEventLedger(db).head("run-1").last_sequence == 1
     engine.dispose()
+
+
+def test_writer_append_many_is_atomic_and_assigns_contiguous_sequences(
+    db_session,
+):
+    factory = sessionmaker(bind=db_session.get_bind())
+    writer = SqlAlchemyRunEventLedgerWriter(factory)
+    accepted = _event("batch-accepted", "run.accepted", status="accepted")
+    running = _event(
+        "batch-running",
+        "run.status_changed",
+        status="running",
+    )
+
+    with pytest.raises(RunLedgerConflictError, match="期望 sequence"):
+        writer.append_many(
+            (accepted, running),
+            expected_sequences=(1, 3),
+        )
+    assert writer.head("run-1") is None
+
+    records = writer.append_many(
+        (accepted, running),
+        expected_sequences=(1, 2),
+    )
+    assert [record.sequence for record in records] == [1, 2]
+    assert records[1].previous_event_sha256 == records[0].event_sha256
+
+
+def test_authoritative_read_model_pages_to_fixed_head_and_rejects_drift(
+    db_session,
+):
+    ledger = SqlAlchemyRunEventLedger(db_session)
+    ledger.append(_event("view-accepted", "run.accepted", status="accepted"))
+    ledger.append(_event(
+        "view-running",
+        "run.status_changed",
+        status="running",
+    ))
+    ledger.append(_event(
+        "view-terminal",
+        "run.terminated",
+        status="succeeded",
+    ))
+    ledger.append(_event(
+        "view-correction",
+        "run.event_corrected",
+        payload={"replacement_status": "failed"},
+        correction_of_event_id="view-terminal",
+    ))
+    db_session.commit()
+
+    view = load_authoritative_run_view(ledger, "run-1", page_size=1)
+    assert view is not None
+    assert view.head.last_sequence == 4
+    assert view.head.terminal_sequence == 3
+    assert view.projection.status == "failed"
+    assert [record.sequence for record in view.records] == [1, 2, 3, 4]
+
+    db_session.execute(text(
+        "UPDATE run_ledger_stream_heads "
+        "SET last_event_id='drifted-head' WHERE run_id='run-1'"
+    ))
+    db_session.commit()
+    with pytest.raises(RunLedgerIntegrityError, match="last_event_id"):
+        load_authoritative_run_view(ledger, "run-1", page_size=2)
+
+
+def test_delivery_attempt_sink_owns_independent_terminal_run(db_session):
+    from core.runtime.event_registry import RUNTIME_EVENT_REGISTRY
+    from core.runtime.events import RuntimeEventEmitter
+
+    factory = sessionmaker(bind=db_session.get_bind())
+    sink = SqlAlchemyRuntimeEventLedgerSink(factory)
+    emitter = RuntimeEventEmitter(
+        RUNTIME_EVENT_REGISTRY,
+        now=lambda: datetime(2026, 8, 4, 12, 2, tzinfo=timezone.utc),
+        event_id_factory=iter(("delivery-start", "delivery-finish")).__next__,
+    )
+    context = TelemetryCorrelation(
+        run_id="delivery:test:42",
+        task_run_id="source-run-1",
+        job_id="outbox-7",
+        delivery_id="attempt-42",
+    )
+
+    sink.emit(emitter.emit(
+        "delivery.attempt",
+        "started",
+        context=context,
+        attributes={"channel": "qq", "attempt_no": 1},
+    ))
+    sink.emit(emitter.emit(
+        "delivery.attempt",
+        "failed",
+        context=context,
+        attributes={
+            "channel": "qq",
+            "attempt_no": 1,
+            "error_type": "ambiguous_transport",
+        },
+    ))
+
+    with factory() as db:
+        records = SqlAlchemyRunEventLedger(db).read("delivery:test:42")
+    assert [record.event_type for record in records] == [
+        "run.accepted",
+        "run.status_changed",
+        "delivery.attempt.started",
+        "delivery.attempt.failed",
+        "run.terminated",
+    ]
+    projection = project_run_ledger(records)
+    assert projection is not None
+    assert projection.status == "ambiguous"
+    assert projection.terminal is True
+    assert records[0].event.correlation.task_run_id == "source-run-1"
+
+
+@pytest.mark.asyncio
+async def test_runtime_sinks_reject_events_for_unadmitted_business_run(
+    db_session,
+):
+    from core.runtime.event_registry import RUNTIME_EVENT_REGISTRY
+    from core.runtime.events import RuntimeEventEmitter
+
+    factory = sessionmaker(bind=db_session.get_bind())
+    runtime_sink = SqlAlchemyRuntimeEventLedgerSink(factory)
+    emitter = RuntimeEventEmitter(
+        RUNTIME_EVENT_REGISTRY,
+        event_id_factory=lambda: "unadmitted-model-event",
+    )
+    event = emitter.emit(
+        "model.request",
+        "started",
+        context=TelemetryCorrelation(run_id="unadmitted-main-run"),
+        attributes={
+            "route_key": "reply",
+            "provider": "newapi",
+            "model": "model-1",
+            "source": "replyer",
+        },
+    )
+    with pytest.raises(RunLedgerAuthorityError) as runtime_failure:
+        runtime_sink.emit(event)
+    assert runtime_failure.value.code == "run_not_admitted"
+
+    identity = RuntimeRunIdentity(
+        run_id="unadmitted-main-run",
+        turn_id="turn-1",
+        correlation_id="trace-1",
+        actor=RuntimeActor(RuntimeActorType.USER, "user-1"),
+        owner=RuntimePrincipal(
+            platform="qq",
+            owner_type=RuntimeOwnerType.USER,
+            owner_id="user-1",
+        ),
+    )
+    typed_event = RuntimeRunEvent(
+        event_id="typed-unadmitted",
+        identity=identity,
+        sequence=1,
+        kind=RuntimeRunEventKind.STATUS,
+        status=RuntimeRunStatus.RUNNING,
+        occurred_at=datetime.now(timezone.utc),
+    )
+    typed_sink = SqlAlchemyRuntimeRunEventSink(factory)
+    with pytest.raises(RunLedgerAuthorityError) as typed_failure:
+        await typed_sink.append(typed_event)
+    assert typed_failure.value.code == "run_not_admitted"
+
 
 
 def test_runtime_event_sink_records_model_tool_and_delivery_projection(db_session):

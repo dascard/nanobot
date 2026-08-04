@@ -338,12 +338,12 @@ class TestNanobotBridge:
             record_success=AsyncMock(),
         )
 
-        async def execute_turn(_request):
+        async def execute_turn(_request, _handler):
             if process_outcome == "system_error":
                 raise RuntimeError("模型调用失败")
             return AgentTurnResult(raw_result=None, messages=())
 
-        runtime.run = AsyncMock(side_effect=execute_turn)
+        runtime.run_event = AsyncMock(side_effect=execute_turn)
         bridge._runtime = runtime
 
         result = run_async(bridge._run_model_loop(
@@ -365,6 +365,47 @@ class TestNanobotBridge:
         else:
             assert "[系统内部错误]" in result.response
         tracker.record_failure.assert_awaited_once_with("only-model")
+        tracker.record_success.assert_not_awaited()
+
+    def test_model_loop_does_not_retry_run_ledger_authority_failure(self):
+        from core.run_ledger.contracts import RunLedgerAuthorityError
+        from nanobot_kt.bridge import NanobotBridge
+
+        bridge = NanobotBridge()
+        bridge._agent = SimpleNamespace(controller=SimpleNamespace())
+        runtime = MagicMock()
+        runtime.read_conversation.return_value = ()
+        runtime.run_event = AsyncMock(side_effect=RunLedgerAuthorityError(
+            "typed event write failed",
+            run_id="run-authority",
+            event_type="runtime.invocation_status_changed",
+        ))
+        bridge._runtime = runtime
+        tracker = MagicMock(
+            record_failure=AsyncMock(),
+            record_success=AsyncMock(),
+        )
+
+        with pytest.raises(
+            RunLedgerAuthorityError,
+            match="typed event write failed",
+        ):
+            run_async(bridge._run_model_loop(
+                candidate_models=[{"id": "model-a"}, {"id": "model-b"}],
+                route_plan=SimpleNamespace(),
+                event_content="你好",
+                query="你好",
+                session_id="session-authority",
+                meta={"stream": False},
+                tracker=tracker,
+                trace_id="trace-authority",
+                run_id="run-authority",
+                reply_llm_source="replyer.private_chat",
+                runtime_context=_runtime_context("session-authority"),
+            ))
+
+        assert runtime.run_event.await_count == 1
+        tracker.record_failure.assert_not_awaited()
         tracker.record_success.assert_not_awaited()
 
     @pytest.mark.parametrize(
@@ -415,7 +456,7 @@ class TestNanobotBridge:
                 ensure_ascii=False,
             )
 
-        async def execute_turn(_request):
+        async def execute_turn(_request, _handler):
             if terminal_kind == "html":
                 from nanobot_kt.reply_contract import build_rich_output
 
@@ -432,7 +473,7 @@ class TestNanobotBridge:
             runtime.read_conversation.return_value = runtime_messages
             return AgentTurnResult(raw_result=None, messages=runtime_messages)
 
-        runtime.run = AsyncMock(side_effect=execute_turn)
+        runtime.run_event = AsyncMock(side_effect=execute_turn)
         tracker = MagicMock(
             record_failure=AsyncMock(),
             record_success=AsyncMock(),
@@ -454,7 +495,7 @@ class TestNanobotBridge:
 
         assert result.target_model == "model-a"
         assert result.attempts == 1
-        runtime.run.assert_awaited_once()
+        runtime.run_event.assert_awaited_once()
         tracker.record_success.assert_awaited_once_with("model-a")
         tracker.record_failure.assert_not_awaited()
         if terminal_kind == "no_reply":
@@ -475,7 +516,7 @@ class TestNanobotBridge:
         runtime = MagicMock()
         runtime.read_conversation.return_value = ()
 
-        async def execute_turn(_request):
+        async def execute_turn(_request, _handler):
             runtime_messages = _runtime_tool_exchange(
                 "reply",
                 json.dumps(
@@ -486,7 +527,7 @@ class TestNanobotBridge:
             runtime.read_conversation.return_value = runtime_messages
             return AgentTurnResult(raw_result=None, messages=runtime_messages)
 
-        runtime.run = AsyncMock(side_effect=execute_turn)
+        runtime.run_event = AsyncMock(side_effect=execute_turn)
         bridge._runtime = runtime
         tracker = MagicMock(
             record_failure=AsyncMock(),
@@ -553,11 +594,11 @@ class TestNanobotBridge:
             record_success=AsyncMock(),
         )
 
-        async def execute_turn(_request):
+        async def execute_turn(_request, _handler):
             bridge._output._buffer.append(raw_output)
             return AgentTurnResult(raw_result=None, messages=())
 
-        runtime.run = AsyncMock(side_effect=execute_turn)
+        runtime.run_event = AsyncMock(side_effect=execute_turn)
         bridge._runtime = runtime
         model_loop = run_async(bridge._run_model_loop(
             candidate_models=[{"id": "only-model"}],
@@ -676,7 +717,11 @@ class TestNanobotBridge:
             tool_plan_token="tool-token",
         )
 
-        finalizer.finish("success", output_preview="ok")
+        if failing_step == "finish_run":
+            with pytest.raises(RuntimeError, match="finish failed"):
+                finalizer.finish("success", output_preview="ok")
+        else:
+            finalizer.finish("success", output_preview="ok")
         finalizer.finish("error", error="late")
 
         assert events == [

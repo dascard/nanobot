@@ -442,6 +442,24 @@ def test_sandbox_exec_records_exact_trace_links_and_resource_summary(db_session)
         },
     })
     tool = _tool_factory(SandboxExecTool, backend)
+    from core.run_ledger.adapters import run_accepted_event
+    from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+
+    SqlAlchemyRunEventLedger(db_session).append(run_accepted_event(
+        run_id="agent-run-1",
+        trace_id="trace-1",
+        session_id="private_super-1",
+        user_id="super-1",
+        chat_type="private",
+        group_id="",
+        run_type="chat",
+        prompt_mode="prompt",
+        prompt_key="chat_private",
+        prompt_sha256="",
+        model="",
+        input_value="sandbox",
+    ))
+    db_session.commit()
     trace_tokens = set_trace_context("trace-1", "agent-run-1")
     tool_token = set_tool_trace_context("tool-call-1")
     try:

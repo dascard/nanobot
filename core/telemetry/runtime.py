@@ -196,6 +196,7 @@ def start_telemetry_runtime(
             session_factory is None
             and os.environ.get("NANOBOT_TESTING") == "1"
         ):
+            install_runtime_event_sinks((LoggingRuntimeEventSink(),))
             handle = TelemetryRuntimeHandle(buffered_sink=None)
             _RUNTIME_HANDLE = handle
             return handle
@@ -216,9 +217,8 @@ def start_telemetry_runtime(
         buffered.start()
         install_runtime_event_sinks((
             LoggingRuntimeEventSink(),
-            ledger,
             buffered,
-        ))
+        ), authoritative_sinks=(ledger,))
         from core.telemetry.job_observer import (
             install_job_telemetry_observer,
         )

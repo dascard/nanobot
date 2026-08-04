@@ -54,16 +54,33 @@ class BridgeRequestScope:
         exc: BaseException | None,
         _traceback: TracebackType | None,
     ) -> bool:
+        cleanup_failure = await self._run_async_cleanups()
+        finish_failure: BaseException | None = None
         try:
-            await self._run_async_cleanups()
-            if exc_type is None:
+            if exc_type is None and cleanup_failure is None:
                 self.finish("success")
-            elif issubclass(exc_type, asyncio.CancelledError):
+            elif (
+                exc_type is not None
+                and issubclass(exc_type, asyncio.CancelledError)
+            ):
                 self.finish("cancelled", error=str(exc or "request cancelled"))
             else:
-                self.finish("error", error=str(exc or exc_type.__name__))
+                failure = cleanup_failure or exc
+                self.finish(
+                    "error",
+                    error=str(
+                        failure
+                        or (exc_type.__name__ if exc_type is not None else "")
+                    ),
+                )
+        except BaseException as finish_exc:
+            finish_failure = finish_exc
         finally:
             self.close()
+        if finish_failure is not None:
+            raise finish_failure
+        if cleanup_failure is not None:
+            raise cleanup_failure
         return False
 
     def bind_async_cleanup(
@@ -74,9 +91,10 @@ class BridgeRequestScope:
             raise RuntimeError("Bridge request scope 已关闭")
         self._async_cleanups.append(cleanup)
 
-    async def _run_async_cleanups(self) -> None:
+    async def _run_async_cleanups(self) -> BaseException | None:
         cleanups = list(reversed(self._async_cleanups))
         self._async_cleanups.clear()
+        authority_failure: BaseException | None = None
         for cleanup in cleanups:
             try:
                 await cleanup()
@@ -88,6 +106,13 @@ class BridgeRequestScope:
                     exc,
                     exc_info=True,
                 )
+                from core.run_ledger.contracts import (
+                    find_run_ledger_authority_error,
+                )
+
+                if authority_failure is None:
+                    authority_failure = find_run_ledger_authority_error(exc)
+        return authority_failure
 
     def bind_trace_finalizer(self, finalizer: Any) -> None:
         self._trace_finalizer = finalizer
@@ -103,15 +128,12 @@ class BridgeRequestScope:
         finalizer = self._trace_finalizer
         if finalizer is None or bool(getattr(finalizer, "closed", False)):
             return
-        try:
-            finalizer.finish(
-                status,
-                output_preview=output_preview,
-                error=error,
-                model=model,
-            )
-        except Exception as exc:
-            logger.warning("Bridge request trace finalization failed: %s", exc, exc_info=True)
+        finalizer.finish(
+            status,
+            output_preview=output_preview,
+            error=error,
+            model=model,
+        )
 
     def close(self) -> None:
         if self._closed:

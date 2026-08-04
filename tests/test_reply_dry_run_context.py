@@ -80,6 +80,48 @@ async def test_bridge_request_dry_run_context_resets_after_exception():
     assert lock.locked() is False
 
 
+@pytest.mark.asyncio
+async def test_bridge_request_cleanup_preserves_authority_failure_and_closes():
+    from core.run_ledger.contracts import RunLedgerAuthorityError
+    from nanobot_kt.request_scope import BridgeRequestScope
+
+    lock = asyncio.Lock()
+    output = MagicMock()
+    events = []
+
+    class Finalizer:
+        closed = False
+
+        def finish(self, status, **kwargs):
+            events.append(("finish", status, kwargs.get("error", "")))
+            self.closed = True
+
+    async def successful_cleanup():
+        events.append(("cleanup", "success"))
+
+    async def failed_cleanup():
+        events.append(("cleanup", "authority"))
+        raise RunLedgerAuthorityError(
+            "cleanup ledger failed",
+            run_id="run-cleanup",
+            event_type="memory.session_end.failed",
+        )
+
+    with pytest.raises(RunLedgerAuthorityError, match="cleanup ledger failed"):
+        async with BridgeRequestScope(lock, output) as scope:
+            scope.bind_trace_finalizer(Finalizer())
+            scope.bind_async_cleanup(successful_cleanup)
+            scope.bind_async_cleanup(failed_cleanup)
+
+    assert events == [
+        ("cleanup", "authority"),
+        ("cleanup", "success"),
+        ("finish", "error", "cleanup ledger failed"),
+    ]
+    assert lock.locked() is False
+    output.disable_stream.assert_called_once_with()
+
+
 @patch("nanobot_kt.bridge.registry")
 @patch("nanobot_kt.bridge.NewAPIClient")
 @patch("nanobot_kt.bridge.load_agent_config")

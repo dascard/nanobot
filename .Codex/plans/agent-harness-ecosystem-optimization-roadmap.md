@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 4.1，Run/Event Ledger shadow 基座已落地）
+> 状态：执行中（阶段 4.1，Run/Event Ledger 已成为执行写入与管理端权威事实源）
 >
 > 建立日期：2026-08-03
 >
@@ -538,31 +538,35 @@ Native Runtime 能独立提供主回复链路。从工作区移除的 submodule 
 
 #### 4.1 Append-only Run/Event Ledger
 
-- [ ] 记录请求接纳、状态迁移、模型调用、工具调用、权限决定、usage、Artifact、交付和终止。
+- [x] 记录请求接纳、状态迁移、模型调用、工具调用、权限决定、usage、Artifact、交付和终止。
 - [x] 事件不可原地修改；纠正使用后续事件表达。
 - [ ] 会话、管理端、恢复和模型上下文通过投影生成。
 - [x] 事件 schema 带版本和迁移策略。
 
-阶段性实现证据（尚不等同于 4.1 整体验收）：
+阶段性实现证据（第三项仍需随恢复与 Context Engine 完成）：
 
 - 新增独立于可丢弃 Telemetry 的 `core/run_ledger/` 合同、SQLAlchemy Adapter 和
   `run_ledger_events`／`run_ledger_stream_heads` 迁移。事件按 Run 分配严格递增 sequence，
   使用 event ID 幂等、payload／事件摘要和前向 hash chain；同一 Run 不得切换 owner，终止后只能追加
   `run.event_corrected`。SQLite 迁移通过数据库 trigger 直接拒绝事实表的 UPDATE／DELETE。
-- `RunTracer` 已在同一数据库事务中双写接纳、running、usage 和终止事实；带 Run 关联的
-  `model.request`、`tool.execute`、`delivery.attempt` 等净化 Runtime Event 由同步 shadow sink
-  写入独立 Ledger。类型化 Runtime 事件、权限决定和 Artifact 已有 Adapter／Port 装饰器，但生产
-  Permission 与 Artifact 生命周期尚未接线，因此第一项继续保持未完成。
-- 管理端 Run 详情已增加可重建投影，并提供带 high-water sequence 的只读分页事件端点；旧
-  AgentRun／ToolCall／LLM 日志响应保持兼容。会话、恢复和模型上下文尚未改由 Ledger 投影生成，
-  因此第三项继续保持未完成。
+- `RunTracer` 在同一数据库事务中写入接纳、running、Prompt 固定点、usage 和终止事实；带 Run 关联的
+  `model.request`、`tool.execute` 等净化 Runtime Event 与类型化 Runtime Run Event 均先通过权威 Sink
+  入账。真实 Sandbox 权限决定在工具副作用前提交，Artifact 登记与不可变资产事实共用事务；聊天和
+  主动外呼的每次交付 Attempt 使用独立 Run，保留来源 Run 关联并将成功、失败、取消或不确定结果终态化。
+  请求接纳、状态、模型、工具、权限、usage、Artifact、交付和终止已形成完整生产接线。
+- 管理端通过固定 high-water、完整分页和摘要链校验生成权威 Run 投影；状态、时间、筛选和排序不再读取
+  legacy `AgentRun` 当前值。独立交付 Run 即使没有 `AgentRun` 行也可列出、查看详情和分页事件；只有
+  迁移前完全没有 Ledger 的旧记录才显式标记为 `legacy_compat`。会话、恢复和模型上下文仍需在后续
+  Checkpoint／Context Engine 切片改由 Ledger 投影生成，因此第三项继续保持未完成。
 - 第二个 shadow 切片把 Prompt Runtime 解析完成后的 mode、key、Prompt hash 与模板解析清单 hash
   作为 `run.prompt_resolved` 后续事实，与 legacy `AgentRun` Prompt 头在同一事务中双写；模板正文、
   runtime/default 路径和解析清单原文不进入 Ledger。投影现在可重建安全的 Prompt／模型／工具／usage／
   Artifact context manifest，并在管理端对 legacy header 给出 `projection_consistent` 与稳定 reason code。
-  该 readiness 仅用于灰度前 shadow 核对，不会自动修复状态或提升 Ledger 控制权。
-- 当前仍是 shadow 迁移期：Runtime Event 总线保持 fail-open，`RunTracer` 也保留旧追踪容错语义；
-  Ledger 尚未成为所有执行入口的强制控制事实，不能据此宣称已具备完整恢复或 exactly-once 副作用保证。
+  legacy readiness 现只作为迁移审计信息，不能覆盖 Ledger 投影。
+- 带 Run 的 Runtime Event、类型化 Runtime Event、接纳、Prompt 固定点、工具前权限决定、Artifact 和
+  终止事实均采用 fail-closed 权威屏障；Ledger 失败不会进入模型重试、Provider 熔断或普通工具错误归一化。
+  请求清理和 Trace Context 在终止入账失败时仍完整释放。无 Run 的纯观测事件继续 fail-open。
+  当前切换只保证事实先行和提交不确定 read-back；完整恢复及外部副作用 exactly-once 仍属于 4.3／4.4。
 - 验证证据：Ledger／Telemetry／Runtime Event／管理端 Trace／LLM Trace／Schema Migration／Release Artifact
   联合回归 126 passed；Bridge 关联上下文与 Ledger 联合回归 36 passed；最终完整
   `python -m pytest tests/ -v` 为 6483 passed、12 skipped、0 failed。架构边界、OpenAPI 生成物、
@@ -570,6 +574,10 @@ Native Runtime 能独立提供主回复链路。从工作区移除的 submodule 
   致命静态错误检查、定向 Ruff、Python 编译和 `git diff --check` 均通过。
   第二个 shadow 切片的 Ledger／Trace／Telemetry／Migration／Bridge 联合回归为 155 passed；对应架构、
   OpenAPI、行为基线、Release／Verification Golden、决策规则和静态检查再次通过。
+- 权威切换切片的 Ledger／Runtime Event／Bridge／Native Runtime／权限／Artifact／投递／管理端联合回归
+  为 252 passed；最终完整 `python -m pytest tests/ -v` 为 6497 passed、12 skipped、0 failed。
+  管理端漂移测试证明 legacy 状态和时间不能覆盖 Ledger；模型或工具入账失败不会触发第二次模型调用、
+  Provider 健康度变更或普通工具错误归一化。
 
 #### 4.2 隐私安全的运行证据
 

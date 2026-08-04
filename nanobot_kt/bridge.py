@@ -29,6 +29,10 @@ from nanobot_kt.runtime_context_adapter import (
     build_fallback_request_runtime_context,
     build_request_runtime_context,
 )
+from nanobot_kt.runtime_event_delivery import (
+    build_runtime_event_handler,
+    create_default_run_event_sink,
+)
 from nanobot_kt.bridge_state import (
     BridgeEventPayload,
     BridgeRuntimeToolState as BridgeRuntimeToolState,
@@ -59,8 +63,6 @@ from core.agent_runtime import (
     RuntimeLifecycleState,
     RuntimeMessage,
     RuntimeModelRoute,
-    RuntimeRunEvent,
-    RuntimeRunEventKind,
     RuntimeTurnKind,
 )
 from core.llm_sdk_tracing import install_openai_chat_completion_tracer
@@ -155,20 +157,6 @@ def _sha256_text(text: str) -> str:
     return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
 
 
-async def _project_runtime_stream_event(
-    event: RuntimeRunEvent,
-    stream_queue: asyncio.Queue[dict[str, Any]],
-) -> None:
-    """把框架无关的 Runtime 事件投影为既有 SSE 字典协议。"""
-
-    if event.kind is RuntimeRunEventKind.TEXT_DELTA and event.text_delta:
-        await stream_queue.put({"status": "delta", "text": event.text_delta})
-    elif event.kind is RuntimeRunEventKind.ERROR and event.error is not None:
-        await stream_queue.put(
-            {"status": "error", "message": event.error.message}
-        )
-
-
 class NanobotBridge(MessageContractBridgeMixin):
     """
     Wraps a KT Agent for use as a request/response handler.
@@ -204,6 +192,7 @@ class NanobotBridge(MessageContractBridgeMixin):
         self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session 分锁
         self._last_prompt_render_meta: dict[str, Any] = {}
         self._kt_session_key = f"nanobot-bridge-{uuid4().hex}"
+        self._run_event_sink = create_default_run_event_sink()
 
     def _build_runtime(self, *, initially_started: bool) -> AgentRuntimePort:
         from core.runtime.event_bus import emit_agent_lifecycle_event
@@ -891,13 +880,14 @@ class NanobotBridge(MessageContractBridgeMixin):
                 cache_context=cache_context,
             ),
         ):
-            turn = await self._require_runtime().run(
+            turn = await self._require_runtime().run_event(
                 AgentTurnRequest(
                     context=runtime_context,
                     content=retry_prompt,
                     stream=False,
                     kind=RuntimeTurnKind.USER_INPUT,
-                )
+                ),
+                build_runtime_event_handler(self),
             )
         retry_result = turn.raw_result
         retry_response = self._output.get_response()
@@ -1060,6 +1050,11 @@ class NanobotBridge(MessageContractBridgeMixin):
         next_turn_kind = RuntimeTurnKind.USER_INPUT
         cache_context = build_llm_cache_context(session_id, meta.get("context_debug"))
 
+        runtime_event_handler = build_runtime_event_handler(
+            self,
+            stream_queue if bool(meta.get("stream")) else None,
+        )
+
         for attempt in range(max_attempts):
             self._output.clear()
             turn_kind = next_turn_kind
@@ -1119,22 +1114,23 @@ class NanobotBridge(MessageContractBridgeMixin):
                         event_attributes=runtime_attributes,
                     )
                     runtime = self._require_runtime()
-                    if bool(meta["stream"]) and stream_queue is not None:
-                        turn = await runtime.run_event(
-                            turn_request,
-                            lambda event: _project_runtime_stream_event(
-                                event,
-                                stream_queue,
-                            ),
-                        )
-                    else:
-                        turn = await runtime.run(turn_request)
+                    turn = await runtime.run_event(
+                        turn_request,
+                        runtime_event_handler,
+                    )
                 result = turn.raw_result
                 logger.info(
                     "[NanobotBridge] AgentRuntimePort returned: type=%s",
                     type(result),
                 )
             except Exception as e:
+                from core.run_ledger.contracts import (
+                    find_run_ledger_authority_error,
+                )
+
+                authority_failure = find_run_ledger_authority_error(e)
+                if authority_failure is not None:
+                    raise authority_failure
                 logger.error(
                     f"[NanobotBridge] Agent processing error: {e}", exc_info=True
                 )
@@ -1532,6 +1528,13 @@ class NanobotBridge(MessageContractBridgeMixin):
                 result_name="suppressed",
             )
         except Exception as exc:
+            from core.run_ledger.contracts import (
+                find_run_ledger_authority_error,
+            )
+
+            authority_failure = find_run_ledger_authority_error(exc)
+            if authority_failure is not None:
+                raise authority_failure
             logger.error(
                 "[Reply] contract retry failed session=%s: %s",
                 session_id,
@@ -1894,13 +1897,10 @@ class NanobotBridge(MessageContractBridgeMixin):
                 "prompt_sha256": prompt_build.prompt_sha256,
                 "prompt_template_resolutions": prompt_build.prompt_template_resolutions,
             }
-            try:
-                RunTracer.update_prompt_source(
-                    run_handle.run_id,
-                    **self._last_prompt_render_meta,
-                )
-            except Exception:
-                pass
+            RunTracer.update_prompt_source(
+                run_handle.run_id,
+                **self._last_prompt_render_meta,
+            )
             prompt_messages = tuple(
                 RuntimeMessage(
                     role=str(message.get("role") or "system"),

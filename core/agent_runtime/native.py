@@ -680,6 +680,13 @@ class NativeAgentRuntime:
                 if not _is_retryable_model_error(str(exc)):
                     break
             except Exception as exc:
+                from core.run_ledger.contracts import (
+                    find_run_ledger_authority_error,
+                )
+
+                authority_failure = find_run_ledger_authority_error(exc)
+                if authority_failure is not None:
+                    raise authority_failure
                 last_error = exc
             if attempt + 1 >= self._config.max_model_attempts:
                 break
@@ -768,6 +775,13 @@ class NativeAgentRuntime:
             except TimeoutError as exc:
                 last_error = exc
             except Exception as exc:
+                from core.run_ledger.contracts import (
+                    find_run_ledger_authority_error,
+                )
+
+                authority_failure = find_run_ledger_authority_error(exc)
+                if authority_failure is not None:
+                    raise authority_failure
                 last_error = exc
             if saw_irreversible_payload:
                 raise _NativeAmbiguousExecutionError(
@@ -880,6 +894,13 @@ class NativeAgentRuntime:
                 ),
             )
         except Exception as exc:
+            from core.run_ledger.contracts import (
+                find_run_ledger_authority_error,
+            )
+
+            authority_failure = find_run_ledger_authority_error(exc)
+            if authority_failure is not None:
+                raise authority_failure
             return RuntimeToolExecutionResult(
                 tool_call=RuntimeToolCall(
                     call_id=call.call_id,

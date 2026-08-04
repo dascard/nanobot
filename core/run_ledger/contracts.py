@@ -130,6 +130,38 @@ class RunLedgerIntegrityError(RuntimeError):
     """持久记录的摘要链或 payload 与声明不一致。"""
 
 
+class RunLedgerAuthorityError(RuntimeError):
+    """权威 Run Ledger 无法确认事实；调用方必须停止或进入不确定态。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: str = "",
+        event_type: str = "",
+        code: str = "run_ledger_unavailable",
+    ) -> None:
+        self.run_id = str(run_id or "").strip()
+        self.event_type = str(event_type or "").strip()
+        self.code = str(code or "run_ledger_unavailable").strip()
+        super().__init__(str(message or "Run Ledger 权威写入失败"))
+
+
+def find_run_ledger_authority_error(
+    error: BaseException,
+) -> RunLedgerAuthorityError | None:
+    """沿异常因果链定位被 Adapter 包装过的权威写入失败。"""
+
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, RunLedgerAuthorityError):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
 class UnsupportedRunLedgerSchemaError(RunLedgerContractError):
     """读取到当前代码不支持的 Event schema。"""
 
@@ -568,6 +600,7 @@ __all__ = [
     "RUN_LEDGER_SCHEMA_NAME",
     "RUN_LEDGER_SCHEMA_VERSION",
     "RunEventLedgerPort",
+    "RunLedgerAuthorityError",
     "RunLedgerConflictError",
     "RunLedgerContractError",
     "RunLedgerEventDraft",
@@ -578,6 +611,7 @@ __all__ = [
     "RunLedgerScalar",
     "UnsupportedRunLedgerSchemaError",
     "canonical_run_status",
+    "find_run_ledger_authority_error",
     "decode_run_ledger_payload",
     "encode_run_ledger_payload",
     "is_terminal_run_status",

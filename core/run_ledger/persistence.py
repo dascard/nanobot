@@ -402,15 +402,44 @@ class SqlAlchemyRunEventLedgerWriter:
         *,
         expected_sequence: int | None = None,
     ) -> RunLedgerEventRecord:
+        return self.append_many(
+            (event,),
+            expected_sequences=(expected_sequence,),
+        )[0]
+
+    def append_many(
+        self,
+        events: tuple[RunLedgerEventDraft, ...],
+        *,
+        expected_sequences: tuple[int | None, ...] | None = None,
+    ) -> tuple[RunLedgerEventRecord, ...]:
+        """在一个短事务中追加同一 Run 的一组连续事实。"""
+
+        drafts = tuple(events)
+        if not drafts or any(
+            not isinstance(event, RunLedgerEventDraft) for event in drafts
+        ):
+            raise TypeError("events 必须是非空 RunLedgerEventDraft tuple")
+        run_ids = {event.run_id for event in drafts}
+        if len(run_ids) != 1:
+            raise ValueError("append_many 只能追加同一 run_id 的事实")
+        sequences = (
+            tuple(expected_sequences)
+            if expected_sequences is not None
+            else (None,) * len(drafts)
+        )
+        if len(sequences) != len(drafts):
+            raise ValueError("expected_sequences 数量必须与 events 一致")
         db = self._session_factory()
         try:
-            def operation() -> RunLedgerEventRecord:
-                record = SqlAlchemyRunEventLedger(db).append(
-                    event,
-                    expected_sequence=expected_sequence,
+            def operation() -> tuple[RunLedgerEventRecord, ...]:
+                ledger = SqlAlchemyRunEventLedger(db)
+                records = tuple(
+                    ledger.append(event, expected_sequence=expected)
+                    for event, expected in zip(drafts, sequences, strict=True)
                 )
                 db.commit()
-                return record
+                return records
 
             return run_sqlite_locked_retry(
                 operation,
@@ -420,37 +449,51 @@ class SqlAlchemyRunEventLedgerWriter:
             )
         except BaseException as exc:
             db.rollback()
-            recovered = self._read_back(event)
+            recovered = self._read_back_many(drafts)
             if recovered is not None:
-                if expected_sequence is not None and (
-                    recovered.sequence != expected_sequence
+                for record, expected in zip(
+                    recovered,
+                    sequences,
+                    strict=True,
                 ):
-                    raise RunLedgerConflictError(
-                        "提交后 read-back 的 sequence 与期望不一致"
-                    ) from exc
+                    if expected is not None and record.sequence != expected:
+                        raise RunLedgerConflictError(
+                            "提交后 read-back 的 sequence 与期望不一致"
+                        ) from exc
                 return recovered
             if isinstance(exc, IntegrityError):
                 raise RunLedgerConflictError(
-                    f"Run Ledger 并发追加冲突：{event.event_id}"
+                    f"Run Ledger 并发追加冲突：{drafts[0].run_id}"
                 ) from exc
             raise
         finally:
             db.close()
 
-    def _read_back(
+    def _read_back_many(
         self,
-        event: RunLedgerEventDraft,
-    ) -> RunLedgerEventRecord | None:
+        events: tuple[RunLedgerEventDraft, ...],
+    ) -> tuple[RunLedgerEventRecord, ...] | None:
         db = self._session_factory()
         try:
-            record = SqlAlchemyRunEventLedger(db).get(event.event_id)
-            if record is None:
-                return None
-            if not _same_event(record, event):
-                raise RunLedgerConflictError(
-                    f"event_id 已绑定不同事实：{event.event_id}"
-                )
-            return record
+            ledger = SqlAlchemyRunEventLedger(db)
+            records: list[RunLedgerEventRecord] = []
+            for event in events:
+                record = ledger.get(event.event_id)
+                if record is None:
+                    return None
+                if not _same_event(record, event):
+                    raise RunLedgerConflictError(
+                        f"event_id 已绑定不同事实：{event.event_id}"
+                    )
+                records.append(record)
+            return tuple(records)
+        finally:
+            db.close()
+
+    def head(self, run_id: str) -> RunLedgerHead | None:
+        db = self._session_factory()
+        try:
+            return SqlAlchemyRunEventLedger(db).head(run_id)
         finally:
             db.close()
 

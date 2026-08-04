@@ -127,6 +127,13 @@ def _handler(service: ServiceCallable):
                 started=started,
             )
         except BaseException as exc:
+            from core.run_ledger.contracts import (
+                find_run_ledger_authority_error,
+            )
+
+            authority_failure = find_run_ledger_authority_error(exc)
+            if authority_failure is not None:
+                raise authority_failure
             finish_tool_trace(
                 trace_call_id,
                 started,

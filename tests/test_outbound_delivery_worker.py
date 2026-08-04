@@ -1165,6 +1165,12 @@ async def test_invalid_persisted_envelope_opens_contract_circuit_before_send(
     assert emitted[-1][2]["attributes"]["failure_code"] == (
         "delivery.contract_invalid"
     )
+    attempt_context = emitted[-1][2]["context"]
+    assert attempt_context.run_id == (
+        f"delivery:outbound:{result.attempt_id}"
+    )
+    assert attempt_context.delivery_id == str(result.attempt_id)
+    assert attempt_context.task_run_id
     with outbound_factory() as db:
         circuit = db.query(OutboundDeliveryCircuit).one()
         assert circuit.scope_type == "payload_contract"

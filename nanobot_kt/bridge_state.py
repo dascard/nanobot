@@ -135,17 +135,26 @@ class BridgeTraceFinalizer:
         if self.closed:
             return
         self.closed = True
+        authority_failure: Exception | None = None
 
-        def run_step(label: str, callback: Callable[[], None]) -> None:
+        def run_step(
+            label: str,
+            callback: Callable[[], None],
+            *,
+            authoritative: bool = False,
+        ) -> None:
+            nonlocal authority_failure
             try:
                 callback()
             except Exception as exc:
-                logger.warning(
+                logger.error(
                     "Bridge trace cleanup step %s failed: %s",
                     label,
                     exc,
                     exc_info=True,
                 )
+                if authoritative and authority_failure is None:
+                    authority_failure = exc
 
         def finish_run() -> None:
             from core.tracing import RunTracer
@@ -160,7 +169,7 @@ class BridgeTraceFinalizer:
                 meta=self.run_meta,
             )
 
-        run_step("finish_run", finish_run)
+        run_step("finish_run", finish_run, authoritative=True)
         if self.tool_plan_token is not None:
             tool_plan_token = self.tool_plan_token
             self.tool_plan_token = None
@@ -213,6 +222,8 @@ class BridgeTraceFinalizer:
                 reset_trace_context(trace_tokens)
 
             run_step("reset_trace", reset_trace)
+        if authority_failure is not None:
+            raise authority_failure
 
 
 __all__ = [

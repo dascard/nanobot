@@ -11,6 +11,7 @@ from core.sandbox.contracts import (
     SandboxErrorCode,
     SandboxServiceError,
 )
+from core.run_ledger.contracts import RunLedgerAuthorityError
 from core.sandbox.tool_service import SandboxToolService
 from core.tool_contracts.result import ToolServiceResult
 from core.uow import UnitOfWork
@@ -194,6 +195,8 @@ async def execute_sandbox_tool(
             session_factory=session_factory,
             service_factory=service_factory,
         )
+    except RunLedgerAuthorityError:
+        raise
     except SandboxServiceError as error:
         result = error.to_result()
     except RuntimeError:

@@ -322,21 +322,25 @@ async def execute_registered_tool(
         finish_error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        RunTracer.finish_run(
-            run_handle.run_id,
-            status=finish_status,
-            output_preview=(result.output if result is not None else ""),
-            error=finish_error,
-            meta={
-                "tool_name": name,
-                "workflow_idempotency_key": str(
-                    idempotency_key or ""
+        try:
+            RunTracer.finish_run(
+                run_handle.run_id,
+                status=finish_status,
+                output_preview=(
+                    result.output if result is not None else ""
                 ),
-                "tool_plan_sha256": tool_plan.sha256,
-            },
-        )
-        reset_runtime_correlation(correlation_tokens)
-        reset_trace_context(trace_tokens)
+                error=finish_error,
+                meta={
+                    "tool_name": name,
+                    "workflow_idempotency_key": str(
+                        idempotency_key or ""
+                    ),
+                    "tool_plan_sha256": tool_plan.sha256,
+                },
+            )
+        finally:
+            reset_runtime_correlation(correlation_tokens)
+            reset_trace_context(trace_tokens)
 
     return DirectToolExecutionResult(
         output=result.output,

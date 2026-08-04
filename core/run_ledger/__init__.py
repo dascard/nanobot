@@ -4,6 +4,7 @@ from core.run_ledger.contracts import (
     RUN_LEDGER_SCHEMA_NAME,
     RUN_LEDGER_SCHEMA_VERSION,
     RunEventLedgerPort,
+    RunLedgerAuthorityError,
     RunLedgerConflictError,
     RunLedgerContractError,
     RunLedgerEventDraft,
@@ -13,6 +14,7 @@ from core.run_ledger.contracts import (
     RunLedgerIntegrityError,
     UnsupportedRunLedgerSchemaError,
     canonical_run_status,
+    find_run_ledger_authority_error,
     decode_run_ledger_payload,
     encode_run_ledger_payload,
     is_terminal_run_status,
@@ -27,11 +29,17 @@ from core.run_ledger.projection import (
     run_ledger_record_to_dict,
     verify_run_ledger_chain,
 )
+from core.run_ledger.read_model import (
+    AuthoritativeRunLedgerView,
+    load_authoritative_run_view,
+)
 
 __all__ = [
     "RUN_LEDGER_SCHEMA_NAME",
     "RUN_LEDGER_SCHEMA_VERSION",
     "RunEventLedgerPort",
+    "RunLedgerAuthorityError",
+    "AuthoritativeRunLedgerView",
     "RunLedgerConflictError",
     "RunLedgerContractError",
     "RunLedgerEventDraft",
@@ -44,9 +52,11 @@ __all__ = [
     "UnsupportedRunLedgerSchemaError",
     "assess_run_ledger_readiness",
     "canonical_run_status",
+    "find_run_ledger_authority_error",
     "decode_run_ledger_payload",
     "encode_run_ledger_payload",
     "is_terminal_run_status",
+    "load_authoritative_run_view",
     "project_run_ledger",
     "run_ledger_event_sha256",
     "run_ledger_payload_sha256",
