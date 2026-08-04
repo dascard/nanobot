@@ -84,6 +84,7 @@ from core.agent_runtime.extension_ports import (
     RuntimeSkillScope,
     RuntimeSkillSnapshot,
     SkillProviderPort,
+    mcp_wire_tool_name,
 )
 from core.agent_runtime.gateway import (
     agent_runtime_binding_state,
@@ -150,6 +151,7 @@ __all__ = [
     "InMemoryCheckpointStore",
     "InMemorySkillProvider",
     "McpProviderPort",
+    "mcp_wire_tool_name",
     "ManagedAgentGatewayPort",
     "NativeAgentRuntime",
     "NativeAgentRuntimeConfig",

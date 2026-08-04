@@ -915,7 +915,8 @@ def test_skill_schema_migration_creates_immutable_version_tables():
         "skill_invocations",
         "skill_evaluations",
     } <= set(inspect(engine).get_table_names())
-    assert MIGRATIONS[-1][0] == _AGENT_SKILLS_GOVERNANCE_V2_VERSION
+    versions = [item[0] for item in MIGRATIONS]
+    assert _AGENT_SKILLS_GOVERNANCE_V2_VERSION in versions
     with engine.begin() as connection:
         connection.execute(text(
             "INSERT INTO skill_invocations("

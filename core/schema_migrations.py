@@ -115,6 +115,7 @@ _AGENT_SKILLS_LIFECYCLE_V1_VERSION = (
 _AGENT_SKILLS_GOVERNANCE_V2_VERSION = (
     "20260804_agent_skills_governance_v2"
 )
+_MCP_CONTROL_PLANE_V1_VERSION = "20260804_mcp_control_plane_v1"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3902,6 +3903,41 @@ def _agent_skills_governance_v2(
         ))
 
 
+def _mcp_control_plane_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建 MCP 原子配置、加密秘密和追加式安全诊断。"""
+
+    from core.db.models.mcp import (
+        McpConfigurationStateRow,
+        McpDiagnosticRow,
+        McpSecretRow,
+        McpServerRow,
+    )
+
+    for model in (
+        McpConfigurationStateRow,
+        McpServerRow,
+        McpSecretRow,
+        McpDiagnosticRow,
+    ):
+        model.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS trg_mcp_diagnostics_no_update "
+        "BEFORE UPDATE ON mcp_diagnostics BEGIN "
+        "SELECT RAISE(ABORT, 'mcp_diagnostics_append_only'); END"
+    ))
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS trg_mcp_diagnostics_no_delete "
+        "BEFORE DELETE ON mcp_diagnostics BEGIN "
+        "SELECT RAISE(ABORT, 'mcp_diagnostics_append_only'); END"
+    ))
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -5164,6 +5200,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _AGENT_SKILLS_GOVERNANCE_V2_VERSION,
         "agent skills registry retrieval usage cost and evaluations",
         _agent_skills_governance_v2,
+    ),
+    (
+        _MCP_CONTROL_PLANE_V1_VERSION,
+        "mcp atomic configuration encrypted secrets transports and diagnostics",
+        _mcp_control_plane_v1,
     ),
 ]
 

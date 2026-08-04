@@ -5169,6 +5169,234 @@
         "title": "MarkDuplicateBody",
         "type": "object"
       },
+      "McpConfigurationReplaceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/McpServerBody"
+            },
+            "maxItems": 64,
+            "title": "Servers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "McpConfigurationReplaceBody",
+        "type": "object"
+      },
+      "McpEnabledBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "enabled"
+        ],
+        "title": "McpEnabledBody",
+        "type": "object"
+      },
+      "McpSecretReferenceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "binding": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Binding",
+            "type": "string"
+          },
+          "secret_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Secret Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "binding",
+          "secret_id"
+        ],
+        "title": "McpSecretReferenceBody",
+        "type": "object"
+      },
+      "McpSecretWriteBody": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "replace",
+              "clear"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "McpSecretWriteBody",
+        "type": "object"
+      },
+      "McpServerBody": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128,
+            "title": "Args",
+            "type": "array"
+          },
+          "auth_mode": {
+            "default": "none",
+            "enum": [
+              "none",
+              "bearer",
+              "oauth_client_credentials"
+            ],
+            "title": "Auth Mode",
+            "type": "string"
+          },
+          "command": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Command",
+            "type": "string"
+          },
+          "connect_timeout_seconds": {
+            "default": 10.0,
+            "maximum": 120.0,
+            "minimum": 0.1,
+            "title": "Connect Timeout Seconds",
+            "type": "number"
+          },
+          "cwd": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Cwd",
+            "type": "string"
+          },
+          "display_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "endpoint": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "max_tools": {
+            "default": 20,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Tools",
+            "type": "integer"
+          },
+          "oauth_scopes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Oauth Scopes",
+            "type": "array"
+          },
+          "oauth_token_url": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Oauth Token Url",
+            "type": "string"
+          },
+          "reconnect_attempts": {
+            "default": 1,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Reconnect Attempts",
+            "type": "integer"
+          },
+          "request_timeout_seconds": {
+            "default": 60.0,
+            "maximum": 1800.0,
+            "minimum": 0.1,
+            "title": "Request Timeout Seconds",
+            "type": "number"
+          },
+          "secret_refs": {
+            "items": {
+              "$ref": "#/components/schemas/McpSecretReferenceBody"
+            },
+            "maxItems": 32,
+            "title": "Secret Refs",
+            "type": "array"
+          },
+          "server_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Server Id",
+            "type": "string"
+          },
+          "sse_read_timeout_seconds": {
+            "default": 300.0,
+            "maximum": 3600.0,
+            "minimum": 1.0,
+            "title": "Sse Read Timeout Seconds",
+            "type": "number"
+          },
+          "transport": {
+            "enum": [
+              "stdio",
+              "sse",
+              "http"
+            ],
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "display_name",
+          "transport"
+        ],
+        "title": "McpServerBody",
+        "type": "object"
+      },
       "MemoryDigestRunAdminRequest": {
         "properties": {
           "force": {
@@ -16300,6 +16528,462 @@
         "tags": [
           "admin-logs"
         ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/mcp": {
+      "get": {
+        "operationId": "get_api_v1_admin_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Api V1 Admin Mcp Get Mcp Configuration",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Mcp Configuration",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "put": {
+        "operationId": "put_api_v1_admin_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpConfigurationReplaceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Put Api V1 Admin Mcp Replace Mcp Configuration",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Replace Mcp Configuration",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/mcp/diagnostics": {
+      "get": {
+        "operationId": "get_api_v1_admin_mcp_diagnostics",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "server_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 64,
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Api V1 Admin Mcp Diagnostics List Mcp Diagnostics",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Mcp Diagnostics",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "limit"
+      }
+    },
+    "/api/v1/admin/mcp/health": {
+      "post": {
+        "operationId": "post_api_v1_admin_mcp_health",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Mcp Health Check All Mcp Servers Health",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Check All Mcp Servers Health",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/mcp/secrets/{secret_id}": {
+      "put": {
+        "operationId": "put_api_v1_admin_mcp_secrets_secret_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "secret_id",
+            "required": true,
+            "schema": {
+              "title": "Secret Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpSecretWriteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Put Api V1 Admin Mcp Secrets Secret Id Write Mcp Secret",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Write Mcp Secret",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/mcp/servers/{server_id}/enabled": {
+      "patch": {
+        "operationId": "patch_api_v1_admin_mcp_servers_server_id_enabled",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpEnabledBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Patch Api V1 Admin Mcp Servers Server Id Enabled Set Mcp Server Enabled",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Set Mcp Server Enabled",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/mcp/servers/{server_id}/health": {
+      "post": {
+        "operationId": "post_api_v1_admin_mcp_servers_server_id_health",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Mcp Servers Server Id Health Check Mcp Server Health",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Check Mcp Server Health",
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"
       }

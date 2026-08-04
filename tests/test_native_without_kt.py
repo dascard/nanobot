@@ -42,8 +42,6 @@ def test_native_runtime_and_server_import_without_kt() -> None:
             "kohakuvault",
             "libcst",
             "linkify_it",
-            "mcp",
-            "mcp_types",
             "mdit_py_plugins",
             "model2vec",
             "multipart",

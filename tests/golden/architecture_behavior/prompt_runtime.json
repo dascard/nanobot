@@ -17,8 +17,8 @@
     },
     {
       "path": "data/prompts_v2/chat/main.md",
-      "sha256": "b0228ce1a22918c21db7bde50ed7b75375329db38c122fcb846d1c73ce326750",
-      "size_bytes": 6799
+      "sha256": "d3253db58100bfbd44d8be13204d31c9b2481afc785691bee8e58921433bfc85",
+      "size_bytes": 7145
     },
     {
       "path": "data/prompts_v2/chat/platform/qq/common.md",
@@ -86,6 +86,11 @@
       "size_bytes": 3910
     },
     {
+      "path": "data/prompts_v2/tools/skill/usage.md",
+      "sha256": "b48c8988de56806158bb847239a58f670f320431922d2c4debe5b35e9dffbb3a",
+      "size_bytes": 1153
+    },
+    {
       "path": "data/prompts_v2/tools/sql_analysis/usage.md",
       "sha256": "1fafb30c96af6889ad5dc3a086304ff4ce39f0193746e72789d03993911ac88c",
       "size_bytes": 819
@@ -142,8 +147,8 @@
     },
     {
       "path": "prompts.v2.default/chat/main.md",
-      "sha256": "b0228ce1a22918c21db7bde50ed7b75375329db38c122fcb846d1c73ce326750",
-      "size_bytes": 6799
+      "sha256": "d3253db58100bfbd44d8be13204d31c9b2481afc785691bee8e58921433bfc85",
+      "size_bytes": 7145
     },
     {
       "path": "prompts.v2.default/chat/platform/qq/common.md",

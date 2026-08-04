@@ -91,6 +91,9 @@ AGENT_HARNESS_PLAN_MODE_PROMPT_BASELINE_SHA256 = (
 AGENT_HARNESS_MANAGED_SKILLS_PROMPT_BASELINE_SHA256 = (
     "f4beef882f28d25f9ab921cc44505a51b7f45927dfefe9d31b54781f1f696e6d"
 )
+AGENT_HARNESS_SKILL_RETRIEVAL_PROMPT_BASELINE_SHA256 = (
+    "2bea17f21d71f93bf88174c1f0fdd56f624ca49f3227b02febd14a5cefed68e1"
+)
 PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256 = (
     "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552"
 )
@@ -1421,12 +1424,27 @@ def _manifest(
                 "before_sha256": (
                     AGENT_HARNESS_MANAGED_SKILLS_PROMPT_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["prompt_runtime"]
+                "after_sha256": (
+                    AGENT_HARNESS_SKILL_RETRIEVAL_PROMPT_BASELINE_SHA256
                 ),
                 "reason": (
                     "同步按本轮查询和适用范围检索最小 Skill 候选、依赖闭包、"
                     "延迟 schema 与未入选版本不授权的运行边界。"
+                ),
+            },
+            {
+                "id": "agent_harness_mcp_control_plane_prompt",
+                "snapshot_id": "prompt_runtime",
+                "stage": "Agent Harness 阶段 6.3",
+                "before_sha256": (
+                    AGENT_HARNESS_SKILL_RETRIEVAL_PROMPT_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["prompt_runtime"]
+                ),
+                "reason": (
+                    "登记带 server namespace 的请求级 MCP 工具、冻结 schema、"
+                    "不可信结果信封和服务端秘密引用边界。"
                 ),
             },
             {

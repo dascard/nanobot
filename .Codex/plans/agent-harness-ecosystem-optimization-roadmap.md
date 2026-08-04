@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 6.2 已完成，准备阶段 6.3）
+> 状态：执行中（阶段 6.3 已完成，准备阶段 6.4）
 >
 > 建立日期：2026-08-03
 >
@@ -910,12 +910,36 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 6.3 MCP 控制面
 
-- [ ] 支持 stdio、SSE 和 HTTP transport。
-- [ ] 支持 OAuth 与请求级秘密引用。
-- [ ] 提供健康检查、启停、超时、重连和诊断。
-- [ ] 工具名默认带 server namespace，并检测冲突。
-- [ ] 配置原子替换；单个坏 MCP 不阻塞其他 MCP。
-- [ ] 秘密不得进入日志、metadata、子 Agent 或 Sandbox。
+- [x] 支持 stdio、SSE 和 HTTP transport。
+- [x] 支持 OAuth 与请求级秘密引用。
+- [x] 提供健康检查、启停、超时、重连和诊断。
+- [x] 工具名默认带 server namespace，并检测冲突。
+- [x] 配置原子替换；单个坏 MCP 不阻塞其他 MCP。
+- [x] 秘密不得进入日志、metadata、子 Agent 或 Sandbox。
+
+实施记录（2026-08-04）：
+
+- 新增 Nanobot 自有 MCP 控制面和正式生产接入，使用官方 Python SDK 连接 stdio、旧版 SSE 与
+  Streamable HTTP；SDK 固定在核心、测试和可选 KT 锁中的同一 `1.29.0` 版本。Native Runtime 与
+  KT Adapter 消费同一请求级 MCP 快照、ToolPlan 和 Core execution port，不存在 shadow 分流；无启用
+  server 或无 SDK 时不会影响 Native／非 Agent 主链路。
+- server 配置通过 Registry 快照、内容摘要和 revision CAS 执行全量原子替换；启停同样生成新 revision。
+  每个 server 独立发现、缓存、超时和诊断，坏配置、缺失秘密、错误身份、非法 schema、工具预算超限或
+  namespace 冲突只隔离该 server。工具 wire name 默认加入 server namespace，调用前重新获取目录并比对
+  冻结 schema；连接前失败可按上限重连，调用已发出后的未知结果标为 ambiguous，禁止自动重放。
+- OAuth client credentials、Bearer、自定义 Header 与 stdio 环境变量全部只保存为秘密引用；值使用独立
+  派生密钥加密，只在发现／调用栈局部解析。stdio stderr 丢弃，异常压缩为无 URL／正文的稳定分类，诊断、
+  run metadata、Runtime attributes、ToolPlan、子 Agent 与 Sandbox 均不接收秘密值；响应会移除 `_meta`
+  并按本次已知凭据脱敏，所有 content block 和 structured content 作为不可信结果信封保留。
+- 外部 server 自报的 `readOnlyHint` 不会下调服务端授权等级；MCP 一律按 external effect 进入 Native
+  恢复边界。调用参数在解析秘密和建立连接前按本轮冻结 JSON Schema 校验，非 ambiguous 的调用前失败
+  形成普通失败结果，只有已发出后无法确认的结果进入副作用 ambiguous 流程。
+- Admin API 已提供配置读取／原子替换、server 启停、秘密 replace／clear、单项／批量健康检查和脱敏诊断；
+  OpenAPI、canonical／runtime Prompt、行为 Golden、决策规则清单和依赖锁已同步。MCP 专项测试在本地
+  SDK 和锁定的 `1.29.0` SDK 环境均为 12 passed；桥接、Native／KT、迁移、Prompt 与生成合同联合回归
+  214 passed。最终完整 `python -m pytest tests/ -v` 为 6621 passed、12 skipped、0 failed；架构边界、
+  OpenAPI、行为 Golden、Release／Verification Golden、决策规则、Task SLO、Ruff 致命规则、Python
+  编译、模板一致性和 `git diff --check` 均通过。
 
 #### 6.4 Hook / Plugin 生命周期
 

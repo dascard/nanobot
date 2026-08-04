@@ -1676,7 +1676,6 @@ class NanobotBridge(MessageContractBridgeMixin):
             runtime.replace_conversation(())
             if before_len:
                 logger.info("[SessionRuntime] Reset conversation: %d→0", before_len)
-
             # --- Prompt runtime 输入：只收集结构化上下文，不在 bridge 手工注入 prompt ---
             persona_text = str(meta.get("persona_text", "")).strip()
             history_messages = meta.get("history_messages", [])
@@ -1706,7 +1705,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     session_id=session_id,
                 )
                 run_meta.update(guidance.debug)
-                extension_binding = build_request_extension_binding(
+                extension_binding = await build_request_extension_binding(
                     db=uow.db,
                     metadata=meta,
                     platform=platform,
@@ -1718,6 +1717,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     runtime_preset=runtime_preset,
                     agent_id=getattr(self, "_runtime_name", "nanobot") or "nanobot",
                     query=query,
+                    agent=self._agent, cleanup_registrar=request_scope.bind_async_cleanup,
                 )
                 tool_plan = extension_binding.tool_plan
                 meta["project_context"] = extension_binding.project_context
@@ -1735,7 +1735,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     effective_tools=sorted(tool_plan.executable_tool_names),
                     db=uow.db,
                 )
-                if decision_recorded:
+                if decision_recorded or extension_binding.persistence_pending:
                     try:
                         uow.commit()
                     except Exception as e:

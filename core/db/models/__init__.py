@@ -43,6 +43,12 @@ from core.db.models.knowledge import (
     KnowledgeDocument,
     KnowledgeSource,
 )
+from core.db.models.mcp import (
+    McpConfigurationStateRow,
+    McpDiagnosticRow,
+    McpSecretRow,
+    McpServerRow,
+)
 from core.db.models.observability import (
     AgentRun,
     LLMApiRequestLog,
@@ -162,6 +168,10 @@ __all__ = [
     "MemoryDigest",
     "MemoryDigestJob",
     "MemoryCleanupRun",
+    "McpConfigurationStateRow",
+    "McpDiagnosticRow",
+    "McpSecretRow",
+    "McpServerRow",
     "OutboundDeliveryAttempt",
     "OutboundDeliveryCircuit",
     "OutboundDeliveryControl",

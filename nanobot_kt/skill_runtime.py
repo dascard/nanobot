@@ -74,6 +74,7 @@ class RequestExtensionBridgeBinding:
     session_goal_plan: RuntimePlanRef | None
     skill_plan: RuntimePlanRef | None
     runtime_attributes: tuple[RuntimeAttribute, ...]
+    persistence_pending: bool = False
 
 
 def _skill_schema(names: tuple[str, ...], *, db: Any) -> dict[str, Any]:
@@ -246,7 +247,7 @@ def build_skill_bridge_binding(
     )
 
 
-def build_request_extension_binding(
+async def build_request_extension_binding(
     *,
     db: Any,
     metadata: Mapping[str, Any],
@@ -259,6 +260,8 @@ def build_request_extension_binding(
     runtime_preset: str,
     agent_id: str,
     query: str = "",
+    agent: Any = None,
+    cleanup_registrar: Any = None,
 ) -> RequestExtensionBridgeBinding:
     """按固定顺序组合目标策略与受管 Skill，不暴露平行授权路径。"""
 
@@ -289,11 +292,29 @@ def build_request_extension_binding(
             goal.policy.mode.value if goal.policy is not None else ""
         ),
     )
-    return RequestExtensionBridgeBinding(
+    from nanobot_kt.mcp_runtime import build_mcp_bridge_binding
+
+    mcp = await build_mcp_bridge_binding(
+        db=db,
         tool_plan=skill.tool_plan,
+        runtime_chat_type=runtime_chat_type,
+        platform=platform,
+        session_id=session_id,
+        session_goal_mode=(
+            goal.policy.mode.value if goal.policy is not None else ""
+        ),
+        agent=agent,
+        cleanup_registrar=cleanup_registrar,
+    )
+    return RequestExtensionBridgeBinding(
+        tool_plan=mcp.tool_plan,
         project_context=skill.project_context,
         run_meta_update=MappingProxyType(
-            {**goal.run_meta_update, **skill.run_meta_update}
+            {
+                **goal.run_meta_update,
+                **skill.run_meta_update,
+                **mcp.run_meta_update,
+            }
         ),
         session_goal_plan=goal.plan_ref,
         skill_plan=skill.plan_ref,
@@ -301,6 +322,7 @@ def build_request_extension_binding(
             *goal.runtime_attributes,
             *skill.runtime_attributes,
         ),
+        persistence_pending=mcp.persistence_pending,
     )
 
 

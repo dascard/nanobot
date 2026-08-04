@@ -38,6 +38,7 @@ _SKILL_TOOL_PATTERN = re.compile(
     r"^[A-Za-z][A-Za-z0-9_.-]{0,127}(?:\([^\r\n()]{1,128}\))?$"
 )
 _MCP_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_MCP_WIRE_NAME_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 def _required(value: object, name: str) -> str:
@@ -88,6 +89,19 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
             raise ValueError(f"MCP input schema 包含重复字段：{key}")
         result[key] = value
     return result
+
+
+def mcp_wire_tool_name(server_id: str, tool_name: str) -> str:
+    """生成 OpenAI-compatible、带 server namespace 的稳定工具名。"""
+
+    raw = f"{server_id}__{tool_name}"
+    normalized = _MCP_WIRE_NAME_PATTERN.sub("_", raw).strip("_")
+    if not normalized:
+        raise ValueError("MCP 工具无法生成 wire name")
+    if len(normalized) <= 64:
+        return normalized
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"{normalized[:51]}_{digest}"
 
 
 class RuntimeSkillScope(str, Enum):
@@ -366,6 +380,7 @@ class RuntimeMcpToolDescriptor:
     execution_port_id: str
     description: str = ""
     input_schema_sha256: str = ""
+    read_only: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -412,10 +427,16 @@ class RuntimeMcpToolDescriptor:
             "description",
             str(self.description or "").strip(),
         )
+        if not isinstance(self.read_only, bool):
+            raise ValueError("mcp_tool.read_only 必须是 bool")
 
     @property
     def qualified_name(self) -> str:
         return f"{self.server_id}:{self.tool_name}"
+
+    @property
+    def wire_name(self) -> str:
+        return mcp_wire_tool_name(self.server_id, self.tool_name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -437,6 +458,7 @@ class RuntimeMcpSnapshot:
             )
         )
         identities: set[tuple[str, str]] = set()
+        wire_names: set[str] = set()
         for descriptor in tools:
             if descriptor.provider_id != provider_id:
                 raise ValueError("MCP tool descriptor 与 snapshot provider 不一致")
@@ -444,6 +466,9 @@ class RuntimeMcpSnapshot:
             if identity in identities:
                 raise ValueError("同一 MCP server 内不能注册重名工具")
             identities.add(identity)
+            if descriptor.wire_name in wire_names:
+                raise ValueError("同一 MCP server 内工具 wire name 冲突")
+            wire_names.add(descriptor.wire_name)
         digest = _snapshot_digest(
             {
                 "provider_id": provider_id,
@@ -455,6 +480,8 @@ class RuntimeMcpSnapshot:
                         "description": item.description,
                         "input_schema_sha256": item.input_schema_sha256,
                         "execution_port_id": item.execution_port_id,
+                        "wire_name": item.wire_name,
+                        "read_only": item.read_only,
                     }
                     for item in tools
                 ],
@@ -523,6 +550,7 @@ __all__ = [
     "InMemoryMcpProvider",
     "InMemorySkillProvider",
     "McpProviderPort",
+    "mcp_wire_tool_name",
     "RuntimeMcpSnapshot",
     "RuntimeMcpToolDescriptor",
     "RuntimeSkillContent",

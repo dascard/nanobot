@@ -190,6 +190,11 @@ def _default_tool_plan_resolver() -> NativeToolPlan | None:
 
 
 def _default_tool_binding_resolver(tool_name: str) -> str:
+    from core.mcp.runtime import current_mcp_binding_id
+
+    dynamic_binding = current_mcp_binding_id(tool_name)
+    if dynamic_binding:
+        return dynamic_binding
     from core.tool_registration import get_tool_registration
 
     registration = get_tool_registration(tool_name)
@@ -198,6 +203,11 @@ def _default_tool_binding_resolver(tool_name: str) -> str:
 
 
 def _default_tool_effect_resolver(tool_name: str) -> RuntimeToolEffectClass:
+    from core.mcp.runtime import current_mcp_effect_class
+
+    dynamic_effect = current_mcp_effect_class(tool_name)
+    if dynamic_effect is not None:
+        return dynamic_effect
     from core.tool_registration import get_tool_registration
 
     registration = get_tool_registration(tool_name)
@@ -1201,7 +1211,13 @@ class NativeAgentRuntime:
                 )
                 raise self._tool_ambiguous_error(blocked) from exc
         try:
-            result = await self._tool_execution_port.execute(execution_request)
+            from core.mcp.runtime import current_mcp_execution_port
+
+            execution_port = (
+                current_mcp_execution_port(call.name)
+                or self._tool_execution_port
+            )
+            result = await execution_port.execute(execution_request)
         except asyncio.CancelledError as exc:
             if side_effect_guard is None:
                 raise
