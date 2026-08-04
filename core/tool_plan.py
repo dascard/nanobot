@@ -28,6 +28,9 @@ class ToolPlanExecutionError(RuntimeError):
     """工具不在当前请求可执行集合内。"""
 
 
+SKILL_LOCK_PENDING_REASON = "当前请求尚未冻结可见 Skill 版本锁"
+
+
 def _tool_name(tool: Any) -> str:
     if not isinstance(tool, dict):
         return ""
@@ -144,7 +147,7 @@ class ToolPlan:
     sha256: str
     registration_generation: int
     registration_sha256: str
-    hidden_framework_tool_names: frozenset[str] = field(default_factory=lambda: frozenset({"skill"}))
+    hidden_framework_tool_names: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def allowed(self) -> set[str]:
@@ -310,6 +313,43 @@ def extend_tool_plan(
     )
 
 
+def enable_registered_tool(
+    plan: ToolPlan,
+    tool_schema: dict[str, Any],
+    *,
+    chat_type: str,
+    platform: str,
+    session_id: str,
+    db: Any = None,
+) -> ToolPlan:
+    """由受信服务端决策启用一个已注册工具，并冻结其请求级 schema。"""
+
+    normalized = normalize_wire_tool_schema(tool_schema)
+    name = _tool_name(normalized)
+    registration = TOOL_REGISTRATION_REGISTRY.get(name)
+    if registration is None or registration.lifecycle != "active":
+        raise ValueError(f"动态工具未处于 active 注册状态：{name}")
+    enabled = dict(plan.enabled)
+    enabled[name] = True
+    disabled = dict(plan.disabled)
+    disabled.pop(name, None)
+    schemas = [
+        schema
+        for schema in plan.sent_tool_schemas
+        if _tool_name(schema) != name
+    ]
+    schemas.append(normalized)
+    return ToolPlan.from_effective_tools(
+        enabled=enabled,
+        disabled=disabled,
+        chat_type=chat_type,
+        tool_schemas=schemas,
+        platform=platform,
+        session_id=session_id,
+        db=db,
+    )
+
+
 def build_tool_plan(
     *,
     chat_type: str = "group",
@@ -334,12 +374,19 @@ def build_tool_plan(
     )
     # 请求来源级硬禁用(如定时任务会话防递归):只减不增,
     # 在效果表之后、计划冻结之前应用。
+    skill_hard_disabled = False
     for raw_name, raw_reason in (extra_disabled or {}).items():
         name = str(raw_name or "").strip()
         if not name:
             continue
         enabled[name] = False
         disabled[name] = str(raw_reason or "来源上下文禁用").strip()
+        if name == "skill":
+            skill_hard_disabled = True
+    # Skill 只能在服务端解析出请求级精确版本锁后启用，配置覆盖不得提前暴露。
+    enabled["skill"] = False
+    if not skill_hard_disabled:
+        disabled["skill"] = SKILL_LOCK_PENDING_REASON
     goal_mode = str(session_goal_mode or "").strip().lower()
     if goal_mode not in {"", "plan", "execute"}:
         raise ValueError("session_goal_mode 必须是 plan/execute 或空")

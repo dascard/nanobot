@@ -37,6 +37,7 @@ def build_request_runtime_context(
     tool_plan: Any,
     recovery_plans: tuple[RuntimePlanRef, ...] = (),
     session_goal_plan: RuntimePlanRef | None = None,
+    skill_plan: RuntimePlanRef | None = None,
 ) -> RequestRuntimeContext:
     owner_id = group_id if is_group else user_id
     if not owner_id:
@@ -74,6 +75,12 @@ def build_request_runtime_context(
                 f"重复 RuntimePlan：{session_goal_plan.kind.value}"
             )
         plans.append(session_goal_plan)
+    if skill_plan is not None:
+        if not isinstance(skill_plan, RuntimePlanRef):
+            raise TypeError("skill_plan 必须是 RuntimePlanRef")
+        if skill_plan.kind in {item.kind for item in plans}:
+            raise ValueError(f"重复 RuntimePlan：{skill_plan.kind.value}")
+        plans.append(skill_plan)
     return RequestRuntimeContext(
         request_id=request_id or run_id,
         principal=RuntimePrincipal(

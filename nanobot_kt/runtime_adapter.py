@@ -320,6 +320,19 @@ class KtRuntimeAdapter:
                     ),
                 }
             )
+        if str(attributes.get("skill_lock_json", "") or ""):
+            runtime_context.update(
+                {
+                    key: attributes.get(key, "")
+                    for key in (
+                        "skill_lock_json",
+                        "skill_lock_sha256",
+                        "skill_scope_targets_json",
+                        "skill_agent_id",
+                        "skill_project_id",
+                    )
+                }
+            )
         return runtime_context
 
     async def stop(self) -> None:

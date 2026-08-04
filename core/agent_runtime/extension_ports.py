@@ -19,6 +19,24 @@ from core.agent_runtime.contracts import RuntimePrincipal, ToolExecutionPort
 
 
 _IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+_SKILL_IDENTIFIER_PATTERN = re.compile(
+    r"^(?!-)(?!.*--)[a-z0-9]+(?:-[a-z0-9]+)*$"
+)
+_SEMVER_PATTERN = re.compile(
+    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
+_SKILL_DEPENDENCY_PATTERN = re.compile(
+    r"^(?!-)(?!.*--)[a-z0-9]+(?:-[a-z0-9]+)*@"
+    r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
+_SKILL_PERMISSION_PATTERN = re.compile(
+    r"^[a-z][a-z0-9_.-]{0,63}:[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"
+)
+_SKILL_TOOL_PATTERN = re.compile(
+    r"^[A-Za-z][A-Za-z0-9_.-]{0,127}(?:\([^\r\n()]{1,128}\))?$"
+)
 _MCP_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
@@ -91,6 +109,9 @@ class RuntimeSkillDescriptor:
     content_sha256: str
     dependencies: tuple[str, ...] = ()
     required_permissions: tuple[str, ...] = ()
+    license_text: str = ""
+    compatibility: str = ""
+    allowed_tools: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -98,17 +119,19 @@ class RuntimeSkillDescriptor:
             "provider_id",
             _identifier(self.provider_id, "skill.provider_id"),
         )
-        object.__setattr__(
-            self,
-            "skill_id",
-            _identifier(self.skill_id, "skill.skill_id"),
-        )
+        skill_id = _required(self.skill_id, "skill.skill_id")
+        if len(skill_id) > 64 or not _SKILL_IDENTIFIER_PATTERN.fullmatch(skill_id):
+            raise ValueError("skill.skill_id 必须符合 Agent Skills name 规范")
+        object.__setattr__(self, "skill_id", skill_id)
         try:
             scope = RuntimeSkillScope(self.scope)
         except ValueError as exc:
             raise ValueError("skill.scope 无效") from exc
         object.__setattr__(self, "scope", scope)
-        object.__setattr__(self, "version", _required(self.version, "skill.version"))
+        version = _required(self.version, "skill.version")
+        if not _SEMVER_PATTERN.fullmatch(version):
+            raise ValueError("skill.version 必须是 SemVer")
+        object.__setattr__(self, "version", version)
         object.__setattr__(
             self,
             "description",
@@ -132,8 +155,26 @@ class RuntimeSkillDescriptor:
             raise ValueError("skill.dependencies 不能重复")
         if len(permissions) != len(set(permissions)):
             raise ValueError("skill.required_permissions 不能重复")
+        if any(not _SKILL_DEPENDENCY_PATTERN.fullmatch(item) for item in dependencies):
+            raise ValueError("skill.dependencies 必须使用 name@SemVer")
+        if any(not _SKILL_PERMISSION_PATTERN.fullmatch(item) for item in permissions):
+            raise ValueError("skill.required_permissions 包含无效声明")
+        license_text = str(self.license_text or "").strip()
+        compatibility = str(self.compatibility or "").strip()
+        if len(license_text) > 512:
+            raise ValueError("skill.license_text 过长")
+        if len(compatibility) > 500:
+            raise ValueError("skill.compatibility 过长")
+        allowed_tools = tuple(sorted(_required(item, "skill.allowed_tool") for item in self.allowed_tools))
+        if len(allowed_tools) != len(set(allowed_tools)):
+            raise ValueError("skill.allowed_tools 不能重复")
+        if any(not _SKILL_TOOL_PATTERN.fullmatch(item) for item in allowed_tools):
+            raise ValueError("skill.allowed_tools 包含无效声明")
         object.__setattr__(self, "dependencies", dependencies)
         object.__setattr__(self, "required_permissions", permissions)
+        object.__setattr__(self, "license_text", license_text)
+        object.__setattr__(self, "compatibility", compatibility)
+        object.__setattr__(self, "allowed_tools", allowed_tools)
 
     @property
     def qualified_id(self) -> str:
@@ -204,6 +245,9 @@ class RuntimeSkillSnapshot:
                         "content_sha256": item.content_sha256,
                         "dependencies": item.dependencies,
                         "required_permissions": item.required_permissions,
+                        "license_text": item.license_text,
+                        "compatibility": item.compatibility,
+                        "allowed_tools": item.allowed_tools,
                     }
                     for item in skills
                 ],

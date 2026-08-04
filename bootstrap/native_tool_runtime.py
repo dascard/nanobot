@@ -114,6 +114,12 @@ async def _execute_schedule_task(args: dict[str, Any]) -> ToolServiceResult:
     return await ScheduleTaskService().execute(args)
 
 
+async def _execute_skill(args: dict[str, Any]) -> ToolServiceResult:
+    from app.tool_services.skill import execute_skill
+
+    return await execute_skill(args)
+
+
 def _execute_sql_analysis(args: dict[str, Any]) -> ToolServiceResult:
     from app.tool_services.sql_analysis import execute_sql_analysis
     from sandbox import AnalysisSandbox
@@ -153,6 +159,7 @@ def _service_bindings() -> dict[str, ServiceCallable]:
         "tool.schedule_task.execute": _execute_schedule_task,
         "tool.session_plan_read.execute": execute_session_plan_read,
         "tool.session_plan_write.execute": execute_session_plan_write,
+        "tool.skill.execute": _execute_skill,
         "tool.sql_analysis.execute": _execute_sql_analysis,
         "tool.sticker_search.execute": execute_sticker_search,
         "tool.web_search.execute": _execute_web_search,

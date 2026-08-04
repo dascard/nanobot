@@ -409,13 +409,14 @@ def test_tool_plan_rejects_disabled_tool_execution():
     assert "测试禁用" in str(exc.value)
 
 
-def test_framework_skill_has_metadata_without_entering_user_tool_plan():
+def test_managed_skill_stays_disabled_until_request_lock_is_frozen():
     from core.tool_plan import build_tool_plan
-    from core.tool_registry import FRAMEWORK_TOOL_METADATA, get_tool_def
+    from core.tool_registry import FRAMEWORK_TOOL_METADATA, TOOL_METADATA, get_tool_def
 
-    assert get_tool_def("skill") == FRAMEWORK_TOOL_METADATA["skill"]
+    assert get_tool_def("skill") == TOOL_METADATA["skill"]
+    assert "skill" not in FRAMEWORK_TOOL_METADATA
     plan = build_tool_plan(chat_type="private", runtime_preset="full")
-    assert "skill" not in plan.enabled
+    assert plan.enabled["skill"] is False
     assert "skill" not in plan.sent_tool_names
 
 

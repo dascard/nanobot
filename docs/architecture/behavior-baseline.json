@@ -129,6 +129,14 @@
       "stage": "Agent Harness 阶段 5.4"
     },
     {
+      "after_sha256": "f4beef882f28d25f9ab921cc44505a51b7f45927dfefe9d31b54781f1f696e6d",
+      "before_sha256": "693f7364403276a6b4c99371842648211aa0a30c627db811f5f5fc075b54d699",
+      "id": "agent_harness_managed_skills_prompt",
+      "reason": "登记请求级 Skill 目录、精确锁按需加载和授权指导边界；目录描述与资源仍按不可信数据处理。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "Agent Harness 阶段 6.1"
+    },
+    {
       "after_sha256": "59ca2e9a073385589f81b7374a91030605c583122f2c3af2b74b27b1b1e40d9c",
       "before_sha256": "89ab0c4a6e53be676d39cc717f74948d79a1008ad37802b53827656b49c96661",
       "id": "stage6_news_registry",
@@ -199,9 +207,17 @@
       "reason": "登记默认关闭的 Session Plan 读写工具；只有服务端绑定目标状态后才按请求启用，写权限不会由 Prompt 或模型开启。",
       "snapshot_id": "runtime_registries",
       "stage": "Agent Harness 阶段 5.4"
+    },
+    {
+      "after_sha256": "3c8e355c9a34613f773a29b73f7da97fb246623946c251d31726ec2835d2f86b",
+      "before_sha256": "ce3a26119eb761eb9f4635fb017f668aab162096a298d7da27fc277350dc2cc9",
+      "id": "agent_harness_managed_skills_registry",
+      "reason": "把 skill 从 KT 隐藏框架入口迁移为 Nanobot active 工具；只有服务端冻结可见版本锁后才动态启用。",
+      "snapshot_id": "runtime_registries",
+      "stage": "Agent Harness 阶段 6.1"
     }
   ],
-  "baseline_git_commit": "8ef7affc4d4b1bf61e39df20a952e991f511aad2",
+  "baseline_git_commit": "187995c2109539b354b04559871ce71b43cb7221",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -255,14 +271,14 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "693f7364403276a6b4c99371842648211aa0a30c627db811f5f5fc075b54d699"
+      "sha256": "f4beef882f28d25f9ab921cc44505a51b7f45927dfefe9d31b54781f1f696e6d"
     },
     {
       "classification": "preserve",
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "ce3a26119eb761eb9f4635fb017f668aab162096a298d7da27fc277350dc2cc9"
+      "sha256": "3c8e355c9a34613f773a29b73f7da97fb246623946c251d31726ec2835d2f86b"
     },
     {
       "classification": "security_invariant",

@@ -41,6 +41,7 @@ class RuntimePlanKind(str, Enum):
     MANIFEST = "manifest"
     PROMPT = "prompt"
     TOOL = "tool"
+    SKILL = "skill"
     MODEL = "model"
     MEMORY = "memory"
     WORKSPACE = "workspace"

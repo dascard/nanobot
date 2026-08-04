@@ -536,6 +536,32 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "required": ["content", "expected_version"],
         },
     },
+    "skill": {
+        "description": (
+            "按当前请求的服务端版本锁加载一个已授权 Skill。先只传 name 获取正文；"
+            "仅当正文明确引用资源清单中的文本文件时，再传 resource 按需读取。"
+            "参数不能指定 owner、版本、来源、URL 或宿主路径，也不会执行安装器或命令。"
+        ),
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "当前请求 Skill 目录中精确存在的名称。",
+                    "minLength": 1,
+                    "maxLength": 64,
+                },
+                "resource": {
+                    "type": "string",
+                    "description": "可选；正文资源清单中的 POSIX 相对文本路径。",
+                    "minLength": 1,
+                    "maxLength": 512,
+                },
+            },
+            "required": ["name"],
+        },
+    },
     "workspace_read": {
         "description": "按行有界读取当前持久 Workspace 中的 UTF-8 文本并返回稳定行号。",
         "parameters": {

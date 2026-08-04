@@ -8277,6 +8277,234 @@
         "title": "SetCanonicalBody",
         "type": "object"
       },
+      "SkillBindingActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_generation": {
+            "minimum": 1.0,
+            "title": "Expected Generation",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "project",
+              "agent",
+              "user"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "scope_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Scope Key",
+            "type": "string"
+          },
+          "skill_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Skill Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "scope_key",
+          "skill_name",
+          "expected_generation"
+        ],
+        "title": "SkillBindingActionRequest",
+        "type": "object"
+      },
+      "SkillInstallRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_generation": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Generation"
+          },
+          "pin": {
+            "default": true,
+            "title": "Pin",
+            "type": "boolean"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/SkillResourceUpload"
+            },
+            "maxItems": 128,
+            "title": "Resources",
+            "type": "array"
+          },
+          "scope": {
+            "enum": [
+              "project",
+              "agent",
+              "user"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "scope_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Scope Key",
+            "type": "string"
+          },
+          "skill_md": {
+            "maxLength": 524288,
+            "minLength": 1,
+            "title": "Skill Md",
+            "type": "string"
+          },
+          "source_label": {
+            "default": "manual-upload",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Source Label",
+            "type": "string"
+          },
+          "trusted_source": {
+            "title": "Trusted Source",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "scope",
+          "scope_key",
+          "skill_md",
+          "trusted_source"
+        ],
+        "title": "SkillInstallRequest",
+        "type": "object"
+      },
+      "SkillPinRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_generation": {
+            "minimum": 1.0,
+            "title": "Expected Generation",
+            "type": "integer"
+          },
+          "pinned": {
+            "title": "Pinned",
+            "type": "boolean"
+          },
+          "scope": {
+            "enum": [
+              "project",
+              "agent",
+              "user"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "scope_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Scope Key",
+            "type": "string"
+          },
+          "skill_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Skill Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "scope_key",
+          "skill_name",
+          "expected_generation",
+          "pinned"
+        ],
+        "title": "SkillPinRequest",
+        "type": "object"
+      },
+      "SkillResourceUpload": {
+        "additionalProperties": false,
+        "properties": {
+          "content_base64": {
+            "maxLength": 3145728,
+            "minLength": 1,
+            "title": "Content Base64",
+            "type": "string"
+          },
+          "media_type": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content_base64"
+        ],
+        "title": "SkillResourceUpload",
+        "type": "object"
+      },
+      "SkillUpgradeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_generation": {
+            "minimum": 1.0,
+            "title": "Expected Generation",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "project",
+              "agent",
+              "user"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "scope_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Scope Key",
+            "type": "string"
+          },
+          "skill_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Skill Name",
+            "type": "string"
+          },
+          "target_version": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Target Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "scope_key",
+          "skill_name",
+          "expected_generation",
+          "target_version"
+        ],
+        "title": "SkillUpgradeRequest",
+        "type": "object"
+      },
       "StickerCreate": {
         "properties": {
           "chat_stream_id": {
@@ -26540,6 +26768,423 @@
           }
         },
         "summary": "Reset Setting",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/skills": {
+      "get": {
+        "operationId": "get_api_v1_admin_skills",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "project",
+                    "agent",
+                    "user"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_key",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 255,
+              "title": "Scope Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "skill_name",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 64,
+              "title": "Skill Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Api V1 Admin Skills List Skills",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Skills",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/skills/install": {
+      "post": {
+        "operationId": "post_api_v1_admin_skills_install",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillInstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Skills Install Install Skill",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Install Skill",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/skills/pin": {
+      "post": {
+        "operationId": "post_api_v1_admin_skills_pin",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillPinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Skills Pin Pin Skill",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Pin Skill",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/skills/rollback": {
+      "post": {
+        "operationId": "post_api_v1_admin_skills_rollback",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillBindingActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Skills Rollback Rollback Skill",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Rollback Skill",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/skills/uninstall": {
+      "post": {
+        "operationId": "post_api_v1_admin_skills_uninstall",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillBindingActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Skills Uninstall Uninstall Skill",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Uninstall Skill",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/skills/upgrade": {
+      "post": {
+        "operationId": "post_api_v1_admin_skills_upgrade",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillUpgradeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Skills Upgrade Upgrade Skill",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Upgrade Skill",
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"
       }

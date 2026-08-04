@@ -109,6 +109,9 @@ _LLM_PROVIDER_CACHE_PERFORMANCE_VERSION = (
 _SESSION_GOAL_PLAN_MODE_V1_VERSION = (
     "20260804_session_goal_plan_mode_v1"
 )
+_AGENT_SKILLS_LIFECYCLE_V1_VERSION = (
+    "20260804_agent_skills_lifecycle_v1"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3830,6 +3833,46 @@ def _session_goal_plan_mode_v1(
         ))
 
 
+def _agent_skills_lifecycle_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建不可变 Skill 版本、资源、作用域绑定和生命周期事件。"""
+
+    from core.db.models.skill import (
+        SkillBindingRow,
+        SkillLifecycleEventRow,
+        SkillPackageFileRow,
+        SkillPackageRow,
+    )
+
+    for model in (
+        SkillPackageRow,
+        SkillPackageFileRow,
+        SkillBindingRow,
+        SkillLifecycleEventRow,
+    ):
+        model.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    for table_name in (
+        "skill_packages",
+        "skill_package_files",
+        "skill_lifecycle_events",
+    ):
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_update "
+            f"BEFORE UPDATE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_immutable'); END"
+        ))
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_delete "
+            f"BEFORE DELETE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_immutable'); END"
+        ))
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -5082,6 +5125,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _SESSION_GOAL_PLAN_MODE_V1_VERSION,
         "session goal plan mode and immutable plan assets",
         _session_goal_plan_mode_v1,
+    ),
+    (
+        _AGENT_SKILLS_LIFECYCLE_V1_VERSION,
+        "agent skills immutable versions scoped bindings and lifecycle",
+        _agent_skills_lifecycle_v1,
     ),
 ]
 

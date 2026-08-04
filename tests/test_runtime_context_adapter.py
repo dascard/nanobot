@@ -5,6 +5,7 @@ from core.agent_runtime import (
     RuntimeChatType,
     RuntimeOwnerType,
     RuntimePlanKind,
+    RuntimePlanRef,
 )
 from nanobot_kt.runtime_context_adapter import (
     build_fallback_request_runtime_context,
@@ -34,6 +35,11 @@ def test_build_request_runtime_context_keeps_trusted_identity_and_plan_pins():
         prompt_key="chat.default",
         prompt_sha256="a" * 64,
         tool_plan=_ToolPlan(),
+        skill_plan=RuntimePlanRef(
+            RuntimePlanKind.SKILL,
+            "skill-lock:test",
+            "c" * 64,
+        ),
     )
 
     assert context.principal.owner_type is RuntimeOwnerType.GROUP
@@ -48,6 +54,7 @@ def test_build_request_runtime_context_keeps_trusted_identity_and_plan_pins():
     assert [plan.kind for plan in context.plans] == [
         RuntimePlanKind.PROMPT,
         RuntimePlanKind.TOOL,
+        RuntimePlanKind.SKILL,
     ]
 
 

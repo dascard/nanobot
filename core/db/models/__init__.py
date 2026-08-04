@@ -92,6 +92,12 @@ from core.db.models.session_goal import (
     SessionGoalRow,
     SessionPlanAssetRow,
 )
+from core.db.models.skill import (
+    SkillBindingRow,
+    SkillLifecycleEventRow,
+    SkillPackageFileRow,
+    SkillPackageRow,
+)
 from core.db.models.scheduling import (
     ScheduledTask,
     ScheduledTaskExecution,
@@ -195,6 +201,10 @@ __all__ = [
     "SessionGoalEventRow",
     "SessionGoalRow",
     "SessionPlanAssetRow",
+    "SkillBindingRow",
+    "SkillLifecycleEventRow",
+    "SkillPackageFileRow",
+    "SkillPackageRow",
     "ScheduledTask",
     "ScheduledTaskExecution",
     "ScheduledTaskOwnerLease",

@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 5.4 已完成，准备阶段 6.1）
+> 状态：执行中（阶段 6.1 已完成，准备阶段 6.2）
 >
 > 建立日期：2026-08-03
 >
@@ -851,11 +851,36 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 6.1 Agent Skills / SKILL.md 兼容
 
-- [ ] 支持内置、项目、Agent 和用户作用域。
-- [ ] 定义发现优先级和冲突策略。
-- [ ] 校验 YAML 元数据、版本、依赖和权限要求。
-- [ ] 支持按需加载、版本 pin、lock、升级、回滚和卸载。
-- [ ] 不执行来源不明的自动安装器或命令注入。
+- [x] 支持内置、项目、Agent 和用户作用域。
+- [x] 定义发现优先级和冲突策略。
+- [x] 校验 YAML 元数据、版本、依赖和权限要求。
+- [x] 支持按需加载、版本 pin、lock、升级、回滚和卸载。
+- [x] 不执行来源不明的自动安装器或命令注入。
+
+实施记录（2026-08-04）：
+
+- 新增受管 Skill 不可变版本、资源文件、作用域绑定和追加式生命周期事件。内置 Skill 只从固定发布目录
+  读取；项目、Agent、用户版本只接受管理员提交的字面 `SKILL.md` 与资源，不提供 URL 下载、安装器、
+  subprocess 或模型可调用的安装入口。SQLite trigger 禁止普通更新／删除版本、资源和审计事件。
+- 严格解析 Agent Skills frontmatter，并扩展校验 SemVer、依赖精确版本、权限声明、`allowed-tools`、
+  license、compatibility、资源规范路径、文件类型、单文件／总 bundle 大小及循环依赖。未知字段、符号链接、
+  FIFO、路径穿越、同版本正文漂移和跨作用域持久化投影均失败关闭。
+- 可见性按 `user → agent → project → builtin` 冻结，每个同名 Skill 只保留最高优先级的合法版本；群聊不会
+  读取用户私有作用域。权限、依赖和可执行工具集合在服务端解析，诊断不把正文或私有低优先级版本泄露给模型。
+- 生命周期 API 支持显式安装、版本新增、pin／unpin、upgrade、rollback、uninstall 和 reinstall，并使用
+  generation CAS 防止并发覆盖。每个请求生成包含 package ID、版本、内容摘要和元数据的精确 lock；后续
+  切换 active 版本不会改变已冻结请求的读取结果。
+- 生产 Bridge 仅在当前请求存在合法 lock 时动态启用 `skill` 工具并生成枚举 schema；Prompt 只注入有界目录，
+  完整正文和 UTF-8 文本资源由工具按 lock 精确读取。Plan Mode、ToolPlan 硬禁用、未知 Skill、二进制资源和
+  额外身份参数全部拒绝。canonical 与运行时 Prompt 模板已同步不可信目录／资源和授权指导边界。
+- KT 2.0／1.4 的内置 Skill 自动发现路径在 Nanobot 生产 Agent 子类中被关闭，不扫描 cwd、HOME、Agent 目录
+  或包目录，也不注册 KT 隐藏 slash skill 命令；Native 与 KT Adapter 都只消费 Nanobot 请求级精确 lock，
+  因而本模块已经是生产主路径而非 shadow 双写。
+- 外键开启场景下，版本父记录先于资源子记录落库，避免依赖 ORM 未声明 relationship 时的偶然插入顺序。
+  Agent Skills、生命周期、Admin API、Runtime、KT 隔离、ToolPlan、Prompt、流式桥接和迁移定向回归均通过。
+  最终完整 `python -m pytest tests/ -v` 为 6606 passed、12 skipped、0 failed；架构边界、OpenAPI、
+  行为 Golden、Release／Verification Golden、决策规则、Task SLO、Ruff 致命规则、Python 编译和
+  `git diff --check` 全部通过。
 
 #### 6.2 Skill 检索和治理
 

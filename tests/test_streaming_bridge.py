@@ -45,7 +45,7 @@ def _make_request_scope_bridge(monkeypatch, *, prompt_error, finish_calls):
 
     tool_plan = SimpleNamespace(
         enabled={},
-        disabled={},
+        disabled={"skill": "流式桥接单元测试不加载 Skill"},
         runtime_tool_prompt="",
         executable_tool_names=set(),
         sent_tool_schemas=[],
@@ -532,7 +532,7 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
         "core.tool_plan.build_tool_plan",
         lambda **_kwargs: SimpleNamespace(
             enabled={},
-            disabled={},
+            disabled={"skill": "流式桥接单元测试不加载 Skill"},
             runtime_tool_prompt="",
             executable_tool_names=set(),
             sent_tool_schemas=[],

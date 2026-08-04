@@ -31,7 +31,7 @@ def _skill(
     document: bytes,
     *,
     scope: RuntimeSkillScope,
-    version: str = "1",
+    version: str = "1.0.0",
 ) -> RuntimeSkillContent:
     descriptor = RuntimeSkillDescriptor(
         provider_id="skills",
@@ -40,8 +40,8 @@ def _skill(
         version=version,
         description=f"{skill_id} 描述",
         content_sha256=hashlib.sha256(document).hexdigest(),
-        dependencies=("base-runtime",),
-        required_permissions=("workspace.read",),
+        dependencies=("base-runtime@1.0.0",),
+        required_permissions=("workspace:read",),
     )
     return RuntimeSkillContent(descriptor=descriptor, document=document)
 
@@ -88,13 +88,13 @@ def test_skill_snapshot_rejects_ambiguous_active_versions_and_content_drift():
         "versioned-guide",
         b"# v1\n",
         scope=RuntimeSkillScope.PROJECT,
-        version="1",
+        version="1.0.0",
     )
     second = _skill(
         "versioned-guide",
         b"# v2\n",
         scope=RuntimeSkillScope.PROJECT,
-        version="2",
+        version="2.0.0",
     )
 
     with pytest.raises(ValueError, match="多个同 scope"):

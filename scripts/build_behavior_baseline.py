@@ -85,6 +85,9 @@ AGENT_HARNESS_CONTEXT_LAYER_PROMPT_BASELINE_SHA256 = (
 AGENT_HARNESS_CONTEXT_COMPACTION_PROMPT_BASELINE_SHA256 = (
     "51d70f01b31df8300551a1f77a0888656ecae54ba8e535203a2119e9cc61af4d"
 )
+AGENT_HARNESS_PLAN_MODE_PROMPT_BASELINE_SHA256 = (
+    "693f7364403276a6b4c99371842648211aa0a30c627db811f5f5fc075b54d699"
+)
 PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256 = (
     "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552"
 )
@@ -99,6 +102,9 @@ AGENT_HARNESS_CHECKPOINT_REGISTRY_BASELINE_SHA256 = (
 )
 AGENT_HARNESS_CONTEXT_COMPACTION_REGISTRY_BASELINE_SHA256 = (
     "9f0f29bdd28ea3669dcfe42e639b52abe7498b89c77b2b8162eb3c0be4a79ebb"
+)
+AGENT_HARNESS_PLAN_MODE_REGISTRY_BASELINE_SHA256 = (
+    "ce3a26119eb761eb9f4635fb017f668aab162096a298d7da27fc277350dc2cc9"
 )
 
 SNAPSHOT_CLASSIFICATIONS = {
@@ -1382,12 +1388,27 @@ def _manifest(
                 "before_sha256": (
                     AGENT_HARNESS_CONTEXT_COMPACTION_PROMPT_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["prompt_runtime"]
+                "after_sha256": (
+                    AGENT_HARNESS_PLAN_MODE_PROMPT_BASELINE_SHA256
                 ),
                 "reason": (
                     "同步 Session Goal 不可信目标上下文、服务端 Plan Mode "
                     "权限边界，以及专用计划资产读写工具说明。"
+                ),
+            },
+            {
+                "id": "agent_harness_managed_skills_prompt",
+                "snapshot_id": "prompt_runtime",
+                "stage": "Agent Harness 阶段 6.1",
+                "before_sha256": (
+                    AGENT_HARNESS_PLAN_MODE_PROMPT_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["prompt_runtime"]
+                ),
+                "reason": (
+                    "登记请求级 Skill 目录、精确锁按需加载和授权指导边界；"
+                    "目录描述与资源仍按不可信数据处理。"
                 ),
             },
             {
@@ -1514,12 +1535,27 @@ def _manifest(
                 "before_sha256": (
                     AGENT_HARNESS_CONTEXT_COMPACTION_REGISTRY_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["runtime_registries"]
+                "after_sha256": (
+                    AGENT_HARNESS_PLAN_MODE_REGISTRY_BASELINE_SHA256
                 ),
                 "reason": (
                     "登记默认关闭的 Session Plan 读写工具；只有服务端绑定"
                     "目标状态后才按请求启用，写权限不会由 Prompt 或模型开启。"
+                ),
+            },
+            {
+                "id": "agent_harness_managed_skills_registry",
+                "snapshot_id": "runtime_registries",
+                "stage": "Agent Harness 阶段 6.1",
+                "before_sha256": (
+                    AGENT_HARNESS_PLAN_MODE_REGISTRY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["runtime_registries"]
+                ),
+                "reason": (
+                    "把 skill 从 KT 隐藏框架入口迁移为 Nanobot active 工具；"
+                    "只有服务端冻结可见版本锁后才动态启用。"
                 ),
             },
         ],

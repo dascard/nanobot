@@ -66,6 +66,10 @@ tools:
     type: package
     module: nanobot_kt.tools.session_plan
     class: SessionPlanWriteTool
+  - name: skill
+    type: package
+    module: nanobot_kt.tools.skill
+    class: SkillTool
   - name: group_analysis
     type: package
     module: nanobot_kt.tools.group_analysis

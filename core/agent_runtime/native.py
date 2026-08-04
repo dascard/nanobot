@@ -628,6 +628,19 @@ def _runtime_context_payload(request: AgentTurnRequest) -> dict[str, object]:
                 ),
             }
         )
+    if str(attributes.get("skill_lock_json", "") or ""):
+        payload.update(
+            {
+                key: attributes.get(key, "")
+                for key in (
+                    "skill_lock_json",
+                    "skill_lock_sha256",
+                    "skill_scope_targets_json",
+                    "skill_agent_id",
+                    "skill_project_id",
+                )
+            }
+        )
     return payload
 
 

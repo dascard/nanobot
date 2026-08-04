@@ -1682,7 +1682,6 @@ class NanobotBridge(MessageContractBridgeMixin):
             history_messages = meta.get("history_messages", [])
             history_header = str(meta.get("history_header", "")).strip()
             is_super_user = meta.get("is_superuser") is True
-            # --- Dynamic runtime preset enforcement ---
             effort_constraint = str(meta.get("effort_constraint", "")).strip()
             runtime_preset = str(meta.get("runtime_preset", "full")).strip()
             runtime_chat_type = (
@@ -1698,7 +1697,7 @@ class NanobotBridge(MessageContractBridgeMixin):
             from core.final_tools import set_current_final_tools
             from core.tool_plan import set_current_tool_plan
             from core.runtime_tool_service import record_runtime_tool_decision
-            from nanobot_kt.session_goal_runtime import build_session_goal_bridge_binding
+            from nanobot_kt.skill_runtime import build_request_extension_binding
             from core.uow import UnitOfWork
             with UnitOfWork() as uow:
                 guidance = resolve_session_guidance(
@@ -1708,7 +1707,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     session_id=session_id,
                 )
                 run_meta.update(guidance.debug)
-                goal_binding = build_session_goal_bridge_binding(
+                extension_binding = build_request_extension_binding(
                     db=uow.db,
                     metadata=meta,
                     platform=platform,
@@ -1718,11 +1717,11 @@ class NanobotBridge(MessageContractBridgeMixin):
                     user_id=user_id,
                     session_id=session_id,
                     runtime_preset=runtime_preset,
-                    disabled_tool_names=meta.get("disabled_tool_names"),
+                    agent_id=getattr(self, "_runtime_name", "nanobot") or "nanobot",
                 )
-                tool_plan = goal_binding.tool_plan
-                meta["project_context"] = goal_binding.project_context
-                run_meta.update(goal_binding.run_meta_update)
+                tool_plan = extension_binding.tool_plan
+                meta["project_context"] = extension_binding.project_context
+                run_meta.update(extension_binding.run_meta_update)
                 decision_recorded = record_runtime_tool_decision(
                     session_id=session_id,
                     message_id=meta.get("message_id", ""),
@@ -1957,7 +1956,8 @@ class NanobotBridge(MessageContractBridgeMixin):
                 prompt_sha256=prompt_build.prompt_sha256,
                 tool_plan=tool_plan,
                 recovery_plans=recovery_plans,
-                session_goal_plan=goal_binding.plan_ref,
+                session_goal_plan=extension_binding.session_goal_plan,
+                skill_plan=extension_binding.skill_plan,
             )
             runtime_attributes_list = [
                 RuntimeAttribute("runtime_chat_type", runtime_chat_type),
@@ -1965,7 +1965,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 RuntimeAttribute("group_id", group_id),
                 RuntimeAttribute("sender_name", sender_name),
             ]
-            runtime_attributes_list.extend(goal_binding.runtime_attributes)
+            runtime_attributes_list.extend(extension_binding.runtime_attributes)
             runtime_attributes = tuple(runtime_attributes_list)
 
             # --- Dynamic Model Routing (new priority-ordered system) ---

@@ -108,6 +108,10 @@ _KT_EXECUTION_BINDINGS = MappingProxyType({
         "nanobot_kt.tools.session_plan",
         "SessionPlanWriteTool",
     ),
+    "tool.skill.execute": KtExecutionBinding(
+        "nanobot_kt.tools.skill",
+        "SkillTool",
+    ),
     "tool.sandbox_exec.execute": KtExecutionBinding(
         "nanobot_kt.tools.sandbox",
         "SandboxExecTool",
@@ -244,8 +248,8 @@ def _expected_loaded_tool_names() -> tuple[str, ...]:
 def validate_loaded_tool_names(loaded_names: Iterable[str]) -> None:
     """真实 KT Agent 启动后严格核对工具目录。
 
-    框架自带且已登记为 ``framework`` 的工具（目前为 ``skill``）允许额外
-    存在；其他未登记工具和任何 active 工具缺失都直接阻断启动。
+    只有显式登记的 framework 工具可额外存在；其他未登记工具和任何 active
+    工具缺失都直接阻断启动。
     """
 
     loaded = {

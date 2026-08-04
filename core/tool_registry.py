@@ -393,6 +393,15 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         description="仅在服务端 Plan Mode 中为当前 Session Goal 写入新的不可变计划版本。",
         effect_policy="local_write",
     ),
+    "skill": ToolDef(
+        name="skill", label="受管技能加载", category="system", risk_level="low",
+        private_default=False, group_default=False,
+        description=(
+            "按当前请求冻结的版本锁加载一个已授权 Skill 正文或单个文本资源；"
+            "不扫描工作目录、不下载安装器，也不执行 Skill 中的命令。"
+        ),
+        supports_background=False,
+    ),
     "memory_read": ToolDef(
         name="memory_read", label="记忆读取 (subagent)", category="system", risk_level="low",
         private_default=False, group_default=False,
@@ -543,19 +552,8 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
 })
 
 
-# KT 自动注册但不会进入 Nanobot 用户可见 ToolPlan 的框架工具。
-FRAMEWORK_TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
-    "skill": ToolDef(
-        name="skill",
-        label="技能加载（框架）",
-        category="system",
-        risk_level="low",
-        private_default=False,
-        group_default=False,
-        description="KT 框架按需读取过程技能；不作为 Nanobot 对话工具暴露。",
-        prompt_template_keys=(),
-    ),
-})
+# 当前没有允许绕过 Nanobot ToolPlan 的 KT 框架工具。
+FRAMEWORK_TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({})
 
 
 TOOL_DESCRIPTOR_REGISTRY = ToolDescriptorRegistry.from_metadata(
