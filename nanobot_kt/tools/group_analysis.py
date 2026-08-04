@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from kohakuterrarium.modules.tool.base import (
+from nanobot_kt.optional_tool_api import (
     BaseTool,
     ExecutionMode,
     ToolResult,

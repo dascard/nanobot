@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
 from api import chat_content_helpers
+
+
+logger = logging.getLogger("nanobot.chat_media_precache")
 
 
 def schedule_image_precache(
@@ -22,7 +26,21 @@ def schedule_image_precache(
         return
 
     if precache_image_sources is None:
-        from nanobot_kt.image_pipeline import precache_image_sources as precache_image_sources_func
+        from core.media_preprocess_runtime import (
+            ImagePrecacheRuntimeUnavailableError,
+            get_image_precache_port,
+        )
+
+        try:
+            precache_image_sources_func = get_image_precache_port().precache
+        except ImagePrecacheRuntimeUnavailableError:
+            logger.warning(
+                "图片预缓存运行时未启动，跳过旁路任务: source_type=%s source_name_prefix=%s",
+                source_type,
+                source_name_prefix,
+            )
+            return
+        normalized_files = tuple(normalized_files)
     else:
         precache_image_sources_func = precache_image_sources
 

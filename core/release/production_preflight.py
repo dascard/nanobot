@@ -88,9 +88,6 @@ def validate_release_source_identity(
         raise ProductionPreflightError("独立发布树 HEAD 与 ReleaseManifest 不一致")
     if _git(source, "status", "--porcelain", "--untracked-files=no"):
         raise ProductionPreflightError("独立发布树存在 tracked 修改")
-    kt_root = source / "vendor" / "KohakuTerrarium"
-    if _git(kt_root, "rev-parse", "HEAD") != artifact.source.kt_commit:
-        raise ProductionPreflightError("独立发布树 KT commit 与 ReleaseManifest 不一致")
 
 
 def _safe_artifact_path(
@@ -193,10 +190,9 @@ def validate_release_artifact_evidence(
     if not isinstance(verification_payload, dict):
         raise ProductionPreflightError("验证结果格式无效")
     if (
-        verification_payload.get("schema_version") != 1
+        verification_payload.get("schema_version") != 2
         or verification_payload.get("source_sha")
         != artifact.source.git_full_commit
-        or verification_payload.get("kt_sha") != artifact.source.kt_commit
     ):
         raise ProductionPreflightError("验证结果源码身份与 ArtifactManifest 不一致")
     suites = verification_payload.get("suites")

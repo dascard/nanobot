@@ -74,7 +74,7 @@ def test_schedule_task_run_requires_explicit_idempotency_key(
     db_session,
 ):
     from core import daily_digest
-    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+    from nanobot_kt.tools.schedule_task import ScheduleTaskTool
 
     _seed_scheduled_outbox_control(db_session)
     task = _seed_task(db_session)
@@ -99,8 +99,8 @@ def test_schedule_task_run_queues_and_reports_not_delivered(monkeypatch, db_sess
         ScheduledTask,
         ScheduledTaskExecution,
     )
-    from creatures.nanobot.prompts.skills.schedule_task import tool as schedule_tool_module
-    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+    import nanobot_kt.tools.schedule_task as schedule_tool_module
+    from nanobot_kt.tools.schedule_task import ScheduleTaskTool
 
     _seed_scheduled_outbox_control(db_session)
     task = _seed_task(db_session)
@@ -154,7 +154,7 @@ def test_schedule_task_run_queues_and_reports_not_delivered(monkeypatch, db_sess
 
 def test_schedule_task_schema_declares_manual_idempotency_key():
     from core.tool_schema_preview import STATIC_TOOL_SCHEMAS
-    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+    from nanobot_kt.tools.schedule_task import ScheduleTaskTool
 
     runtime_properties = ScheduleTaskTool().get_parameters_schema()["properties"]
     preview_properties = STATIC_TOOL_SCHEMAS["schedule_task"]["parameters"]["properties"]
@@ -168,7 +168,7 @@ def test_schedule_task_toggle_cancels_pending_delivery(monkeypatch, db_session):
         ScheduledTaskProducerConfig,
         enqueue_scheduled_task_occurrence,
     )
-    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+    from nanobot_kt.tools.schedule_task import ScheduleTaskTool
 
     _seed_scheduled_outbox_control(db_session)
     task = _seed_task(db_session)
@@ -195,7 +195,7 @@ def test_schedule_task_toggle_cancels_pending_delivery(monkeypatch, db_session):
 
 
 def test_schedule_task_list_hides_target_id(db_session):
-    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+    from nanobot_kt.tools.schedule_task import ScheduleTaskTool
 
     task = _seed_task(db_session)
 
@@ -210,7 +210,7 @@ def test_schedule_task_list_hides_target_id(db_session):
 
 def test_schedule_task_create_uses_runtime_context_target(monkeypatch):
     from core import database
-    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+    from nanobot_kt.tools.schedule_task import ScheduleTaskTool
 
     added = []
 
@@ -253,7 +253,7 @@ def test_schedule_task_create_uses_runtime_context_target(monkeypatch):
 
 def test_schedule_task_create_one_shot_via_schedule(monkeypatch):
     from core import database
-    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+    from nanobot_kt.tools.schedule_task import ScheduleTaskTool
 
     added = []
 
@@ -288,7 +288,7 @@ def test_schedule_task_create_one_shot_via_schedule(monkeypatch):
 
 def test_schedule_task_create_rejects_invalid_schedule(monkeypatch):
     from core import database
-    from creatures.nanobot.prompts.skills.schedule_task.tool import ScheduleTaskTool
+    from nanobot_kt.tools.schedule_task import ScheduleTaskTool
 
     class FakeDB:
         def add(self, obj):
@@ -321,7 +321,7 @@ def test_schedule_task_cannot_list_or_mutate_another_owner(db_session):
         apply_scheduled_task_owner,
         scheduled_task_owner_from_target,
     )
-    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+    from nanobot_kt.tools.schedule_task import (
         ScheduleTaskTool,
     )
 
@@ -365,7 +365,7 @@ def test_schedule_task_cannot_list_or_mutate_another_owner(db_session):
 
 def test_schedule_task_create_rejects_cross_owner_target(monkeypatch):
     from core import database
-    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+    from nanobot_kt.tools.schedule_task import (
         ScheduleTaskTool,
     )
 
@@ -402,7 +402,7 @@ def test_schedule_task_rejects_oversized_prompt_before_database(
     from core.scheduled_task_contract import (
         MAX_SCHEDULED_TASK_PROMPT_CHARS,
     )
-    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+    from nanobot_kt.tools.schedule_task import (
         ScheduleTaskTool,
     )
 
@@ -434,7 +434,7 @@ def test_schedule_task_rejects_oversized_prompt_before_database(
 
 def test_schedule_task_create_content_compiles_to_static_emit(monkeypatch):
     from core import database
-    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+    from nanobot_kt.tools.schedule_task import (
         ScheduleTaskTool,
     )
 
@@ -476,7 +476,7 @@ def test_schedule_task_list_detail_returns_program_and_latest_failure(
 ):
     from core.database import ScheduledTaskExecution
     from core.scheduled_workflow import enqueue_scheduled_task_execution
-    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+    from nanobot_kt.tools.schedule_task import (
         ScheduleTaskTool,
     )
 
@@ -519,7 +519,7 @@ def test_schedule_task_prompt_update_cannot_overwrite_static_program(
     db_session,
 ):
     from core.scheduled_task_contract import apply_scheduled_task_program
-    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+    from nanobot_kt.tools.schedule_task import (
         ScheduleTaskTool,
     )
 
@@ -556,7 +556,7 @@ def test_schedule_task_create_rejects_unavailable_direct_program_tool(
 ):
     from core import database
     from core.tool_plan import ToolPlan, tool_plan_scope
-    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+    from nanobot_kt.tools.schedule_task import (
         ScheduleTaskTool,
     )
 
@@ -610,7 +610,7 @@ def test_schedule_task_create_rejects_unavailable_direct_program_tool(
 
 def test_schedule_task_rejects_unknown_action_without_database(monkeypatch):
     from core import database
-    from creatures.nanobot.prompts.skills.schedule_task.tool import (
+    from nanobot_kt.tools.schedule_task import (
         ScheduleTaskTool,
     )
 

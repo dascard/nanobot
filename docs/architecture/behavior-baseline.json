@@ -1,6 +1,14 @@
 {
   "approved_changes": [
     {
+      "after_sha256": "e6a1a7b0e07f14e1919a4bbb93d039e2ec44a2c33aa8e339a32aa428e49751b5",
+      "before_sha256": null,
+      "id": "agent_harness_stage1_runtime_baseline",
+      "reason": "新增不导入 KT 的 Runtime 重放 fixture，冻结普通、流式、多轮工具消息、中断信号、模型路由、conversation 和生命周期；本项只记录升级前行为，不改变生产 Runtime。",
+      "snapshot_id": "agent_runtime",
+      "stage": "Agent Harness 阶段 1.1"
+    },
+    {
       "after_sha256": "04889c5b873921f3ca330e5803b7c5f3ed894f6c50acb7a32f773073491ba533",
       "before_sha256": "5f369375cd179c523d77fc5728228fa1f6d70ef5d68b40f8dc55935213a4dbed",
       "id": "stage1_admin_structured_views",
@@ -121,7 +129,7 @@
       "stage": "阶段 8"
     },
     {
-      "after_sha256": "dfc89e244a914bfb71b9de9d249498bec7f0abd00283a31c63d52c42470b4e84",
+      "after_sha256": "23e82ea5390f676e7ac8ae7b478f0cfc9e2b6f5c46ee012951d9314f15b9591a",
       "before_sha256": "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552",
       "id": "proactive_outreach_fact_guard_registry",
       "reason": "升级主动外呼话题与 Judge 输出合同，登记独立质量复核模型路由及其受管配置。",
@@ -129,7 +137,7 @@
       "stage": "主动外呼事实性治理"
     }
   ],
-  "baseline_git_commit": "0b379ae60a6557efa18fef42f701ee5214450f71",
+  "baseline_git_commit": "0a3998313864b40f3193f2f0c8ac996558e5a034",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -138,14 +146,25 @@
     "command": "python scripts/build_behavior_baseline.py --root \"$PWD\" --write",
     "environment": "清除代理；不访问网络；不读取生产数据库；只读取版本化 Prompt 文件"
   },
+  "runtime_fixture": {
+    "framework_dependency": "none",
+    "path": "tests/fixtures/agent_runtime_behavior_cases.json",
+    "sha256": "f2596f57d97ec4b6ad11746da6ec93f02fefafcebb3f4cf507d8b552090a1396"
+  },
   "runtime_versions": {
     "generated_with_python": "3.12.7",
-    "kt_commit": "6c2c5f1d059ac7f99379b0cddeea21da8e9b55c0",
     "prompt_runtime_schema": "v2",
     "python_constraint": ">=3.11"
   },
   "schema_version": 1,
   "snapshots": [
+    {
+      "classification": "preserve",
+      "id": "agent_runtime",
+      "note": "使用框架无关 FakeAgentRuntime 重放普通、流式、工具链和中断信号，冻结 KT 升级前的 Port 输入、结果、conversation、route 与生命周期。",
+      "path": "tests/golden/architecture_behavior/agent_runtime.json",
+      "sha256": "e6a1a7b0e07f14e1919a4bbb93d039e2ec44a2c33aa8e339a32aa428e49751b5"
+    },
     {
       "classification": "known_bad",
       "id": "group_analysis",
@@ -179,7 +198,7 @@
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "dfc89e244a914bfb71b9de9d249498bec7f0abd00283a31c63d52c42470b4e84"
+      "sha256": "23e82ea5390f676e7ac8ae7b478f0cfc9e2b6f5c46ee012951d9314f15b9591a"
     },
     {
       "classification": "security_invariant",

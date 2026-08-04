@@ -337,7 +337,7 @@ def test_compose_services_apply_runtime_hardening_and_resource_limits():
         assert "healthcheck:" in block
 
 
-def test_compose_services_give_kt_a_bounded_ephemeral_home():
+def test_compose_services_do_not_provision_kt_runtime_home():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     kt_home_tmpfs = (
         "/home/nanobot/.kohakuterrarium:size=64m,mode=0700,"
@@ -356,7 +356,7 @@ def test_compose_services_give_kt_a_bounded_ephemeral_home():
             'user: "${NANOBOT_RUNTIME_UID:-10001}:'
             '${NANOBOT_RUNTIME_GID:-10001}"'
         ) in block
-        assert kt_home_tmpfs in block
+        assert kt_home_tmpfs not in block
 
 
 def test_compose_workers_wait_for_server_readiness():
@@ -389,15 +389,16 @@ def test_runtime_image_labels_the_exact_source_revision():
     assert 'LABEL org.opencontainers.image.revision="${GIT_FULL_COMMIT}"' in dockerfile
 
 
-def test_runtime_image_applies_kt_patch_without_dirtying_host_submodule():
+def test_runtime_image_installs_unmodified_pinned_kt_source():
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
     dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
 
-    assert "AS kt-source" in dockerfile
-    assert "stream-message-flag.patch" in dockerfile
-    assert "git apply --check" in dockerfile
-    assert "COPY --from=kt-source" in dockerfile
-    assert "!patches/kohakuterrarium/stream-message-flag.patch" in dockerignore
+    assert "vendor/KohakuTerrarium" not in dockerfile
+    assert "requirements-kt" not in dockerfile
+    assert "AS kt-source" not in dockerfile
+    assert "stream-message-flag.patch" not in dockerfile
+    assert "git apply" not in dockerfile
+    assert "!patches/kohakuterrarium" not in dockerignore
 
 
 def test_runtime_directory_preparer_is_executable():
@@ -883,7 +884,8 @@ def test_dockerignore_excludes_runtime_model_directories():
     assert "sentinel/" in ignored
     assert "**/.git/" in ignored
     assert "*.egg-info/" in ignored
-    assert "vendor/KohakuTerrarium/build/" in ignored
+    assert "requirements-kt.in" in ignored
+    assert "requirements-kt.lock" in ignored
 
 
 def test_new_api_timeout_defaults_to_300_seconds():

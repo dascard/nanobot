@@ -620,6 +620,68 @@ def _response_body_audit(value: Any) -> dict[str, Any]:
     }
 
 
+def _nonnegative_usage_metric(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float) and value.is_integer():
+        return max(0, int(value))
+    return 0
+
+
+def _llm_usage_ledger_metrics(
+    response: Any,
+    *,
+    cache_hit_tokens: int,
+    cache_miss_tokens: int,
+) -> dict[str, int]:
+    response_mapping = response if isinstance(response, Mapping) else {}
+    raw_usage = response_mapping.get("usage")
+    usage = raw_usage if isinstance(raw_usage, Mapping) else {}
+    prompt_details_value = usage.get("prompt_tokens_details")
+    prompt_details = (
+        prompt_details_value
+        if isinstance(prompt_details_value, Mapping)
+        else {}
+    )
+    completion_details_value = usage.get("completion_tokens_details")
+    completion_details = (
+        completion_details_value
+        if isinstance(completion_details_value, Mapping)
+        else {}
+    )
+    input_tokens = _nonnegative_usage_metric(
+        usage.get("prompt_tokens", usage.get("input_tokens"))
+    )
+    if input_tokens == 0:
+        input_tokens = max(
+            0,
+            int(cache_hit_tokens) + int(cache_miss_tokens),
+        )
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": _nonnegative_usage_metric(
+            usage.get("completion_tokens", usage.get("output_tokens"))
+        ),
+        "cached_input_tokens": max(
+            int(cache_hit_tokens),
+            _nonnegative_usage_metric(
+                prompt_details.get(
+                    "cached_tokens",
+                    usage.get("cached_input_tokens"),
+                )
+            ),
+        ),
+        "reasoning_tokens": _nonnegative_usage_metric(
+            completion_details.get(
+                "reasoning_tokens",
+                usage.get("reasoning_tokens"),
+            )
+        ),
+    }
+
+
 def _bounded_payload_json(value: Any, *, max_chars: int) -> str:
     text = _json_dumps(value, max_chars=0)
     if len(text) <= max_chars:
@@ -696,12 +758,52 @@ class RunTracer:
     ) -> RunHandle:
         run_id = new_run_id()
         trace_id = trace_id or new_trace_id()
+        accepted_at = datetime.now().astimezone()
+        normalized_meta = dict(meta or {})
         try:
             from core.database import AgentRun
+            from core.run_ledger.adapters import (
+                run_accepted_event,
+                run_status_changed_event,
+            )
+            from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+
+            accepted_event = run_accepted_event(
+                run_id=run_id,
+                trace_id=trace_id,
+                session_id=str(session_id or "")[:128],
+                user_id=str(user_id or "")[:128],
+                chat_type=str(chat_type or "")[:32],
+                group_id=str(group_id or "")[:128],
+                run_type=str(run_type or "chat")[:32],
+                prompt_mode=str(prompt_mode or "legacy")[:32],
+                prompt_key=str(prompt_key or "")[:96],
+                prompt_sha256=str(prompt_sha256 or "")[:64],
+                model=str(model or "")[:160],
+                input_value=input_preview,
+                platform=str(normalized_meta.get("platform") or "")[:32],
+                request_id=str(
+                    normalized_meta.get("message_id") or run_id
+                )[:160],
+                occurred_at=accepted_at,
+            )
+            running_event = run_status_changed_event(
+                accepted_event=accepted_event,
+                status="running",
+                previous_status="accepted",
+            )
 
             db = _session()
             try:
                 def operation() -> None:
+                    SqlAlchemyRunEventLedger(db).append(
+                        accepted_event,
+                        expected_sequence=1,
+                    )
+                    SqlAlchemyRunEventLedger(db).append(
+                        running_event,
+                        expected_sequence=2,
+                    )
                     db.add(AgentRun(
                         run_id=run_id,
                         trace_id=trace_id,
@@ -724,8 +826,8 @@ class RunTracer:
                         model=str(model or "")[:160],
                         status="running",
                         input_preview=_preview(input_preview, max_chars=1000),
-                        meta_json=_json_dumps(meta or {}, max_chars=3000),
-                        started_at=db_now_naive(),
+                        meta_json=_json_dumps(normalized_meta, max_chars=3000),
+                        started_at=to_db_naive(accepted_at),
                     ))
                     db.commit()
 
@@ -750,6 +852,18 @@ class RunTracer:
             return
         try:
             from core.database import AgentRun
+            from core.run_ledger.adapters import run_prompt_resolved_event
+            from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+
+            resolution_manifest_json = serialize_template_resolutions_json(
+                prompt_template_resolutions
+            )
+            resolution_manifest = json.loads(resolution_manifest_json)
+            resolution_count = (
+                len(resolution_manifest)
+                if isinstance(resolution_manifest, dict)
+                else 0
+            )
 
             db = _session()
             try:
@@ -757,15 +871,29 @@ class RunTracer:
                     row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
                     if not row:
                         return
+                    ledger = SqlAlchemyRunEventLedger(db)
+                    head = ledger.head(run_id)
+                    if head is not None and head.terminal_sequence is None:
+                        ledger.append(
+                            run_prompt_resolved_event(
+                                run_id=run_id,
+                                trace_id=str(row.trace_id or ""),
+                                session_id=str(row.session_id or ""),
+                                prompt_mode=str(row.prompt_mode or ""),
+                                prompt_key=str(row.prompt_key or ""),
+                                prompt_source=prompt_source,
+                                prompt_sha256=prompt_sha256,
+                                resolution_manifest_json=(
+                                    resolution_manifest_json
+                                ),
+                                resolution_count=resolution_count,
+                            )
+                        )
                     row.prompt_source = str(prompt_source or "")[:96]
                     row.prompt_runtime_path = str(prompt_runtime_path or "")
                     row.prompt_default_path = str(prompt_default_path or "")
                     row.prompt_sha256 = str(prompt_sha256 or "")[:64]
-                    row.prompt_template_resolutions_json = (
-                        serialize_template_resolutions_json(
-                            prompt_template_resolutions
-                        )
-                    )
+                    row.prompt_template_resolutions_json = resolution_manifest_json
                     db.commit()
 
                 _run_db_write(db, operation, label="agent_run_prompt_source")
@@ -788,8 +916,13 @@ class RunTracer:
     ) -> None:
         if not run_id:
             return
+        event_finished_at = finished_at or datetime.now().astimezone()
+        if event_finished_at.tzinfo is None:
+            event_finished_at = event_finished_at.astimezone()
         try:
             from core.database import AgentRun
+            from core.run_ledger.adapters import run_terminated_event
+            from core.run_ledger.persistence import SqlAlchemyRunEventLedger
 
             db = _session()
             try:
@@ -797,6 +930,18 @@ class RunTracer:
                     row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
                     if not row:
                         return
+                    terminal_event = run_terminated_event(
+                        run_id=run_id,
+                        trace_id=str(row.trace_id or ""),
+                        session_id=str(row.session_id or ""),
+                        status=str(status or "success")[:32],
+                        output_value=output_preview,
+                        error_value=error,
+                        latency_ms=latency_ms,
+                        model=str(model or row.model or "")[:160],
+                        occurred_at=event_finished_at,
+                    )
+                    SqlAlchemyRunEventLedger(db).append(terminal_event)
                     row.status = str(status or "success")[:32]
                     row.output_preview = _preview(output_preview, max_chars=1000)
                     row.error = _preview(error, max_chars=1000)
@@ -806,7 +951,7 @@ class RunTracer:
                         row.model = str(model)[:160]
                     if meta is not None:
                         row.meta_json = _json_dumps(meta, max_chars=3000)
-                    row.finished_at = to_db_naive(finished_at) or db_now_naive()
+                    row.finished_at = to_db_naive(event_finished_at)
                     db.commit()
 
                 _run_db_write(db, operation, label="agent_run_finish")
@@ -823,10 +968,14 @@ class ToolTracer:
         run_id: str,
         tool_name: str,
         args: Any,
+        *,
+        tool_call_id: str = "",
     ) -> str:
         if not trace_id and not run_id:
             return ""
-        tool_call_id = new_tool_call_id()
+        resolved_tool_call_id = str(tool_call_id or "").strip()[:80]
+        if not resolved_tool_call_id:
+            resolved_tool_call_id = new_tool_call_id()
         try:
             from core.database import ToolCall
 
@@ -834,7 +983,7 @@ class ToolTracer:
             try:
                 def operation() -> None:
                     db.add(ToolCall(
-                        tool_call_id=tool_call_id,
+                        tool_call_id=resolved_tool_call_id,
                         trace_id=str(trace_id or "")[:64],
                         run_id=str(run_id or "")[:80],
                         tool_name=str(tool_name or "")[:128],
@@ -852,7 +1001,7 @@ class ToolTracer:
         except Exception as e:
             logger.warning("tool_call start failed: %s", e)
             return ""
-        return tool_call_id
+        return resolved_tool_call_id
 
     @staticmethod
     def finish_tool_call(
@@ -1137,6 +1286,11 @@ class LLMRequestTracer:
                         response or {},
                         successful=successful,
                     )
+                    usage_metrics = _llm_usage_ledger_metrics(
+                        response or {},
+                        cache_hit_tokens=cache_usage.hit_tokens,
+                        cache_miss_tokens=cache_usage.miss_tokens,
+                    )
                     if successful:
                         log.response_json = _bounded_payload_json(
                             response or {},
@@ -1202,7 +1356,39 @@ class LLMRequestTracer:
                         log.phase = str(phase or "")[:64]
                     log.error = safe_response_summary(error, max_chars=2000)
                     log.latency_ms = int(latency_ms or 0)
-                    log.finished_at = db_now_naive()
+                    ledger_occurred_at = datetime.now().astimezone()
+                    log.finished_at = to_db_naive(ledger_occurred_at)
+                    if str(log.run_id or ""):
+                        from core.run_ledger.adapters import (
+                            usage_recorded_event,
+                        )
+                        from core.run_ledger.persistence import (
+                            SqlAlchemyRunEventLedger,
+                        )
+
+                        ledger = SqlAlchemyRunEventLedger(db)
+                        head = ledger.head(str(log.run_id))
+                        if head is not None and head.terminal_sequence is None:
+                            ledger.append(usage_recorded_event(
+                                event_id=f"llm-log-{int(log.id or 0)}",
+                                run_id=str(log.run_id),
+                                trace_id=str(log.trace_id or ""),
+                                source_event_id=f"llm_api_request:{int(log.id or 0)}",
+                                status=normalized_status,
+                                provider=str(log.provider or ""),
+                                model=str(log.model or ""),
+                                input_tokens=usage_metrics["input_tokens"],
+                                output_tokens=usage_metrics["output_tokens"],
+                                cached_input_tokens=usage_metrics[
+                                    "cached_input_tokens"
+                                ],
+                                reasoning_tokens=usage_metrics[
+                                    "reasoning_tokens"
+                                ],
+                                cache_miss_tokens=cache_usage.miss_tokens,
+                                cache_write_tokens=cache_usage.write_tokens,
+                                occurred_at=ledger_occurred_at,
+                            ))
                     db.commit()
 
                 _run_db_write(db, operation, label="llm_api_request_finish")

@@ -32,7 +32,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ env.SOURCE_SHA }}
-          submodules: recursive
           persist-credentials: false
 
       - name: 配置 Python
@@ -57,8 +56,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
           test -z "$(git status --porcelain --untracked-files=normal)"
-          kt_sha="$(git -C vendor/KohakuTerrarium rev-parse HEAD)"
-          test "${kt_sha}" = "$(git rev-parse HEAD:vendor/KohakuTerrarium)"
 
           quality_jobs="$(gh api --method GET \
             "/repos/${GITHUB_REPOSITORY}/actions/runs/${QUALITY_RUN_ID}/jobs" \
@@ -99,13 +96,11 @@ jobs:
           mkdir -p "${evidence_dir}"
           jq -n \
             --arg source_sha "${SOURCE_SHA}" \
-            --arg kt_sha "${kt_sha}" \
             --arg quality_run_id "${QUALITY_RUN_ID}" \
             --arg eval_run_id "${eval_run_id}" \
             '{
-              schema_version: 1,
+              schema_version: 2,
               source_sha: $source_sha,
-              kt_sha: $kt_sha,
               suites: {
                 "backend-full": {
                   run_id: $quality_run_id,
@@ -124,7 +119,6 @@ jobs:
                 }
               }
             }' >"${evidence_dir}/verification-results.json"
-          printf 'kt_sha=%s\n' "${kt_sha}" >>"${GITHUB_OUTPUT}"
           printf 'short_sha=%s\n' "${short_sha}" >>"${GITHUB_OUTPUT}"
           printf 'evidence_dir=%s\n' "${evidence_dir}" >>"${GITHUB_OUTPUT}"
 
@@ -194,7 +188,6 @@ jobs:
         env:
           NANOBOT_RUNTIME_IMAGE: ${{ steps.image.outputs.reference }}
           RUNTIME_IMAGE_ID: ${{ steps.image.outputs.image_id }}
-          KT_SHA: ${{ steps.verification.outputs.kt_sha }}
           EVIDENCE_DIR: ${{ steps.verification.outputs.evidence_dir }}
           BUILD_CONTEXT_SHA256: ${{ steps.image.outputs.build_context_sha256 }}
         run: |
@@ -203,7 +196,6 @@ jobs:
             --profile nanobot-runtime \
             --git-full-commit "${SOURCE_SHA}" \
             --git-dirty false \
-            --kt-commit "${KT_SHA}" \
             --input python_lock=requirements-prod.lock \
             --input web_lock=webui/package-lock.json \
             --input prompt_defaults=prompts.v2.default \

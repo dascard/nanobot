@@ -23,7 +23,7 @@ from core.lifecycle import (
     COMPATIBILITY_REGISTRY,
     record_compatibility_usage,
 )
-from nanobot_kt.bridge import get_bridge as _default_get_bridge
+from core.agent_runtime.gateway import get_agent_gateway as _default_get_bridge
 
 logger = logging.getLogger("nanobot.routes.group_utility")
 router = APIRouter(tags=["group-utility"])

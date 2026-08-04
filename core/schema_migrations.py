@@ -98,6 +98,7 @@ _LLM_CACHE_OBSERVABILITY_VERSION = (
 _LLM_CACHE_DIAGNOSTICS_V2_VERSION = (
     "20260803_llm_cache_miss_and_shape"
 )
+_RUN_LEDGER_V1_VERSION = "20260804_run_event_ledger_v1"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3542,6 +3543,40 @@ def _runtime_telemetry_events(
     )
 
 
+def _run_event_ledger_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建版本化 Run Ledger，并在 SQLite 层拒绝事实更新和删除。"""
+
+    from core.db.models.run_ledger import (
+        RunLedgerEventRow,
+        RunLedgerStreamHead,
+    )
+
+    RunLedgerStreamHead.__table__.create(bind=conn, checkfirst=True)
+    RunLedgerEventRow.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS "
+        "trg_run_ledger_events_no_update "
+        "BEFORE UPDATE ON run_ledger_events "
+        "BEGIN "
+        "SELECT RAISE(ABORT, 'run_ledger_events_append_only'); "
+        "END"
+    ))
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS "
+        "trg_run_ledger_events_no_delete "
+        "BEFORE DELETE ON run_ledger_events "
+        "BEGIN "
+        "SELECT RAISE(ABORT, 'run_ledger_events_append_only'); "
+        "END"
+    ))
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -4489,6 +4524,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _LLM_CACHE_DIAGNOSTICS_V2_VERSION,
         "llm cache miss tokens and prefix shape",
         _llm_cache_diagnostics_v2,
+    ),
+    (
+        _RUN_LEDGER_V1_VERSION,
+        "versioned append-only run event ledger",
+        _run_event_ledger_v1,
     ),
 ]
 

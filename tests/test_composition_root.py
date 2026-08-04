@@ -363,6 +363,48 @@ def test_kt_boundary_scan_rejects_static_and_function_local_imports(
     assert "kohakuterrarium.modules.plugin.base" in errors[1]
 
 
+def test_kt_boundary_scan_includes_api_delivery_layer():
+    from scripts.check_architecture import (
+        ROOT,
+        check_kt_framework_boundaries,
+    )
+
+    default_paths = tuple(
+        path
+        for root in (ROOT / "core", ROOT / "app", ROOT / "api")
+        for path in sorted(root.rglob("*.py"))
+    )
+
+    assert any(path.parts[-2:] == ("api", "routes.py") for path in default_paths)
+    assert check_kt_framework_boundaries(default_paths) == []
+
+
+def test_kt_private_access_is_rejected_without_compatibility_exception(
+    tmp_path,
+):
+    from scripts.check_architecture import check_bridge_private_access
+
+    direct = tmp_path / "runtime_adapter.py"
+    direct.write_text(
+        "result = agent._process_event(event)\n"
+        "messages = getattr(conversation, '_messages', ())\n",
+        encoding="utf-8",
+    )
+
+    errors = check_bridge_private_access((direct,))
+
+    assert len(errors) == 2
+    assert "_process_event" in errors[0]
+    assert "_messages" in errors[1]
+    assert "公开 API 或 Nanobot 自有实现" in errors[0]
+
+
+def test_current_kt_adapters_have_no_known_private_access():
+    from scripts.check_architecture import check_bridge_private_access
+
+    assert check_bridge_private_access() == []
+
+
 def test_identity_prefix_scan_accepts_typed_identity_usage(tmp_path):
     from scripts.check_architecture import (
         check_identity_prefix_inference_boundaries,

@@ -17,7 +17,7 @@ def test_web_search_registered_in_tool_plan(db_session):
 @pytest.mark.asyncio
 async def test_web_search_tool_returns_structured_results(monkeypatch):
     from core.web_search.search_runtime import WebSearchProviderResult, WebSearchResult
-    from creatures.nanobot.prompts.skills.web_search.tool import WebSearchTool
+    from nanobot_kt.tools.web_search import WebSearchTool
 
     async def fake_search_enabled_providers(db, query, limit=5, provider_id=""):
         assert query == "nanobot"
@@ -36,7 +36,7 @@ async def test_web_search_tool_returns_structured_results(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "creatures.nanobot.prompts.skills.web_search.tool.search_enabled_providers",
+        "nanobot_kt.tools.web_search.search_enabled_providers",
         fake_search_enabled_providers,
     )
 
@@ -51,7 +51,7 @@ async def test_web_search_tool_returns_structured_results(monkeypatch):
 @pytest.mark.asyncio
 async def test_web_search_tool_accepts_legacy_max_results(monkeypatch):
     from core.web_search.search_runtime import WebSearchProviderResult
-    from creatures.nanobot.prompts.skills.web_search.tool import WebSearchTool
+    from nanobot_kt.tools.web_search import WebSearchTool
 
     calls = []
 
@@ -60,7 +60,7 @@ async def test_web_search_tool_accepts_legacy_max_results(monkeypatch):
         return WebSearchProviderResult(provider_id=provider_id or "searxng", results=[])
 
     monkeypatch.setattr(
-        "creatures.nanobot.prompts.skills.web_search.tool.search_enabled_providers",
+        "nanobot_kt.tools.web_search.search_enabled_providers",
         fake_search_enabled_providers,
     )
 
@@ -193,13 +193,13 @@ def test_web_search_prompt_declares_provider_is_runtime_selected():
 @pytest.mark.asyncio
 async def test_web_search_tool_reports_no_enabled_provider(monkeypatch):
     from core.web_search.search_runtime import WebSearchError
-    from creatures.nanobot.prompts.skills.web_search.tool import WebSearchTool
+    from nanobot_kt.tools.web_search import WebSearchTool
 
     async def fake_search_enabled_providers(db, query, limit=5, provider_id=""):
         raise WebSearchError("no_enabled_provider", "没有启用的搜索 provider")
 
     monkeypatch.setattr(
-        "creatures.nanobot.prompts.skills.web_search.tool.search_enabled_providers",
+        "nanobot_kt.tools.web_search.search_enabled_providers",
         fake_search_enabled_providers,
     )
 
@@ -211,7 +211,7 @@ async def test_web_search_tool_reports_no_enabled_provider(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_web_search_rejects_query_longer_than_public_schema_limit():
-    from creatures.nanobot.prompts.skills.web_search.tool import WebSearchTool
+    from nanobot_kt.tools.web_search import WebSearchTool
 
     tool = WebSearchTool()
     query_schema = tool.get_parameters_schema()["properties"]["query"]

@@ -6,11 +6,12 @@ from collections.abc import Mapping
 import inspect
 from typing import Any
 
+from core.agent_runtime.gateway_contracts import AgentMessageGatewayPort
 from foundation.message_contract import InboundMessageContract
 
 
 async def dispatch_agent_message(
-    gateway: Any,
+    gateway: AgentMessageGatewayPort,
     message: InboundMessageContract,
     *,
     content: str,

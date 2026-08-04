@@ -20,6 +20,10 @@ class ChatCompletionRuntimeState(StrEnum):
     STOPPED = "stopped"
 
 
+class ChatCompletionRuntimeUnavailableError(RuntimeError):
+    """进程级 Chat Completion Port 尚未绑定或已停止。"""
+
+
 def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType(dict(value))
 
@@ -112,10 +116,14 @@ class ChatCompletionRuntime:
     def _require_port(self) -> ChatCompletionPort:
         with self._lock:
             if self._state is not ChatCompletionRuntimeState.RUNNING:
-                raise RuntimeError("Chat Completion 运行时尚未启动或已经停止")
+                raise ChatCompletionRuntimeUnavailableError(
+                    "Chat Completion 运行时尚未启动或已经停止"
+                )
             port = self._port
         if port is None:
-            raise RuntimeError("Chat Completion Adapter 未配置")
+            raise ChatCompletionRuntimeUnavailableError(
+                "Chat Completion Adapter 未配置"
+            )
         return port
 
     async def complete(
@@ -148,6 +156,36 @@ class ChatCompletionRuntime:
 
 
 _CHAT_COMPLETION_RUNTIME = ChatCompletionRuntime()
+
+
+class RuntimeBoundChatCompletionPort:
+    """把进程组合根已绑定的模型 Port 提供给 Native Agent Runtime。"""
+
+    @property
+    def adapter_id(self) -> str:
+        status = _CHAT_COMPLETION_RUNTIME.introspect()
+        upstream = str(status.get("adapter_id") or "unbound")
+        return f"chat-runtime:{upstream}"
+
+    def ensure_ready(self) -> None:
+        if _CHAT_COMPLETION_RUNTIME.state is not ChatCompletionRuntimeState.RUNNING:
+            raise ChatCompletionRuntimeUnavailableError(
+                "Native Agent Runtime 启动时 Chat Completion 尚未就绪"
+            )
+        _CHAT_COMPLETION_RUNTIME._require_port()
+
+    async def complete_chat(
+        self,
+        request: ChatCompletionRequest,
+    ) -> Mapping[str, Any]:
+        return await _CHAT_COMPLETION_RUNTIME.complete(request)
+
+    async def stream_chat(
+        self,
+        request: ChatCompletionRequest,
+    ) -> AsyncIterator[Mapping[str, Any]]:
+        async for chunk in _CHAT_COMPLETION_RUNTIME.stream(request):
+            yield chunk
 
 
 def start_chat_completion_runtime(port: ChatCompletionPort) -> None:
@@ -219,6 +257,8 @@ __all__ = [
     "ChatCompletionRequest",
     "ChatCompletionRuntime",
     "ChatCompletionRuntimeState",
+    "ChatCompletionRuntimeUnavailableError",
+    "RuntimeBoundChatCompletionPort",
     "RuntimeChatCompletionClient",
     "chat_completion_runtime_status",
     "start_chat_completion_runtime",

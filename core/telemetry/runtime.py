@@ -17,6 +17,7 @@ from core.runtime.event_bus import (
     install_runtime_event_sinks,
 )
 from core.runtime.events import RuntimeEvent
+from core.run_ledger.sinks import SqlAlchemyRuntimeEventLedgerSink
 from core.telemetry.persistence import SqlAlchemyRuntimeEventSink
 
 
@@ -171,6 +172,7 @@ class BufferedRuntimeEventSink:
 class TelemetryRuntimeHandle:
     buffered_sink: BufferedRuntimeEventSink | None
     job_observer: object | None = None
+    ledger_sink: SqlAlchemyRuntimeEventLedgerSink | None = None
     installed: bool = True
 
 
@@ -205,6 +207,7 @@ def start_telemetry_runtime(
         persistent = SqlAlchemyRuntimeEventSink(
             session_factory
         )
+        ledger = SqlAlchemyRuntimeEventLedgerSink(session_factory)
         buffered = BufferedRuntimeEventSink(
             persistent,
             capacity=capacity,
@@ -213,6 +216,7 @@ def start_telemetry_runtime(
         buffered.start()
         install_runtime_event_sinks((
             LoggingRuntimeEventSink(),
+            ledger,
             buffered,
         ))
         from core.telemetry.job_observer import (
@@ -224,6 +228,7 @@ def start_telemetry_runtime(
         )
         handle = TelemetryRuntimeHandle(
             buffered_sink=buffered,
+            ledger_sink=ledger,
             job_observer=observer,
         )
         _RUNTIME_HANDLE = handle

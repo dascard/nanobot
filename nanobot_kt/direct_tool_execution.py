@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -22,6 +23,93 @@ class DirectToolExecutionResult:
     @property
     def success(self) -> bool:
         return not self.error and self.exit_code in {None, 0}
+
+
+def _build_tool_execution_request(
+    *,
+    request_id: str,
+    platform: str,
+    normalized_session_id: str,
+    normalized_user_id: str,
+    group_id: str,
+    is_group: bool,
+    trace_id: str,
+    run_id: str,
+    name: str,
+    args: dict[str, Any],
+    execution_port_id: str,
+    idempotency_key: str,
+    tool_plan_sha256: str,
+    timeout_seconds: float,
+):
+    from core.agent_runtime import (
+        RequestRuntimeContext,
+        RuntimeActor,
+        RuntimeActorType,
+        RuntimeChatType,
+        RuntimeOwnerType,
+        RuntimePlanKind,
+        RuntimePlanRef,
+        RuntimePrincipal,
+        RuntimeToolCall,
+        RuntimeToolExecutionRequest,
+    )
+
+    owner_id = (
+        group_id or normalized_session_id
+        if is_group
+        else normalized_user_id
+    )
+    return RuntimeToolExecutionRequest(
+        context=RequestRuntimeContext(
+            request_id=request_id,
+            principal=RuntimePrincipal(
+                platform=platform,
+                owner_type=(
+                    RuntimeOwnerType.GROUP
+                    if is_group
+                    else RuntimeOwnerType.USER
+                ),
+                owner_id=owner_id,
+            ),
+            session_id=normalized_session_id,
+            chat_type=(
+                RuntimeChatType.GROUP
+                if is_group
+                else RuntimeChatType.PRIVATE
+            ),
+            trace_id=trace_id,
+            run_id=run_id,
+            turn_id=request_id,
+            correlation_id=request_id,
+            actor=RuntimeActor(
+                RuntimeActorType.SYSTEM,
+                "scheduled-task",
+                parent_actor_id=normalized_user_id,
+            ),
+            message_id=request_id,
+            capabilities=frozenset({"tools"}),
+            plans=(
+                RuntimePlanRef(
+                    RuntimePlanKind.TOOL,
+                    f"tool-plan:{tool_plan_sha256}",
+                    tool_plan_sha256,
+                ),
+            ),
+            deadline_at=(
+                datetime.now(timezone.utc)
+                + timedelta(seconds=float(timeout_seconds))
+            ),
+        ),
+        tool_call=RuntimeToolCall(
+            call_id=f"tool-{uuid4().hex}",
+            name=name,
+            arguments=dict(args),
+        ),
+        execution_port_id=execution_port_id,
+        idempotency_key=str(idempotency_key or request_id),
+        timeout_seconds=float(timeout_seconds),
+    )
 
 
 async def execute_registered_tool(
@@ -44,8 +132,11 @@ async def execute_registered_tool(
     ContextVar 中生效。
     """
 
+    from core.agent_runtime import AgentRuntimeKind
+
+    runtime_kind = getattr(bridge, "runtime_kind", AgentRuntimeKind.KT)
     agent = getattr(bridge, "_agent", None)
-    if agent is None:
+    if runtime_kind is AgentRuntimeKind.KT and agent is None:
         raise RuntimeError("KT Agent 尚未初始化")
     name = str(tool_name or "").strip()
     if not name:
@@ -103,6 +194,16 @@ async def execute_registered_tool(
                 },
             )
     tool_plan.ensure_executable(name)
+    from core.tool_registration import TOOL_REGISTRATION_REGISTRY
+
+    registration = TOOL_REGISTRATION_REGISTRY.get(name)
+    execution_binding = (
+        registration.execution_binding
+        if registration is not None
+        else None
+    )
+    if execution_binding is None:
+        raise RuntimeError(f"工具 {name} 缺少确定性 execution binding")
 
     from core.agent_runtime.request_scope import runtime_context_scope
     from core.tool_execution_policy import tool_execution_scope
@@ -126,6 +227,8 @@ async def execute_registered_tool(
         prompt_key="",
         input_preview=f"{name} 直接工具步骤",
         meta={
+            "platform": platform,
+            "message_id": request_id,
             "tool_name": name,
             "workflow_idempotency_key": str(idempotency_key or ""),
             "tool_plan_sha256": tool_plan.sha256,
@@ -154,33 +257,62 @@ async def execute_registered_tool(
         "sender_name": "定时任务",
         "trace_id": resolved_trace_id,
         "run_id": run_handle.run_id,
+        "turn_id": request_id,
+        "correlation_id": request_id,
+        "actor_type": "system",
+        "actor_id": "scheduled-task",
+        "actor_parent_id": normalized_user_id,
+        "owner_type": "group" if is_group else "user",
+        "owner_id": (
+            group_id or normalized_session_id
+            if is_group
+            else normalized_user_id
+        ),
         "message_id": request_id,
         "workflow_idempotency_key": str(idempotency_key or ""),
     }
+    if runtime_kind is AgentRuntimeKind.NATIVE:
+        from bootstrap.native_tool_runtime import (
+            build_native_tool_execution_port,
+        )
+
+        execution_port = build_native_tool_execution_port()
+    else:
+        from nanobot_kt.tool_execution_adapter import (
+            KtRegisteredToolExecutionAdapter,
+        )
+
+        execution_port = KtRegisteredToolExecutionAdapter(agent)
     result: Any = None
     finish_status = "error"
     finish_error = ""
     try:
+        tool_request = _build_tool_execution_request(
+            request_id=request_id,
+            platform=platform,
+            normalized_session_id=normalized_session_id,
+            normalized_user_id=normalized_user_id,
+            group_id=group_id,
+            is_group=is_group,
+            trace_id=resolved_trace_id,
+            run_id=run_handle.run_id,
+            name=name,
+            args=args,
+            execution_port_id=execution_binding.port_id,
+            idempotency_key=idempotency_key,
+            tool_plan_sha256=tool_plan.sha256,
+            timeout_seconds=timeout_seconds,
+        )
         with (
             runtime_context_scope(runtime_context),
             tool_plan_scope(tool_plan),
             tool_execution_scope(request_id),
         ):
-            executor = agent.executor
-            job_id = await executor.submit(
-                name,
-                dict(args),
-                is_direct=True,
-            )
-            result = await executor.wait_for(
-                job_id,
-                timeout=float(timeout_seconds),
-            )
-            if result is None:
-                await executor.cancel(job_id)
-                raise TimeoutError("直接工具步骤执行超时")
-        finish_error = str(getattr(result, "error", "") or "")
-        exit_code = getattr(result, "exit_code", None)
+            result = await execution_port.execute(tool_request)
+        finish_error = (
+            result.error.message if result.error is not None else ""
+        )
+        exit_code = result.exit_code
         finish_status = (
             "success"
             if not finish_error and exit_code in {None, 0}
@@ -193,7 +325,7 @@ async def execute_registered_tool(
         RunTracer.finish_run(
             run_handle.run_id,
             status=finish_status,
-            output_preview=getattr(result, "output", ""),
+            output_preview=(result.output if result is not None else ""),
             error=finish_error,
             meta={
                 "tool_name": name,
@@ -206,38 +338,14 @@ async def execute_registered_tool(
         reset_runtime_correlation(correlation_tokens)
         reset_trace_context(trace_tokens)
 
-    tool_call_id = ""
-    try:
-        from core.database import SessionLocal, ToolCall
-
-        trace_db = SessionLocal()
-        try:
-            row = (
-                trace_db.query(ToolCall.tool_call_id)
-                .filter(
-                    ToolCall.run_id == run_handle.run_id,
-                    ToolCall.tool_name == name,
-                )
-                .order_by(
-                    ToolCall.started_at.desc(),
-                    ToolCall.tool_call_id.desc(),
-                )
-                .first()
-            )
-            if row is not None:
-                tool_call_id = str(row[0] or "")
-        finally:
-            trace_db.close()
-    except Exception:
-        pass
     return DirectToolExecutionResult(
-        output=getattr(result, "output", ""),
-        error=str(getattr(result, "error", "") or ""),
-        exit_code=getattr(result, "exit_code", None),
-        metadata=dict(getattr(result, "metadata", {}) or {}),
+        output=result.output,
+        error=(result.error.message if result.error is not None else ""),
+        exit_code=result.exit_code,
+        metadata=dict(result.metadata),
         trace_id=resolved_trace_id,
         run_id=run_handle.run_id,
-        tool_call_id=tool_call_id,
+        tool_call_id=result.tool_call_id,
     )
 
 

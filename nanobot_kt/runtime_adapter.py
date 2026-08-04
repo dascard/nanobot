@@ -1,14 +1,16 @@
-"""KT 1.3 Agent 到 Nanobot ``AgentRuntimePort`` 的兼容适配器。
+"""KT 1.4 Agent 到 Nanobot ``AgentRuntimePort`` 的公开 API 适配器。
 
-这里是允许了解 KT 对象结构、私有兼容字段和 monkey patch 安装方式的唯一
-边界。核心运行时合同不反向依赖本模块。
+核心运行时合同不反向依赖本模块；KT 对象只在这里转换为 Nanobot 的类型化
+Turn、事件、Conversation 与模型路由合同。
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
+from contextlib import nullcontext
+from dataclasses import replace
 from typing import Protocol
 
 from core.agent_runtime import (
@@ -21,30 +23,35 @@ from core.agent_runtime import (
     RuntimeLifecycleEvent,
     RuntimeLifecycleEventSink,
     RuntimeLifecycleState,
+    RuntimeCapabilities,
+    RuntimeCapability,
     RuntimeMessage,
     RuntimeModelRoute,
     RuntimePendingStateReset,
+    RuntimeRunError,
+    RuntimeRunEvent,
+    RuntimeRunEventHandler,
+    RuntimeRunStatus,
     RuntimeToolCall,
     RuntimeToolCallStatus,
     RuntimeToolPolicyStatus,
     RuntimeTurnKind,
+    RuntimeUsage,
+)
+from core.agent_runtime.event_stream import (
+    RuntimeRunEventEmitter,
+    relay_runtime_run_events,
 )
 from core.agent_runtime.lifecycle import RuntimeLifecycleMachine
+
+
+_OUTPUT_SIGNAL_END = object()
 
 
 class KtModelRouteApplier(Protocol):
     """由 composition root 注入的 KT Provider 路由应用器。"""
 
     def __call__(self, agent: object, route: RuntimeModelRoute) -> None: ...
-
-
-class KtOpenAITransportConfig(Protocol):
-    base_url: str
-    api_key: str
-    timeout: float
-    enable_thinking: object
-    provider_id: str
-    registry_provider: str
 
 
 def _member(value: object, name: str, default: object = None) -> object:
@@ -151,85 +158,8 @@ def _default_route_applier(agent: object, route: RuntimeModelRoute) -> None:
         llm.provider_name = route.provider_id
 
 
-def apply_kt_openai_model_route(
-    agent: object,
-    route: RuntimeModelRoute,
-    transport: KtOpenAITransportConfig,
-    *,
-    client_factory: Callable[..., object] | None = None,
-    tracer_installer: Callable[..., object] | None = None,
-) -> None:
-    """在 KT Adapter 边界内原子应用模型与 OpenAI-compatible 传输配置。"""
-
-    controller = getattr(agent, "controller", None)
-    llm = getattr(controller, "llm", None)
-    config = getattr(llm, "config", None)
-    if llm is None or config is None or not hasattr(config, "model"):
-        raise AgentRuntimeCapabilityError("KT LLM 缺少可配置模型连接")
-
-    config.model = route.model_id
-    if route.temperature is not None:
-        if not hasattr(config, "temperature"):
-            raise AgentRuntimeCapabilityError("KT LLM 不支持 temperature")
-        config.temperature = route.temperature
-    if route.max_tokens is not None:
-        if not hasattr(config, "max_tokens"):
-            raise AgentRuntimeCapabilityError("KT LLM 不支持 max_tokens")
-        config.max_tokens = route.max_tokens
-
-    if hasattr(llm, "extra_body"):
-        from core.model_route_options import apply_enable_thinking_to_payload
-
-        if getattr(llm, "extra_body", None) is None:
-            llm.extra_body = {}
-        apply_enable_thinking_to_payload(
-            llm.extra_body,
-            route.model_id,
-            transport.enable_thinking,
-        )
-
-    target_base_url = str(transport.base_url or "").rstrip("/")
-    target_api_key = str(transport.api_key or "")
-    target_timeout = float(transport.timeout)
-    current_base_url = str(getattr(llm, "base_url", "") or "").rstrip("/")
-    current_api_key = str(getattr(llm, "_api_key", "") or "")
-    current_timeout = float(getattr(llm, "_timeout", 120.0) or 120.0)
-    if (
-        (target_base_url and current_base_url != target_base_url)
-        or current_api_key != target_api_key
-        or current_timeout != target_timeout
-    ):
-        if client_factory is None:
-            from openai import AsyncOpenAI
-
-            client_factory = AsyncOpenAI
-
-        llm.base_url = target_base_url
-        llm._api_key = target_api_key
-        llm._timeout = target_timeout
-        llm._client = client_factory(
-            api_key=target_api_key,
-            base_url=target_base_url,
-            timeout=target_timeout,
-            max_retries=getattr(llm, "_max_retries", 3),
-            default_headers=getattr(llm, "_extra_headers", {}),
-        )
-    llm.provider_name = route.provider_id
-
-    if tracer_installer is None:
-        from core.llm_sdk_tracing import install_openai_chat_completion_tracer
-
-        tracer_installer = install_openai_chat_completion_tracer
-
-    tracer_installer(
-        llm,
-        provider=route.provider_id,
-        base_url=target_base_url,
-    )
-
-
-class Kt13RuntimeAdapter:
-    """把现有 KT Agent 包装成稳定端口，不拥有 Nanobot 业务策略。"""
+class KtRuntimeAdapter:
+    """把 KT Agent 包装成稳定端口，不拥有 Nanobot 业务策略。"""
 
     def __init__(
         self,
@@ -239,13 +169,22 @@ class Kt13RuntimeAdapter:
         route_applier: KtModelRouteApplier | None = None,
         event_sinks: tuple[RuntimeLifecycleEventSink, ...] = (),
         initially_started: bool | None = None,
+        output_sink: object | None = None,
     ) -> None:
         self._agent = agent
-        running = (
-            bool(getattr(agent, "_running", False))
-            if initially_started is None
-            else bool(initially_started)
-        )
+        self._output_sink = output_sink
+        if initially_started is None:
+            running_state = getattr(agent, "is_running", None)
+            if running_state is None:
+                raise AgentRuntimeCapabilityError(
+                    "KT Agent 缺少公开 is_running 状态",
+                    runtime_id=runtime_id,
+                )
+            running = bool(
+                running_state() if callable(running_state) else running_state
+            )
+        else:
+            running = bool(initially_started)
         self._lifecycle = RuntimeLifecycleMachine(
             runtime_id,
             initial_state=(
@@ -267,12 +206,20 @@ class Kt13RuntimeAdapter:
     def lifecycle_events(self) -> tuple[RuntimeLifecycleEvent, ...]:
         return self._lifecycle.events
 
+    @property
+    def runtime_capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities(
+            runtime_id=self.runtime_id,
+            supported=frozenset(RuntimeCapability),
+        )
+
     async def start(self) -> None:
         self._lifecycle.ensure(RuntimeLifecycleState.NEW)
         self._lifecycle.transition(RuntimeLifecycleState.STARTING)
         try:
-            self._configure_executor_boundary()
+            self._install_executor_tracing()
             await _await_call(self._agent, "start", runtime_id=self.runtime_id)
+            self._disable_framework_compaction()
         except Exception as exc:
             self._lifecycle.fail(type(exc).__name__)
             raise AgentRuntimeAdapterError(
@@ -281,13 +228,18 @@ class Kt13RuntimeAdapter:
             ) from exc
         self._lifecycle.transition(RuntimeLifecycleState.RUNNING)
 
-    def _configure_executor_boundary(self) -> None:
-        """集中安装 KT 1.3 executor 的安全与追踪兼容项。"""
+    def _disable_framework_compaction(self) -> None:
+        """Nanobot Prompt Runtime 独占上下文预算与压缩。"""
+
+        manager = getattr(self._agent, "compact_manager", None)
+        config = getattr(manager, "config", None)
+        if config is not None and hasattr(config, "enabled"):
+            config.enabled = False
+
+    def _install_executor_tracing(self) -> None:
+        """给公开 Executor 实例安装 Nanobot 追踪。"""
 
         executor = getattr(self._agent, "executor", None)
-        path_guard = getattr(executor, "_path_guard", None)
-        if path_guard is not None and hasattr(path_guard, "mode"):
-            path_guard.mode = "block"
         if executor is None:
             return
         try:
@@ -306,6 +258,7 @@ class Kt13RuntimeAdapter:
         }
         context = request.context
         principal = context.principal
+        actor = context.actor
         is_group = context.chat_type.value == "group"
         actor_user_id = str(attributes.get("actor_user_id", "") or "")
         group_id = principal.owner_id if is_group else str(
@@ -328,6 +281,15 @@ class Kt13RuntimeAdapter:
             "sender_name": str(attributes.get("sender_name", "") or ""),
             "trace_id": context.trace_id,
             "run_id": context.run_id,
+            "turn_id": context.turn_id,
+            "correlation_id": context.correlation_id,
+            "actor_type": actor.actor_type.value if actor is not None else "",
+            "actor_id": actor.actor_id if actor is not None else "",
+            "actor_parent_id": (
+                actor.parent_actor_id if actor is not None else ""
+            ),
+            "owner_type": principal.owner_type.value,
+            "owner_id": principal.owner_id,
             "message_id": context.message_id,
         }
 
@@ -364,16 +326,12 @@ class Kt13RuntimeAdapter:
 
     def _raw_messages(self) -> tuple[object, ...]:
         conversation = self._conversation()
-        get_messages = getattr(conversation, "get_messages", None)
-        if callable(get_messages):
-            messages = get_messages()
-        else:
-            to_messages = getattr(conversation, "to_messages", None)
-            if callable(to_messages):
-                messages = to_messages()
-            else:
-                # KT 1.3 兼容 fallback；私有访问被限制在本 Adapter 内。
-                messages = getattr(conversation, "_messages", ())
+        get_messages = _required_callable(
+            conversation,
+            "get_messages",
+            runtime_id=self.runtime_id,
+        )
+        messages = get_messages()
         if not isinstance(messages, Iterable) or isinstance(
             messages, (str, bytes, dict)
         ):
@@ -383,10 +341,10 @@ class Kt13RuntimeAdapter:
             )
         return tuple(messages)
 
-    async def execute_turn(self, request: AgentTurnRequest) -> AgentTurnResult:
+    async def run(self, request: AgentTurnRequest) -> AgentTurnResult:
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
-        from nanobot_kt.kt_adapter import create_user_event, process_event
         from core.agent_runtime.request_scope import runtime_context_scope
+        from kohakuterrarium.core.events import create_user_input_event
 
         runtime_context = self._request_context(request)
         event_context = {
@@ -398,11 +356,20 @@ class Kt13RuntimeAdapter:
 
             event = TriggerEvent(type="user_input", content=request.content)
         else:
-            event = create_user_event(request.content, **event_context)
+            event = create_user_input_event(request.content, **event_context)
         try:
             with runtime_context_scope(runtime_context):
-                raw_result = await process_event(self._agent, event)
+                inject_event = _required_callable(
+                    self._agent,
+                    "inject_event",
+                    runtime_id=self.runtime_id,
+                )
+                raw_result = inject_event(event)
+                if inspect.isawaitable(raw_result):
+                    raw_result = await raw_result
         except asyncio.CancelledError:
+            raise
+        except TimeoutError:
             raise
         except Exception as exc:
             raise AgentRuntimeExecutionError(
@@ -415,25 +382,162 @@ class Kt13RuntimeAdapter:
             tool_calls=self.inspect_tool_calls(),
         )
 
-    def replace_conversation(self, messages: tuple[RuntimeMessage, ...]) -> int:
-        self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
-        from nanobot_kt.kt_adapter import install_conversation_order_guard
+    def run_stream(
+        self,
+        request: AgentTurnRequest,
+    ) -> AsyncIterator[RuntimeRunEvent]:
+        stream_request = replace(request, stream=True)
+        return relay_runtime_run_events(
+            lambda handler: self.run_event(stream_request, handler)
+        )
 
-        install_conversation_order_guard(self._agent)
-        conversation = self._conversation()
-        clear = getattr(conversation, "clear", None)
-        append = getattr(conversation, "append", None)
-        raw_messages = getattr(conversation, "_messages", None)
-        if callable(clear):
-            clear(keep_system=False)
-        elif isinstance(raw_messages, list):
-            # KT 1.3 兼容 fallback；私有访问只允许留在本 Adapter。
-            raw_messages.clear()
-        else:
-            raise AgentRuntimeCapabilityError(
-                "KT conversation 缺少 clear 能力",
+    async def run_event(
+        self,
+        request: AgentTurnRequest,
+        handler: RuntimeRunEventHandler,
+    ) -> AgentTurnResult:
+        emitter = RuntimeRunEventEmitter(
+            request.context.execution_identity(),
+            handler,
+        )
+        await emitter.status_changed(RuntimeRunStatus.ACCEPTED)
+        await emitter.status_changed(RuntimeRunStatus.RUNNING)
+
+        signal_queue: asyncio.Queue[
+            tuple[str, dict[str, object]] | object
+        ] = asyncio.Queue()
+
+        def collect_signal(kind: str, payload: dict[str, object]) -> None:
+            signal_queue.put_nowait((kind, payload))
+
+        async def forward_signals() -> None:
+            while True:
+                signal = await signal_queue.get()
+                if signal is _OUTPUT_SIGNAL_END:
+                    return
+                kind, payload = signal
+                if kind == "text_delta":
+                    text = str(payload.get("text", "") or "")
+                    if text:
+                        await emitter.text_delta(text)
+                elif kind == "error":
+                    await emitter.error(
+                        RuntimeRunError(
+                            code=str(
+                                payload.get("code", "kt_runtime_error")
+                                or "kt_runtime_error"
+                            ),
+                            message=str(
+                                payload.get("message", "KT Runtime 输出错误")
+                                or "KT Runtime 输出错误"
+                            ),
+                            retryable=bool(payload.get("retryable", False)),
+                        )
+                    )
+
+        capture = getattr(self._output_sink, "capture_runtime_signals", None)
+        signal_scope = (
+            capture(collect_signal) if callable(capture) else nullcontext()
+        )
+        forward_task = asyncio.create_task(forward_signals())
+        result: AgentTurnResult | None = None
+        execution_failure: BaseException | None = None
+        forward_failure: BaseException | None = None
+        try:
+            with signal_scope:
+                result = await self.run(request)
+        except BaseException as exc:
+            execution_failure = exc
+        finally:
+            signal_queue.put_nowait(_OUTPUT_SIGNAL_END)
+            try:
+                await forward_task
+            except BaseException as exc:
+                forward_failure = exc
+
+        if execution_failure is not None:
+            if isinstance(execution_failure, asyncio.CancelledError):
+                await emitter.end(RuntimeRunStatus.CANCELLED)
+            elif isinstance(execution_failure, TimeoutError):
+                await emitter.error(
+                    RuntimeRunError(
+                        code="runtime_timeout",
+                        message=str(execution_failure) or "KT Runtime 执行超时",
+                        retryable=True,
+                    )
+                )
+                await emitter.end(RuntimeRunStatus.TIMED_OUT)
+            else:
+                await emitter.error(
+                    RuntimeRunError(
+                        code="runtime_execution_error",
+                        message=str(execution_failure)
+                        or type(execution_failure).__name__,
+                    )
+                )
+                await emitter.end(RuntimeRunStatus.FAILED)
+            raise execution_failure
+        if forward_failure is not None:
+            raise forward_failure
+        if result is None:
+            raise AgentRuntimeExecutionError(
+                "KT Agent 单轮执行未返回结果",
                 runtime_id=self.runtime_id,
             )
+
+        for tool_call in result.tool_calls:
+            await emitter.tool_activity(tool_call)
+        usage = self._read_runtime_usage()
+        if usage is not None:
+            await emitter.usage(usage)
+        await emitter.end(RuntimeRunStatus.SUCCEEDED)
+        return result
+
+    def _read_runtime_usage(self) -> RuntimeUsage | None:
+        controller = getattr(self._agent, "controller", None)
+        llm = getattr(controller, "llm", None)
+        raw = getattr(llm, "last_usage", None)
+        if raw is None:
+            return None
+
+        def nonnegative_int(name: str) -> int:
+            try:
+                return max(0, int(_member(raw, name, 0) or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        usage = RuntimeUsage(
+            input_tokens=nonnegative_int("prompt_tokens")
+            or nonnegative_int("input_tokens"),
+            output_tokens=nonnegative_int("completion_tokens")
+            or nonnegative_int("output_tokens"),
+            cached_input_tokens=nonnegative_int("cached_tokens")
+            or nonnegative_int("cached_input_tokens"),
+            reasoning_tokens=nonnegative_int("reasoning_tokens"),
+        )
+        if not usage.total_tokens and not usage.reasoning_tokens:
+            return None
+        return usage
+
+    async def execute_turn(self, request: AgentTurnRequest) -> AgentTurnResult:
+        """旧版兼容 façade；保留给尚未迁移的 Bridge 调用。"""
+
+        return await self.run(request)
+
+    def replace_conversation(self, messages: tuple[RuntimeMessage, ...]) -> int:
+        self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
+        conversation = self._conversation()
+        clear = _required_callable(
+            conversation,
+            "clear",
+            runtime_id=self.runtime_id,
+        )
+        append = _required_callable(
+            conversation,
+            "append",
+            runtime_id=self.runtime_id,
+        )
+        clear(keep_system=False)
         for message in messages:
             kwargs: dict[str, object] = {}
             if message.name:
@@ -444,60 +548,17 @@ class Kt13RuntimeAdapter:
                 kwargs["tool_calls"] = [
                     _tool_call_wire(tool_call) for tool_call in message.tool_calls
                 ]
-            if callable(append):
-                append(message.role, message.content, **kwargs)
-            elif isinstance(raw_messages, list):
-                raw_messages.append(
-                    {
-                        "role": message.role,
-                        "content": message.content,
-                        **kwargs,
-                    }
-                )
-            else:
-                raise AgentRuntimeCapabilityError(
-                    "KT conversation 缺少 append 能力",
-                    runtime_id=self.runtime_id,
-                )
+            append(message.role, message.content, **kwargs)
         return len(messages)
 
     def read_conversation(self) -> tuple[RuntimeMessage, ...]:
         return tuple(_runtime_message(message) for message in self._raw_messages())
 
     def clear_pending_events(self) -> RuntimePendingStateReset:
+        """公开注入路径不使用 KT Controller 的内部等待队列。"""
+
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
-        controller = getattr(self._agent, "controller", None)
-        if controller is None:
-            raise AgentRuntimeCapabilityError(
-                "KT Agent 缺少 controller",
-                runtime_id=self.runtime_id,
-            )
-
-        pending = getattr(controller, "_pending_events", None)
-        pending_count = len(pending) if isinstance(pending, list) else 0
-        if isinstance(pending, list):
-            pending.clear()
-
-        queued_count = 0
-        queue = getattr(controller, "_event_queue", None)
-        if isinstance(queue, asyncio.Queue):
-            while True:
-                try:
-                    queue.get_nowait()
-                    queued_count += 1
-                except asyncio.QueueEmpty:
-                    break
-
-        injections = getattr(controller, "_pending_injections", None)
-        injection_count = len(injections) if isinstance(injections, list) else 0
-        if isinstance(injections, list):
-            injections.clear()
-
-        return RuntimePendingStateReset(
-            pending_events=pending_count,
-            queued_events=queued_count,
-            pending_injections=injection_count,
-        )
+        return RuntimePendingStateReset()
 
     def install_tool_policy(self) -> RuntimeToolPolicyStatus:
         # 权限组件必须能在 Agent 启动前安装；RUNNING 仅用于兼容显式重验。
@@ -575,18 +636,12 @@ class Kt13RuntimeAdapter:
         registry = getattr(self._agent, "registry", None)
         if registry is None:
             return ()
-        raw: object = ()
-        list_tools = getattr(registry, "list_tools", None)
-        if callable(list_tools):
-            try:
-                raw = list_tools() or ()
-            except Exception:
-                raw = ()
-        if not raw:
-            # KT 1.3 兼容 fallback；私有访问只允许留在本 Adapter。
-            raw = getattr(registry, "_tools", {})
-            if isinstance(raw, dict):
-                raw = tuple(raw)
+        list_tools = _required_callable(
+            registry,
+            "list_tools",
+            runtime_id=self.runtime_id,
+        )
+        raw = list_tools() or ()
         if not isinstance(raw, Iterable) or isinstance(raw, (str, bytes)):
             return ()
         names: set[str] = set()
@@ -604,24 +659,23 @@ class Kt13RuntimeAdapter:
     def interrupt(self, *, reason: str = "") -> bool:
         del reason  # 原因由调用侧事件记录，不能注入 KT 控制流。
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
-        interrupt = getattr(self._agent, "interrupt", None)
-        if callable(interrupt):
-            interrupt()
-            return True
-        if hasattr(self._agent, "_interrupt_requested"):
-            # KT 旧版 fallback；私有访问被限制在本 Adapter 内。
-            self._agent._interrupt_requested = True
-            return True
-        return False
+        interrupt = _required_callable(
+            self._agent,
+            "interrupt",
+            runtime_id=self.runtime_id,
+        )
+        interrupt()
+        return True
 
 
-def build_kt13_runtime(
+def build_kt_runtime(
     agent: object,
     *,
     runtime_id: str | None = None,
     route_applier: KtModelRouteApplier | None = None,
     event_sinks: tuple[RuntimeLifecycleEventSink, ...] = (),
     initially_started: bool | None = None,
+    output_sink: object | None = None,
 ) -> AgentRuntimePort:
     """显式 composition factory；不读取或写入模块级单例。"""
 
@@ -629,20 +683,19 @@ def build_kt13_runtime(
     if not resolved_id:
         config = getattr(agent, "config", None)
         name = str(getattr(config, "name", "") or "").strip()
-        resolved_id = f"kt13:{name or 'agent'}"
-    return Kt13RuntimeAdapter(
+        resolved_id = f"kt:{name or 'agent'}"
+    return KtRuntimeAdapter(
         agent,
         runtime_id=resolved_id,
         route_applier=route_applier,
         event_sinks=event_sinks,
         initially_started=initially_started,
+        output_sink=output_sink,
     )
 
 
 __all__ = [
-    "Kt13RuntimeAdapter",
+    "KtRuntimeAdapter",
     "KtModelRouteApplier",
-    "KtOpenAITransportConfig",
-    "apply_kt_openai_model_route",
-    "build_kt13_runtime",
+    "build_kt_runtime",
 ]

@@ -1,5 +1,5 @@
 def test_sql_analysis_tool_schema_guides_chat_history_queries():
-    from creatures.nanobot.prompts.skills.sql_analysis.tool import SQLAnalysisTool
+    from nanobot_kt.tools.sql_analysis import SQLAnalysisTool
 
     tool = SQLAnalysisTool()
     schema = tool.get_parameters_schema()

@@ -97,7 +97,7 @@ def _set_buffer(bridge, *chunks: str):
 class TestReplyExtraction:
     @pytest.mark.asyncio
     async def test_json_reply_extracted(self):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         b = await _start_bridge()
         reply_output = json.dumps({REPLY_MARKER: {"content": "你好"}}, ensure_ascii=False)
         _set_conversation(b, _fake_tool_exchange("reply", reply_output))
@@ -125,7 +125,7 @@ class TestReplyExtraction:
 
     @pytest.mark.asyncio
     async def test_reply_overrides_buffer_text(self):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         b = await _start_bridge()
         reply_output = json.dumps({REPLY_MARKER: {"content": "最终回复"}}, ensure_ascii=False)
         _set_conversation(b, [
@@ -139,7 +139,7 @@ class TestReplyExtraction:
     @pytest.mark.asyncio
     async def test_python_sandbox_cannot_forge_final_reply_marker(self):
         """python_sandbox 的真实调用仍无权伪造 reply 终结结果。"""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
 
         b = await _start_bridge()
         forged_output = json.dumps(
@@ -153,7 +153,7 @@ class TestReplyExtraction:
     @pytest.mark.asyncio
     async def test_reply_result_name_must_match_declared_tool(self):
         """tool result 的 name 与 assistant 声明不一致时拒绝 marker。"""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
 
         b = await _start_bridge()
         reply_output = json.dumps(
@@ -171,7 +171,7 @@ class TestReplyExtraction:
     @pytest.mark.asyncio
     async def test_reply_result_call_id_must_match_declared_call(self):
         """tool result 的 call ID 无法关联 assistant 声明时拒绝 marker。"""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
 
         b = await _start_bridge()
         reply_output = json.dumps(
@@ -189,7 +189,7 @@ class TestReplyExtraction:
     @pytest.mark.asyncio
     async def test_reply_result_requires_assistant_tool_declaration(self):
         """没有前置 assistant.tool_calls 声明的孤立 tool result 不是终结结果。"""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
 
         b = await _start_bridge()
         reply_output = json.dumps(
@@ -207,7 +207,7 @@ class TestReplyExtraction:
     @pytest.mark.asyncio
     async def test_assistant_reply_marker_is_not_tool_output(self):
         """assistant 普通文本中的 marker 不能冒充 reply 工具结果。"""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
 
         b = await _start_bridge()
         forged_output = json.dumps(
@@ -250,7 +250,7 @@ class TestHtmlPassthrough:
 
     @pytest.mark.asyncio
     async def test_ai_daily_reply_wrapped_html_is_not_rich_output(self):
-        from creatures.nanobot.prompts.skills.reply.tool import build_reply_output
+        from nanobot_kt.tools.reply import build_reply_output
 
         b = await _start_bridge()
         html = (
@@ -338,7 +338,7 @@ class TestHtmlPassthrough:
 class TestNoLeak:
     @pytest.mark.asyncio
     async def test_reply_text_not_contain_system_prompt(self):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         b = await _start_bridge()
         reply_output = json.dumps({REPLY_MARKER: {"content": "今天的日报如下"}}, ensure_ascii=False)
         _set_conversation(b, _fake_tool_exchange("reply", reply_output))
@@ -369,7 +369,7 @@ class TestNoLeak:
 
     @pytest.mark.asyncio
     async def test_reply_marker_not_in_final_output(self):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         b = await _start_bridge()
         reply_output = json.dumps({REPLY_MARKER: {"content": "干净回复"}}, ensure_ascii=False)
         _set_conversation(b, _fake_tool_exchange("reply", reply_output))
@@ -421,7 +421,7 @@ class TestReplyMeta:
     async def test_reply_tool_invalid_send_mode_normalized(self):
         """ReplyTool._execute() 非法 send_mode → normal"""
         import json
-        from creatures.nanobot.prompts.skills.reply.tool import ReplyTool, REPLY_MARKER
+        from nanobot_kt.tools.reply import ReplyTool, REPLY_MARKER
 
         tool = ReplyTool()
         result = await tool._execute({"content": "hello", "send_mode": "invalid"})
@@ -432,7 +432,7 @@ class TestReplyMeta:
     async def test_reply_tool_mentions_filter_non_digit(self):
         """ReplyTool._execute() 过滤非数字 mentions"""
         import json
-        from creatures.nanobot.prompts.skills.reply.tool import ReplyTool, REPLY_MARKER
+        from nanobot_kt.tools.reply import ReplyTool, REPLY_MARKER
 
         tool = ReplyTool()
         result = await tool._execute({

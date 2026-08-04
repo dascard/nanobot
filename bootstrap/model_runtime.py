@@ -13,6 +13,10 @@ from core.model_provider.chat_runtime import (
     start_chat_completion_runtime,
     stop_chat_completion_runtime,
 )
+from core.model_provider.admin_runtime import (
+    start_model_provider_admin_runtime,
+    stop_model_provider_admin_runtime,
+)
 from core.model_provider.catalog_runtime import (
     start_model_catalog_runtime,
     stop_model_catalog_runtime,
@@ -46,6 +50,23 @@ _catalog_adapter: RegistryModelCatalogAdapter | None = None
 _task_adapter: RouteTaskModelAdapter | None = None
 
 
+class OptionalCodexCredentialStatusAdapter:
+    """Codex 可选依赖未安装时返回明确的未配置状态。"""
+
+    def resolve(self, driver_type: str) -> tuple[bool, str]:
+        if str(driver_type or "") != "codex":
+            return False, "none"
+        try:
+            from nanobot_kt.codex_oauth_adapter import codex_status
+        except ModuleNotFoundError as exc:
+            if not str(exc.name or "").startswith("kohakuterrarium"):
+                raise
+            return False, "none"
+        status = codex_status()
+        configured = bool(status.get("authenticated"))
+        return configured, "kt_oauth" if configured else "none"
+
+
 def start_model_runtime() -> None:
     global _catalog_adapter, _chat_adapter, _decision_adapter, _route_adapter
     global _task_adapter
@@ -61,18 +82,30 @@ def start_model_runtime() -> None:
     if any(adapter is not None for adapter in adapters):
         raise RuntimeError("模型运行时处于不一致的部分启动状态")
 
-    from nanobot_kt.codex_oauth_adapter import (
-        KtProviderCredentialStatusAdapter,
+    from core.model_provider.variation_resolver import (
+        ModelPresetVariationResolver,
     )
-    from nanobot_kt.model_provider_adapter import (
-        KtModelPresetResolverAdapter,
+    from nanobot_kt.model_provider_admin_adapter import (
+        KtModelProviderAdminAdapter,
     )
+    from nanobot_kt.codex_admin_adapter import KtCodexAdminAdapter
+    from bootstrap.media_tool_runtime import bind_media_tool_runtime
+    from bootstrap.news_search_runtime import bind_news_search_runtime
 
     validate_model_route_task_contracts()
-    start_model_preset_resolver_runtime(KtModelPresetResolverAdapter())
     try:
+        bind_media_tool_runtime()
+        bind_news_search_runtime()
+        start_model_preset_resolver_runtime(ModelPresetVariationResolver())
+        admin_adapter = KtModelProviderAdminAdapter()
+        codex_admin_adapter = KtCodexAdminAdapter()
+        start_model_provider_admin_runtime(
+            native_tools=admin_adapter,
+            connectivity=admin_adapter,
+            codex_admin=codex_admin_adapter,
+        )
         start_provider_credential_status_runtime(
-            KtProviderCredentialStatusAdapter()
+            OptionalCodexCredentialStatusAdapter()
         )
         route_adapter = ClassifierRouteModelAdapter()
         task_adapter = RouteTaskModelAdapter()
@@ -88,13 +121,19 @@ def start_model_runtime() -> None:
         start_decision_model_runtime(decision_adapter)
         start_model_catalog_runtime(catalog_adapter)
     except Exception:
+        from bootstrap.media_tool_runtime import clear_media_tool_runtime
+        from bootstrap.news_search_runtime import clear_news_search_runtime
+
         stop_model_catalog_runtime()
         stop_decision_model_runtime()
         stop_chat_completion_runtime()
         stop_task_runtime()
         stop_route_model_runtime()
         stop_provider_credential_status_runtime()
+        stop_model_provider_admin_runtime()
         stop_model_preset_resolver_runtime()
+        clear_news_search_runtime()
+        clear_media_tool_runtime()
         raise
     _route_adapter = route_adapter
     _task_adapter = task_adapter
@@ -106,13 +145,19 @@ def start_model_runtime() -> None:
 def stop_model_runtime() -> None:
     global _catalog_adapter, _chat_adapter, _decision_adapter, _route_adapter
     global _task_adapter
+    from bootstrap.media_tool_runtime import clear_media_tool_runtime
+    from bootstrap.news_search_runtime import clear_news_search_runtime
+
     stop_model_catalog_runtime()
     stop_decision_model_runtime()
     stop_chat_completion_runtime()
     stop_task_runtime()
     stop_route_model_runtime()
     stop_provider_credential_status_runtime()
+    stop_model_provider_admin_runtime()
     stop_model_preset_resolver_runtime()
+    clear_news_search_runtime()
+    clear_media_tool_runtime()
     _chat_adapter = None
     _decision_adapter = None
     _catalog_adapter = None

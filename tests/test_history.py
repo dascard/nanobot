@@ -505,7 +505,7 @@ async def test_bridge_injects_history_messages(db_session):
     agent = MagicMock()
     agent.controller = MagicMock()
     agent.controller.conversation = conv
-    agent._process_event = AsyncMock()
+    agent.inject_event = AsyncMock()
     agent.llm = MagicMock()
     bridge._agent = agent
 
@@ -542,25 +542,6 @@ async def test_bridge_injects_history_messages(db_session):
                      if call.args[0] in ("user", "assistant")]
     assert "user" in history_roles
     assert "assistant" in history_roles
-
-
-def test_bridge_event_state_clear_ignores_mock_queue():
-    """MagicMock 不是 asyncio.Queue，不能按真实队列 drain。"""
-    from types import SimpleNamespace
-    from unittest.mock import MagicMock
-    from nanobot_kt.bridge import NanobotBridge
-
-    bridge = NanobotBridge.__new__(NanobotBridge)
-    mock_queue = MagicMock()
-    bridge._agent = SimpleNamespace(controller=SimpleNamespace(
-        _pending_events=[],
-        _event_queue=mock_queue,
-        _pending_injections=[],
-    ))
-
-    bridge._clear_controller_event_state()
-
-    mock_queue.get_nowait.assert_not_called()
 
 
 def test_bridge_no_crash_on_empty_history():

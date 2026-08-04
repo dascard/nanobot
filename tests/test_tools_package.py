@@ -5,8 +5,8 @@ import pytest
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta, timezone
 
-from creatures.nanobot.prompts.skills.news_search import tool as news_tool
-from creatures.nanobot.prompts.skills.news_search.tool import (
+import nanobot_kt.tools.ai_daily as news_tool
+from nanobot_kt.tools.ai_daily import (
     AiDailyTool,
     WebTools,
     search_and_extract_news,
@@ -24,7 +24,7 @@ def test_web_search_mock(monkeypatch):
         {"title": "AI News 2", "href": "http://test2.com", "body": "Snippet 2"},
     ]
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+    with patch("nanobot_kt.tools.ai_daily.DDGS") as mock_ddgs:
         # Mock DDGS context manager and text method
         mock_instance = mock_ddgs.return_value.__enter__.return_value
         mock_instance.text.return_value = mock_results
@@ -37,8 +37,8 @@ def test_web_search_mock(monkeypatch):
 
 def test_web_extract_mock():
     """测试网页内容提取工具"""
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.trafilatura.fetch_url") as mock_fetch, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool.trafilatura.extract") as mock_extract:
+    with patch("nanobot_kt.tools.ai_daily.trafilatura.fetch_url") as mock_fetch, \
+         patch("nanobot_kt.tools.ai_daily.trafilatura.extract") as mock_extract:
         
         mock_fetch.return_value = "<html>content</html>"
         mock_extract.return_value = "Extracted Plain Text"
@@ -50,9 +50,9 @@ def test_web_extract_mock():
 
 def test_combined_news_tool():
     """测试组合出的新闻搜集工具逻辑"""
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.search") as mock_search, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.extract_web_content") as mock_extract, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen") as mock_deepen, \
+    with patch("nanobot_kt.tools.ai_daily.WebTools.search") as mock_search, \
+         patch("nanobot_kt.tools.ai_daily.WebTools.extract_web_content") as mock_extract, \
+         patch("nanobot_kt.tools.ai_daily._model_should_deepen") as mock_deepen, \
          patch("config.NEW_API_KEY", ""):
         
         mock_search.return_value = [
@@ -83,9 +83,9 @@ def test_combined_news_tool():
 
 def test_combined_news_tool_output_matches_qqbot_markdown_render_patterns():
     """输出应包含 QQbot 复杂 Markdown 检测所需的标题和表格。"""
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.search") as mock_search, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.extract_web_content") as mock_extract, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen") as mock_deepen, \
+    with patch("nanobot_kt.tools.ai_daily.WebTools.search") as mock_search, \
+         patch("nanobot_kt.tools.ai_daily.WebTools.extract_web_content") as mock_extract, \
+         patch("nanobot_kt.tools.ai_daily._model_should_deepen") as mock_deepen, \
          patch("config.NEW_API_KEY", ""):
 
         mock_search.return_value = [
@@ -131,7 +131,7 @@ def test_web_search_news_query_uses_daily_timelimit_and_merges_rss_with_web(monk
     ]
     monkeypatch.setattr(news_tool, "_fetch_multi_rss", lambda query=None, max_results=3: rss_results)
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+    with patch("nanobot_kt.tools.ai_daily.DDGS") as mock_ddgs:
         mock_instance = mock_ddgs.return_value.__enter__.return_value
         mock_instance.text.return_value = web_results
 
@@ -169,10 +169,10 @@ def test_parse_news_layout_payload_accepts_small_json_schema():
 
 
 def test_combined_news_tool_renders_fixed_html_template_from_structured_layout():
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.search") as mock_search, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.extract_web_content") as mock_extract, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen") as mock_deepen, \
-         patch("creatures.nanobot.prompts.skills.news_search.tool._summarize_news_layout") as mock_layout:
+    with patch("nanobot_kt.tools.ai_daily.WebTools.search") as mock_search, \
+         patch("nanobot_kt.tools.ai_daily.WebTools.extract_web_content") as mock_extract, \
+         patch("nanobot_kt.tools.ai_daily._model_should_deepen") as mock_deepen, \
+         patch("nanobot_kt.tools.ai_daily._summarize_news_layout") as mock_layout:
 
         mock_search.return_value = [
             {
@@ -227,7 +227,7 @@ def test_web_search_news_query_prefers_ddgs_news_results(monkeypatch):
         }
     ]
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+    with patch("nanobot_kt.tools.ai_daily.DDGS") as mock_ddgs:
         mock_instance = mock_ddgs.return_value.__enter__.return_value
         mock_instance.news.return_value = news_results
         mock_instance.text.return_value = text_results
@@ -269,7 +269,7 @@ def test_juya_rss_preserves_pubdate_for_freshness_filter():
     mock_resp.__enter__.return_value = mock_resp
     mock_resp.__exit__.return_value = False
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool._urlopen", return_value=mock_resp):
+    with patch("nanobot_kt.tools.ai_daily._urlopen", return_value=mock_resp):
         results = news_tool._fetch_juya_rss(max_results=3, target_date="2026-05-01")
 
     assert len(results) == 1
@@ -323,7 +323,7 @@ def test_web_search_latest_query_filters_out_obviously_stale_dated_results(monke
     ]
     monkeypatch.setattr(news_tool, "_fetch_multi_rss", lambda query=None, max_results=3: rss_results)
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+    with patch("nanobot_kt.tools.ai_daily.DDGS") as mock_ddgs:
         mock_instance = mock_ddgs.return_value.__enter__.return_value
         mock_instance.news.return_value = []
         mock_instance.text.return_value = []
@@ -370,8 +370,8 @@ def test_merge_layout_with_fallback_backfills_specific_models_and_more_items():
 
 
 def test_combined_news_tool_returns_unavailable_html_when_search_backends_fail():
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.search", return_value=[]), \
-         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen", return_value=(False, "backend-unavailable")):
+    with patch("nanobot_kt.tools.ai_daily.WebTools.search", return_value=[]), \
+         patch("nanobot_kt.tools.ai_daily._model_should_deepen", return_value=(False, "backend-unavailable")):
 
         final_report = search_and_extract_news("今天 AI 新闻")
 
@@ -384,7 +384,7 @@ def test_combined_news_tool_returns_unavailable_html_when_search_backends_fail()
 def test_ai_daily_tool_wraps_html_as_rich_output():
     html = '<!DOCTYPE html><html><body><article class="news-brief">AI 资讯</article></body></html>'
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline", return_value=html):
+    with patch("nanobot_kt.tools.ai_daily._run_news_daily_pipeline", return_value=html):
         result = run_async(AiDailyTool().execute({"query": "今天 AI 新闻"}))
 
     assert result.success
@@ -399,7 +399,7 @@ def test_ai_daily_tool_wraps_html_as_rich_output():
 @pytest.mark.asyncio
 async def test_reply_tool_preserves_plain_text_without_channel_normalization(monkeypatch):
     from core import text_style
-    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER, ReplyTool
+    from nanobot_kt.tools.reply import REPLY_MARKER, ReplyTool
 
     monkeypatch.setattr(text_style, "normalize_chat_reply_style", lambda _text: "被通道层改写了")
 
@@ -411,7 +411,7 @@ async def test_reply_tool_preserves_plain_text_without_channel_normalization(mon
 
 @pytest.mark.asyncio
 async def test_reply_tool_preserves_html_without_text_style_normalization():
-    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER, ReplyTool
+    from nanobot_kt.tools.reply import REPLY_MARKER, ReplyTool
 
     html = (
         '<!DOCTYPE html><html><head><style>'
@@ -441,8 +441,8 @@ def test_web_search_preserves_partial_results_when_later_variant_fails(monkeypat
         }
     ]
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool._fetch_multi_rss", return_value=rss_results), \
-         patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+    with patch("nanobot_kt.tools.ai_daily._fetch_multi_rss", return_value=rss_results), \
+         patch("nanobot_kt.tools.ai_daily.DDGS") as mock_ddgs:
         mock_instance = mock_ddgs.return_value.__enter__.return_value
         mock_instance.news.side_effect = RuntimeError("403 Ratelimit")
 

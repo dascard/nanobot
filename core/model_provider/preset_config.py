@@ -35,6 +35,15 @@ ROUTE_OVERRIDE_FIELDS = frozenset({
     "retry_policy",
     "driver_options",
 })
+VARIATION_PATCH_ROOTS = frozenset({
+    "temperature",
+    "reasoning_effort",
+    "service_tier",
+    "max_context",
+    "max_output",
+    "extra_body",
+    "retry_policy",
+})
 SENSITIVE_HEADER_NAMES = frozenset({
     "authorization",
     "proxy-authorization",
@@ -53,6 +62,34 @@ def validate_preset_id(preset_id: str) -> str:
             "长度不超过 64"
         )
     return value
+
+
+def validate_variation_patch_map(patch: dict[str, Any]) -> None:
+    """校验 Nanobot Preset 允许的 variation dotted-path。"""
+
+    target: dict[str, Any] = {}
+    for raw_path, value in patch.items():
+        path = str(raw_path or "").strip()
+        parts = path.split(".")
+        if not path or any(not part for part in parts):
+            raise ValueError("Variation patch path 无效")
+        if parts[0] not in VARIATION_PATCH_ROOTS:
+            raise ValueError(
+                f"不支持的 Variation patch 字段：{path}；"
+                f"允许：{', '.join(sorted(VARIATION_PATCH_ROOTS))}"
+            )
+        cursor = target
+        for part in parts[:-1]:
+            existing = cursor.get(part)
+            if existing is None:
+                existing = {}
+                cursor[part] = existing
+            if not isinstance(existing, dict):
+                raise ValueError(
+                    f"Variation patch 路径冲突：{path} 的 {part} 不是对象"
+                )
+            cursor = existing
+        cursor[parts[-1]] = value
 
 
 def preset_setting_key(preset_id: str) -> str:
@@ -1047,6 +1084,7 @@ __all__ = [
     "SENSITIVE_HEADER_NAMES",
     "MODEL_DEFAULT_SETTING_PREFIX",
     "ROUTE_OVERRIDE_FIELDS",
+    "VARIATION_PATCH_ROOTS",
     "build_request_preview",
     "get_effective_route_binding",
     "get_model_default",
@@ -1072,4 +1110,5 @@ __all__ = [
     "route_binding_setting_key",
     "route_binding_write",
     "validate_preset_id",
+    "validate_variation_patch_map",
 ]

@@ -1,0 +1,501 @@
+{
+  "schema_version": 1,
+  "context_defaults": {
+    "principal": {
+      "platform": "QQ",
+      "owner_type": "user",
+      "owner_id": "runtime-baseline-user"
+    },
+    "actor": {
+      "actor_type": "user",
+      "actor_id": "runtime-baseline-user",
+      "parent_actor_id": ""
+    },
+    "session_id": "private_runtime-baseline-user",
+    "chat_type": "private",
+    "capabilities": [
+      "memory",
+      "tools"
+    ],
+    "features": [
+      {
+        "name": "sandbox",
+        "enabled": false,
+        "source": "behavior_fixture"
+      }
+    ],
+    "plans": [
+      {
+        "kind": "prompt",
+        "identity": "prompt-plan:runtime-baseline",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "kind": "tool",
+        "identity": "tool-plan:runtime-baseline",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    ],
+    "deadline_at": "2026-08-03T12:00:30+08:00"
+  },
+  "route": {
+    "route_id": "reply:runtime-baseline",
+    "model_id": "fixture-model",
+    "provider_id": "fixture-provider",
+    "profile_id": "fixture-profile",
+    "temperature": 0.2,
+    "max_tokens": 512,
+    "timeout_seconds": 30,
+    "enable_thinking": "false"
+  },
+  "cases": [
+    {
+      "id": "ordinary_chat",
+      "runtime_id": "fake:ordinary-chat",
+      "context": {
+        "request_id": "req-ordinary",
+        "trace_id": "trace-ordinary",
+        "run_id": "run-ordinary",
+        "turn_id": "turn-ordinary",
+        "correlation_id": "correlation-ordinary",
+        "message_id": "message-ordinary"
+      },
+      "tool_names": [
+        "reply"
+      ],
+      "initial_messages": [
+        {
+          "role": "system",
+          "content": "你是中文助手。"
+        }
+      ],
+      "turns": [
+        {
+          "content": "你好",
+          "stream": false,
+          "kind": "user_input",
+          "event_attributes": [
+            {
+              "key": "entrypoint",
+              "value": "chat"
+            }
+          ],
+          "result": {
+            "raw_result": {
+              "type": "text",
+              "text": "你好，有什么可以帮你？"
+            },
+            "messages": [
+              {
+                "role": "system",
+                "content": "你是中文助手。"
+              },
+              {
+                "role": "user",
+                "content": "你好"
+              },
+              {
+                "role": "assistant",
+                "content": "你好，有什么可以帮你？"
+              }
+            ],
+            "tool_calls": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "streaming_chat",
+      "runtime_id": "fake:streaming-chat",
+      "context": {
+        "request_id": "req-stream",
+        "trace_id": "trace-stream",
+        "run_id": "run-stream",
+        "turn_id": "turn-stream",
+        "correlation_id": "correlation-stream",
+        "message_id": "message-stream"
+      },
+      "tool_names": [
+        "reply"
+      ],
+      "initial_messages": [
+        {
+          "role": "system",
+          "content": "你是中文助手。"
+        }
+      ],
+      "turns": [
+        {
+          "content": "请流式回答",
+          "stream": true,
+          "kind": "user_input",
+          "text_deltas": [
+            "流",
+            "式"
+          ],
+          "event_attributes": [
+            {
+              "key": "entrypoint",
+              "value": "chat_stream"
+            }
+          ],
+          "result": {
+            "raw_result": {
+              "events": [
+                {
+                  "status": "delta",
+                  "text": "流"
+                },
+                {
+                  "status": "delta",
+                  "text": "式"
+                },
+                {
+                  "status": "done",
+                  "reply": "流式回复"
+                }
+              ]
+            },
+            "messages": [
+              {
+                "role": "system",
+                "content": "你是中文助手。"
+              },
+              {
+                "role": "user",
+                "content": "请流式回答"
+              },
+              {
+                "role": "assistant",
+                "content": "流式回复"
+              }
+            ],
+            "tool_calls": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_round_tools",
+      "runtime_id": "fake:multi-round-tools",
+      "context": {
+        "request_id": "req-tools",
+        "trace_id": "trace-tools",
+        "run_id": "run-tools",
+        "turn_id": "turn-tools",
+        "correlation_id": "correlation-tools",
+        "message_id": "message-tools"
+      },
+      "tool_names": [
+        "reply",
+        "web_search"
+      ],
+      "initial_messages": [
+        {
+          "role": "system",
+          "content": "必要时使用工具，并最终调用 reply。"
+        }
+      ],
+      "turns": [
+        {
+          "content": "查一下基线消息",
+          "stream": false,
+          "kind": "user_input",
+          "event_attributes": [
+            {
+              "key": "entrypoint",
+              "value": "chat"
+            }
+          ],
+          "result": {
+            "raw_result": "tool-requested",
+            "messages": [
+              {
+                "role": "system",
+                "content": "必要时使用工具，并最终调用 reply。"
+              },
+              {
+                "role": "user",
+                "content": "查一下基线消息"
+              },
+              {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                  {
+                    "call_id": "call-search",
+                    "name": "web_search",
+                    "arguments": {
+                      "query": "基线消息"
+                    },
+                    "status": "requested"
+                  }
+                ]
+              }
+            ],
+            "tool_calls": [
+              {
+                "call_id": "call-search",
+                "name": "web_search",
+                "arguments": {
+                  "query": "基线消息"
+                },
+                "status": "requested"
+              }
+            ]
+          }
+        },
+        {
+          "content": {
+            "call_id": "call-search",
+            "result": {
+              "items": [
+                "结果一"
+              ]
+            }
+          },
+          "stream": false,
+          "kind": "continue",
+          "event_attributes": [
+            {
+              "key": "tool_name",
+              "value": "web_search"
+            }
+          ],
+          "result": {
+            "raw_result": "reply-requested",
+            "messages": [
+              {
+                "role": "system",
+                "content": "必要时使用工具，并最终调用 reply。"
+              },
+              {
+                "role": "user",
+                "content": "查一下基线消息"
+              },
+              {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                  {
+                    "call_id": "call-search",
+                    "name": "web_search",
+                    "arguments": {
+                      "query": "基线消息"
+                    },
+                    "status": "requested"
+                  }
+                ]
+              },
+              {
+                "role": "tool",
+                "name": "web_search",
+                "tool_call_id": "call-search",
+                "content": {
+                  "items": [
+                    "结果一"
+                  ]
+                }
+              },
+              {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                  {
+                    "call_id": "call-reply",
+                    "name": "reply",
+                    "arguments": {
+                      "text": "找到结果一。"
+                    },
+                    "status": "requested"
+                  }
+                ]
+              }
+            ],
+            "tool_calls": [
+              {
+                "call_id": "call-search",
+                "name": "web_search",
+                "arguments": {
+                  "query": "基线消息"
+                },
+                "status": "completed",
+                "result": {
+                  "items": [
+                    "结果一"
+                  ]
+                }
+              },
+              {
+                "call_id": "call-reply",
+                "name": "reply",
+                "arguments": {
+                  "text": "找到结果一。"
+                },
+                "status": "requested"
+              }
+            ]
+          }
+        },
+        {
+          "content": {
+            "call_id": "call-reply",
+            "result": "已发送"
+          },
+          "stream": false,
+          "kind": "continue",
+          "event_attributes": [
+            {
+              "key": "tool_name",
+              "value": "reply"
+            }
+          ],
+          "result": {
+            "raw_result": "completed",
+            "messages": [
+              {
+                "role": "system",
+                "content": "必要时使用工具，并最终调用 reply。"
+              },
+              {
+                "role": "user",
+                "content": "查一下基线消息"
+              },
+              {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                  {
+                    "call_id": "call-search",
+                    "name": "web_search",
+                    "arguments": {
+                      "query": "基线消息"
+                    },
+                    "status": "requested"
+                  }
+                ]
+              },
+              {
+                "role": "tool",
+                "name": "web_search",
+                "tool_call_id": "call-search",
+                "content": {
+                  "items": [
+                    "结果一"
+                  ]
+                }
+              },
+              {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                  {
+                    "call_id": "call-reply",
+                    "name": "reply",
+                    "arguments": {
+                      "text": "找到结果一。"
+                    },
+                    "status": "requested"
+                  }
+                ]
+              },
+              {
+                "role": "tool",
+                "name": "reply",
+                "tool_call_id": "call-reply",
+                "content": "已发送"
+              }
+            ],
+            "tool_calls": [
+              {
+                "call_id": "call-search",
+                "name": "web_search",
+                "arguments": {
+                  "query": "基线消息"
+                },
+                "status": "completed",
+                "result": {
+                  "items": [
+                    "结果一"
+                  ]
+                }
+              },
+              {
+                "call_id": "call-reply",
+                "name": "reply",
+                "arguments": {
+                  "text": "找到结果一。"
+                },
+                "status": "completed",
+                "result": "已发送"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "interrupted_stream",
+      "runtime_id": "fake:interrupted-stream",
+      "context": {
+        "request_id": "req-interrupt",
+        "trace_id": "trace-interrupt",
+        "run_id": "run-interrupt",
+        "turn_id": "turn-interrupt",
+        "correlation_id": "correlation-interrupt",
+        "message_id": "message-interrupt"
+      },
+      "tool_names": [
+        "reply"
+      ],
+      "initial_messages": [
+        {
+          "role": "system",
+          "content": "你是中文助手。"
+        }
+      ],
+      "turns": [
+        {
+          "content": "开始一个长回复",
+          "stream": true,
+          "kind": "user_input",
+          "text_deltas": [
+            "部分"
+          ],
+          "event_attributes": [
+            {
+              "key": "entrypoint",
+              "value": "chat_stream"
+            }
+          ],
+          "result": {
+            "raw_result": {
+              "events": [
+                {
+                  "status": "delta",
+                  "text": "部分"
+                }
+              ]
+            },
+            "messages": [
+              {
+                "role": "system",
+                "content": "你是中文助手。"
+              },
+              {
+                "role": "user",
+                "content": "开始一个长回复"
+              },
+              {
+                "role": "assistant",
+                "content": "部分"
+              }
+            ],
+            "tool_calls": []
+          }
+        }
+      ],
+      "interrupt_reason": "client_disconnect"
+    }
+  ]
+}

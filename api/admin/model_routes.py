@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 import json
 import logging
 import time
@@ -408,14 +409,12 @@ def _validated_native_tools(values: list[str] | None) -> list[str]:
         if str(value or "").strip()
     ))
     try:
-        from kohakuterrarium.studio.identity.llm_native_tools import (
-            list_native_tools,
-        )
+        from core.model_provider.admin_runtime import list_provider_native_tools
 
         known = {
             str(item.get("name") or "")
-            for item in list_native_tools()
-            if isinstance(item, dict)
+            for item in list_provider_native_tools()
+            if isinstance(item, Mapping)
         }
     except Exception:
         known = {"image_gen"}
@@ -1338,9 +1337,9 @@ def edit_model_route(
     # 清除 image_summary 30s route cache（invalidate 后清理，避免并发重建旧缓存）
     if db_key == "sticker_describe":
         try:
-            from creatures.nanobot.prompts.skills.image_summary.tool import _get_image_summary_route
-            if hasattr(_get_image_summary_route, "_cache"):
-                delattr(_get_image_summary_route, "_cache")
+            from core.media_tool_runtime import get_image_summary_provider
+
+            get_image_summary_provider().invalidate_route_cache()
         except Exception as e:
             logger.warning("[models] clear image_summary route cache failed: %s", e, exc_info=True)
     # 不返回 written，只返回 api_key_configured
@@ -1380,12 +1379,14 @@ async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(ver
 
     if route_key in _CHAT_ROUTES:
         from clients.new_api_client import NewAPIClient
-        from nanobot_kt.bridge import _registry_provider_for_route
+        from clients.classifier_client import registry_provider_for_route
         model = route.get("model", "") or route_key
         client = NewAPIClient(
             api_key=route["api_key"],
             base_url=route["base_url"],
-            registry_provider=_registry_provider_for_route(route.get("provider_id", "")),
+            registry_provider=registry_provider_for_route(
+                route.get("provider_id", "")
+            ),
         )
         try:
             with llm_trace_scope(source="admin"):
@@ -1479,7 +1480,7 @@ def get_resolved_route(route_key: str, _auth=Depends(verify_admin)):
     用于排查"页面显示 newapi，实际走不走 newapi"一类问题。
     """
     from clients.classifier_client import resolve_model_route
-    from nanobot_kt.bridge import _registry_provider_for_route
+    from clients.classifier_client import registry_provider_for_route
 
     try:
         route_key = resolve_model_route_key(route_key)
@@ -1528,7 +1529,9 @@ def get_resolved_route(route_key: str, _auth=Depends(verify_admin)):
             "route_completion_supported",
             True,
         ),
-        "registry_provider": _registry_provider_for_route(route.get("provider_id", "")),
+        "registry_provider": registry_provider_for_route(
+            route.get("provider_id", "")
+        ),
         "base_url": route.get("base_url", ""),
         "model": route.get("model", ""),
         "api_key_configured": bool(route.get("api_key")),

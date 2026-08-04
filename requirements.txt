@@ -4,10 +4,11 @@ sqlalchemy>=2.0.0
 croniter>=2.0.0
 requests>=2.31.0
 pydantic>=2.0.0
+jsonschema>=4.20.0
 aiohttp>=3.8.0
 httpx>=0.27.0
 cryptography>=43.0.0
-./vendor/KohakuTerrarium
+python-dotenv>=1.0.0
 duckduckgo-search
 feedparser>=6.0.11
 trafilatura>=2.0.0

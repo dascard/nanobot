@@ -1,6 +1,8 @@
 """Codex 多账号加密存储、轮询与账号绑定 Provider 测试。"""
 
 import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from kohakuterrarium.llm.codex_auth import CodexTokens
@@ -190,13 +192,129 @@ async def test_account_bound_provider_never_starts_interactive_oauth(
         model="gpt-5.6-codex",
         account_id=account.id,
     )
-    rebuilt = []
-    monkeypatch.setattr(provider, "_rebuild_client", lambda: rebuilt.append(True))
+    rebuild = AsyncMock(return_value=None)
+    monkeypatch.setattr(provider, "_rebuild_codex_connection", rebuild)
 
     await provider.ensure_authenticated()
     clone = provider.with_model("gpt-5.6-codex-mini")
 
-    assert rebuilt == [True]
-    assert provider._tokens is tokens
+    rebuild.assert_awaited_once()
+    assert provider.is_authenticated is True
     assert clone.codex_account_id == account.id
-    assert clone._tokens is tokens
+    assert clone.is_authenticated is True
+
+
+@pytest.mark.asyncio
+async def test_account_bound_provider_uses_public_chat_contract(
+    db_session,
+    monkeypatch,
+):
+    from kohakuterrarium.llm.base import ToolSchema
+
+    class _Stream:
+        def __init__(self):
+            self.events = iter(
+                [
+                    SimpleNamespace(
+                        type="response.output_text.delta",
+                        delta="收到",
+                    ),
+                    SimpleNamespace(
+                        type="response.output_item.done",
+                        item=SimpleNamespace(
+                            type="function_call",
+                            call_id="call-reply",
+                            name="reply",
+                            arguments='{"content":"收到"}',
+                        ),
+                    ),
+                    SimpleNamespace(
+                        type="response.completed",
+                        response=SimpleNamespace(
+                            usage=SimpleNamespace(
+                                input_tokens=12,
+                                output_tokens=3,
+                                total_tokens=15,
+                                input_tokens_details=SimpleNamespace(
+                                    cached_tokens=4,
+                                ),
+                            ),
+                        ),
+                    ),
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self.events)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    account = create_codex_account("公开合同账号", db=db_session)
+    tokens = _tokens("public-contract")
+    save_codex_account_tokens(account.id, tokens, db=db_session)
+    monkeypatch.setattr(
+        "nanobot_kt.codex_accounts.load_codex_account_tokens",
+        lambda _account_id: tokens,
+    )
+    create_response = AsyncMock(return_value=_Stream())
+    client_kwargs = []
+
+    def build_client(**kwargs):
+        client_kwargs.append(kwargs)
+
+        async def close():
+            await kwargs["http_client"].aclose()
+
+        return SimpleNamespace(
+            responses=SimpleNamespace(create=create_response),
+            close=close,
+        )
+
+    monkeypatch.setattr(
+        "nanobot_kt.codex_provider.AsyncOpenAI",
+        build_client,
+    )
+    provider = AccountBoundCodexOAuthProvider(
+        model="gpt-5.6-codex",
+        account_id=account.id,
+        reasoning_effort="high",
+    )
+
+    chunks = [
+        chunk
+        async for chunk in provider.chat(
+            [
+                {"role": "system", "content": "系统规则"},
+                {"role": "user", "content": "你好"},
+            ],
+            tools=[
+                ToolSchema(
+                    name="reply",
+                    description="回复",
+                    parameters={"type": "object", "properties": {}},
+                )
+            ],
+        )
+    ]
+
+    assert chunks == ["收到"]
+    assert client_kwargs[0]["api_key"] == tokens.access_token
+    request = create_response.await_args.kwargs
+    assert request["model"] == "gpt-5.6-codex"
+    assert request["instructions"] == "系统规则"
+    assert request["tools"][0]["name"] == "reply"
+    assert request["reasoning"] == {"effort": "high"}
+    assert [(call.id, call.name) for call in provider.last_tool_calls] == [
+        ("call-reply", "reply")
+    ]
+    assert provider.last_usage == {
+        "prompt_tokens": 12,
+        "completion_tokens": 3,
+        "total_tokens": 15,
+        "cached_tokens": 4,
+    }
+    await provider.close()

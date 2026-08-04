@@ -429,16 +429,15 @@ _DESCRIPTORS = (
         verification_suites=("architecture",),
     ),
     _descriptor(
-        "kt_vendor",
+        "kt_compatibility",
         owner="nanobot_kt",
         source_globs=(
-            "patches/kohaku/**",
-            "scripts/apply_kohaku_patches.sh",
-            "vendor/KohakuTerrarium",
+            "nanobot_kt/**",
+            "requirements-kt.in",
+            "requirements-kt.lock",
         ),
-        affected_services=FIXED_RUNTIME_SERVICES,
-        artifacts=("nanobot-runtime",),
         verification_suites=("backend-full", "kt-compatibility"),
+        owns_production_paths=False,
     ),
     _descriptor(
         "evaluation",

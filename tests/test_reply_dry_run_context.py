@@ -11,7 +11,7 @@ from tests.async_helpers import run_async
 @pytest.mark.asyncio
 async def test_public_reply_execute_records_sticker_outside_dry_run(monkeypatch):
     """普通请求仍应通过公开 ReplyTool.execute 记录贴纸使用。"""
-    from creatures.nanobot.prompts.skills.reply.tool import ReplyTool
+    from nanobot_kt.tools.reply import ReplyTool
 
     recorded = []
     monkeypatch.setattr(
@@ -92,7 +92,7 @@ def test_bridge_dry_run_reaches_public_reply_execute(
     monkeypatch,
 ):
     """Bridge 的 dry-run 必须抑制公开 ReplyTool.execute 的贴纸计数副作用。"""
-    from creatures.nanobot.prompts.skills.reply.tool import ReplyTool
+    from nanobot_kt.tools.reply import ReplyTool
     from core.session_guidance import SessionGuidanceResolution
     from nanobot_kt.bridge import NanobotBridge
 
@@ -179,7 +179,7 @@ def test_bridge_dry_run_reaches_public_reply_execute(
             },
         ])
 
-    mock_agent._process_event = AsyncMock(side_effect=fake_process)
+    mock_agent.inject_event = AsyncMock(side_effect=fake_process)
     MockAgent.return_value = mock_agent
 
     async def _run():

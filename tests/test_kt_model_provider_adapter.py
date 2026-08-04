@@ -48,6 +48,10 @@ class _ProviderDouble:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.prompt_cache_key = None
+        self.emergency_drop_callbacks = []
+
+    def on_emergency_drop(self, callback):
+        self.emergency_drop_callbacks.append(callback)
 
 
 @pytest.mark.parametrize(
@@ -97,10 +101,9 @@ def test_create_kt_provider_uses_driver_specific_constructor(
 
     provider = create_kt_provider(transport)
 
-    assert provider._nanobot_profile_id == f"{driver_type}-preset"
-    assert provider._nanobot_provider_id == f"{driver_type}-provider"
+    assert provider.nanobot_profile_id == f"{driver_type}-preset"
+    assert provider.nanobot_provider_id == f"{driver_type}-provider"
     assert provider.provider_name == driver_type
-    assert provider._profile_max_context == 128000
     assert provider.kwargs["model"] == f"{driver_type}-model"
     assert provider.kwargs["max_retries"] == 4
     if driver_type == "openai":
@@ -119,10 +122,13 @@ def test_apply_preset_route_replaces_all_kt_provider_references(
     monkeypatch,
 ):
     current = SimpleNamespace(
-        _emergency_drop_callbacks=["recover"],
         prompt_cache_key="prompt-cache",
     )
-    replacement = SimpleNamespace(prompt_cache_key=None)
+    replacement_callbacks = []
+    replacement = SimpleNamespace(
+        prompt_cache_key=None,
+        on_emergency_drop=replacement_callbacks.append,
+    )
     registered = []
 
     class _Registry:
@@ -139,16 +145,18 @@ def test_apply_preset_route_replaces_all_kt_provider_references(
         llm=current,
         subagent_manager=SimpleNamespace(llm=current),
         registry=_Registry(),
+        compact_manager=SimpleNamespace(
+            config=SimpleNamespace(enabled=True),
+        ),
     )
     monkeypatch.setattr(
         "nanobot_kt.model_provider_adapter.create_kt_provider",
-        lambda _transport_value: replacement,
+        lambda _transport_value, *, model_id=None: replacement,
     )
     monkeypatch.setattr(
         "kohakuterrarium.builtins.tool_catalog.get_builtin_tool",
         lambda name: {"name": name},
     )
-    legacy_calls = []
     route = RuntimeModelRoute(
         route_id="reply",
         model_id="gpt-5.4",
@@ -166,17 +174,14 @@ def test_apply_preset_route_replaces_all_kt_provider_references(
         agent,
         route,
         transport,
-        legacy_openai_applier=lambda *args, **kwargs: legacy_calls.append(
-            (args, kwargs)
-        ),
     )
 
-    assert legacy_calls == []
-    assert agent.controller.llm is replacement
-    assert agent.llm is replacement
-    assert agent.subagent_manager.llm is replacement
-    assert replacement._emergency_drop_callbacks == ["recover"]
+    assert agent.controller.llm.provider is replacement
+    assert agent.llm is agent.controller.llm
+    assert agent.subagent_manager.llm is agent.controller.llm
+    assert len(replacement_callbacks) == 1
     assert replacement.prompt_cache_key == "prompt-cache"
+    assert agent.compact_manager.config.enabled is False
     assert registered == [{"name": "image_gen"}]
 
 

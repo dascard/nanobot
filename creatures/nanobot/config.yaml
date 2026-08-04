@@ -13,8 +13,8 @@ controller:
   tool_format: native            # Re-enabling native function calling per user request
   include_tools_in_prompt: false # 工具清单以 API tools schema 为准，避免 prompt 与硬裁剪不一致
   include_hints_in_prompt: false # 不注入 KT 默认工具说明；reply/no_reply 契约由项目 prompt 控制
-  max_messages: 50               # auto-compaction threshold
-  ephemeral: false              # 桥接层已手动清理 conversation，KT 不需再清（会删掉 reply 工具输出）
+  max_messages: 0                # 历史和上下文裁剪由 Nanobot Prompt Runtime 统一管理
+  ephemeral: false               # 桥接层每轮重建 conversation，KT 不再额外清理
 
 # ── Memory ──
 memory:

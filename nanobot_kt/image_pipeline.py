@@ -19,7 +19,7 @@ from typing import Any
 
 from PIL import Image, ImageOps
 
-from kohakuterrarium.llm.message import ImagePart
+from nanobot_kt.optional_message_api import ImagePart
 
 from config import (
     IMAGE_PREPROCESS_ALLOW_LOCAL_FILES,

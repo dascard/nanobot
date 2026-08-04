@@ -153,7 +153,7 @@ def _resolve_reply_test_prompt_settings(body: ReplyTestRunRequest) -> tuple[str,
 async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
     from core.database import AgentRun, LLMApiRequestLog, ReplyContractCheckLog
     from core.tracing import new_trace_id
-    from nanobot_kt.bridge import get_bridge
+    from core.agent_runtime.gateway import get_agent_gateway
 
     trace_id = new_trace_id()
     session_id = (body.session_id or f"reply-test-{uuid.uuid4().hex[:8]}").strip()
@@ -174,7 +174,7 @@ async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
         "enable_reply_contract_retry": enable_retry,
         "dry_run": bool(body.dry_run),
     }
-    bridge = get_bridge()
+    bridge = get_agent_gateway()
     content = await bridge.handle_message(
         body.message,
         user_id=sender_id,

@@ -886,7 +886,7 @@ def test_memory_query_degraded_contract_without_reranker(db_session):
 
 
 def test_memory_query_tool_schema_supports_all_source():
-    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from nanobot_kt.tools.memory_query import MemoryQueryTool
 
     schema = MemoryQueryTool().get_parameters_schema()
 
@@ -896,7 +896,7 @@ def test_memory_query_tool_schema_supports_all_source():
 def test_memory_query_tool_search_routes_all_sources_through_memory_rag(db_session, monkeypatch):
     from core import database
     import core.memory_rag as memory_rag
-    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from nanobot_kt.tools.memory_query import MemoryQueryTool
 
     calls = []
 
@@ -958,7 +958,7 @@ def test_memory_query_tool_search_routes_all_sources_through_memory_rag(db_sessi
 
 def test_memory_query_rag_index_probe_ignores_active_fallback_rows(db_session):
     from core.semantic.adapters import SemanticChunk
-    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from nanobot_kt.tools.memory_query import MemoryQueryTool
 
     _index_chunks(db_session, [SemanticChunk(
         source_type="memory_digest",
@@ -986,7 +986,7 @@ def test_memory_query_tool_blocks_when_reranker_required_unavailable(db_session,
     from core.semantic.adapters import chunks_from_memory_digest
     from core.semantic.indexer import upsert_semantic_chunks
     from core.semantic.provider_factory import get_reranker_provider
-    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from nanobot_kt.tools.memory_query import MemoryQueryTool
 
     digest = _digest_row(501, cards=[
         {"title": "端口", "text": "KohakuVQ 端口冲突。", "keywords": ["KohakuVQ", "端口"]},

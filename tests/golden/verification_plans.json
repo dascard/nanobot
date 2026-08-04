@@ -9,7 +9,7 @@
         "registries": {
           "build_profile": {
             "generation": 1,
-            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+            "sha256": "e045d16eeb53186e88a64157e520b0be21e2bf8c55faa516ba4139eac9afdf1e"
           },
           "feature_lifecycle": {
             "generation": 1,
@@ -17,11 +17,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "fa5bf6352e383f2a21c54a48a3be4f237e5c9de1bc5535a98b1b33f34d87929b"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "e5c76012ffdd368d644f08f1f5b87dbf16204e0e3b7a713f9d4c181a4f37cdf4"
           }
         },
         "release_impact": {
@@ -31,11 +31,11 @@
           "descriptor_ids": [
             "documentation"
           ],
-          "sha256": "6be177c454dc58dcc5d096e98db06965cd46c01e524aec29f1be67f1597eba7a"
+          "sha256": "b8a06ad067cc120cf708852e86290ae23ba522a50c29b34a0ff44abae7c9dc89"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "9ce5e798d07ebe32a84357dbe24adc60937edaf223497d910fa3ff12657a3041",
+        "sha256": "a1af90c8025a18e8ee6b24808535bbfb4690bb65093cc02fba26034d4e8ce3e2",
         "suites": [
           {
             "allow_skip": false,
@@ -79,7 +79,7 @@
               "database_schema",
               "sandbox",
               "news_resources",
-              "kt_vendor",
+              "kt_compatibility",
               "tests"
             ],
             "cleanup": [
@@ -100,7 +100,6 @@
             "owner": "quality.backend",
             "preconditions": [
               "python_dependencies_installed",
-              "kt_compatibility_patch_applied",
               "prompt_runtime_acceptance_copy_initialized",
               "proxy_environment_cleared"
             ],
@@ -154,7 +153,7 @@
         "registries": {
           "build_profile": {
             "generation": 1,
-            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+            "sha256": "e045d16eeb53186e88a64157e520b0be21e2bf8c55faa516ba4139eac9afdf1e"
           },
           "feature_lifecycle": {
             "generation": 1,
@@ -162,11 +161,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "fa5bf6352e383f2a21c54a48a3be4f237e5c9de1bc5535a98b1b33f34d87929b"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "e5c76012ffdd368d644f08f1f5b87dbf16204e0e3b7a713f9d4c181a4f37cdf4"
           }
         },
         "release_impact": {
@@ -178,11 +177,11 @@
             "prompt_runtime",
             "runtime"
           ],
-          "sha256": "2c5a39ae65592876ad2385274c6be1a9719234519f0a810f83e8572eb279b893"
+          "sha256": "db9349bf49ab7292af1d6a0d01c62d84ac5cdb4795021e3e8a8e51511acba500"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "4667183ea79e43077bc69da042822e5ad60b78f5255e22db7d6e8fe63ff85c5a",
+        "sha256": "3b401a255dcc4cd97d587c74aa2e35c8d2c1e15c19dfe55cd64d6e9125bcb9e0",
         "suites": [
           {
             "allow_skip": false,
@@ -212,7 +211,6 @@
               "artifact_profile:nanobot-runtime",
               "dependency:backend-full",
               "dependency:database-migration-check",
-              "dependency:kt-compatibility",
               "dependency:prompt-runtime-audit",
               "release_impact:runtime"
             ],
@@ -405,7 +403,7 @@
               "database_schema",
               "sandbox",
               "news_resources",
-              "kt_vendor",
+              "kt_compatibility",
               "tests"
             ],
             "cleanup": [
@@ -426,7 +424,6 @@
             "owner": "quality.backend",
             "preconditions": [
               "python_dependencies_installed",
-              "kt_compatibility_patch_applied",
               "prompt_runtime_acceptance_copy_initialized",
               "proxy_environment_cleared"
             ],
@@ -525,44 +522,6 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "kt_vendor"
-            ],
-            "cleanup": [
-              "none_required"
-            ],
-            "command": [
-              "python",
-              "-m",
-              "pytest",
-              "tests/test_kt_framework.py",
-              "tests/test_kt_integration.py",
-              "tests/test_agent_runtime_gateway.py",
-              "-v"
-            ],
-            "environment": [],
-            "output_artifacts": [
-              "captured_stdout"
-            ],
-            "owner": "nanobot_kt",
-            "preconditions": [
-              "python_dependencies_installed",
-              "kt_compatibility_patch_applied"
-            ],
-            "required_credentials": [],
-            "security_level": "local",
-            "selection_reasons": [
-              "artifact_profile:nanobot-runtime"
-            ],
-            "success_criteria": [
-              "exit_code_zero"
-            ],
-            "suite_id": "kt-compatibility",
-            "timeout_seconds": 420,
-            "working_directory": "."
-          },
-          {
-            "allow_skip": false,
-            "applicable_release_impacts": [
               "prompt_runtime"
             ],
             "cleanup": [
@@ -638,7 +597,7 @@
         "registries": {
           "build_profile": {
             "generation": 1,
-            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+            "sha256": "e045d16eeb53186e88a64157e520b0be21e2bf8c55faa516ba4139eac9afdf1e"
           },
           "feature_lifecycle": {
             "generation": 1,
@@ -646,11 +605,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "fa5bf6352e383f2a21c54a48a3be4f237e5c9de1bc5535a98b1b33f34d87929b"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "e5c76012ffdd368d644f08f1f5b87dbf16204e0e3b7a713f9d4c181a4f37cdf4"
           }
         },
         "release_impact": {
@@ -662,11 +621,11 @@
             "news_resources",
             "runtime"
           ],
-          "sha256": "de5944fcdcfb3574ac73d657f86cbe10c4e3ba5e9ca55765a55f50e3ef62e517"
+          "sha256": "dedf27b7900a494356ccece712ae1967781906a5d6e4fdce6331ecf8bdca915a"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "a65e1231889ce071b912c6e93128728b1e7746f87ab0d362a4b642a158caec94",
+        "sha256": "68638c78c8fcb2c3ba2604cd010da3b3cf675e98559cfe4b9d0cb756716f83c0",
         "suites": [
           {
             "allow_skip": false,
@@ -696,7 +655,6 @@
               "artifact_profile:nanobot-runtime",
               "dependency:backend-full",
               "dependency:database-migration-check",
-              "dependency:kt-compatibility",
               "dependency:prompt-runtime-audit",
               "release_impact:runtime"
             ],
@@ -927,7 +885,7 @@
               "database_schema",
               "sandbox",
               "news_resources",
-              "kt_vendor",
+              "kt_compatibility",
               "tests"
             ],
             "cleanup": [
@@ -948,7 +906,6 @@
             "owner": "quality.backend",
             "preconditions": [
               "python_dependencies_installed",
-              "kt_compatibility_patch_applied",
               "prompt_runtime_acceptance_copy_initialized",
               "proxy_environment_cleared"
             ],
@@ -1047,44 +1004,6 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "kt_vendor"
-            ],
-            "cleanup": [
-              "none_required"
-            ],
-            "command": [
-              "python",
-              "-m",
-              "pytest",
-              "tests/test_kt_framework.py",
-              "tests/test_kt_integration.py",
-              "tests/test_agent_runtime_gateway.py",
-              "-v"
-            ],
-            "environment": [],
-            "output_artifacts": [
-              "captured_stdout"
-            ],
-            "owner": "nanobot_kt",
-            "preconditions": [
-              "python_dependencies_installed",
-              "kt_compatibility_patch_applied"
-            ],
-            "required_credentials": [],
-            "security_level": "local",
-            "selection_reasons": [
-              "artifact_profile:nanobot-runtime"
-            ],
-            "success_criteria": [
-              "exit_code_zero"
-            ],
-            "suite_id": "kt-compatibility",
-            "timeout_seconds": 420,
-            "working_directory": "."
-          },
-          {
-            "allow_skip": false,
-            "applicable_release_impacts": [
               "prompt_runtime"
             ],
             "cleanup": [
@@ -1161,7 +1080,7 @@
         "registries": {
           "build_profile": {
             "generation": 1,
-            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+            "sha256": "e045d16eeb53186e88a64157e520b0be21e2bf8c55faa516ba4139eac9afdf1e"
           },
           "feature_lifecycle": {
             "generation": 1,
@@ -1169,11 +1088,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "fa5bf6352e383f2a21c54a48a3be4f237e5c9de1bc5535a98b1b33f34d87929b"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "e5c76012ffdd368d644f08f1f5b87dbf16204e0e3b7a713f9d4c181a4f37cdf4"
           }
         },
         "release_impact": {
@@ -1185,11 +1104,11 @@
             "database_schema",
             "runtime"
           ],
-          "sha256": "89477563a6a57b2257322919df4b904b1a651d8491e4b370a8cac0100d386848"
+          "sha256": "48df31f2f8adba910e7d29b31bef88b70ebd240127dece22c92efda8ff49f099"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "2eaee10c0da6e961cf4d7b241d359e35cd93fe5a396e3bfe1250a933ded951ec",
+        "sha256": "3df1f59fd16f95999115cb5b73db6e0ff056b7d0b1d56fdeca5d0ad866e12193",
         "suites": [
           {
             "allow_skip": false,
@@ -1219,7 +1138,6 @@
               "artifact_profile:nanobot-runtime",
               "dependency:backend-full",
               "dependency:database-migration-check",
-              "dependency:kt-compatibility",
               "dependency:prompt-runtime-audit",
               "release_impact:runtime"
             ],
@@ -1422,7 +1340,7 @@
               "database_schema",
               "sandbox",
               "news_resources",
-              "kt_vendor",
+              "kt_compatibility",
               "tests"
             ],
             "cleanup": [
@@ -1443,7 +1361,6 @@
             "owner": "quality.backend",
             "preconditions": [
               "python_dependencies_installed",
-              "kt_compatibility_patch_applied",
               "prompt_runtime_acceptance_copy_initialized",
               "proxy_environment_cleared"
             ],
@@ -1544,44 +1461,6 @@
           {
             "allow_skip": false,
             "applicable_release_impacts": [
-              "kt_vendor"
-            ],
-            "cleanup": [
-              "none_required"
-            ],
-            "command": [
-              "python",
-              "-m",
-              "pytest",
-              "tests/test_kt_framework.py",
-              "tests/test_kt_integration.py",
-              "tests/test_agent_runtime_gateway.py",
-              "-v"
-            ],
-            "environment": [],
-            "output_artifacts": [
-              "captured_stdout"
-            ],
-            "owner": "nanobot_kt",
-            "preconditions": [
-              "python_dependencies_installed",
-              "kt_compatibility_patch_applied"
-            ],
-            "required_credentials": [],
-            "security_level": "local",
-            "selection_reasons": [
-              "artifact_profile:nanobot-runtime"
-            ],
-            "success_criteria": [
-              "exit_code_zero"
-            ],
-            "suite_id": "kt-compatibility",
-            "timeout_seconds": 420,
-            "working_directory": "."
-          },
-          {
-            "allow_skip": false,
-            "applicable_release_impacts": [
               "prompt_runtime"
             ],
             "cleanup": [
@@ -1658,7 +1537,7 @@
         "registries": {
           "build_profile": {
             "generation": 1,
-            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+            "sha256": "e045d16eeb53186e88a64157e520b0be21e2bf8c55faa516ba4139eac9afdf1e"
           },
           "feature_lifecycle": {
             "generation": 1,
@@ -1666,11 +1545,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "fa5bf6352e383f2a21c54a48a3be4f237e5c9de1bc5535a98b1b33f34d87929b"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "e5c76012ffdd368d644f08f1f5b87dbf16204e0e3b7a713f9d4c181a4f37cdf4"
           }
         },
         "release_impact": {
@@ -1684,13 +1563,13 @@
             "runtime",
             "sandbox"
           ],
-          "sha256": "49c5d0c2cc626b31f39e762380557e1a42e536fd02b8197cba974b55a825f71d"
+          "sha256": "80282d9e520f34016861504c04ef4a94c365af09d5876a978292244e8ad2d91d"
         },
         "required_credentials": [
           "docker_host_access"
         ],
         "schema_version": 1,
-        "sha256": "a3a4380108707371f5d6d47007f1fc29e0781bb8c2e570fd6bddba5fb76be53d",
+        "sha256": "d10d4e01accb36eb46d50b6ddf882b155a5dbe13920c25ae40815ffab59682b4",
         "suites": [
           {
             "allow_skip": false,
@@ -1805,7 +1684,7 @@
               "database_schema",
               "sandbox",
               "news_resources",
-              "kt_vendor",
+              "kt_compatibility",
               "tests"
             ],
             "cleanup": [
@@ -1826,7 +1705,6 @@
             "owner": "quality.backend",
             "preconditions": [
               "python_dependencies_installed",
-              "kt_compatibility_patch_applied",
               "prompt_runtime_acceptance_copy_initialized",
               "proxy_environment_cleared"
             ],
@@ -1960,7 +1838,7 @@
         "registries": {
           "build_profile": {
             "generation": 1,
-            "sha256": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160"
+            "sha256": "e045d16eeb53186e88a64157e520b0be21e2bf8c55faa516ba4139eac9afdf1e"
           },
           "feature_lifecycle": {
             "generation": 1,
@@ -1968,11 +1846,11 @@
           },
           "release_impact": {
             "generation": 1,
-            "sha256": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9"
+            "sha256": "fa5bf6352e383f2a21c54a48a3be4f237e5c9de1bc5535a98b1b33f34d87929b"
           },
           "verification_suite": {
             "generation": 1,
-            "sha256": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+            "sha256": "e5c76012ffdd368d644f08f1f5b87dbf16204e0e3b7a713f9d4c181a4f37cdf4"
           }
         },
         "release_impact": {
@@ -1983,11 +1861,11 @@
           "descriptor_ids": [
             "webui"
           ],
-          "sha256": "14b94643ed7cd34bc05f01c4e928f23edaff2b118cf696cf81df933cfff3d976"
+          "sha256": "50a044e8acb457b7cb250aa8749db32113d9bbf494948e8d20c108cb50d1685a"
         },
         "required_credentials": [],
         "schema_version": 1,
-        "sha256": "416259c38480339f4dec0bb9baf7224119f45e4e111052779cb93bb61d71f935",
+        "sha256": "6b833496981a15646690a542fb7040013b0fee430a39912ba18ebd12a5761674",
         "suites": [
           {
             "allow_skip": false,
@@ -2069,7 +1947,7 @@
               "database_schema",
               "sandbox",
               "news_resources",
-              "kt_vendor",
+              "kt_compatibility",
               "tests"
             ],
             "cleanup": [
@@ -2090,7 +1968,6 @@
             "owner": "quality.backend",
             "preconditions": [
               "python_dependencies_installed",
-              "kt_compatibility_patch_applied",
               "prompt_runtime_acceptance_copy_initialized",
               "proxy_environment_cleared"
             ],
@@ -2112,10 +1989,10 @@
     }
   ],
   "registries": {
-    "build_profile": "1a70e8254fac3abce4a3e21e82a63e2dc6427184e61942c3fd71917027b2e160",
+    "build_profile": "e045d16eeb53186e88a64157e520b0be21e2bf8c55faa516ba4139eac9afdf1e",
     "feature_lifecycle": "0dbd2174ded5449951384b994b12aa8bccdf70e321013330fa92f5a621caf31a",
-    "release_impact": "94a629b166b56212b44a49d16dc5ca13d6ad10efc1cefe39d624e1137b00c7b9",
-    "verification_suite": "4bce102c7db05ba10f314c484e8ffdc48510bbc40db9bea969f0806b12e68fb9"
+    "release_impact": "fa5bf6352e383f2a21c54a48a3be4f237e5c9de1bc5535a98b1b33f34d87929b",
+    "verification_suite": "e5c76012ffdd368d644f08f1f5b87dbf16204e0e3b7a713f9d4c181a4f37cdf4"
   },
   "schema_version": 1
 }

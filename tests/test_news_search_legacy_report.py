@@ -59,7 +59,7 @@ if not payload["has_report"] or any(payload["loaded"].values()):
 
 def test_tool_reexports_legacy_report_helpers():
     from creatures.nanobot.prompts.skills.news_search import legacy_report
-    from creatures.nanobot.prompts.skills.news_search import tool
+    import nanobot_kt.tools.ai_daily as tool
 
     names = [
         "TRUSTED_NEWS_DOMAINS",
@@ -107,7 +107,7 @@ parsed = module._parse_news_layout_payload(
     '{"title":"AI 今日速报","summary":"OpenAI 发布新模型","highlights":["GPT-5 API 降价"]}'
 )
 runtime_modules = [
-    "creatures.nanobot.prompts.skills.news_search.tool",
+    "nanobot_kt.tools.ai_daily",
     "duckduckgo_search",
     "trafilatura",
     "kohakuterrarium.modules.tool.base",
@@ -143,7 +143,7 @@ if payload["title"] != "AI 今日速报" or any(payload["loaded"].values()):
     assert payload["title"] == "AI 今日速报"
     assert payload["summary"] == "OpenAI 发布新模型"
     assert payload["loaded"] == {
-        "creatures.nanobot.prompts.skills.news_search.tool": False,
+        "nanobot_kt.tools.ai_daily": False,
         "duckduckgo_search": False,
         "trafilatura": False,
         "kohakuterrarium.modules.tool.base": False,

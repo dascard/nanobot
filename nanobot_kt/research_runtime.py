@@ -53,8 +53,8 @@ class _KtResearchBudgetPlugin(BasePlugin):
 class KtResearchRuntime:
     """把单次 ``NanobotBridge`` 暴露为研究任务所需的窄接口。"""
 
-    def __init__(self) -> None:
-        self._bridge = NanobotBridge()
+    def __init__(self, *, bridge: NanobotBridge | None = None) -> None:
+        self._bridge = bridge or NanobotBridge()
 
     async def start(self) -> None:
         await self._bridge.start()

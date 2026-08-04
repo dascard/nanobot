@@ -357,13 +357,12 @@ _VERIFICATION_SUITES = (
             "database_schema",
             "sandbox",
             "news_resources",
-            "kt_vendor",
+            "kt_compatibility",
             "tests",
         ),
         command=("python", "-m", "pytest", "tests/", "-v"),
         preconditions=(
             "python_dependencies_installed",
-            "kt_compatibility_patch_applied",
             "prompt_runtime_acceptance_copy_initialized",
             "proxy_environment_cleared",
         ),
@@ -533,7 +532,7 @@ _VERIFICATION_SUITES = (
     _suite(
         "kt-compatibility",
         owner="nanobot_kt",
-        release_impacts=("kt_vendor",),
+        release_impacts=("kt_compatibility",),
         command=(
             "python",
             "-m",
@@ -545,10 +544,9 @@ _VERIFICATION_SUITES = (
         ),
         preconditions=(
             "python_dependencies_installed",
-            "kt_compatibility_patch_applied",
+            "kt_optional_dependency_installed",
         ),
         timeout_seconds=420,
-        artifact_profiles=("nanobot-runtime",),
         dependencies=("architecture",),
     ),
     _suite(

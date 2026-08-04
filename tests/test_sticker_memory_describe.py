@@ -57,18 +57,21 @@ def test_safe_parse_sticker_summary_falls_back_to_raw_text():
 def test_describe_sticker_with_qwen_uses_raw_text_fallback_and_tags(monkeypatch):
     from core.sticker_memory import describe_sticker_with_qwen
     from core.llm_trace_context import get_llm_trace_vars
-    from creatures.nanobot.prompts.skills.image_summary import tool as image_tool
+    import core.media_tool_runtime as media_runtime
 
     seen_sources = []
 
-    def fake_call_qwen(self, files, focus):
-        seen_sources.append(get_llm_trace_vars()[2])
-        return "猫猫疑惑问号脸，适合表示不理解。"
+    class FakeSummaryProvider:
+        def summarize(self, files, focus):
+            assert files == ("https://example.com/cat.png",)
+            assert "聊天表情包" in focus
+            seen_sources.append(get_llm_trace_vars()[2])
+            return "猫猫疑惑问号脸，适合表示不理解。"
 
     monkeypatch.setattr(
-        image_tool.ImageSummaryTool,
-        "_call_qwen",
-        fake_call_qwen,
+        media_runtime,
+        "get_image_summary_provider",
+        lambda: FakeSummaryProvider(),
     )
 
     payload = describe_sticker_with_qwen("https://example.com/cat.png")

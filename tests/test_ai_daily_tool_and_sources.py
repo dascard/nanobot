@@ -21,8 +21,8 @@ def _news_item(title, source_name, group="core_provider", url=None, summary="摘
 
 
 def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
-    from creatures.nanobot.prompts.skills.news_search.tool import AiDailyTool
+    import nanobot_kt.tools.ai_daily as news_tool
+    from nanobot_kt.tools.ai_daily import AiDailyTool
     from core.tool_registry import TOOL_METADATA
 
     calls = []
@@ -36,7 +36,7 @@ def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
         to_thread_calls.append((func, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline", fake_daily)
+    monkeypatch.setattr("nanobot_kt.tools.ai_daily._run_news_daily_pipeline", fake_daily)
     monkeypatch.setattr(news_tool.asyncio, "to_thread", fake_to_thread)
 
     ai_daily = AiDailyTool()
@@ -61,7 +61,7 @@ def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
 
 
 def test_ai_daily_tool_returns_fallback_html_when_pipeline_empty(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     monkeypatch.setattr(news_tool, "_run_news_daily_pipeline", lambda *args, **kwargs: "")
 
@@ -80,7 +80,7 @@ def test_ai_daily_tool_returns_fallback_html_when_pipeline_empty(monkeypatch):
 
 
 def test_ai_daily_tool_returns_fallback_html_when_pipeline_plain_text(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     monkeypatch.setattr(news_tool, "_run_news_daily_pipeline", lambda *args, **kwargs: "plain text")
 

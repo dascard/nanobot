@@ -10,8 +10,20 @@ class _FakeConversation:
     def __init__(self):
         self._messages = [SimpleNamespace(role="system", content="旧 system")]
 
-    def append(self, role, content):
-        self._messages.append(SimpleNamespace(role=role, content=content))
+    def append(self, role, content, **kwargs):
+        self._messages.append(
+            SimpleNamespace(role=role, content=content, **kwargs)
+        )
+
+    def clear(self, keep_system=True):
+        if keep_system:
+            self._messages = [
+                message
+                for message in self._messages
+                if getattr(message, "role", "") == "system"
+            ]
+        else:
+            self._messages = []
 
     def get_messages(self):
         return list(self._messages)
@@ -60,7 +72,7 @@ def _append_reply_exchange(
     *,
     call_id: str,
 ) -> None:
-    from creatures.nanobot.prompts.skills.reply.tool import build_reply_output
+    from nanobot_kt.tools.reply import build_reply_output
 
     conversation._messages.extend([
         SimpleNamespace(
@@ -843,7 +855,7 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     agent = SimpleNamespace(
         controller=SimpleNamespace(conversation=conversation),
         registry=SimpleNamespace(_tools={"reply": object(), "no_reply": object()}),
-        _process_event=fake_process_event,
+        inject_event=fake_process_event,
         executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
     )
     bridge._agent = agent
@@ -1093,7 +1105,7 @@ async def test_bridge_engine_v2_maps_private_runtime_metadata(
     bridge._agent = SimpleNamespace(
         controller=SimpleNamespace(conversation=_FakeConversation()),
         registry=SimpleNamespace(_tools={"reply": object(), "no_reply": object()}),
-        _process_event=fake_process_event,
+        inject_event=fake_process_event,
         executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
     )
 
@@ -1311,7 +1323,7 @@ async def test_guidance_db_failure_stops_before_prompt_compile_and_model(
     bridge._agent = SimpleNamespace(
         controller=SimpleNamespace(conversation=_FakeConversation()),
         registry=SimpleNamespace(_tools={"reply": object(), "no_reply": object()}),
-        _process_event=AsyncMock(side_effect=AssertionError("模型事件不得执行")),
+        inject_event=AsyncMock(side_effect=AssertionError("模型事件不得执行")),
         executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
     )
     called = {
@@ -1426,7 +1438,7 @@ async def test_bridge_engine_v2_fails_fast_when_prompt_audit_fails(monkeypatch, 
     bridge._agent = SimpleNamespace(
         controller=SimpleNamespace(conversation=conversation),
         registry=SimpleNamespace(_tools={"reply": object(), "no_reply": object()}),
-        _process_event=fake_process_event,
+        inject_event=fake_process_event,
         executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
     )
 
@@ -1493,7 +1505,7 @@ async def test_bridge_engine_v2_ignores_fallback_v1_policy_when_audit_fails(monk
     bridge._agent = SimpleNamespace(
         controller=SimpleNamespace(conversation=_FakeConversation()),
         registry=SimpleNamespace(_tools={"reply": object(), "no_reply": object()}),
-        _process_event=fake_process_event,
+        inject_event=fake_process_event,
         executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
     )
 
@@ -1569,7 +1581,7 @@ async def test_bridge_tool_plan_does_not_mutate_registry_tools(monkeypatch, db_s
     bridge._agent = SimpleNamespace(
         controller=SimpleNamespace(conversation=conversation),
         registry=registry,
-        _process_event=fake_process_event,
+        inject_event=fake_process_event,
         executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
     )
 

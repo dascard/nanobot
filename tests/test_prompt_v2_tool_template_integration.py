@@ -317,7 +317,7 @@ def test_ai_daily_digest_and_image_internal_prompts_use_v2_templates(tmp_path, m
     monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
 
-    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool, _build_multimodal_content
+    from nanobot_kt.tools.image_summary import ImageSummaryTool, _build_multimodal_content
     from creatures.nanobot.prompts.skills.news_search.prompts import build_evidence_prompt, get_system_prompt
 
     assert get_system_prompt() == "V2 DAILY DIGEST SYSTEM"
@@ -338,7 +338,7 @@ def test_ai_daily_digest_and_image_internal_prompts_use_v2_templates(tmp_path, m
 
     assert ImageSummaryTool._system_prompt() == "V2 IMAGE SYSTEM"
     monkeypatch.setattr(
-        "creatures.nanobot.prompts.skills.image_summary.tool.prepare_image_parts",
+        "nanobot_kt.tools.image_summary.prepare_image_parts",
         lambda *args, **kwargs: [],
     )
     image_content = _build_multimodal_content(["https://example.com/a.png"], "OCR")

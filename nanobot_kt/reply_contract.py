@@ -7,17 +7,17 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterator
 
+from core.tool_contracts.reply import (
+    ALLOWED_SEND_MODES,
+    REPLY_MARKER,
+)
+from core.tool_contracts.rich_output import (
+    RICH_OUTPUT_MARKER,
+    RICH_REPORT_HTML_MARKERS,
+    RICH_REPORT_TOOLS,
+    build_rich_output,
+)
 
-ALLOWED_SEND_MODES = frozenset({"normal", "quote", "mention", "quote_and_mention"})
-RICH_OUTPUT_MARKER = "NANOBOT_RICH_OUTPUT"
-RICH_REPORT_TOOLS = {
-    "ai_daily": "ai_daily",
-    "group_analysis": "group_analysis",
-}
-RICH_REPORT_HTML_MARKERS = {
-    "ai_daily": "news-brief",
-    "group_analysis": "group-analysis-report",
-}
 
 
 @dataclass(frozen=True)
@@ -165,12 +165,7 @@ def normalize_send_mode(value: Any) -> str:
 
 
 def _reply_marker() -> str:
-    try:
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
-
-        return REPLY_MARKER
-    except Exception:
-        return "NANOBOT_REPLY_OUTPUT"
+    return REPLY_MARKER
 
 
 def _clean_mentions(raw: Any) -> list[str]:
@@ -230,30 +225,8 @@ def extract_reply_tool_output(messages: list[Any]) -> ReplyToolExtraction:
     return ReplyToolExtraction()
 
 
-def build_rich_output(html: str, *, report_kind: str) -> str:
-    """构造与 reply marker 分离的富 HTML 终结 envelope。"""
-
-    kind = str(report_kind or "").strip()
-    if kind not in RICH_REPORT_TOOLS:
-        raise ValueError(f"Unsupported rich report kind: {kind}")
-    content = str(html or "").strip()
-    if not content:
-        raise ValueError("Rich terminal HTML must not be empty")
-    return json.dumps(
-        {
-            RICH_OUTPUT_MARKER: {
-                "version": 1,
-                "report_kind": kind,
-                "content_type": "text/html",
-                "html": content,
-            },
-        },
-        ensure_ascii=False,
-    )
-
-
 def build_rich_tool_result(html: str, *, report_kind: str) -> Any:
-    from kohakuterrarium.modules.tool.base import ToolResult
+    from nanobot_kt.optional_tool_api import ToolResult
 
     return ToolResult(
         output=build_rich_output(html, report_kind=report_kind),

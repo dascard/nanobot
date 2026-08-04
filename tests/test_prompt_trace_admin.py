@@ -158,6 +158,20 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         assert run_meta["session_guidance_chars"] == len(guidance_body)
         assert run_meta["session_guidance_sha256"] == "c" * 64
         assert guidance_body not in run_row.meta_json
+        ledger_rows = (
+            db.query(database.RunLedgerEventRow)
+            .order_by(database.RunLedgerEventRow.sequence.asc())
+            .all()
+        )
+        assert [row.event_type for row in ledger_rows] == [
+            "run.accepted",
+            "run.status_changed",
+            "run.terminated",
+        ]
+        assert ledger_rows[1].previous_event_sha256 == ledger_rows[0].event_sha256
+        assert ledger_rows[2].previous_event_sha256 == ledger_rows[1].event_sha256
+        assert "你好" not in ledger_rows[0].payload_json
+        assert "回复" not in ledger_rows[2].payload_json
     finally:
         db.close()
 
@@ -378,6 +392,14 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
         model="model-a",
         input_preview="输入",
     )
+    RunTracer.update_prompt_source(
+        run.run_id,
+        prompt_source=effective_v2_json["prompt_source"],
+        prompt_runtime_path=effective_v2_json["prompt_runtime_path"],
+        prompt_default_path=effective_v2_json["prompt_default_path"],
+        prompt_sha256=effective_v2_json["prompt_sha256"],
+        prompt_template_resolutions=template_resolutions,
+    )
     tool_id = ToolTracer.start_tool_call("trace-admin", run.run_id, "reply", {"text": "ok"})
     ToolTracer.finish_tool_call(tool_id, status="error", error="boom")
     ReplyContractTracer.record_check(
@@ -433,14 +455,86 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
 
     detail_resp = client.get(f"/api/v1/admin/agent-runs/{run.run_id}", headers=auth_header)
     assert detail_resp.status_code == 200, detail_resp.text
-    assert detail_resp.json()["run"]["prompt_source"] == "Legacy runtime prompt"
-    assert detail_resp.json()["run"]["prompt_runtime_path"] == "/runtime/prompt.md"
-    assert detail_resp.json()["run"]["prompt_default_path"] == "/default/prompt.md"
-    assert detail_resp.json()["run"]["prompt_sha256"] == "c" * 64
+    assert detail_resp.json()["run"]["prompt_source"] == effective_v2_json[
+        "prompt_source"
+    ]
+    assert detail_resp.json()["run"]["prompt_runtime_path"] == (
+        effective_v2_json["prompt_runtime_path"]
+    )
+    assert detail_resp.json()["run"]["prompt_default_path"] == (
+        effective_v2_json["prompt_default_path"]
+    )
+    assert detail_resp.json()["run"]["prompt_sha256"] == effective_v2_json[
+        "prompt_sha256"
+    ]
+    assert detail_resp.json()["ledger"]["available"] is True
+    assert detail_resp.json()["ledger"]["projection_complete"] is True
+    assert detail_resp.json()["ledger"]["projection"]["status"] == "failed"
+    assert detail_resp.json()["ledger"]["projection"]["event_count"] == 5
+    assert detail_resp.json()["ledger"]["projection"]["context_manifest"][
+        "prompt_sha256"
+    ] == effective_v2_json["prompt_sha256"]
+    assert detail_resp.json()["ledger"]["projection"]["context_manifest"][
+        "prompt_resolution_sha256"
+    ]
+    assert detail_resp.json()["ledger"]["readiness"] == {
+        "run_id": run.run_id,
+        "projection_consistent": True,
+        "projection_complete": True,
+        "reason_codes": [],
+        "legacy_status": "failed",
+        "ledger_status": "failed",
+        "legacy_terminal": True,
+        "ledger_terminal": True,
+        "accepted_event_count": 1,
+        "terminal_event_count": 1,
+        "high_water_sequence": 5,
+    }
+    assert detail_resp.json()["ledger"]["projection"]["usage"] == {
+        "input_tokens": 20,
+        "output_tokens": 0,
+        "cached_input_tokens": 16,
+        "reasoning_tokens": 0,
+        "cost_microunits": 0,
+    }
     assert detail_resp.json()["tool_calls"][0]["tool_name"] == "reply"
     assert detail_resp.json()["reply_contract_check_logs"][0]["result"] == "no_tool_call"
     assert json.loads(detail_resp.json()["llm_api_request_logs"][0]["response_json"])["choices"][0]["message"]["content"] == "输出"
     assert detail_resp.json()["llm_api_request_logs"][0]["response_status"] == 200
+
+    ledger_resp = client.get(
+        f"/api/v1/admin/agent-runs/{run.run_id}/events",
+        params={"limit": 1},
+        headers=auth_header,
+    )
+    assert ledger_resp.status_code == 200, ledger_resp.text
+    assert ledger_resp.json()["items"][0]["event_type"] == "run.accepted"
+    assert ledger_resp.json()["next_after_sequence"] == 1
+    assert ledger_resp.json()["high_water_sequence"] == 5
+    assert ledger_resp.json()["has_more"] is True
+    ledger_next_resp = client.get(
+        f"/api/v1/admin/agent-runs/{run.run_id}/events",
+        params={"after_sequence": 1, "limit": 10},
+        headers=auth_header,
+    )
+    assert ledger_next_resp.status_code == 200, ledger_next_resp.text
+    prompt_events = [
+        item
+        for item in ledger_next_resp.json()["items"]
+        if item["event_type"] == "run.prompt_resolved"
+    ]
+    assert len(prompt_events) == 1
+    assert effective_v2_json["prompt_runtime_path"] not in str(
+        prompt_events[0]["payload"]
+    )
+    assert [
+        item["event_type"] for item in ledger_next_resp.json()["items"]
+    ] == [
+        "run.status_changed",
+        "run.prompt_resolved",
+        "usage.recorded",
+        "run.terminated",
+    ]
 
     llm_logs_resp = client.get("/api/v1/admin/llm-api-logs", params={"trace_id": "trace-admin"}, headers=auth_header)
     assert llm_logs_resp.status_code == 200, llm_logs_resp.text

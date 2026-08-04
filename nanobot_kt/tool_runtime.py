@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 from kohakuterrarium.llm.base import ToolSchema
@@ -20,6 +21,103 @@ from core.tool_execution_policy import (
 )
 
 logger = logging.getLogger("nanobot.kt.tool_runtime")
+
+
+class ToolPlanProviderAdapter:
+    """在 KT 的公开 Provider 边界应用请求级 ToolPlan schema。
+
+    KT Controller 会从 Registry 生成 native schema，但 Nanobot 的最终权限
+    事实源是请求级 ToolPlan。Adapter 只改写公开 ``chat(..., tools=...)``
+    参数，不替换 Controller 方法，也不读取 Registry 私有状态。
+    """
+
+    def __init__(self, provider: Any) -> None:
+        self.provider = provider
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.provider, name)
+
+    @property
+    def model(self) -> str:
+        value = getattr(self.provider, "model", None)
+        if value is not None:
+            return str(value)
+        return str(getattr(getattr(self.provider, "config", None), "model", ""))
+
+    @model.setter
+    def model(self, value: str) -> None:
+        if hasattr(self.provider, "model"):
+            self.provider.model = value
+        config = getattr(self.provider, "config", None)
+        if config is not None and hasattr(config, "model"):
+            config.model = value
+
+    @property
+    def prompt_cache_key(self) -> str | None:
+        return getattr(self.provider, "prompt_cache_key", None)
+
+    @prompt_cache_key.setter
+    def prompt_cache_key(self, value: str | None) -> None:
+        if hasattr(self.provider, "prompt_cache_key"):
+            self.provider.prompt_cache_key = value
+
+    async def chat(
+        self,
+        messages: list[Any],
+        *,
+        stream: bool = True,
+        tools: list[ToolSchema] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        plan = get_current_tool_plan()
+        effective_tools = (
+            _tool_plan_native_schemas(plan) if plan is not None else tools
+        )
+        async for chunk in self.provider.chat(
+            messages,
+            stream=stream,
+            tools=effective_tools,
+            **kwargs,
+        ):
+            yield chunk
+
+    async def chat_complete(self, messages: list[Any], **kwargs: Any) -> Any:
+        return await self.provider.chat_complete(messages, **kwargs)
+
+    def on_emergency_drop(self, callback: Any) -> None:
+        self.provider.on_emergency_drop(callback)
+
+    def translate_provider_native_tool(self, tool: Any) -> dict | None:
+        return self.provider.translate_provider_native_tool(tool)
+
+    def with_model(self, name: str) -> "ToolPlanProviderAdapter":
+        replacement = self.provider.with_model(name)
+        if replacement is self.provider:
+            return self
+        return ToolPlanProviderAdapter(replacement)
+
+    async def close(self) -> None:
+        close = getattr(self.provider, "close", None)
+        if not callable(close):
+            return
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
+
+
+def wrap_tool_plan_provider(provider: Any) -> ToolPlanProviderAdapter:
+    if isinstance(provider, ToolPlanProviderAdapter):
+        return provider
+    return ToolPlanProviderAdapter(provider)
+
+
+def _get_registered_plugin(manager: Any, name: str) -> Any | None:
+    """只通过 KT 1.4 PluginManager 的公开查询入口读取插件。"""
+
+    getter = getattr(manager, "get_plugin", None)
+    if not callable(getter):
+        return None
+    return getter(name)
 
 
 class ToolPlanGuardPlugin(BasePlugin):
@@ -131,20 +229,18 @@ def tool_plan_runtime_status(agent: Any) -> dict[str, Any]:
     """检查 ToolPlan 执行守卫与原生 schema 过滤器的最终安装状态。"""
 
     manager = getattr(agent, "plugins", None)
-    plugins = list(getattr(manager, "_plugins", []) or [])
     guard_marker = bool(
         getattr(agent, "__dict__", {}).get(
             "_nanobot_tool_plan_guard_installed",
             False,
         )
     )
-    guard_installed = guard_marker or any(
-        str(getattr(plugin, "name", "") or "") == ToolPlanGuardPlugin.name
-        for plugin in plugins
-    )
-    controller = getattr(agent, "controller", None)
+    guard_installed = guard_marker or _get_registered_plugin(
+        manager,
+        ToolPlanGuardPlugin.name,
+    ) is not None
     schema_filter_installed = bool(
-        getattr(controller, "__dict__", {}).get(
+        getattr(agent, "__dict__", {}).get(
             "_nanobot_tool_plan_schema_filter_installed",
             False,
         )
@@ -180,8 +276,7 @@ def install_tool_plan_guard(agent: Any) -> bool:
     manager = getattr(agent, "plugins", None)
     if manager is None or not hasattr(manager, "register"):
         return False
-    plugins = list(getattr(manager, "_plugins", []) or [])
-    if any(getattr(plugin, "name", "") == ToolPlanGuardPlugin.name for plugin in plugins):
+    if _get_registered_plugin(manager, ToolPlanGuardPlugin.name) is not None:
         agent._nanobot_tool_plan_guard_installed = True
         return False
     manager.register(ToolPlanGuardPlugin())
@@ -195,11 +290,7 @@ def install_tool_loop_control(agent: Any) -> bool:
     manager = getattr(agent, "plugins", None)
     if manager is None or not hasattr(manager, "register"):
         return False
-    plugins = list(getattr(manager, "_plugins", []) or [])
-    if any(
-        getattr(plugin, "name", "") == ToolLoopControlPlugin.name
-        for plugin in plugins
-    ):
+    if _get_registered_plugin(manager, ToolLoopControlPlugin.name) is not None:
         agent._nanobot_tool_loop_control_installed = True
         return False
     manager.register(ToolLoopControlPlugin())
@@ -253,28 +344,24 @@ def _tool_plan_native_schemas(plan: Any) -> list[ToolSchema]:
 def install_tool_plan_native_schema_filter(agent: Any) -> bool:
     """让 KT native tools schema 使用当前请求的 ToolPlan。
 
-    KT 默认从 registry 生成 schema；同名内置工具会覆盖 package 工具自己的参数定义。
-    这里在 controller 层做一次轻量适配，使发给模型的 API tools 与 ToolPlan 保持一致。
+    KT 默认从 Registry 生成 schema；同名内置工具会覆盖 package 工具自己的
+    参数定义。这里包装公开 Provider.chat 边界，使最终请求与 ToolPlan 一致。
     """
 
     controller = getattr(agent, "controller", None)
-    if controller is None or not hasattr(controller, "_get_native_tool_schemas"):
+    provider = getattr(controller, "llm", None)
+    if controller is None or provider is None:
         return False
-    if getattr(controller, "__dict__", {}).get(
-        "_nanobot_tool_plan_schema_filter_installed",
-        False,
-    ):
+    if isinstance(provider, ToolPlanProviderAdapter):
+        agent._nanobot_tool_plan_schema_filter_installed = True
         return False
 
-    original_get_native_tool_schemas = controller._get_native_tool_schemas
-
-    def _get_native_tool_schemas_with_tool_plan() -> list[ToolSchema]:
-        plan = get_current_tool_plan()
-        if plan is not None:
-            return _tool_plan_native_schemas(plan)
-        return original_get_native_tool_schemas()
-
-    controller._nanobot_original_get_native_tool_schemas = original_get_native_tool_schemas
-    controller._get_native_tool_schemas = _get_native_tool_schemas_with_tool_plan
-    controller._nanobot_tool_plan_schema_filter_installed = True
+    wrapped = wrap_tool_plan_provider(provider)
+    controller.llm = wrapped
+    if getattr(agent, "llm", None) is provider:
+        agent.llm = wrapped
+    subagents = getattr(agent, "subagent_manager", None)
+    if getattr(subagents, "llm", None) is provider:
+        subagents.llm = wrapped
+    agent._nanobot_tool_plan_schema_filter_installed = True
     return True

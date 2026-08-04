@@ -15,6 +15,8 @@ from core.model_provider.chat_runtime import (
     ChatCompletionRequest,
     ChatCompletionRuntime,
     ChatCompletionRuntimeState,
+    ChatCompletionRuntimeUnavailableError,
+    RuntimeBoundChatCompletionPort,
 )
 from core.model_provider.catalog_runtime import (
     ModelCatalogRuntime,
@@ -35,6 +37,7 @@ from core.model_provider.registry import (
     ProviderRegistryFrozenError,
     ProviderUnavailableError,
 )
+from core.model_provider.route_plan import ReplyRoutePlan
 from core.model_provider.route_registry import (
     MODEL_ROUTE_REGISTRY,
     ModelRouteDescriptor,
@@ -59,6 +62,7 @@ __all__ = [
     "ChatCompletionRequest",
     "ChatCompletionRuntime",
     "ChatCompletionRuntimeState",
+    "ChatCompletionRuntimeUnavailableError",
     "DecisionModelPort",
     "DecisionModelRuntime",
     "DecisionModelRuntimeState",
@@ -88,6 +92,8 @@ __all__ = [
     "ProviderNotFoundError",
     "ProviderRegistryFrozenError",
     "ProviderUnavailableError",
+    "ReplyRoutePlan",
+    "RuntimeBoundChatCompletionPort",
     "SyncModelCompletionPort",
     "get_model_route_descriptor",
     "list_model_route_descriptors",

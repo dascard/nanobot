@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 from urllib.parse import parse_qsl, unquote_to_bytes, urlsplit
 
+from core.agent_runtime.gateway_contracts import ResearchAgentRuntimePort
 from core.model_provider.response_normalization import strip_think_blocks
 from core.proactive_diagnostics import (
     generation_failure_from_exception,
@@ -723,30 +724,6 @@ def _default_source_loader(trace_id: str) -> list[Any]:
         session.close()
 
 
-def _install_budget_plugin(bridge: Any, plugin: ResearchBudgetPlugin) -> bool:
-    installer = getattr(
-        bridge,
-        "install_research_budget_guard",
-        None,
-    )
-    if not callable(installer):
-        return False
-    try:
-        return bool(installer(plugin))
-    except Exception:
-        return False
-
-
-def _research_runtime_guards_ready(bridge: Any) -> bool:
-    status = getattr(bridge, "research_tool_guards_ready", None)
-    if not callable(status):
-        return False
-    try:
-        return bool(status())
-    except Exception:
-        return False
-
-
 async def _load_sources(
     source_loader: Callable[[str], list[Any]],
     trace_id: str,
@@ -811,7 +788,7 @@ def _result(
 async def run_proactive_research(
     request: ResearchRequest,
     *,
-    bridge_factory: Callable[[], Any] | None = None,
+    bridge_factory: Callable[[], ResearchAgentRuntimePort] | None = None,
     source_loader: Callable[[str], list[Any]] | None = None,
 ) -> ResearchResult:
     """运行一次研究任务并返回经 ToolCall 证据核验的草稿。"""
@@ -833,7 +810,7 @@ async def run_proactive_research(
         )
 
         bridge_factory = create_research_agent_runtime
-    bridge: Any | None = None
+    bridge: ResearchAgentRuntimePort | None = None
     lifecycle_task: asyncio.Task[tuple[str, list[Any], str]] | None = None
     budget_plugin = ResearchBudgetPlugin(
         budget=request.budget,
@@ -845,9 +822,9 @@ async def run_proactive_research(
         if bridge is None:
             raise RuntimeError("研究 Bridge 尚未初始化")
         await bridge.start()
-        if not _research_runtime_guards_ready(bridge):
+        if not bridge.research_tool_guards_ready():
             return "", [], "tool_guard_unavailable"
-        if not _install_budget_plugin(bridge, budget_plugin):
+        if not bridge.install_research_budget_guard(budget_plugin):
             return "", [], "budget_guard_unavailable"
         response = await bridge.handle_message(
             _research_prompt(request),

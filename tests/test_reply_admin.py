@@ -118,7 +118,10 @@ def _install_fake_reply_bridge(monkeypatch, reply_text="测试回复", capture=N
             RunTracer.finish_run(run.run_id, status="success", output_preview=reply_text)
             return reply_text
 
-    monkeypatch.setattr("nanobot_kt.bridge.get_bridge", lambda: FakeBridge())
+    monkeypatch.setattr(
+        "core.agent_runtime.gateway.get_agent_gateway",
+        lambda: FakeBridge(),
+    )
 
 
 def test_reply_test_run_returns_attempts_final_and_llm_logs(client, auth_header, monkeypatch):

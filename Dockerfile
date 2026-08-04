@@ -2,22 +2,6 @@
 ARG NODE_IMAGE=node:20.19.4-bookworm-slim@sha256:6db5e436948af8f0244488a1f658c2c8e55a3ae51ca2e1686ed042be8f25f70a
 ARG PYTHON_IMAGE=python:3.11.13-slim-bookworm@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1
 
-# ── KT 源码阶段：在镜像内应用受版本控制的兼容补丁，不改脏宿主 submodule ──
-FROM ${PYTHON_IMAGE} AS kt-source
-WORKDIR /build
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-	&& rm -rf /var/lib/apt/lists/*
-COPY vendor/KohakuTerrarium/ ./vendor/KohakuTerrarium/
-COPY patches/kohakuterrarium/stream-message-flag.patch ./patches/stream-message-flag.patch
-RUN cd vendor/KohakuTerrarium \
-	&& if grep -q 'conversation.append("user", user_content, stream=user_stream)' src/kohakuterrarium/core/controller.py \
-		&& grep -q 'stream=stream' src/kohakuterrarium/llm/message.py; then \
-		printf 'KohakuTerrarium patch already applied\n'; \
-	else \
-		git apply --check /build/patches/stream-message-flag.patch \
-		&& git apply /build/patches/stream-message-flag.patch; \
-	fi
-
 # ── 第一阶段：构建 React 前端 ──
 FROM ${NODE_IMAGE} AS webui-builder
 WORKDIR /webui
@@ -64,11 +48,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 		--index-url https://pypi.tuna.tsinghua.edu.cn/simple \
 		--trusted-host pypi.tuna.tsinghua.edu.cn \
 		-r requirements-prod.lock
-
-# KT 源码变化只重建本地包层，不使第三方依赖层失效。
-COPY --from=kt-source /build/vendor/KohakuTerrarium/ ./vendor/KohakuTerrarium/
-RUN --mount=type=cache,target=/root/.cache/pip \
-	pip install --no-deps ./vendor/KohakuTerrarium
 
 # 业务代码位于依赖层之后；构建上下文由 .dockerignore 严格收窄。
 COPY --chown=nanobot:nanobot . .

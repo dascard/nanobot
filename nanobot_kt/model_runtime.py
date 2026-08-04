@@ -3,57 +3,18 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from typing import Any
 
+from core.model_provider.route_plan import ReplyRoutePlan
 
 logger = logging.getLogger("nanobot.kt.model_runtime")
 
 
-@dataclass(frozen=True)
-class ReplyRoutePlan:
-    provider_id: str
-    registry_provider: str
-    base_url: str
-    api_key: str
-    timeout: float
-    driver_type: str = "openai"
-    profile_id: str = ""
-    model: str = ""
-    temperature: object = None
-    max_tokens: int | None = None
-    max_context: int = 128000
-    cost_input_1m: float | None = None
-    cost_output_1m: float | None = None
-    intelligence: int = 0
-    fallback_only: bool = False
-    input_modalities: tuple[str, ...] = ("text",)
-    output_modalities: tuple[str, ...] = ("text",)
-    reasoning_effort: str = ""
-    service_tier: str = ""
-    enable_thinking: object = "auto"
-    capabilities: dict[str, bool] = field(default_factory=dict)
-    extra_headers: dict[str, str] = field(default_factory=dict)
-    extra_body: dict[str, Any] = field(default_factory=dict)
-    retry_policy: dict[str, Any] = field(default_factory=dict)
-    driver_options: dict[str, Any] = field(default_factory=dict)
-    provider_name: str = ""
-    provider_native_tools: tuple[str, ...] = ()
-    codex_account_id: str = ""
-
-
 def registry_provider_for_route(provider_id: str) -> str:
-    provider_id = (provider_id or "").strip()
-    if not provider_id:
-        return "new-api"
-    from clients.classifier_client import _get_provider_config
+    from clients.classifier_client import registry_provider_for_route as resolve
 
-    cfg = _get_provider_config(provider_id)
-    if cfg and cfg.get("registry_provider"):
-        return cfg["registry_provider"]
-    if provider_id in ("newapi", "new-api"):
-        return "new-api"
-    return provider_id
+    return resolve(provider_id)
 
 
 def resolve_reply_route_plans(

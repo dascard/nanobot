@@ -402,6 +402,7 @@ def test_production_runtime_flushes_to_database_and_restores_logging_sink(
     tmp_path,
 ):
     from core.db.models.observability import RuntimeTelemetryEvent
+    from core.db.models.run_ledger import RunLedgerEventRow
     from core.runtime.event_bus import emit_runtime_event
     from core.runtime.events import RuntimeEventContext
     from core.schema_migrations import run_schema_migrations
@@ -416,6 +417,23 @@ def test_production_runtime_flushes_to_database_and_restores_logging_sink(
     )
     run_schema_migrations(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
+    from core.run_ledger.adapters import run_accepted_event
+    from core.run_ledger.persistence import SqlAlchemyRunEventLedgerWriter
+
+    SqlAlchemyRunEventLedgerWriter(factory).append(run_accepted_event(
+        run_id="run-production-runtime",
+        trace_id="",
+        session_id="qq:private:u1",
+        user_id="u1",
+        chat_type="private",
+        group_id="",
+        run_type="http_test",
+        prompt_mode="none",
+        prompt_key="",
+        prompt_sha256="",
+        model="",
+        input_value="",
+    ))
     handle = None
     try:
         handle = start_telemetry_runtime(
@@ -429,6 +447,7 @@ def test_production_runtime_flushes_to_database_and_restores_logging_sink(
             context=RuntimeEventContext(
                 request_id="request-production-runtime",
                 session_id="qq:private:u1",
+                run_id="run-production-runtime",
             ),
             attributes={
                 "method": "GET",
@@ -443,9 +462,14 @@ def test_production_runtime_flushes_to_database_and_restores_logging_sink(
 
     with factory() as db:
         rows = db.query(RuntimeTelemetryEvent).all()
+        ledger_rows = db.query(RunLedgerEventRow).all()
     assert len(rows) == 1
     assert rows[0].event_id == event.event_id
     assert rows[0].request_id == "request-production-runtime"
+    assert len(ledger_rows) == 2
+    assert ledger_rows[1].event_type == "http.request.succeeded"
+    assert ledger_rows[1].run_id == "run-production-runtime"
+    assert "/api/v1/ready" in ledger_rows[1].payload_json
     assert handle is not None
     assert handle.buffered_sink is not None
     assert handle.buffered_sink.running is False

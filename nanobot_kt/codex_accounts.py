@@ -24,13 +24,13 @@ from kohakuterrarium.llm.codex_auth import (
     TOKEN_URL,
     CodexTokens,
 )
-from kohakuterrarium.llm.codex_provider import CodexOAuthProvider
 
 from core.db import system_setting_repository
 from core.settings_admin_service import (
     SystemSettingCommandService,
     SystemSettingWrite,
 )
+from nanobot_kt.codex_provider import AccountBoundCodexOAuthProvider
 
 logger = logging.getLogger("nanobot.kt.codex_accounts")
 
@@ -85,6 +85,12 @@ def _account_id(value: object) -> str:
     if not ACCOUNT_ID_PATTERN.fullmatch(account_id):
         raise CodexAccountError("Codex 账号 ID 无效")
     return account_id
+
+
+def normalize_codex_account_id(value: object) -> str:
+    """公开给运行时 Adapter 使用的账号 ID 规范化入口。"""
+
+    return _account_id(value)
 
 
 def _account_name(value: object, *, default: str = "") -> str:
@@ -534,58 +540,6 @@ async def refresh_codex_account_tokens(account_id: str) -> CodexTokens:
         return refreshed
 
 
-class AccountBoundCodexOAuthProvider(CodexOAuthProvider):
-    """只使用指定账号凭据、绝不在请求链自动打开 OAuth 的 KT Provider。"""
-
-    def __init__(self, *args: Any, account_id: str, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.codex_account_id = _account_id(account_id)
-
-    async def ensure_authenticated(self) -> None:
-        tokens = load_codex_account_tokens(self.codex_account_id)
-        if tokens.is_expired():
-            tokens = await refresh_codex_account_tokens(self.codex_account_id)
-        self._tokens = tokens
-        self._rebuild_client()
-
-    async def _ensure_valid_token(self) -> None:
-        if self._tokens is None:
-            await self.ensure_authenticated()
-            return
-        if self._tokens.is_expired():
-            self._tokens = await refresh_codex_account_tokens(self.codex_account_id)
-            self._rebuild_client()
-
-    def with_model(self, name: str) -> AccountBoundCodexOAuthProvider:
-        if not name or name == self.model:
-            return self
-        clone = AccountBoundCodexOAuthProvider(
-            model=name,
-            account_id=self.codex_account_id,
-            reasoning_effort=self.reasoning_effort,
-            service_tier=self.service_tier,
-            timeout=self.timeout,
-            max_retries=self.max_retries,
-            retry_policy=self._retry_policy,
-        )
-        clone._tokens = self._tokens
-        clone._client = self._client
-        clone._retry_policy = self._retry_policy
-        clone._emergency_drop_callbacks = list(self._emergency_drop_callbacks)
-        clone.prompt_cache_key = self.prompt_cache_key
-        clone._profile_max_context = getattr(self, "_profile_max_context", None)
-        for attribute in (
-            "provider_name",
-            "provider_native_tools",
-            "_nanobot_profile_id",
-            "_nanobot_provider_id",
-            "_nanobot_config_fingerprint",
-        ):
-            if hasattr(self, attribute):
-                setattr(clone, attribute, getattr(self, attribute))
-        return clone
-
-
 def import_legacy_codex_tokens(
     tokens: CodexTokens,
     *,
@@ -624,6 +578,7 @@ __all__ = [
     "list_codex_account_views",
     "list_codex_accounts",
     "load_codex_account_tokens",
+    "normalize_codex_account_id",
     "refresh_codex_account_tokens",
     "save_codex_account_tokens",
     "update_codex_account",

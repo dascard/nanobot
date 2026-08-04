@@ -40,6 +40,21 @@ def build_runtime_event_registry() -> RuntimeEventRegistry:
             ),
         ),
         RuntimeEventDescriptor(
+            name="agent.runtime_selection",
+            domain="agent",
+            owner_module="runtime.agent",
+            phases=("state_changed",),
+            fields=(
+                _field("selected_runtime", "label", required=True),
+                _field("previous_runtime", "label"),
+                _field("selection_reason", "label", required=True),
+                _field("scope_sha256", "digest", required=True),
+                _field("policy_sha256", "digest", required=True),
+                _field("bucket", "count", required=True),
+                _field("changed", "boolean", required=True),
+            ),
+        ),
+        RuntimeEventDescriptor(
             name="prompt.compile",
             domain="prompt",
             owner_module="prompt.runtime",

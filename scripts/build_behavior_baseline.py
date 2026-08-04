@@ -14,6 +14,7 @@ import json
 import subprocess
 import sys
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -21,6 +22,9 @@ from typing import Any, Mapping, Sequence
 SCHEMA_VERSION = 1
 FIXTURE_RELATIVE_PATH = Path(
     "tests/fixtures/architecture_behavior_cases.json"
+)
+RUNTIME_FIXTURE_RELATIVE_PATH = Path(
+    "tests/fixtures/agent_runtime_behavior_cases.json"
 )
 GOLDEN_RELATIVE_ROOT = Path("tests/golden/architecture_behavior")
 MANIFEST_RELATIVE_PATH = Path("docs/architecture/behavior-baseline.json")
@@ -74,6 +78,7 @@ PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256 = (
 )
 
 SNAPSHOT_CLASSIFICATIONS = {
+    "agent_runtime": "preserve",
     "group_analysis": "known_bad",
     "news_heuristics": "preserve",
     "private_timing": "preserve",
@@ -83,6 +88,10 @@ SNAPSHOT_CLASSIFICATIONS = {
 }
 
 SNAPSHOT_NOTES = {
+    "agent_runtime": (
+        "使用框架无关 FakeAgentRuntime 重放普通、流式、工具链和中断信号，"
+        "冻结 KT 升级前的 Port 输入、结果、conversation、route 与生命周期。"
+    ),
     "group_analysis": (
         "记录现有命令清洗和正则时间窗口解析；阶段 7 可按批准差异更新。"
     ),
@@ -169,6 +178,48 @@ def load_fixture(path: Path) -> dict[str, Any]:
         raise BehaviorBaselineError(
             "行为 fixture 缺少分区：" + ", ".join(sorted(missing))
         )
+    return payload
+
+
+def load_runtime_fixture(path: Path) -> dict[str, Any]:
+    """读取不依赖 KT 类型的 Runtime 重放 fixture。"""
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BehaviorBaselineError(
+            f"无法读取 Runtime 行为 fixture：{path}"
+        ) from exc
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise BehaviorBaselineError("Runtime 行为 fixture schema_version 无效")
+    required = {"context_defaults", "route", "cases"}
+    missing = required - set(payload)
+    if missing:
+        raise BehaviorBaselineError(
+            "Runtime 行为 fixture 缺少分区：" + ", ".join(sorted(missing))
+        )
+    if not isinstance(payload["context_defaults"], dict):
+        raise BehaviorBaselineError("Runtime context_defaults 必须是对象")
+    if not isinstance(payload["route"], dict):
+        raise BehaviorBaselineError("Runtime route 必须是对象")
+    cases = payload["cases"]
+    if not isinstance(cases, list) or not cases:
+        raise BehaviorBaselineError("Runtime cases 必须是非空数组")
+    case_ids: list[str] = []
+    for case in cases:
+        if not isinstance(case, dict):
+            raise BehaviorBaselineError("Runtime case 必须是对象")
+        case_id = str(case.get("id") or "").strip()
+        if not case_id:
+            raise BehaviorBaselineError("Runtime case.id 不能为空")
+        case_ids.append(case_id)
+        turns = case.get("turns")
+        if not isinstance(turns, list) or not turns:
+            raise BehaviorBaselineError(
+                f"Runtime case {case_id} 的 turns 必须是非空数组"
+            )
+    if len(case_ids) != len(set(case_ids)):
+        raise BehaviorBaselineError("Runtime case.id 不能重复")
     return payload
 
 
@@ -626,15 +677,399 @@ def _registry_snapshot() -> dict[str, Any]:
     }
 
 
+def _runtime_tool_call_from_fixture(payload: Mapping[str, Any]):
+    from core.agent_runtime import RuntimeToolCall, RuntimeToolCallStatus
+
+    return RuntimeToolCall(
+        call_id=str(payload.get("call_id") or ""),
+        name=str(payload.get("name") or ""),
+        arguments=payload.get("arguments", ""),
+        status=RuntimeToolCallStatus(
+            str(payload.get("status") or RuntimeToolCallStatus.REQUESTED.value)
+        ),
+        result=payload.get("result"),
+    )
+
+
+def _runtime_message_from_fixture(payload: Mapping[str, Any]):
+    from core.agent_runtime import RuntimeMessage
+
+    raw_tool_calls = payload.get("tool_calls") or []
+    if not isinstance(raw_tool_calls, list):
+        raise BehaviorBaselineError("Runtime message.tool_calls 必须是数组")
+    return RuntimeMessage(
+        role=str(payload.get("role") or ""),
+        content=payload.get("content", ""),
+        name=str(payload.get("name") or ""),
+        tool_call_id=str(payload.get("tool_call_id") or ""),
+        tool_calls=tuple(
+            _runtime_tool_call_from_fixture(item)
+            for item in raw_tool_calls
+            if isinstance(item, Mapping)
+        ),
+    )
+
+
+def _runtime_context_from_fixture(
+    defaults: Mapping[str, Any],
+    overrides: Mapping[str, Any],
+):
+    from core.agent_runtime import (
+        RequestRuntimeContext,
+        RuntimeActor,
+        RuntimeActorType,
+        RuntimeChatType,
+        RuntimeFeature,
+        RuntimeOwnerType,
+        RuntimePlanKind,
+        RuntimePlanRef,
+        RuntimePrincipal,
+    )
+
+    payload = dict(defaults)
+    payload.update(overrides)
+    principal_payload = payload.get("principal")
+    if not isinstance(principal_payload, Mapping):
+        raise BehaviorBaselineError("Runtime principal 必须是对象")
+    actor_payload = payload.get("actor")
+    if actor_payload is not None and not isinstance(actor_payload, Mapping):
+        raise BehaviorBaselineError("Runtime actor 必须是对象")
+    raw_features = payload.get("features") or []
+    raw_plans = payload.get("plans") or []
+    if not isinstance(raw_features, list) or not isinstance(raw_plans, list):
+        raise BehaviorBaselineError("Runtime features/plans 必须是数组")
+    deadline_text = str(payload.get("deadline_at") or "").strip()
+    deadline_at = datetime.fromisoformat(deadline_text) if deadline_text else None
+    return RequestRuntimeContext(
+        request_id=str(payload.get("request_id") or ""),
+        principal=RuntimePrincipal(
+            platform=str(principal_payload.get("platform") or ""),
+            owner_type=RuntimeOwnerType(
+                str(principal_payload.get("owner_type") or "")
+            ),
+            owner_id=str(principal_payload.get("owner_id") or ""),
+        ),
+        session_id=str(payload.get("session_id") or ""),
+        chat_type=RuntimeChatType(str(payload.get("chat_type") or "")),
+        trace_id=str(payload.get("trace_id") or ""),
+        run_id=str(payload.get("run_id") or ""),
+        turn_id=str(payload.get("turn_id") or ""),
+        correlation_id=str(payload.get("correlation_id") or ""),
+        actor=(
+            RuntimeActor(
+                actor_type=RuntimeActorType(
+                    str(actor_payload.get("actor_type") or "")
+                ),
+                actor_id=str(actor_payload.get("actor_id") or ""),
+                parent_actor_id=str(
+                    actor_payload.get("parent_actor_id") or ""
+                ),
+            )
+            if actor_payload is not None
+            else None
+        ),
+        message_id=str(payload.get("message_id") or ""),
+        capabilities=frozenset(
+            str(capability) for capability in payload.get("capabilities") or []
+        ),
+        features=tuple(
+            RuntimeFeature(
+                name=str(item.get("name") or ""),
+                enabled=item.get("enabled"),
+                source=str(item.get("source") or "default"),
+            )
+            for item in raw_features
+            if isinstance(item, Mapping)
+        ),
+        plans=tuple(
+            RuntimePlanRef(
+                kind=RuntimePlanKind(str(item.get("kind") or "")),
+                identity=str(item.get("identity") or ""),
+                sha256=str(item.get("sha256") or ""),
+            )
+            for item in raw_plans
+            if isinstance(item, Mapping)
+        ),
+        deadline_at=deadline_at,
+    )
+
+
+def _runtime_route_from_fixture(payload: Mapping[str, Any]):
+    from core.agent_runtime import RuntimeModelRoute
+
+    return RuntimeModelRoute(
+        route_id=str(payload.get("route_id") or ""),
+        model_id=str(payload.get("model_id") or ""),
+        provider_id=str(payload.get("provider_id") or ""),
+        profile_id=str(payload.get("profile_id") or ""),
+        temperature=payload.get("temperature"),
+        max_tokens=payload.get("max_tokens"),
+        timeout_seconds=payload.get("timeout_seconds"),
+        enable_thinking=payload.get("enable_thinking"),
+    )
+
+
+def _runtime_result_from_fixture(payload: Mapping[str, Any]):
+    from core.agent_runtime import AgentTurnResult
+
+    raw_messages = payload.get("messages") or []
+    raw_tool_calls = payload.get("tool_calls") or []
+    if not isinstance(raw_messages, list) or not isinstance(raw_tool_calls, list):
+        raise BehaviorBaselineError(
+            "Runtime result.messages/tool_calls 必须是数组"
+        )
+    return AgentTurnResult(
+        raw_result=payload.get("raw_result"),
+        messages=tuple(
+            _runtime_message_from_fixture(item)
+            for item in raw_messages
+            if isinstance(item, Mapping)
+        ),
+        tool_calls=tuple(
+            _runtime_tool_call_from_fixture(item)
+            for item in raw_tool_calls
+            if isinstance(item, Mapping)
+        ),
+    )
+
+
+def _runtime_context_snapshot(context: Any) -> dict[str, Any]:
+    return {
+        "request_id": context.request_id,
+        "principal": _jsonable(context.principal),
+        "session_id": context.session_id,
+        "chat_type": context.chat_type.value,
+        "trace_id": context.trace_id,
+        "run_id": context.run_id,
+        "turn_id": context.turn_id,
+        "correlation_id": context.correlation_id,
+        "actor": _jsonable(context.actor),
+        "message_id": context.message_id,
+        "capabilities": sorted(context.capabilities),
+        "features": _jsonable(context.features),
+        "plans": _jsonable(context.plans),
+        "deadline_at": (
+            context.deadline_at.isoformat()
+            if context.deadline_at is not None
+            else None
+        ),
+    }
+
+
+def _runtime_run_event_snapshot(event: Any) -> dict[str, Any]:
+    """保留事件语义，移除每次重放都会变化的 event_id 与时间。"""
+
+    return {
+        "sequence": event.sequence,
+        "kind": event.kind.value,
+        "status": event.status.value,
+        "run_id": event.run_id,
+        "turn_id": event.turn_id,
+        "correlation_id": event.correlation_id,
+        "actor": _jsonable(event.actor),
+        "owner": _jsonable(event.owner),
+        "text_delta": event.text_delta,
+        "tool_call": _jsonable(event.tool_call),
+        "usage": _jsonable(event.usage),
+        "artifact": _jsonable(event.artifact),
+        "error": _jsonable(event.error),
+        "attributes": _jsonable(event.attributes),
+    }
+
+
+async def _replay_runtime_case(
+    case: Mapping[str, Any],
+    *,
+    context_defaults: Mapping[str, Any],
+    route_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    from core.agent_runtime import (
+        AgentTurnRequest,
+        FakeAgentRuntime,
+        RuntimeAttribute,
+        RuntimeTurnKind,
+    )
+
+    case_id = str(case.get("id") or "")
+    context_overrides = case.get("context") or {}
+    if not isinstance(context_overrides, Mapping):
+        raise BehaviorBaselineError(
+            f"Runtime case {case_id} 的 context 必须是对象"
+        )
+    context = _runtime_context_from_fixture(
+        context_defaults,
+        context_overrides,
+    )
+    runtime = FakeAgentRuntime(
+        runtime_id=str(case.get("runtime_id") or f"fake:{case_id}")
+    )
+    raw_tool_names = case.get("tool_names") or []
+    if not isinstance(raw_tool_names, list):
+        raise BehaviorBaselineError(
+            f"Runtime case {case_id} 的 tool_names 必须是数组"
+        )
+    runtime.tool_names = tuple(str(name) for name in raw_tool_names)
+    tool_policy = runtime.install_tool_policy()
+    await runtime.start()
+
+    raw_initial_messages = case.get("initial_messages") or []
+    if not isinstance(raw_initial_messages, list):
+        raise BehaviorBaselineError(
+            f"Runtime case {case_id} 的 initial_messages 必须是数组"
+        )
+    replace_count = runtime.replace_conversation(
+        tuple(
+            _runtime_message_from_fixture(item)
+            for item in raw_initial_messages
+            if isinstance(item, Mapping)
+        )
+    )
+    route = _runtime_route_from_fixture(route_payload)
+    runtime.set_model_route(route)
+
+    turns: list[dict[str, Any]] = []
+    for index, raw_turn in enumerate(case.get("turns") or [], start=1):
+        if not isinstance(raw_turn, Mapping):
+            raise BehaviorBaselineError(
+                f"Runtime case {case_id} 的第 {index} 个 turn 必须是对象"
+            )
+        raw_attributes = raw_turn.get("event_attributes") or []
+        if not isinstance(raw_attributes, list):
+            raise BehaviorBaselineError(
+                f"Runtime case {case_id} 的 event_attributes 必须是数组"
+            )
+        result_payload = raw_turn.get("result")
+        if not isinstance(result_payload, Mapping):
+            raise BehaviorBaselineError(
+                f"Runtime case {case_id} 的第 {index} 个 result 必须是对象"
+            )
+        runtime.queue_result(_runtime_result_from_fixture(result_payload))
+        raw_text_deltas = raw_turn.get("text_deltas") or []
+        if not isinstance(raw_text_deltas, list):
+            raise BehaviorBaselineError(
+                f"Runtime case {case_id} 的 text_deltas 必须是数组"
+            )
+        if raw_text_deltas:
+            runtime.queue_text_deltas(
+                *(str(delta) for delta in raw_text_deltas)
+            )
+        request = AgentTurnRequest(
+            context=context,
+            content=raw_turn.get("content", ""),
+            stream=raw_turn.get("stream", False),
+            kind=RuntimeTurnKind(
+                str(raw_turn.get("kind") or RuntimeTurnKind.USER_INPUT.value)
+            ),
+            event_attributes=tuple(
+                RuntimeAttribute(
+                    key=str(item.get("key") or ""),
+                    value=item.get("value"),
+                )
+                for item in raw_attributes
+                if isinstance(item, Mapping)
+            ),
+        )
+        run_events = []
+        result = await runtime.run_event(request, run_events.append)
+        turns.append(
+            {
+                "request": {
+                    "context": _runtime_context_snapshot(request.context),
+                    "content": request.content,
+                    "stream": request.stream,
+                    "kind": request.kind.value,
+                    "event_attributes": _jsonable(request.event_attributes),
+                },
+                "result": _jsonable(result),
+                "events": [
+                    _runtime_run_event_snapshot(event)
+                    for event in run_events
+                ],
+            }
+        )
+
+    pending_reset = runtime.clear_pending_events()
+    interrupt_reason = str(case.get("interrupt_reason") or "")
+    interrupt_accepted = (
+        runtime.interrupt(reason=interrupt_reason)
+        if interrupt_reason
+        else False
+    )
+    conversation = runtime.read_conversation()
+    inspected_tool_calls = runtime.inspect_tool_calls()
+    await runtime.stop()
+    return {
+        "id": case_id,
+        "runtime_id": runtime.runtime_id,
+        "tool_policy": _jsonable(tool_policy),
+        "replace_count": replace_count,
+        "tool_names": list(runtime.list_tool_names()),
+        "routes": _jsonable(runtime.routes),
+        "turns": turns,
+        "request_count": len(runtime.requests),
+        "conversation": _jsonable(conversation),
+        "inspected_tool_calls": _jsonable(inspected_tool_calls),
+        "pending_reset": _jsonable(pending_reset),
+        "interrupt_reason": interrupt_reason,
+        "interrupt_accepted": interrupt_accepted,
+        "lifecycle": [
+            {
+                "sequence": event.sequence,
+                "previous_state": event.previous_state.value,
+                "current_state": event.current_state.value,
+                "reason": event.reason,
+            }
+            for event in runtime.lifecycle_events
+        ],
+        "final_state": runtime.state.value,
+    }
+
+
+def _agent_runtime_snapshot(fixture: Mapping[str, Any]) -> dict[str, Any]:
+    """重放框架无关 Runtime fixture，并移除非确定性的事件时间。"""
+
+    from core.async_bridge import run_awaitable_sync
+
+    async def replay_all() -> list[dict[str, Any]]:
+        return [
+            await _replay_runtime_case(
+                case,
+                context_defaults=fixture["context_defaults"],
+                route_payload=fixture["route"],
+            )
+            for case in fixture["cases"]
+        ]
+
+    try:
+        cases = run_awaitable_sync(replay_all())
+    except BehaviorBaselineError:
+        raise
+    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+        raise BehaviorBaselineError(
+            f"无法重放 Runtime 行为 fixture：{exc}"
+        ) from exc
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "framework_dependency": "none",
+        "runtime_contract": "core.agent_runtime.AgentRuntimePort",
+        "cases": cases,
+    }
+
+
 def build_behavior_snapshots(
     root: Path,
     fixture: Mapping[str, Any],
+    runtime_fixture: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """在不访问网络和生产数据库的前提下生成全部快照。"""
 
     repository_root = root.resolve()
     _ensure_repository_importable(repository_root)
+    effective_runtime_fixture = runtime_fixture or load_runtime_fixture(
+        repository_root / RUNTIME_FIXTURE_RELATIVE_PATH
+    )
     return {
+        "agent_runtime": _agent_runtime_snapshot(effective_runtime_fixture),
         "group_analysis": _group_snapshot(fixture),
         "news_heuristics": _news_snapshot(fixture),
         "private_timing": _private_timing_snapshot(fixture),
@@ -677,9 +1112,9 @@ def _manifest(
     root: Path,
     *,
     fixture_path: Path,
+    runtime_fixture_path: Path,
     snapshot_paths: Mapping[str, Path],
 ) -> dict[str, Any]:
-    kt_root = root / "vendor/KohakuTerrarium"
     return {
         "schema_version": SCHEMA_VERSION,
         "baseline_git_commit": _git_revision(root),
@@ -689,12 +1124,16 @@ def _manifest(
                 f"{sys.version_info.major}.{sys.version_info.minor}."
                 f"{sys.version_info.micro}"
             ),
-            "kt_commit": _git_revision(kt_root),
             "prompt_runtime_schema": "v2",
         },
         "fixture": {
             "path": fixture_path.relative_to(root).as_posix(),
             "sha256": _sha256_file(fixture_path),
+        },
+        "runtime_fixture": {
+            "path": runtime_fixture_path.relative_to(root).as_posix(),
+            "sha256": _sha256_file(runtime_fixture_path),
+            "framework_dependency": "none",
         },
         "generation": {
             "command": (
@@ -706,6 +1145,20 @@ def _manifest(
             ),
         },
         "approved_changes": [
+            {
+                "id": "agent_harness_stage1_runtime_baseline",
+                "snapshot_id": "agent_runtime",
+                "stage": "Agent Harness 阶段 1.1",
+                "before_sha256": None,
+                "after_sha256": _sha256_file(
+                    snapshot_paths["agent_runtime"]
+                ),
+                "reason": (
+                    "新增不导入 KT 的 Runtime 重放 fixture，冻结普通、流式、"
+                    "多轮工具消息、中断信号、模型路由、conversation 和生命周期；"
+                    "本项只记录升级前行为，不改变生产 Runtime。"
+                ),
+            },
             {
                 "id": "stage1_admin_structured_views",
                 "snapshot_id": "security_invariants",
@@ -940,8 +1393,14 @@ def _manifest(
 
 def write_baseline(root: Path) -> None:
     fixture_path = root / FIXTURE_RELATIVE_PATH
+    runtime_fixture_path = root / RUNTIME_FIXTURE_RELATIVE_PATH
     fixture = load_fixture(fixture_path)
-    snapshots = build_behavior_snapshots(root, fixture)
+    runtime_fixture = load_runtime_fixture(runtime_fixture_path)
+    snapshots = build_behavior_snapshots(
+        root,
+        fixture,
+        runtime_fixture,
+    )
     snapshot_paths: dict[str, Path] = {}
     for snapshot_name, payload in sorted(snapshots.items()):
         path = root / GOLDEN_RELATIVE_ROOT / f"{snapshot_name}.json"
@@ -950,6 +1409,7 @@ def write_baseline(root: Path) -> None:
     manifest = _manifest(
         root,
         fixture_path=fixture_path,
+        runtime_fixture_path=runtime_fixture_path,
         snapshot_paths=snapshot_paths,
     )
     _write_atomic(root / MANIFEST_RELATIVE_PATH, render_json(manifest))
@@ -958,9 +1418,15 @@ def write_baseline(root: Path) -> None:
 def check_baseline(root: Path) -> list[str]:
     errors: list[str] = []
     fixture_path = root / FIXTURE_RELATIVE_PATH
+    runtime_fixture_path = root / RUNTIME_FIXTURE_RELATIVE_PATH
     try:
         fixture = load_fixture(fixture_path)
-        snapshots = build_behavior_snapshots(root, fixture)
+        runtime_fixture = load_runtime_fixture(runtime_fixture_path)
+        snapshots = build_behavior_snapshots(
+            root,
+            fixture,
+            runtime_fixture,
+        )
     except BehaviorBaselineError as exc:
         return [str(exc)]
 
@@ -985,6 +1451,17 @@ def check_baseline(root: Path) -> list[str]:
     fixture_record = manifest.get("fixture") or {}
     if fixture_record.get("sha256") != _sha256_file(fixture_path):
         errors.append("行为 fixture SHA-256 已漂移")
+    runtime_fixture_record = manifest.get("runtime_fixture") or {}
+    if runtime_fixture_record.get("path") != (
+        RUNTIME_FIXTURE_RELATIVE_PATH.as_posix()
+    ):
+        errors.append("Runtime 行为 fixture 路径已漂移")
+    if runtime_fixture_record.get("sha256") != _sha256_file(
+        runtime_fixture_path
+    ):
+        errors.append("Runtime 行为 fixture SHA-256 已漂移")
+    if runtime_fixture_record.get("framework_dependency") != "none":
+        errors.append("Runtime 行为 fixture 不得依赖具体 Agent 框架")
     records = {
         item.get("id"): item
         for item in manifest.get("snapshots", [])

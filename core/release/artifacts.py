@@ -75,7 +75,6 @@ _BUILD_PROFILES = (
             "requirements-prod.lock",
             "webui/package-lock.json",
             "prompts.v2.default",
-            "vendor/KohakuTerrarium",
         ),
         required_input_keys=(
             "prompt_defaults",
@@ -120,9 +119,7 @@ def _build_profile_registry() -> RegistrySnapshot[BuildProfile]:
 BUILD_PROFILE_REGISTRY = _build_profile_registry()
 
 
-def _validate_commit(value: str, *, field_name: str, required: bool) -> str:
-    if not value and not required:
-        return ""
+def _validate_commit(value: str, *, field_name: str) -> str:
     if _GIT_COMMIT_PATTERN.fullmatch(value) is None:
         raise ArtifactManifestError(
             f"{field_name} 必须是 40 位小写 Git commit"
@@ -197,18 +194,11 @@ class ArtifactSource:
 
     git_full_commit: str
     git_dirty: bool | None
-    kt_commit: str
 
     def __post_init__(self) -> None:
         _validate_commit(
             self.git_full_commit,
             field_name="source.git_full_commit",
-            required=True,
-        )
-        _validate_commit(
-            self.kt_commit,
-            field_name="source.kt_commit",
-            required=False,
         )
         if (
             self.git_dirty is not None
@@ -222,7 +212,6 @@ class ArtifactSource:
         return {
             "git_full_commit": self.git_full_commit,
             "git_dirty": self.git_dirty,
-            "kt_commit": self.kt_commit,
         }
 
 
@@ -254,7 +243,7 @@ class ArtifactManifest:
 
     def _content_dict(self) -> dict[str, object]:
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "profile_id": self.profile_id,
             "artifact_id": self.artifact_id,
             "artifact_kind": self.artifact_kind,
@@ -356,10 +345,6 @@ def build_artifact_manifest(
             raise ArtifactManifestError(
                 "正式 Artifact 必须来自 clean Git 工作树"
             )
-        if profile_id == "nanobot-runtime" and not source.kt_commit:
-            raise ArtifactManifestError(
-                "nanobot-runtime 必须记录 KT 固定提交"
-            )
         if not normalized_hashes:
             raise ArtifactManifestError(
                 "正式 Artifact 必须记录输入 Hash"
@@ -416,7 +401,7 @@ def build_artifact_manifest(
             )
 
     content = {
-        "schema_version": 2,
+        "schema_version": 3,
         "profile_id": profile_id,
         "artifact_id": profile_id,
         "artifact_kind": profile.artifact_kind,
@@ -484,7 +469,6 @@ def build_observed_runtime_artifact(
         source=ArtifactSource(
             git_full_commit=revision,
             git_dirty=None,
-            kt_commit="",
         ),
         input_hashes={},
         schema_migration_head="",
@@ -659,7 +643,6 @@ _ARTIFACT_FIELDS = frozenset({
 _SOURCE_FIELDS = frozenset({
     "git_full_commit",
     "git_dirty",
-    "kt_commit",
 })
 _RELEASE_FIELDS = frozenset({
     "schema_version",
@@ -679,7 +662,7 @@ def _artifact_from_dict(value: object) -> ArtifactManifest:
         field_name="ArtifactManifest",
     )
     try:
-        if payload["schema_version"] != 2:
+        if payload["schema_version"] != 3:
             raise ReleaseManifestError(
                 "ArtifactManifest schema_version 无效"
             )
@@ -695,7 +678,6 @@ def _artifact_from_dict(value: object) -> ArtifactManifest:
         source = ArtifactSource(
             git_full_commit=str(source_payload["git_full_commit"]),
             git_dirty=source_payload["git_dirty"],
-            kt_commit=str(source_payload["kt_commit"]),
         )
         artifact = build_artifact_manifest(
             profile_id=str(payload["profile_id"]),

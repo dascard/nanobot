@@ -427,37 +427,25 @@ class TestGeneratedImagesAdmin:
     def test_create_generated_image_response(self, client, auth_header, monkeypatch, tmp_path):
         import base64
 
-        from kohakuterrarium.modules.tool.base import ToolResult
-
         from core import generated_images
+        import core.media_tool_runtime as media_runtime
 
         seen = {}
         monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
 
-        async def fake_execute(self, args):
-            seen["args"] = dict(args)
-            saved = generated_images.save_generated_image(
-                base64.b64encode(b"fake-png").decode("ascii"),
-                prompt=args["prompt"],
-                metadata={
-                    "model": "gpt-image",
-                    "size": args["size"],
-                    "quality": args["quality"],
-                    "background": args["background"],
-                },
-            )
-            return ToolResult(output=json.dumps({
-                "reply_token": saved["reply_token"],
-                "mime": "image/png",
-                "model": "gpt-image",
-                "size": args["size"],
-                "quality": args["quality"],
-                "background": args["background"],
-            }, ensure_ascii=False), exit_code=0)
+        class FakeGenerationProvider:
+            def generate(self, **kwargs):
+                seen["args"] = dict(kwargs)
+                return {
+                    "image_b64": base64.b64encode(b"fake-png").decode("ascii"),
+                    "revised_prompt": "",
+                    "text_output": "",
+                }
 
         monkeypatch.setattr(
-            "creatures.nanobot.prompts.skills.image_generation.tool.ImageGenerationTool.execute",
-            fake_execute,
+            media_runtime,
+            "get_image_generation_provider",
+            lambda: FakeGenerationProvider(),
         )
 
         r = client.post(
@@ -491,14 +479,16 @@ class TestGeneratedImagesAdmin:
         assert image.content == b"fake-png"
 
     def test_create_generated_image_tool_failure_returns_502(self, client, auth_header, monkeypatch):
-        from kohakuterrarium.modules.tool.base import ToolResult
+        import core.media_tool_runtime as media_runtime
 
-        async def fake_execute(self, args):
-            return ToolResult(error="Image generation failed: upstream unavailable")
+        class FailingGenerationProvider:
+            def generate(self, **_kwargs):
+                raise RuntimeError("upstream unavailable")
 
         monkeypatch.setattr(
-            "creatures.nanobot.prompts.skills.image_generation.tool.ImageGenerationTool.execute",
-            fake_execute,
+            media_runtime,
+            "get_image_generation_provider",
+            lambda: FailingGenerationProvider(),
         )
 
         r = client.post(

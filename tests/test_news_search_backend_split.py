@@ -13,7 +13,7 @@ def test_search_backend_module_exposes_split_entrypoints():
 
 
 def test_tool_webtools_search_uses_legacy_patch_points(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     rss_results = [
         {
@@ -63,7 +63,7 @@ def test_tool_webtools_search_uses_legacy_patch_points(monkeypatch):
 
 
 def test_tool_fetch_juya_rss_uses_legacy_urlopen_patch(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     xml = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss><channel><item>
@@ -93,7 +93,7 @@ def test_tool_fetch_juya_rss_uses_legacy_urlopen_patch(monkeypatch):
 
 
 def test_tool_extract_web_content_uses_legacy_trafilatura_patch(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     monkeypatch.setattr(news_tool.trafilatura, "fetch_url", lambda url, timeout=5: "<html>ok</html>")
     monkeypatch.setattr(

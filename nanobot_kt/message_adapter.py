@@ -10,6 +10,8 @@ from typing import Any
 from core.agent_runtime.contracts import (
     AgentTurnRequest,
     RequestRuntimeContext,
+    RuntimeActor,
+    RuntimeActorType,
     RuntimeChatType,
     RuntimeOwnerType,
     RuntimePrincipal,
@@ -96,8 +98,9 @@ def _build_runtime_request(
         if message.chat_stream.chat_type == "group"
         else RuntimeChatType.PRIVATE
     )
+    request_id = _runtime_request_id(message, content=content)
     context = RequestRuntimeContext(
-        request_id=_runtime_request_id(message, content=content),
+        request_id=request_id,
         principal=RuntimePrincipal(
             platform=str(message.principal.platform),
             owner_type=RuntimeOwnerType(message.principal.owner_type),
@@ -106,6 +109,23 @@ def _build_runtime_request(
         session_id=message.chat_stream.chat_stream_id,
         chat_type=chat_type,
         trace_id=message.trace.trace_id,
+        turn_id=(
+            message.message_id
+            or request_id
+        ),
+        correlation_id=(
+            message.trace.correlation_id
+            or message.trace.trace_id
+            or request_id
+        ),
+        actor=RuntimeActor(
+            (
+                RuntimeActorType.AGENT
+                if message.gateway.sender_is_bot
+                else RuntimeActorType.USER
+            ),
+            message.actor.actor_id,
+        ),
         message_id=message.message_id,
     )
     return AgentTurnRequest(

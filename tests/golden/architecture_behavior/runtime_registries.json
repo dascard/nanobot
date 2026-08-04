@@ -1680,6 +1680,66 @@
   "schema_version": 1,
   "settings": [
     {
+      "category": "agent",
+      "dangerous": false,
+      "default": "native",
+      "env_name": "NANOBOT_AGENT_RUNTIME_DEFAULT",
+      "key": "agent.runtime.default",
+      "owner_module": "runtime.agent",
+      "restart_required": true,
+      "safety_class": "invariant",
+      "source_precedence": [
+        "environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
+      "category": "agent",
+      "dangerous": false,
+      "default": false,
+      "env_name": "NANOBOT_AGENT_RUNTIME_KT_ENABLED",
+      "key": "agent.runtime.kt_enabled",
+      "owner_module": "runtime.agent",
+      "restart_required": true,
+      "safety_class": "invariant",
+      "source_precedence": [
+        "environment",
+        "default"
+      ],
+      "value_type": "bool"
+    },
+    {
+      "category": "agent",
+      "dangerous": false,
+      "default": 0,
+      "env_name": "NANOBOT_AGENT_RUNTIME_KT_ROLLOUT_BPS",
+      "key": "agent.runtime.kt_rollout_basis_points",
+      "owner_module": "runtime.agent",
+      "restart_required": true,
+      "safety_class": "invariant",
+      "source_precedence": [
+        "environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "agent",
+      "dangerous": false,
+      "default": "",
+      "env_name": "NANOBOT_AGENT_RUNTIME_KT_SESSIONS",
+      "key": "agent.runtime.kt_session_allowlist",
+      "owner_module": "runtime.agent",
+      "restart_required": true,
+      "safety_class": "invariant",
+      "source_precedence": [
+        "environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
       "category": "memory",
       "dangerous": false,
       "default": false,

@@ -208,6 +208,10 @@ def test_kt_adapter_identity_fields_override_untrusted_metadata():
         == "qq:group:42"
     )
     assert invocation.runtime_request.context.request_id == "m-1"
+    assert invocation.runtime_request.context.turn_id == "m-1"
+    assert invocation.runtime_request.context.correlation_id == "m-1"
+    assert invocation.runtime_request.context.actor.actor_type.value == "user"
+    assert invocation.runtime_request.context.actor.actor_id == "u-1"
     assert invocation.runtime_request.content == (
         "<user_input>\n你好\n</user_input>"
     )
@@ -267,6 +271,8 @@ def test_kt_adapter_uses_trace_request_id_before_message_id():
         == "req-authoritative"
     )
     assert invocation.runtime_request.context.trace_id == "trace-1"
+    assert invocation.runtime_request.context.turn_id == "m-lower-priority"
+    assert invocation.runtime_request.context.correlation_id == "trace-1"
     assert invocation.runtime_request.context.message_id == (
         "m-lower-priority"
     )

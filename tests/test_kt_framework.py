@@ -248,14 +248,14 @@ class TestSQLAnalysisTool:
     """Test the SQLAnalysisTool BaseTool adapter."""
 
     def test_tool_metadata(self):
-        from creatures.nanobot.prompts.skills.sql_analysis.tool import SQLAnalysisTool
+        from nanobot_kt.tools.sql_analysis import SQLAnalysisTool
         tool = SQLAnalysisTool()
         assert tool.tool_name == "sql_analysis"
         assert "SQL" in tool.description or "sql" in tool.description.lower()
 
-    @patch("creatures.nanobot.prompts.skills.sql_analysis.tool.AnalysisSandbox")
+    @patch("nanobot_kt.tools.sql_analysis.AnalysisSandbox")
     def test_execute_success(self, MockSandbox):
-        from creatures.nanobot.prompts.skills.sql_analysis.tool import SQLAnalysisTool
+        from nanobot_kt.tools.sql_analysis import SQLAnalysisTool
         mock_instance = MockSandbox.return_value
         mock_instance.run_query.return_value = "id|count\n1|42"
 
@@ -264,9 +264,9 @@ class TestSQLAnalysisTool:
         assert result.success
         assert "42" in result.output
 
-    @patch("creatures.nanobot.prompts.skills.sql_analysis.tool.AnalysisSandbox")
+    @patch("nanobot_kt.tools.sql_analysis.AnalysisSandbox")
     def test_execute_empty_sql(self, MockSandbox):
-        from creatures.nanobot.prompts.skills.sql_analysis.tool import SQLAnalysisTool
+        from nanobot_kt.tools.sql_analysis import SQLAnalysisTool
         tool = SQLAnalysisTool()
         result = run_async(tool.execute({"sql": ""}))
         assert not result.success
@@ -276,13 +276,13 @@ class TestPythonSandboxTool:
     """Test the PythonSandboxTool BaseTool adapter."""
 
     def test_tool_metadata(self):
-        from creatures.nanobot.prompts.skills.python_sandbox.tool import PythonSandboxTool
+        from nanobot_kt.tools.python_sandbox import PythonSandboxTool
         tool = PythonSandboxTool()
         assert tool.tool_name == "python_sandbox"
 
-    @patch("creatures.nanobot.prompts.skills.python_sandbox.tool.AnalysisSandbox")
+    @patch("nanobot_kt.tools.python_sandbox.AnalysisSandbox")
     def test_execute_is_hard_disabled(self, MockSandbox):
-        from creatures.nanobot.prompts.skills.python_sandbox.tool import PythonSandboxTool
+        from nanobot_kt.tools.python_sandbox import PythonSandboxTool
 
         tool = PythonSandboxTool()
         result = run_async(tool.execute({"code": "print(42)"}))
@@ -295,13 +295,13 @@ class TestAiDailyTool:
     """Test the AiDailyTool BaseTool adapter."""
 
     def test_tool_metadata(self):
-        from creatures.nanobot.prompts.skills.news_search.tool import AiDailyTool
+        from nanobot_kt.tools.ai_daily import AiDailyTool
         tool = AiDailyTool()
         assert tool.tool_name == "ai_daily"
 
-    @patch("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline")
+    @patch("nanobot_kt.tools.ai_daily._run_news_daily_pipeline")
     def test_execute_success(self, mock_daily):
-        from creatures.nanobot.prompts.skills.news_search.tool import AiDailyTool
+        from nanobot_kt.tools.ai_daily import AiDailyTool
         mock_daily.return_value = "<article>AI news: GPT-5 released</article>"
 
         tool = AiDailyTool()
@@ -343,7 +343,7 @@ class TestNanobotBridge:
                 raise RuntimeError("模型调用失败")
             return AgentTurnResult(raw_result=None, messages=())
 
-        runtime.execute_turn = AsyncMock(side_effect=execute_turn)
+        runtime.run = AsyncMock(side_effect=execute_turn)
         bridge._runtime = runtime
 
         result = run_async(bridge._run_model_loop(
@@ -378,7 +378,7 @@ class TestNanobotBridge:
     ):
         """合法 reply、富 HTML 和 no_reply 都应由当前模型成功终止。"""
         import json
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
 
         bridge = NanobotBridge()
@@ -432,7 +432,7 @@ class TestNanobotBridge:
             runtime.read_conversation.return_value = runtime_messages
             return AgentTurnResult(raw_result=None, messages=runtime_messages)
 
-        runtime.execute_turn = AsyncMock(side_effect=execute_turn)
+        runtime.run = AsyncMock(side_effect=execute_turn)
         tracker = MagicMock(
             record_failure=AsyncMock(),
             record_success=AsyncMock(),
@@ -454,7 +454,7 @@ class TestNanobotBridge:
 
         assert result.target_model == "model-a"
         assert result.attempts == 1
-        runtime.execute_turn.assert_awaited_once()
+        runtime.run.assert_awaited_once()
         tracker.record_success.assert_awaited_once_with("model-a")
         tracker.record_failure.assert_not_awaited()
         if terminal_kind == "no_reply":
@@ -467,7 +467,7 @@ class TestNanobotBridge:
         """Codex 成功只清理当前账号熔断，并把成功账号设为会话粘性账号。"""
         import json
 
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
 
         bridge = NanobotBridge()
@@ -486,7 +486,7 @@ class TestNanobotBridge:
             runtime.read_conversation.return_value = runtime_messages
             return AgentTurnResult(raw_result=None, messages=runtime_messages)
 
-        runtime.execute_turn = AsyncMock(side_effect=execute_turn)
+        runtime.run = AsyncMock(side_effect=execute_turn)
         bridge._runtime = runtime
         tracker = MagicMock(
             record_failure=AsyncMock(),
@@ -557,7 +557,7 @@ class TestNanobotBridge:
             bridge._output._buffer.append(raw_output)
             return AgentTurnResult(raw_result=None, messages=())
 
-        runtime.execute_turn = AsyncMock(side_effect=execute_turn)
+        runtime.run = AsyncMock(side_effect=execute_turn)
         bridge._runtime = runtime
         model_loop = run_async(bridge._run_model_loop(
             candidate_models=[{"id": "only-model"}],
@@ -595,11 +595,8 @@ class TestNanobotBridge:
         tracker.record_success.assert_not_awaited()
 
     def test_bridge_trace_finalizer_finishes_once(self, monkeypatch):
-        from nanobot_kt.bridge import BridgeTraceFinalizer, NanobotBridge
+        from nanobot_kt.bridge import BridgeTraceFinalizer
 
-        bridge = NanobotBridge.__new__(NanobotBridge)
-        restore_calls = []
-        bridge._restore_saved_tools = lambda: restore_calls.append(True)
         finish_calls = []
         reset_trace_calls = []
         reset_final_tools_calls = []
@@ -623,7 +620,6 @@ class TestNanobotBridge:
         )
 
         finalizer = BridgeTraceFinalizer(
-            bridge=bridge,
             run_id="run-1",
             trace_tokens="trace-token",
             run_meta={"message_id": "m1"},
@@ -637,33 +633,25 @@ class TestNanobotBridge:
         finalizer.finish(status="error", error="late")
 
         assert len(finish_calls) == 1
-        assert restore_calls == [True]
         assert reset_trace_calls == ["trace-token"]
         assert reset_final_tools_calls == ["final-token"]
         assert reset_tool_plan_calls == ["tool-token"]
 
-    @pytest.mark.parametrize("failing_step", [None, "restore", "finish_run"])
+    @pytest.mark.parametrize("failing_step", [None, "finish_run"])
     def test_bridge_trace_finalizer_runs_all_cleanup_steps_best_effort(
         self,
         monkeypatch,
         failing_step,
     ):
-        from nanobot_kt.bridge import BridgeTraceFinalizer, NanobotBridge
+        from nanobot_kt.bridge import BridgeTraceFinalizer
 
         events = []
-        bridge = NanobotBridge.__new__(NanobotBridge)
-
-        def restore_saved_tools():
-            events.append("restore-tools")
-            if failing_step == "restore":
-                raise RuntimeError("restore failed")
 
         def finish_run(*_args, **_kwargs):
             events.append("finish-run")
             if failing_step == "finish_run":
                 raise RuntimeError("finish failed")
 
-        bridge._restore_saved_tools = restore_saved_tools
         monkeypatch.setattr("core.tracing.RunTracer.finish_run", finish_run)
         monkeypatch.setattr(
             "core.tool_plan.reset_current_tool_plan",
@@ -679,7 +667,6 @@ class TestNanobotBridge:
         )
 
         finalizer = BridgeTraceFinalizer(
-            bridge=bridge,
             run_id="run-best-effort",
             trace_tokens="trace-token",
             run_meta={},
@@ -693,7 +680,6 @@ class TestNanobotBridge:
         finalizer.finish("error", error="late")
 
         assert events == [
-            "restore-tools",
             "finish-run",
             "reset-tool-plan",
             "reset-final-tools",
@@ -703,18 +689,6 @@ class TestNanobotBridge:
         assert finalizer.tool_plan_token is None
         assert finalizer.final_tools_token is None
         assert finalizer.trace_tokens is None
-
-    def test_strip_kt_framework_prompt_sections_keeps_project_prompt_only(self):
-        from nanobot_kt.bridge import _strip_kt_framework_prompt_sections
-
-        prompt = (
-            "## 交互定位\n\n项目提示\n\n"
-            "## Available Functions\n\n- `reply`: 回复\n\n"
-            "## Skills\n\n- `test`: skill\n\n"
-            "## Tool Usage\n\nTools are called via API"
-        )
-
-        assert _strip_kt_framework_prompt_sections(prompt) == "## 交互定位\n\n项目提示"
 
     @pytest.mark.asyncio
     async def test_get_bridge_requires_explicit_lifecycle_and_stays_singleton(self):
@@ -996,6 +970,7 @@ class TestNanobotBridge:
         mock_load.return_value = mock_config
 
         mock_agent = MagicMock()
+        mock_agent.config = mock_config
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = ["sql_analysis", "python_sandbox"]
         MockAgent.return_value = mock_agent
@@ -1009,11 +984,35 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
+    def test_bridge_start_native_does_not_create_kt_agent(
+        self,
+        MockAgent,
+        mock_load,
+    ):
+        from core.agent_runtime import AgentRuntimeKind, NativeAgentRuntime
+        from nanobot_kt.bridge import NanobotBridge
+
+        bridge = NanobotBridge(
+            "creatures/nanobot",
+            runtime_kind=AgentRuntimeKind.NATIVE,
+        )
+        run_async(bridge.start())
+        try:
+            assert isinstance(bridge._runtime, NativeAgentRuntime)
+            assert bridge._runtime.runtime_id == "native:nanobot"
+            assert bridge.agent is None
+            mock_load.assert_not_called()
+            MockAgent.assert_not_called()
+        finally:
+            run_async(bridge.stop())
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_returns_output(
         self, MockAgent, mock_load, _stub_healthy_reply_route
     ):
         """Test that handle_message() returns reply tool output."""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         import json
 
@@ -1035,7 +1034,7 @@ class TestNanobotBridge:
         async def fake_process(event):
             pass
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -1055,7 +1054,7 @@ class TestNanobotBridge:
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_serializes_same_session(self, MockAgent, mock_load, monkeypatch):
         """同一个 session 的模型处理必须串行，避免共享 conversation 串扰。"""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         import json
 
@@ -1110,7 +1109,7 @@ class TestNanobotBridge:
             await asyncio.sleep(0.03)
             active -= 1
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         async def _run():
@@ -1174,7 +1173,7 @@ class TestNanobotBridge:
     def test_handle_message_uses_multimodal_event_for_files(
         self, MockAgent, mock_load, _stub_healthy_reply_route
     ):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         from kohakuterrarium.llm.message import ImagePart
         import json
@@ -1204,7 +1203,7 @@ class TestNanobotBridge:
             to_thread_calls.append((func, args, kwargs))
             return func(*args, **kwargs)
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
         with patch(
             "nanobot_kt.bridge.prepare_image_parts",
@@ -1249,7 +1248,7 @@ class TestNanobotBridge:
     def test_handle_message_with_files_requests_vision_candidates(
         self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
     ):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from kohakuterrarium.llm.message import ImagePart
         from nanobot_kt.bridge import NanobotBridge
         import json
@@ -1300,7 +1299,7 @@ class TestNanobotBridge:
             conversation=mock_conv,
             llm=MagicMock(config=MagicMock(model="old-model")),
         )
-        mock_agent._process_event = AsyncMock(return_value=None)
+        mock_agent.inject_event = AsyncMock(return_value=None)
         MockAgent.return_value = mock_agent
 
         with patch(
@@ -1341,7 +1340,7 @@ class TestNanobotBridge:
     def test_handle_message_with_files_degrades_to_text_without_vision_candidate(
         self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
     ):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from kohakuterrarium.llm.message import ImagePart
         from nanobot_kt.bridge import NanobotBridge
         import json
@@ -1400,7 +1399,7 @@ class TestNanobotBridge:
             conversation=mock_conv,
             llm=MagicMock(config=MagicMock(model="old-model")),
         )
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         with patch(
@@ -1444,7 +1443,7 @@ class TestNanobotBridge:
     def test_handle_message_passes_runtime_context_to_prompt_runtime(
         self, MockAgent, mock_load, monkeypatch, _stub_healthy_reply_route
     ):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         from nanobot_kt.prompt_runtime import PromptRuntimeResult
         import json
@@ -1467,7 +1466,7 @@ class TestNanobotBridge:
         async def fake_process(event):
             pass
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         route_client = MagicMock()
@@ -1543,7 +1542,7 @@ class TestNanobotBridge:
     def test_handle_message_passes_platform_to_tool_plan_and_decision(
         self, MockAgent, mock_load, monkeypatch, _stub_healthy_reply_route
     ):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from core.tool_plan import ToolPlan
         from nanobot_kt.bridge import NanobotBridge
         from nanobot_kt.prompt_runtime import PromptRuntimeResult
@@ -1567,7 +1566,7 @@ class TestNanobotBridge:
         async def fake_process(event):
             pass
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         route_client = MagicMock()
@@ -1634,7 +1633,7 @@ class TestNanobotBridge:
     def test_handle_message_uses_reply_model_intel_floor(
         self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
     ):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         import json
 
@@ -1687,7 +1686,7 @@ class TestNanobotBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="old-model")))
-        mock_agent._process_event = AsyncMock(return_value=None)
+        mock_agent.inject_event = AsyncMock(return_value=None)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -1816,8 +1815,9 @@ class TestNanobotBridge:
         llm = MagicMock(config=MagicMock(model="old-model"))
 
         async def fake_process(_event):
-            attempts_by_request[-1].append(llm.config.model)
-            if llm.config.model == "auto-model":
+            current_model = mock_agent.controller.llm.model
+            attempts_by_request[-1].append(current_model)
+            if current_model == "auto-model":
                 bridge._output._buffer.append("自动降级回复")
             return None
 
@@ -1828,7 +1828,7 @@ class TestNanobotBridge:
             conversation=mock_conv,
             llm=llm,
         )
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -1982,7 +1982,7 @@ class TestNanobotBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_agent.controller = MagicMock(conversation=conversation, llm=llm)
-        mock_agent._process_event = AsyncMock(return_value=None)
+        mock_agent.inject_event = AsyncMock(return_value=None)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2010,7 +2010,7 @@ class TestNanobotBridge:
         result = run_async(_run())
 
         assert result == ""
-        mock_agent._process_event.assert_not_awaited()
+        mock_agent.inject_event.assert_not_awaited()
         tracker.record_success.assert_not_awaited()
 
     @patch("nanobot_kt.bridge.registry")
@@ -2021,7 +2021,7 @@ class TestNanobotBridge:
         self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
     ):
         """settings 返回 disabled 模型 → 回退到自动路由"""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         import json
 
@@ -2077,7 +2077,7 @@ class TestNanobotBridge:
             conversation=mock_conv,
             llm=MagicMock(config=MagicMock(model="old-model")),
         )
-        mock_agent._process_event = AsyncMock(return_value=None)
+        mock_agent.inject_event = AsyncMock(return_value=None)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2102,7 +2102,7 @@ class TestNanobotBridge:
         self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
     ):
         """settings 返回不支持流式的模型 → 回退到自动路由。"""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         import json
 
@@ -2168,7 +2168,7 @@ class TestNanobotBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=llm)
-        mock_agent._process_event = AsyncMock(return_value=None)
+        mock_agent.inject_event = AsyncMock(return_value=None)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2186,7 +2186,7 @@ class TestNanobotBridge:
 
         assert result == "能力回退"
         assert auto_kwargs["required_capabilities"]["supports_stream"] is True
-        assert llm.config.model == "auto-model"
+        assert mock_agent.controller.llm.model == "auto-model"
 
     @patch("nanobot_kt.bridge.registry")
     @patch("nanobot_kt.bridge.NewAPIClient")
@@ -2195,7 +2195,7 @@ class TestNanobotBridge:
     def test_reply_route_uses_route_provider_for_registry_candidates(
         self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
     ):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         import json
 
@@ -2243,13 +2243,11 @@ class TestNanobotBridge:
         mock_conv.find_last_user_index.return_value = -1
 
         llm = MagicMock(config=MagicMock(model="old-model"))
-        llm.base_url = "http://old-provider.test/v1"
-        llm._api_key = "old-key"
         mock_agent = MagicMock()
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=llm)
-        mock_agent._process_event = AsyncMock(return_value=None)
+        mock_agent.inject_event = AsyncMock(return_value=None)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2264,9 +2262,9 @@ class TestNanobotBridge:
         assert client_kwargs["registry_provider"] == "openrouter"
         mock_registry.get_models_by_provider.assert_called_with("openrouter")
         assert route_client.get_ordered_candidates.call_args.kwargs["provider"] == "openrouter"
-        assert llm.provider_name == "openrouter"
+        assert mock_agent.controller.llm.nanobot_provider_id == "openrouter"
 
-    @patch("nanobot_kt.bridge.AsyncOpenAI")
+    @patch("kohakuterrarium.llm.openai.AsyncOpenAI")
     @patch("nanobot_kt.bridge.registry")
     @patch("nanobot_kt.bridge.NewAPIClient")
     @patch("nanobot_kt.bridge.load_agent_config")
@@ -2274,7 +2272,7 @@ class TestNanobotBridge:
     def test_reply_route_rebuilds_controller_client_when_api_key_changes(
         self, MockAgent, mock_load, MockClient, mock_registry, MockAsyncOpenAI, monkeypatch
     ):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         import json
 
@@ -2318,7 +2316,7 @@ class TestNanobotBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=llm)
-        mock_agent._process_event = AsyncMock(return_value=None)
+        mock_agent.inject_event = AsyncMock(return_value=None)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2330,11 +2328,13 @@ class TestNanobotBridge:
         result = run_async(_run())
 
         assert result == "换 key 回复"
-        assert llm._api_key == "new-key"
+        replacement = mock_agent.controller.llm.provider
+        assert replacement is not llm
+        assert replacement.config.model == "manual-model"
         MockAsyncOpenAI.assert_called_once()
         assert MockAsyncOpenAI.call_args.kwargs["api_key"] == "new-key"
 
-    @patch("nanobot_kt.bridge.AsyncOpenAI")
+    @patch("kohakuterrarium.llm.openai.AsyncOpenAI")
     @patch("nanobot_kt.bridge.registry")
     @patch("nanobot_kt.bridge.NewAPIClient")
     @patch("nanobot_kt.bridge.load_agent_config")
@@ -2342,7 +2342,7 @@ class TestNanobotBridge:
     def test_reply_route_syncs_controller_model_params(
         self, MockAgent, mock_load, MockClient, mock_registry, MockAsyncOpenAI, monkeypatch
     ):
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         import json
 
@@ -2396,7 +2396,7 @@ class TestNanobotBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=llm)
-        mock_agent._process_event = AsyncMock(return_value=None)
+        mock_agent.inject_event = AsyncMock(return_value=None)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2408,12 +2408,13 @@ class TestNanobotBridge:
         result = run_async(_run())
 
         assert result == "参数同步回复"
-        assert llm.config.temperature == 0.2
-        assert llm.config.max_tokens == 1234
-        assert llm._timeout == 88
-        assert llm.provider_name == "newapi"
+        replacement = mock_agent.controller.llm.provider
+        assert replacement is not llm
+        assert replacement.config.temperature == 0.2
+        assert replacement.config.max_tokens == 1234
+        assert replacement.provider_name == "newapi"
         assert install_calls
-        assert install_calls[0][0] is llm
+        assert install_calls[0][0] is replacement
         assert install_calls[0][1]["provider"] == "newapi"
         assert install_calls[0][1]["base_url"] == "http://same-provider.test/v1"
         MockAsyncOpenAI.assert_called_once()
@@ -2429,7 +2430,7 @@ class TestNanobotBridge:
         from types import SimpleNamespace
         import json
 
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.tools.reply import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
 
         monkeypatch.setattr("core.settings_service.settings.get", lambda key, default=None: default)
@@ -2482,7 +2483,7 @@ class TestNanobotBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=llm)
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2499,10 +2500,10 @@ class TestNanobotBridge:
         result = run_async(_run())
 
         assert result == "第二个模型回复"
-        assert mock_agent._process_event.await_count == 2
+        assert mock_agent.inject_event.await_count == 2
         failure_tracker.record_failure.assert_awaited_once_with("model-a")
         failure_tracker.record_success.assert_awaited_once_with("model-b")
-        assert llm.config.model == "model-b"
+        assert mock_agent.controller.llm.model == "model-b"
         # Bridge 已经只经 AgentRuntimePort 回滚 conversation，不再调用 KT 私有截断 API。
         mock_conv.truncate_from.assert_not_called()
 
@@ -2533,7 +2534,7 @@ class TestNanobotBridge:
         async def fake_process(_event):
             bridge._output._buffer.append("我给你整理了几条新闻")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2582,7 +2583,7 @@ class TestNanobotBridge:
         async def fake_process(_event):
             bridge._output._buffer.append("我给你总结一下这个群")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2643,7 +2644,7 @@ class TestNanobotBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
-        mock_agent._process_event = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_agent.inject_event = AsyncMock(side_effect=asyncio.TimeoutError())
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2679,7 +2680,7 @@ class TestNanobotBridge:
         async def fake_process(_event):
             bridge._output._buffer.append("ok")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2737,7 +2738,7 @@ class TestNanobotBridge:
         async def fake_process(_event):
             pass
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2816,7 +2817,7 @@ class TestReplyContract:
         async def fake_process(_event):
             bridge._output._buffer.append("ok")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2863,7 +2864,7 @@ class TestReplyContract:
         async def fake_process(_event):
             bridge._output._buffer.append("some irrelevant text")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2909,7 +2910,7 @@ class TestReplyContract:
         async def fake_process(_event):
             pass
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -2962,7 +2963,7 @@ class TestReplyContract:
         async def fake_process(_event):
             bridge._output._buffer.append(structured)
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3034,7 +3035,7 @@ class TestReplyContract:
                     call_id="call_retry_reply",
                 ))
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3046,7 +3047,7 @@ class TestReplyContract:
         result = run_async(_run())
 
         assert result == "重试后的回复"
-        assert mock_agent._process_event.await_count == 2
+        assert mock_agent.inject_event.await_count == 2
         assert "你刚才没有调用 reply 或 no_reply 工具" in process_calls[1]
         assert "<reply_contract_retry>" in process_calls[1]
         logs = db_session.query(ReplyContractCheckLog).order_by(ReplyContractCheckLog.attempt.asc()).all()
@@ -3094,7 +3095,7 @@ class TestReplyContract:
         async def fake_process(_event):
             bridge._output._buffer.append("还是直接输出普通文本")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3106,7 +3107,7 @@ class TestReplyContract:
         result = run_async(_run())
 
         assert result == ""
-        assert mock_agent._process_event.await_count == 2
+        assert mock_agent.inject_event.await_count == 2
         assert bridge.is_no_tool_call("s-suppress") is True
         logs = db_session.query(ReplyContractCheckLog).order_by(ReplyContractCheckLog.attempt.asc()).all()
         assert [log.result for log in logs] == ["no_tool_call", "suppressed"]
@@ -3160,7 +3161,7 @@ class TestReplyContract:
         async def fake_process(_event):
             bridge._output._buffer.append("我已经调用 reply 工具发送了")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3222,7 +3223,7 @@ class TestReplyContract:
         async def fake_process(_event):
             bridge._output._buffer.append(outputs.pop(0))
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3266,7 +3267,7 @@ class TestReplyContract:
         async def fake_process(_event):
             pass
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3334,7 +3335,7 @@ class TestNoteBotRepliedBridge:
         async def fake_process(_event):
             bridge._output._buffer.append("群聊回复")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3380,7 +3381,7 @@ class TestNoteBotRepliedBridge:
         async def fake_process(_event):
             bridge._output._buffer.append("私聊回复")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3426,7 +3427,7 @@ class TestNoteBotRepliedBridge:
         async def fake_process(_event):
             bridge._output._buffer.append("dry-run 回复")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3467,7 +3468,7 @@ class TestNoteBotRepliedBridge:
         async def fake_process(_event):
             pass
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
@@ -3514,7 +3515,7 @@ class TestNoteBotRepliedBridge:
         async def fake_process(_event):
             bridge._output._buffer.append("回复")
 
-        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        mock_agent.inject_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()

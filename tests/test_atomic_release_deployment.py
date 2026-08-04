@@ -54,7 +54,6 @@ def _release(
             source=ArtifactSource(
                 git_full_commit=revision,
                 git_dirty=False,
-                kt_commit="f" * 40,
             ),
             input_hashes={
                 "prompt_defaults": "1" * 64,

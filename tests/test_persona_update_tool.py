@@ -47,7 +47,7 @@ async def test_persona_update_rejects_missing_or_mismatched_actor_before_databas
     args,
 ):
     from core.database import ChatLog, Persona, PersonaFact
-    from creatures.nanobot.prompts.skills.persona_update.tool import PersonaUpdateTool
+    from nanobot_kt.tools.persona_update import PersonaUpdateTool
 
     db_session.add(
         ChatLog(
@@ -87,7 +87,7 @@ async def test_persona_update_uses_runtime_actor_and_enters_existing_flow(
     monkeypatch,
     args,
 ):
-    from creatures.nanobot.prompts.skills.persona_update.tool import PersonaUpdateTool
+    from nanobot_kt.tools.persona_update import PersonaUpdateTool
 
     captured = {"opened": 0, "queried_user_ids": [], "filters": []}
 
@@ -144,7 +144,7 @@ async def test_persona_update_uses_runtime_actor_and_enters_existing_flow(
 
 @pytest.mark.asyncio
 async def test_persona_update_rejects_unimplemented_instructions_before_database(monkeypatch):
-    from creatures.nanobot.prompts.skills.persona_update.tool import PersonaUpdateTool
+    from nanobot_kt.tools.persona_update import PersonaUpdateTool
 
     monkeypatch.setattr(
         "core.database.SessionLocal",
@@ -163,7 +163,7 @@ async def test_persona_update_rejects_unimplemented_instructions_before_database
 
 def test_persona_update_executable_schemas_have_no_model_selected_target_or_instructions():
     from core.tool_schema_preview import build_effective_tool_schemas, build_tool_schema
-    from creatures.nanobot.prompts.skills.persona_update.tool import PersonaUpdateTool
+    from nanobot_kt.tools.persona_update import PersonaUpdateTool
 
     class_schema = PersonaUpdateTool().get_parameters_schema()
     static_schema = build_tool_schema("persona_update")["function"]["parameters"]
@@ -183,7 +183,7 @@ def test_persona_update_executable_schemas_have_no_model_selected_target_or_inst
 
 def test_persona_update_registry_only_claims_current_user_refresh():
     from core.tool_registry import get_tool_def
-    from creatures.nanobot.prompts.skills.persona_update.tool import PersonaUpdateTool
+    from nanobot_kt.tools.persona_update import PersonaUpdateTool
 
     descriptions = [
         PersonaUpdateTool().description,

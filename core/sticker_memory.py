@@ -569,17 +569,38 @@ def _extract_summary_field_from_raw(raw: str) -> str:
         return value.replace(r"\"", '"').replace(r"\n", "\n").strip()
 
 
+def _strip_sticker_code_fences(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(
+            r"^```(?:json)?\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+    return cleaned.strip()
+
+
 def _safe_parse_sticker_summary(raw: str) -> dict[str, Any]:
     """表情包描述专用容错解析。"""
     raw_text = str(raw or "")
+    cleaned = _strip_sticker_code_fences(raw_text)
     try:
-        from creatures.nanobot.prompts.skills.image_summary.tool import _parse_json_payload
-
-        parsed = _parse_json_payload(raw_text)
+        parsed = json.loads(cleaned)
         if isinstance(parsed, dict):
             return parsed
     except Exception:
-        pass
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                parsed = json.loads(cleaned[start : end + 1])
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
 
     try:
         from core.legacy_adapter import EvolutionUtils
@@ -602,12 +623,6 @@ def _safe_parse_sticker_summary(raw: str) -> dict[str, Any]:
     if summary:
         return _fallback_sticker_summary(summary)
 
-    try:
-        from creatures.nanobot.prompts.skills.image_summary.tool import _strip_code_fences
-
-        cleaned = _strip_code_fences(raw_text)
-    except Exception:
-        cleaned = raw_text
     cleaned = re.sub(r"```(?:json)?", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"</?[^>]+>", " ", cleaned)
     return _fallback_sticker_summary(cleaned)
@@ -615,13 +630,12 @@ def _safe_parse_sticker_summary(raw: str) -> dict[str, Any]:
 
 def describe_sticker_with_qwen(file_ref: str) -> dict[str, Any]:
     """调用现有 image_summary/Qwen 通道，为表情包生成轻量描述。"""
-    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
     from core.llm_trace_context import llm_trace_scope
+    from core.media_tool_runtime import get_image_summary_provider
 
-    tool = ImageSummaryTool()
     with llm_trace_scope(source="image_summary.sticker_auto_describe"):
-        raw = tool._call_qwen(
-            [file_ref],
+        raw = get_image_summary_provider().summarize(
+            (file_ref,),
             "这是一张聊天表情包。请重点识别可用于检索的中文描述、图片文字、梗点、情绪和适合使用的聊天场景。",
         )
     parsed = _safe_parse_sticker_summary(raw)

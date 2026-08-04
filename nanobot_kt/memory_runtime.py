@@ -106,7 +106,7 @@ async def dispatch_memory_tool_call(
 def provider_result_to_tool_result(result: Mapping[str, Any]) -> Any:
     """在 KT Adapter 边界恢复框架 ToolResult。"""
 
-    from kohakuterrarium.modules.tool.base import ToolResult
+    from nanobot_kt.optional_tool_api import ToolResult
 
     error = str(result.get("error") or "")
     if str(result.get("status") or "") == "error" and not error:
@@ -277,9 +277,9 @@ def _normalize_tool_result(result: Any) -> Mapping[str, Any]:
 
 
 def _default_tool_handlers() -> dict[str, MemoryToolHandler]:
-    from nanobot_kt.tools.knowledge_query import execute_knowledge_query
+    from app.tool_services.knowledge_query import execute_knowledge_query
+    from app.tool_services.sticker_search import execute_sticker_search
     from nanobot_kt.tools.memory_query import execute_memory_query
-    from nanobot_kt.tools.sticker_search import execute_sticker_search
 
     return {
         "memory_query": execute_memory_query,

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from collections import deque
+from dataclasses import replace
 
 from core.agent_runtime.contracts import (
     AgentTurnRequest,
@@ -10,11 +13,21 @@ from core.agent_runtime.contracts import (
     RuntimeLifecycleEvent,
     RuntimeLifecycleEventSink,
     RuntimeLifecycleState,
+    RuntimeCapabilities,
+    RuntimeCapability,
     RuntimeMessage,
     RuntimeModelRoute,
     RuntimePendingStateReset,
+    RuntimeRunError,
+    RuntimeRunEvent,
+    RuntimeRunEventHandler,
+    RuntimeRunStatus,
     RuntimeToolCall,
     RuntimeToolPolicyStatus,
+)
+from core.agent_runtime.event_stream import (
+    RuntimeRunEventEmitter,
+    relay_runtime_run_events,
 )
 from core.agent_runtime.lifecycle import RuntimeLifecycleMachine
 
@@ -39,6 +52,7 @@ class FakeAgentRuntime:
         self._messages: tuple[RuntimeMessage, ...] = ()
         self._tool_calls: tuple[RuntimeToolCall, ...] = ()
         self._queued_results: deque[AgentTurnResult] = deque()
+        self._queued_text_deltas: deque[tuple[str, ...]] = deque()
 
     @property
     def runtime_id(self) -> str:
@@ -52,8 +66,21 @@ class FakeAgentRuntime:
     def lifecycle_events(self) -> tuple[RuntimeLifecycleEvent, ...]:
         return self._lifecycle.events
 
+    @property
+    def runtime_capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities(
+            runtime_id=self.runtime_id,
+            supported=frozenset(RuntimeCapability),
+        )
+
     def queue_result(self, result: AgentTurnResult) -> None:
         self._queued_results.append(result)
+
+    def queue_text_deltas(self, *deltas: str) -> None:
+        """为下一次事件化调用预设确定性的真实增量。"""
+
+        normalized = tuple(str(delta) for delta in deltas if str(delta))
+        self._queued_text_deltas.append(normalized)
 
     async def start(self) -> None:
         self._lifecycle.ensure(RuntimeLifecycleState.NEW)
@@ -73,7 +100,7 @@ class FakeAgentRuntime:
         self._lifecycle.transition(RuntimeLifecycleState.STOPPING)
         self._lifecycle.transition(RuntimeLifecycleState.STOPPED)
 
-    async def execute_turn(self, request: AgentTurnRequest) -> AgentTurnResult:
+    async def run(self, request: AgentTurnRequest) -> AgentTurnResult:
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
         self.requests.append(request)
         if self._queued_results:
@@ -86,6 +113,68 @@ class FakeAgentRuntime:
         self._messages = result.messages
         self._tool_calls = result.tool_calls
         return result
+
+    def run_stream(
+        self,
+        request: AgentTurnRequest,
+    ) -> AsyncIterator[RuntimeRunEvent]:
+        stream_request = replace(request, stream=True)
+        return relay_runtime_run_events(
+            lambda handler: self.run_event(stream_request, handler)
+        )
+
+    async def run_event(
+        self,
+        request: AgentTurnRequest,
+        handler: RuntimeRunEventHandler,
+    ) -> AgentTurnResult:
+        emitter = RuntimeRunEventEmitter(
+            request.context.execution_identity(),
+            handler,
+        )
+        deltas = (
+            self._queued_text_deltas.popleft()
+            if self._queued_text_deltas
+            else ()
+        )
+        await emitter.status_changed(RuntimeRunStatus.ACCEPTED)
+        await emitter.status_changed(RuntimeRunStatus.RUNNING)
+        try:
+            result = await self.run(request)
+        except asyncio.CancelledError:
+            await emitter.end(RuntimeRunStatus.CANCELLED)
+            raise
+        except TimeoutError as exc:
+            await emitter.error(
+                RuntimeRunError(
+                    code="runtime_timeout",
+                    message=str(exc) or "Runtime 执行超时",
+                    retryable=True,
+                )
+            )
+            await emitter.end(RuntimeRunStatus.TIMED_OUT)
+            raise
+        except Exception as exc:
+            await emitter.error(
+                RuntimeRunError(
+                    code="runtime_execution_error",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            await emitter.end(RuntimeRunStatus.FAILED)
+            raise
+
+        for delta in deltas:
+            await emitter.text_delta(delta)
+        for tool_call in result.tool_calls:
+            await emitter.tool_activity(tool_call)
+        await emitter.end(RuntimeRunStatus.SUCCEEDED)
+        return result
+
+    async def execute_turn(self, request: AgentTurnRequest) -> AgentTurnResult:
+        """旧版兼容 façade；不产生类型化事件。"""
+
+        return await self.run(request)
 
     def replace_conversation(self, messages: tuple[RuntimeMessage, ...]) -> int:
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)

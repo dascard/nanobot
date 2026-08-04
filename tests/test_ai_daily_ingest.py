@@ -67,7 +67,7 @@ def test_ai_daily_ingest_rolls_back_when_semantic_enqueue_fails(
 
 
 def test_ai_daily_ingest_failure_does_not_fail_tool(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     html = '<article class="news-brief"><a href="https://example.com/a">AI 新闻</a></article>'
     monkeypatch.setattr(news_tool, "_run_news_daily_pipeline", lambda *args, **kwargs: html)
@@ -117,7 +117,7 @@ def test_duplicate_url_does_not_create_duplicate_active_document(db_session):
 
 
 def test_ai_daily_ingest_records_warning_in_tool_meta(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     monkeypatch.setattr(news_tool, "_run_news_daily_pipeline", lambda *args, **kwargs: "<article>AI 新闻</article>")
     secret_sentinel = "db-password-must-not-leak"

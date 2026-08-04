@@ -32,7 +32,7 @@ def _sse_data(payload: dict) -> str:
 # ── 基础元数据测试 ──
 
 def test_tool_metadata_and_schema():
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     tool = ImageGenerationTool()
 
@@ -51,7 +51,7 @@ def test_tool_metadata_and_schema():
 
 
 def test_execute_requires_prompt():
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     result = run_async(ImageGenerationTool().execute({"prompt": "  "}))
 
@@ -60,8 +60,8 @@ def test_execute_requires_prompt():
 
 
 def test_execute_rejects_too_long_prompt(monkeypatch):
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     monkeypatch.setattr(image_tool, "IMAGE_GENERATION_PROMPT_MAX_CHARS", 50)
 
@@ -73,8 +73,8 @@ def test_execute_rejects_too_long_prompt(monkeypatch):
 
 def test_execute_uses_to_thread_for_new_api(monkeypatch, tmp_path):
     from core import generated_images
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
     image_b64 = base64.b64encode(png_data).decode("ascii")
@@ -125,8 +125,8 @@ def test_execute_uses_to_thread_for_new_api(monkeypatch, tmp_path):
 
 def test_execute_calls_new_api_responses_and_returns_generated_image_token(monkeypatch, tmp_path):
     from core import generated_images
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     # 使用有效 PNG 魔数
     png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -209,8 +209,8 @@ def test_execute_calls_new_api_responses_and_returns_generated_image_token(monke
 
 def test_execute_partial_image_then_completed(monkeypatch, tmp_path):
     from core import generated_images
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
     image_b64 = base64.b64encode(png_data).decode("ascii")
@@ -247,8 +247,8 @@ def test_execute_partial_image_then_completed(monkeypatch, tmp_path):
 
 def test_execute_completed_output_aggregation(monkeypatch, tmp_path):
     from core import generated_images
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
     image_b64 = base64.b64encode(png_data).decode("ascii")
@@ -290,8 +290,8 @@ def test_execute_completed_output_aggregation(monkeypatch, tmp_path):
 
 def test_execute_moderation_blocked(monkeypatch):
     """模拟 content_filter 违规——断言错误信息包含 blocked or incomplete。"""
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     response = _MockSSEResponse(
         [
@@ -319,8 +319,8 @@ def test_execute_moderation_blocked(monkeypatch):
 
 def test_execute_upstream_error_event(monkeypatch):
     """模拟 response.failed 事件。"""
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     response = _MockSSEResponse(
         [
@@ -345,8 +345,8 @@ def test_execute_upstream_error_event(monkeypatch):
 
 def test_execute_tool_usage_but_no_output(monkeypatch):
     """模拟 new-api 聚合失败：tool_usage 有统计但 output 为空。"""
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     response = _MockSSEResponse(
         [
@@ -377,8 +377,8 @@ def test_execute_tool_usage_but_no_output(monkeypatch):
 
 def test_execute_reports_missing_image_result(monkeypatch):
     """完全没有生图事件。"""
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     response = _MockSSEResponse(
         [
@@ -402,8 +402,8 @@ def test_execute_reports_missing_image_result(monkeypatch):
 def test_execute_rejects_non_png_result(monkeypatch, tmp_path):
     """校验 PNG 魔数——非 PNG 数据应报错。"""
     from core import generated_images
-    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    import nanobot_kt.tools.image_generation as image_tool
+    from nanobot_kt.tools.image_generation import ImageGenerationTool
 
     # GIF89a 开头，不是 PNG
     non_png = base64.b64encode(b"GIF89a\x00\x00\x00").decode("ascii")
@@ -434,7 +434,7 @@ def test_execute_rejects_non_png_result(monkeypatch, tmp_path):
 def test_reply_tool_keeps_short_generated_image_token(monkeypatch, tmp_path):
     """reply 工具不再展开 [generated_image:...]——保留短 token 给传输层处理。"""
     from core import generated_images
-    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER, ReplyTool
+    from nanobot_kt.tools.reply import REPLY_MARKER, ReplyTool
 
     monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
     png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32

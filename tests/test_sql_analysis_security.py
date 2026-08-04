@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from creatures.nanobot.prompts.skills.sql_analysis.tool import SQLAnalysisTool
+from nanobot_kt.tools.sql_analysis import SQLAnalysisTool
 from sandbox import AnalysisSandbox
 from tests.async_helpers import run_async
 

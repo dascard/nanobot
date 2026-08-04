@@ -6,8 +6,8 @@
       "match": {
         "category": "natural_language_semantic"
       },
-      "expected_count": 88,
-      "expected_rule_ids_sha256": "d84144c211a62a966e23de2328b2a5e9c72b317d675a03f4d6c7c1e3d565d2b6",
+      "expected_count": 87,
+      "expected_rule_ids_sha256": "f00bb202cc0ab88835502635fd1181142a1349ddd488720fc189fb3be62dd5ee",
       "override": {
         "category": "natural_language_semantic",
         "disposition": "model_signal_only",
@@ -266,8 +266,8 @@
         "path": "core/config_registry.py",
         "category": "protocol_syntax"
       },
-      "expected_count": 9,
-      "expected_rule_ids_sha256": "9f77124a791931144953c77b5373c8a64259ac6a8e0f14b1b2dcce8c6f340f64",
+      "expected_count": 13,
+      "expected_rule_ids_sha256": "f2d592916ada949da1762cd953248271ec4d30827833137a92faa93ea5c13cd2",
       "override": {
         "category": "protocol_syntax",
         "disposition": "policy",
@@ -281,8 +281,8 @@
         "path": "scripts/build_behavior_baseline.py",
         "category": "protocol_syntax"
       },
-      "expected_count": 6,
-      "expected_rule_ids_sha256": "31c4cff9fad7812d739480c80769ff37ecfec2e2b0b389f314a40ef63c54dfa3",
+      "expected_count": 9,
+      "expected_rule_ids_sha256": "408053d1aebf4c216b73d606af9e04acb3768ed9a405333479b480dd7d621f20",
       "override": {
         "category": "protocol_syntax",
         "disposition": "policy",
@@ -297,7 +297,7 @@
         "category": "configurable_policy"
       },
       "expected_count": 4,
-      "expected_rule_ids_sha256": "d9d3e4d944f4ea70f45e1372c2ce8ee23701ae315f5c38c23ca5f6c772245ed1",
+      "expected_rule_ids_sha256": "81b12daafc97ad04b4ae7b4eb19d95f6e685bf301f328cc1d32ca589471437f9",
       "override": {
         "category": "data_consistency",
         "disposition": "policy",
@@ -311,8 +311,8 @@
         "path": "scripts/build_behavior_baseline.py",
         "category": "security_invariant"
       },
-      "expected_count": 2,
-      "expected_rule_ids_sha256": "f30752689ab205772d3f76708d989a81c105db0aecf00fed21c6b4f77ab59c77",
+      "expected_count": 3,
+      "expected_rule_ids_sha256": "97be7dcfb9774d394b994d8a3e7a2c43c7d0798c64f05851f9efa48c36b0b2ed",
       "override": {
         "category": "security_invariant",
         "disposition": "preserve",

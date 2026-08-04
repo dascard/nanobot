@@ -6,12 +6,14 @@ processing errors in real time (heartbeats are managed by routes.py).
 """
 
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
-from kohakuterrarium.modules.output.base import BaseOutputModule
+from nanobot_kt.optional_output_api import BaseOutputModule
 
 logger = logging.getLogger("nanobot.kt.output")
 
@@ -66,12 +68,41 @@ class BufferedOutput(BaseOutputModule):
         self._complete_event = asyncio.Event()
         self._stream_queue: asyncio.Queue[dict[str, Any]] | None = None
         self._stream_tasks: set[asyncio.Task[Any]] = set()
+        self._runtime_signal_handler: ContextVar[
+            Callable[[str, dict[str, Any]], None] | None
+        ] = ContextVar(
+            f"nanobot_runtime_output_signal_{id(self)}",
+            default=None,
+        )
 
     def enable_stream(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         self._stream_queue = queue
 
     def disable_stream(self) -> None:
         self._stream_queue = None
+
+    @contextmanager
+    def capture_runtime_signals(
+        self,
+        handler: Callable[[str, dict[str, Any]], None],
+    ) -> Iterator[None]:
+        """仅在当前异步上下文中暴露 KT 输出信号给 Runtime Adapter。"""
+
+        token = self._runtime_signal_handler.set(handler)
+        try:
+            yield
+        finally:
+            self._runtime_signal_handler.reset(token)
+
+    def _emit_runtime_signal(self, kind: str, **payload: Any) -> None:
+        handler = self._runtime_signal_handler.get()
+        if handler is not None:
+            handler(str(kind), dict(payload))
+
+    def _runtime_signal_is_captured(self) -> bool:
+        """当前请求是否由 Runtime Adapter 接管类型化输出。"""
+
+        return self._runtime_signal_handler.get() is not None
 
     def set_interrupt_callback(
         self,
@@ -123,7 +154,13 @@ class BufferedOutput(BaseOutputModule):
     async def write_stream(self, chunk: str) -> None:
         logger.info(f"[BufferedOutput.write_stream] called with {len(chunk)} chars: {chunk[:100] if chunk else '(empty)'}")
         self._buffer.append(chunk)
-        if chunk and self._stream_queue is not None:
+        if chunk:
+            self._emit_runtime_signal("text_delta", text=str(chunk))
+        if (
+            chunk
+            and self._stream_queue is not None
+            and not self._runtime_signal_is_captured()
+        ):
             await self._stream_queue.put({"status": "delta", "text": chunk})
 
     async def write_final(
@@ -171,13 +208,31 @@ class BufferedOutput(BaseOutputModule):
         if activity_type == "processing_error":
             logger.error(f"[Activity] {activity_type}: {detail}")
             self._buffer.append(f"\n[系统内部错误] {detail}")
-            if self._stream_queue is not None:
+            self._emit_runtime_signal(
+                "error",
+                code="kt_processing_error",
+                message=str(detail),
+                retryable=False,
+            )
+            if (
+                self._stream_queue is not None
+                and not self._runtime_signal_is_captured()
+            ):
                 self._schedule_stream_event({"status": "error", "message": detail})
             return
 
         if activity_type == "tool_error":
             logger.error(f"[Activity] {activity_type}: {detail}")
-            if self._stream_queue is not None:
+            self._emit_runtime_signal(
+                "error",
+                code="kt_tool_error",
+                message=str(detail),
+                retryable=False,
+            )
+            if (
+                self._stream_queue is not None
+                and not self._runtime_signal_is_captured()
+            ):
                 self._schedule_stream_event(
                     {"status": "progress", "text": f"工具失败：{detail}"}
                 )

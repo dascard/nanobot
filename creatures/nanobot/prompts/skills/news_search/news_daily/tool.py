@@ -4,12 +4,9 @@ import logging
 import time as _time
 from typing import Any
 
-from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from core.time_utils import db_now_naive
 from core.tool_contracts.ai_daily import (
     AiDailyRequest,
-    AiDailyRequestError,
-    ai_daily_parameters_schema,
     parse_ai_daily_request,
 )
 
@@ -500,46 +497,3 @@ def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
     logger.info("[daily] done %s mode %d items \u2192 %d chars HTML source=%s in %.1fs",
                  mode, len(items), len(html), summary_source, _time.time() - t0)
     return html
-
-
-class NewsDailyTool(BaseTool):
-    """AI 日报生成——默认 quality LLM 摘要，失败时自动降级 daily 事件聚类。"""
-
-    @property
-    def tool_name(self) -> str:
-        return "ai_daily"
-
-    @property
-    def description(self) -> str:
-        return "搜索 AI/科技领域最新资讯并生成日报。"
-
-    @property
-    def execution_mode(self) -> ExecutionMode:
-        return ExecutionMode.DIRECT
-
-    def get_parameters_schema(self) -> dict[str, Any]:
-        return ai_daily_parameters_schema()
-
-    async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
-        try:
-            request = parse_ai_daily_request(args)
-        except AiDailyRequestError as exc:
-            return ToolResult(error=f"Invalid ai_daily arguments: {exc}")
-
-        cache_key = runtime_cache.make_ai_daily_cache_key(request, mode="quality")
-        if not request.bypass_cache:
-            cached = runtime_cache._get_cached_news_result(cache_key)
-            if cached:
-                logger.info("[daily] cache HIT")
-                return ToolResult(output=cached, exit_code=0)
-
-        try:
-            import asyncio
-            result = await asyncio.to_thread(run_news_search_auto, request)
-        except Exception as e:
-            logger.exception("[daily] auto pipeline failed")
-            from ..render import render_html
-            result = render_html(fallback_digest(request.query, str(e)[:160], "quality"))
-
-        runtime_cache._store_cached_news_result(cache_key, result)
-        return ToolResult(output=result, exit_code=0)

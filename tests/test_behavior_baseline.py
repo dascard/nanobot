@@ -11,6 +11,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = ROOT / "tests/fixtures/architecture_behavior_cases.json"
+RUNTIME_FIXTURE_PATH = (
+    ROOT / "tests/fixtures/agent_runtime_behavior_cases.json"
+)
 GOLDEN_ROOT = ROOT / "tests/golden/architecture_behavior"
 MANIFEST_PATH = ROOT / "docs/architecture/behavior-baseline.json"
 
@@ -32,6 +35,7 @@ def test_behavior_snapshots_are_deterministic_and_match_frozen_golden():
 
     assert first == second
     assert set(first) == {
+        "agent_runtime",
         "group_analysis",
         "news_heuristics",
         "private_timing",
@@ -43,6 +47,34 @@ def test_behavior_snapshots_are_deterministic_and_match_frozen_golden():
         golden_path = GOLDEN_ROOT / f"{snapshot_name}.json"
         assert golden_path.is_file(), f"缺少 Golden：{golden_path}"
         assert render_json(payload) == golden_path.read_text(encoding="utf-8")
+    runtime_snapshot = first["agent_runtime"]
+    assert runtime_snapshot["framework_dependency"] == "none"
+    assert [case["id"] for case in runtime_snapshot["cases"]] == [
+        "ordinary_chat",
+        "streaming_chat",
+        "multi_round_tools",
+        "interrupted_stream",
+    ]
+    assert "kohakuterrarium" not in json.dumps(runtime_snapshot).lower()
+    streaming_case = runtime_snapshot["cases"][1]
+    assert streaming_case["turns"][0]["request"]["stream"] is True
+    streaming_context = streaming_case["turns"][0]["request"]["context"]
+    assert streaming_context["turn_id"] == "turn-stream"
+    assert streaming_context["correlation_id"] == "correlation-stream"
+    assert streaming_context["actor"] == {
+        "actor_id": "runtime-baseline-user",
+        "actor_type": "user",
+        "parent_actor_id": "",
+    }
+    tool_case = runtime_snapshot["cases"][2]
+    assert tool_case["request_count"] == 3
+    assert [call["status"] for call in tool_case["inspected_tool_calls"]] == [
+        "completed",
+        "completed",
+    ]
+    interrupted_case = runtime_snapshot["cases"][3]
+    assert interrupted_case["interrupt_accepted"] is True
+    assert interrupted_case["interrupt_reason"] == "client_disconnect"
     security = first["security_invariants"]
     assert "readonly_sql" not in security
     assert security["admin_table_views"]["request_fields"] == [
@@ -68,9 +100,15 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
         "tests/fixtures/architecture_behavior_cases.json"
     )
     assert manifest["fixture"]["sha256"] == _sha256(FIXTURE_PATH)
+    assert manifest["runtime_fixture"] == {
+        "path": "tests/fixtures/agent_runtime_behavior_cases.json",
+        "sha256": _sha256(RUNTIME_FIXTURE_PATH),
+        "framework_dependency": "none",
+    }
     assert manifest["generation"]["command"].endswith("--write")
 
     expected_classifications = {
+        "agent_runtime": "preserve",
         "group_analysis": "known_bad",
         "news_heuristics": "preserve",
         "private_timing": "preserve",
@@ -89,6 +127,12 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     approved = {
         item["id"]: item for item in manifest["approved_changes"]
     }
+    runtime_change = approved["agent_harness_stage1_runtime_baseline"]
+    assert runtime_change["snapshot_id"] == "agent_runtime"
+    assert runtime_change["before_sha256"] is None
+    assert runtime_change["after_sha256"] == _sha256(
+        GOLDEN_ROOT / "agent_runtime.json"
+    )
     admin_change = approved["stage1_admin_structured_views"]
     assert admin_change["snapshot_id"] == "security_invariants"
     assert len(admin_change["before_sha256"]) == 64
@@ -214,6 +258,7 @@ def test_behavior_fixture_rejects_invalid_schema_and_missing_sections(tmp_path):
     from scripts.build_behavior_baseline import (
         BehaviorBaselineError,
         load_fixture,
+        load_runtime_fixture,
     )
 
     with pytest.raises(BehaviorBaselineError, match="无法读取"):
@@ -231,6 +276,32 @@ def test_behavior_fixture_rejects_invalid_schema_and_missing_sections(tmp_path):
     )
     with pytest.raises(BehaviorBaselineError, match="缺少分区"):
         load_fixture(incomplete)
+
+    with pytest.raises(BehaviorBaselineError, match="无法读取 Runtime"):
+        load_runtime_fixture(tmp_path / "missing-runtime.json")
+
+    invalid_runtime = tmp_path / "invalid-runtime.json"
+    invalid_runtime.write_text("[]", encoding="utf-8")
+    with pytest.raises(BehaviorBaselineError, match="schema_version"):
+        load_runtime_fixture(invalid_runtime)
+
+    duplicate_runtime = tmp_path / "duplicate-runtime.json"
+    duplicate_runtime.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "context_defaults": {},
+                "route": {},
+                "cases": [
+                    {"id": "same", "turns": [{}]},
+                    {"id": "same", "turns": [{}]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(BehaviorBaselineError, match="不能重复"):
+        load_runtime_fixture(duplicate_runtime)
 
 
 def test_behavior_baseline_cli_write_delegates_to_atomic_generator(

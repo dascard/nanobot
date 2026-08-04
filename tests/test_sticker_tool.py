@@ -4,7 +4,7 @@ import json
 
 def test_sticker_search_tool_returns_cq_send_code(db_session, monkeypatch):
     from core.sticker_memory import register_sticker
-    from creatures.nanobot.prompts.skills.sticker_search.tool import StickerSearchTool
+    from nanobot_kt.tools.sticker_search import StickerSearchTool
 
     register_sticker(
         db_session,
@@ -17,7 +17,7 @@ def test_sticker_search_tool_returns_cq_send_code(db_session, monkeypatch):
     )
 
     monkeypatch.setattr(
-        "creatures.nanobot.prompts.skills.sticker_search.tool.SessionLocal",
+        "core.database.SessionLocal",
         lambda: db_session,
     )
 
@@ -38,7 +38,7 @@ def test_sticker_search_tool_blocks_when_reranker_required_unavailable(db_sessio
     from core.semantic.adapters import chunk_from_sticker
     from core.semantic.indexer import upsert_semantic_chunks
     from core.sticker_memory import register_sticker
-    from creatures.nanobot.prompts.skills.sticker_search.tool import StickerSearchTool
+    from nanobot_kt.tools.sticker_search import StickerSearchTool
 
     sticker = register_sticker(
         db_session,
@@ -58,7 +58,7 @@ def test_sticker_search_tool_blocks_when_reranker_required_unavailable(db_sessio
     monkeypatch.setenv("RAG_RERANKER_URL", "")
     monkeypatch.setenv("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
     monkeypatch.setattr(
-        "creatures.nanobot.prompts.skills.sticker_search.tool.SessionLocal",
+        "core.database.SessionLocal",
         lambda: db_session,
     )
     from core.semantic.provider_factory import get_reranker_provider
@@ -77,7 +77,7 @@ def test_sticker_search_tool_blocks_when_reranker_required_unavailable(db_sessio
 def test_reply_tool_records_sent_sticker_usage(db_session, monkeypatch):
     from core.database import StickerMemory
     from core.sticker_memory import register_sticker
-    from creatures.nanobot.prompts.skills.reply.tool import ReplyTool
+    from nanobot_kt.tools.reply import ReplyTool
 
     sticker = register_sticker(
         db_session,
@@ -102,7 +102,7 @@ def test_reply_tool_records_sent_sticker_usage(db_session, monkeypatch):
 def test_reply_tool_expands_sticker_token_and_records_usage(db_session, monkeypatch):
     from core.database import StickerMemory
     from core.sticker_memory import register_sticker
-    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER, ReplyTool
+    from nanobot_kt.tools.reply import REPLY_MARKER, ReplyTool
 
     sticker = register_sticker(
         db_session,
@@ -129,7 +129,7 @@ def test_reply_tool_expands_sticker_token_and_records_usage(db_session, monkeypa
 def test_reply_tool_canonicalizes_legacy_double_escaped_sticker_code(db_session, monkeypatch):
     from core.database import StickerMemory
     from core.sticker_memory import register_sticker
-    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER, ReplyTool
+    from nanobot_kt.tools.reply import REPLY_MARKER, ReplyTool
 
     sticker = register_sticker(
         db_session,

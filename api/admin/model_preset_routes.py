@@ -155,7 +155,7 @@ def _validate_variation_groups(
 ) -> None:
     if len(groups) > 12 or _json_size(groups) > 64 * 1024:
         raise HTTPException(422, "Variation Groups 数量或体积超过上限")
-    from kohakuterrarium.llm.variations import apply_patch_map
+    from core.model_provider.preset_config import validate_variation_patch_map
 
     for group_name, options in groups.items():
         if not str(group_name).strip() or len(str(group_name)) > 64:
@@ -171,7 +171,7 @@ def _validate_variation_groups(
                     f"Variation {group_name}/{option_name} patch 无效",
                 )
             try:
-                apply_patch_map({}, patch)
+                validate_variation_patch_map(patch)
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
 
@@ -609,7 +609,7 @@ def resolve_model_preset_api(
 
 
 def _runtime_plan(preset: object, provider: object):
-    from nanobot_kt.model_runtime import ReplyRoutePlan
+    from core.model_provider.route_plan import ReplyRoutePlan
 
     return ReplyRoutePlan(
         provider_id=provider.id,
@@ -654,8 +654,8 @@ async def test_model_preset(
         resolve_model_preset,
     )
     from core.model_provider.provider_config import get_provider_instance
+    from core.model_provider.admin_runtime import probe_model_preset
     from foundation.llm.safe_diagnostics import safe_response_summary
-    from nanobot_kt.model_provider_adapter import create_kt_provider
 
     preset = get_model_preset(preset_id, db)
     if preset is None:
@@ -675,14 +675,12 @@ async def test_model_preset(
         resolved = resolve_model_preset(preset, body.selected_variations)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    llm = None
     started = time.monotonic()
     try:
-        llm = create_kt_provider(_runtime_plan(resolved.preset, provider))
-        response = await llm.chat_complete([
-            {"role": "system", "content": "你是 Nanobot 模型连通性测试。"},
-            {"role": "user", "content": body.prompt},
-        ])
+        response = await probe_model_preset(
+            _runtime_plan(resolved.preset, provider),
+            prompt=body.prompt,
+        )
         return {
             "ok": True,
             "status": "ready",
@@ -706,13 +704,6 @@ async def test_model_preset(
             "latency_ms": int((time.monotonic() - started) * 1000),
             "error": error,
         }
-    finally:
-        close = getattr(llm, "close", None) if llm is not None else None
-        if callable(close):
-            try:
-                await close()
-            except Exception:
-                pass
 
 
 def _binding_candidate_views(route_key: str, db: Session) -> list[dict[str, Any]]:
@@ -1068,16 +1059,16 @@ def migrate_route_to_preset(
 
 @router.get("/models/kt/native-tools")
 def list_kt_native_tools(_auth=Depends(verify_admin)):
-    from kohakuterrarium.studio.identity.llm_native_tools import list_native_tools
+    from core.model_provider.admin_runtime import list_provider_native_tools
 
-    return {"tools": list_native_tools()}
+    return {"tools": [dict(item) for item in list_provider_native_tools()]}
 
 
 @router.get("/models/codex/status")
 def get_codex_status(_auth=Depends(verify_admin)):
-    from nanobot_kt.codex_oauth_adapter import codex_status
+    from core.model_provider.admin_runtime import codex_admin_status
 
-    return codex_status()
+    return dict(codex_admin_status())
 
 
 @router.get("/models/codex/accounts")
@@ -1085,10 +1076,10 @@ def get_codex_accounts(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    from nanobot_kt.codex_accounts import list_codex_account_views
+    from core.model_provider.admin_runtime import list_codex_account_views
 
     return {
-        "accounts": list_codex_account_views(db),
+        "accounts": [dict(item) for item in list_codex_account_views(db)],
         "strategy": {
             "mode": "session_sticky_weighted_round_robin",
             "session_sticky": True,
@@ -1108,28 +1099,32 @@ def patch_codex_account(
 ):
     if body.name is None and body.enabled is None and body.weight is None:
         raise HTTPException(422, "至少需要修改一个 Codex 账号字段")
-    from nanobot_kt.codex_accounts import (
-        CodexAccountError,
-        codex_account_public_view,
-        update_codex_account,
+    from core.model_provider.admin_runtime import (
+        CodexAdminError,
+        CodexAdminErrorCode,
+        update_codex_account_view,
     )
 
     try:
-        account = update_codex_account(
+        account = update_codex_account_view(
             account_id,
             name=body.name,
             enabled=body.enabled,
             weight=body.weight,
-            db=db,
+            database=db,
         )
-    except CodexAccountError as exc:
-        status_code = 404 if "不存在" in str(exc) else 422
+    except CodexAdminError as exc:
+        status_code = (
+            404
+            if exc.code is CodexAdminErrorCode.ACCOUNT_NOT_FOUND
+            else 422
+        )
         raise HTTPException(status_code, str(exc)) from exc
     audit(
         db,
         "update_codex_account",
         "codex_account",
-        account.id,
+        str(account.get("id") or account_id),
         {
             "name_changed": body.name is not None,
             "enabled": body.enabled,
@@ -1137,7 +1132,7 @@ def patch_codex_account(
         },
         ip_address=client_ip(request),
     )
-    return {"ok": True, "account": codex_account_public_view(account)}
+    return {"ok": True, "account": dict(account)}
 
 
 @router.delete("/models/codex/accounts/{account_id}")
@@ -1147,14 +1142,14 @@ def remove_codex_account(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    from nanobot_kt.codex_accounts import (
-        CodexAccountError,
+    from core.model_provider.admin_runtime import (
+        CodexAdminError,
         delete_codex_account,
     )
 
     try:
-        deleted = delete_codex_account(account_id, db)
-    except CodexAccountError as exc:
+        deleted = delete_codex_account(account_id, database=db)
+    except CodexAdminError as exc:
         raise HTTPException(422, str(exc)) from exc
     if not deleted:
         raise HTTPException(404, "Codex 账号不存在")
@@ -1176,67 +1171,66 @@ async def start_codex_device_login(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    from nanobot_kt.codex_accounts import (
-        CodexAccountError,
-        CodexCredentialConfigurationError,
-        create_codex_account,
-        delete_codex_account,
-        get_codex_account,
+    from core.model_provider.admin_runtime import (
+        CodexAdminError,
+        CodexAdminErrorCode,
+        start_codex_device_login as start_login,
     )
-    from nanobot_kt.codex_oauth_adapter import codex_device_login_manager
 
     payload = body or CodexDeviceLoginBody()
-    created_account = False
     try:
-        if payload.account_id:
-            account = get_codex_account(payload.account_id, db)
-            if account is None:
-                raise HTTPException(404, "Codex 账号不存在")
-        else:
-            account = create_codex_account(payload.name, db=db)
-            created_account = True
-        result = await codex_device_login_manager.start(account.id)
+        result = await start_login(
+            account_id=payload.account_id,
+            name=payload.name,
+            database=db,
+        )
+        resolved_account_id = str(
+            result.get("account_id") or payload.account_id
+        )
         audit(
             db,
             "start_codex_device_login",
             "codex_account",
-            account.id,
-            {"new_account": created_account},
+            resolved_account_id,
+            {"new_account": not bool(payload.account_id)},
             ip_address=client_ip(request),
         )
-        return result
-    except HTTPException:
-        raise
-    except CodexCredentialConfigurationError as exc:
-        raise HTTPException(503, str(exc)) from exc
-    except CodexAccountError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    except Exception as exc:
-        if created_account:
-            try:
-                delete_codex_account(account.id, db)
-            except Exception:
-                pass
-        raise HTTPException(502, f"Codex Device OAuth 启动失败: {str(exc)[:300]}") from exc
+        return dict(result)
+    except CodexAdminError as exc:
+        status_code = {
+            CodexAdminErrorCode.ACCOUNT_NOT_FOUND: 404,
+            CodexAdminErrorCode.CREDENTIAL_UNAVAILABLE: 503,
+            CodexAdminErrorCode.INVALID_ACCOUNT: 422,
+            CodexAdminErrorCode.UPSTREAM_FAILED: 502,
+        }[exc.code]
+        detail = str(exc)
+        if exc.code is CodexAdminErrorCode.UPSTREAM_FAILED:
+            detail = f"Codex Device OAuth 启动失败: {detail[:300]}"
+        raise HTTPException(status_code, detail) from exc
 
 
 @router.get("/models/codex/device-login/{login_id}")
 async def get_codex_device_login(login_id: str, _auth=Depends(verify_admin)):
-    from nanobot_kt.codex_oauth_adapter import codex_device_login_manager
+    from core.model_provider.admin_runtime import (
+        get_codex_device_login as resolve_device_login,
+    )
 
-    status = await codex_device_login_manager.get(login_id)
+    status = await resolve_device_login(login_id)
     if status is None:
         raise HTTPException(404, "Codex Device OAuth 会话不存在或已过期")
-    return status
+    return dict(status)
 
 
 @router.get("/models/codex/usage")
 async def get_codex_usage(_auth=Depends(verify_admin)):
-    from nanobot_kt.codex_oauth_adapter import codex_usage
+    from core.model_provider.admin_runtime import (
+        CodexAdminError,
+        get_codex_usage as resolve_codex_usage,
+    )
 
     try:
-        return await codex_usage()
-    except Exception as exc:
+        return dict(await resolve_codex_usage())
+    except CodexAdminError as exc:
         raise HTTPException(401, f"Codex Usage 获取失败: {str(exc)[:300]}") from exc
 
 

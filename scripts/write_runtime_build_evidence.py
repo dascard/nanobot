@@ -42,8 +42,6 @@ def _parse_service_images(values: list[str]) -> dict[str, str]:
 def build_runtime_evidence(args: argparse.Namespace) -> dict[str, object]:
     if _GIT_SHA.fullmatch(args.git_full_commit or "") is None:
         raise RuntimeBuildEvidenceError("git_full_commit 必须是 40 位 SHA")
-    if _GIT_SHA.fullmatch(args.kt_commit or "") is None:
-        raise RuntimeBuildEvidenceError("kt_commit 必须是 40 位 SHA")
     if _CONTEXT_SHA.fullmatch(args.build_context_sha256 or "") is None:
         raise RuntimeBuildEvidenceError(
             "build_context_sha256 必须是 64 位 SHA-256"
@@ -64,12 +62,11 @@ def build_runtime_evidence(args: argparse.Namespace) -> dict[str, object]:
     deployed = args.deployment_status == "deployed"
     timestamp = datetime.now(timezone.utc).isoformat()
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact": "nanobot-runtime",
         "source": {
             "git_full_commit": args.git_full_commit,
             "git_dirty": args.git_dirty,
-            "kt_commit": args.kt_commit,
             "build_context_sha256": args.build_context_sha256,
             "build_context_manifest": args.build_context_manifest,
         },
@@ -133,7 +130,6 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         choices=("true", "false", "unknown"),
     )
-    parser.add_argument("--kt-commit", required=True)
     parser.add_argument("--build-context-sha256", required=True)
     parser.add_argument("--build-context-manifest", required=True)
     parser.add_argument("--image-reference", required=True)

@@ -125,7 +125,6 @@ def test_runtime_build_evidence_records_exact_identity_and_blocked_smokes():
     payload = build_runtime_evidence(Namespace(
         git_full_commit="1" * 40,
         git_dirty="false",
-        kt_commit="2" * 40,
         build_context_sha256="3" * 64,
         build_context_manifest="/evidence/build-context.json",
         image_reference="nanobot-runtime:local",
@@ -159,7 +158,6 @@ def test_runtime_build_evidence_rejects_mixed_service_images():
         build_runtime_evidence(Namespace(
             git_full_commit="1" * 40,
             git_dirty="false",
-            kt_commit="2" * 40,
             build_context_sha256="3" * 64,
             build_context_manifest="/evidence/build-context.json",
             image_reference="nanobot-runtime:local",

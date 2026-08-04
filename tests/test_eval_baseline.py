@@ -1,5 +1,4 @@
 import json
-import subprocess
 from pathlib import Path
 
 from evals.schema import EvalCase, SuiteReport
@@ -465,9 +464,10 @@ def test_eval_pr_gate_workflow_runs_unified_script():
     assert "eval-pr-gate:" in text
     assert "actions/checkout@v7" in text
     assert "actions/setup-python@v6" in text
-    assert "submodules: recursive" in text
-    assert "scripts/apply_kohaku_patches.sh" in text
-    assert "pip install --no-deps ./vendor/KohakuTerrarium" in text
+    assert "submodules: recursive" not in text
+    assert "scripts/apply_kohaku_patches.sh" not in text
+    assert "python -m pip install -r requirements-kt.lock" in text
+    assert "tests/test_native_without_kt.py" in text
     assert "scripts/run_eval_pr_gate.sh" in text
 
 
@@ -493,42 +493,20 @@ def test_eval_workflow_uploads_report_artifacts():
     assert "if-no-files-found: warn" in text
 
 
-def test_eval_workflow_keeps_kohaku_patch_available():
+def test_eval_workflows_install_kt_without_local_patch():
     patch = Path("patches/kohakuterrarium/stream-message-flag.patch")
     script = Path("scripts/apply_kohaku_patches.sh")
 
-    assert patch.exists()
-    assert script.exists()
-    patch_text = patch.read_text(encoding="utf-8")
-    script_text = script.read_text(encoding="utf-8")
-    assert "src/kohakuterrarium/core/controller.py" in patch_text
-    assert "src/kohakuterrarium/llm/message.py" in patch_text
-    assert "git -C \"$KT_DIR\" apply --check \"$PATCH_FILE\"" in script_text
-
-
-def test_eval_kohaku_patch_matches_pinned_submodule():
-    patch = Path("patches/kohakuterrarium/stream-message-flag.patch").resolve()
-    kt_dir = Path("vendor/KohakuTerrarium")
-    controller = kt_dir / "src/kohakuterrarium/core/controller.py"
-    message = kt_dir / "src/kohakuterrarium/llm/message.py"
-
-    controller_text = controller.read_text(encoding="utf-8")
-    message_text = message.read_text(encoding="utf-8")
-    if (
-        'conversation.append("user", user_content, stream=user_stream)'
-        in controller_text
-        and "stream=stream" in message_text
+    assert not patch.exists()
+    assert not script.exists()
+    for workflow_path in (
+        Path(".github/workflows/timing-gate-eval.yml"),
+        Path(".github/workflows/quality-gate.yml"),
     ):
-        return
-
-    result = subprocess.run(
-        ["git", "-C", str(kt_dir), "apply", "--check", str(patch)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
+        text = workflow_path.read_text(encoding="utf-8")
+        assert "apply_kohaku_patches.sh" not in text
+        assert "submodules: recursive" not in text
+        assert "python -m pip install -r requirements-kt.lock" in text
 
 
 def test_eval_workflow_uploads_periodic_manifest():

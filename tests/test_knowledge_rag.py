@@ -604,7 +604,7 @@ def test_knowledge_query_filters_by_source_type_domain_and_date(db_session):
 
 
 def test_knowledge_query_tool_schema_declares_citation_boundary():
-    from creatures.nanobot.prompts.skills.knowledge_query.tool import KnowledgeQueryTool
+    from nanobot_kt.tools.knowledge_query import KnowledgeQueryTool
 
     schema = KnowledgeQueryTool().get_parameters_schema()
 
@@ -621,7 +621,7 @@ def test_knowledge_query_tool_blocks_when_reranker_required_unavailable(db_sessi
 
     from core import database
     from core.semantic.provider_factory import get_reranker_provider
-    from creatures.nanobot.prompts.skills.knowledge_query.tool import KnowledgeQueryTool
+    from nanobot_kt.tools.knowledge_query import KnowledgeQueryTool
 
     doc = _manual_doc(
         db_session,

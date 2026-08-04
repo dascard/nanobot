@@ -191,7 +191,7 @@ def test_ai_daily_cache_controls_bypass_read_without_changing_request(
     monkeypatch,
     cache_flag,
 ):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     cache_reads = []
     pipeline_requests = []
@@ -240,7 +240,7 @@ def test_ai_daily_logs_query_fingerprint_without_raw_query(
     import hashlib
     import logging
 
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     query = "AI 日报 confidential-query-marker"
     monkeypatch.setattr(news_tool, "_get_cached_news_result", lambda _key: None)
@@ -282,7 +282,7 @@ def test_ai_daily_tool_rejects_model_selected_server_fields(
     field,
     value,
 ):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     monkeypatch.setattr(
         news_tool,
@@ -495,7 +495,7 @@ def test_ai_daily_daily_fallback_wires_age_and_result_limits(monkeypatch):
 
 def test_ai_daily_tool_passes_normalized_request_to_pipeline(monkeypatch):
     from core.tool_contracts.ai_daily import AiDailyRequest
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     captured = []
 
@@ -532,7 +532,7 @@ def test_ai_daily_tool_passes_normalized_request_to_pipeline(monkeypatch):
 
 
 def test_ai_daily_invalid_arguments_fail_before_cache_or_pipeline(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     monkeypatch.setattr(
         news_tool,
@@ -654,7 +654,7 @@ def test_ai_daily_schema_and_executor_share_one_contract():
         ai_daily_parameters_schema,
     )
     from core.tool_schema_preview import build_tool_schema
-    from creatures.nanobot.prompts.skills.news_search.tool import AiDailyTool
+    from nanobot_kt.tools.ai_daily import AiDailyTool
 
     contract_schema = ai_daily_parameters_schema()
     class_schema = AiDailyTool().get_parameters_schema()

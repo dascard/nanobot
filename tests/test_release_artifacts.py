@@ -21,7 +21,6 @@ def _built_runtime_artifact():
         source=ArtifactSource(
             git_full_commit="a" * 40,
             git_dirty=False,
-            kt_commit="b" * 40,
         ),
         input_hashes={
             "prompt_defaults": "1" * 64,
@@ -181,7 +180,6 @@ def test_built_artifact_rejects_incomplete_or_mutable_evidence(
         "source": ArtifactSource(
             git_full_commit="a" * 40,
             git_dirty=False,
-            kt_commit="b" * 40,
         ),
         "input_hashes": {"python_lock": "2" * 64},
         "schema_migration_head": "20260723_release_manifest",
@@ -222,7 +220,6 @@ def test_runtime_artifact_requires_python_web_and_prompt_hashes():
             source=ArtifactSource(
                 git_full_commit="a" * 40,
                 git_dirty=False,
-                kt_commit="b" * 40,
             ),
             input_hashes={"python_lock": "2" * 64},
             schema_migration_head="20260723_release_manifest",

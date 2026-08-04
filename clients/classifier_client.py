@@ -563,6 +563,21 @@ def _get_provider_config(provider_id: str) -> dict | None:
     return provider.internal_view() if provider is not None else None
 
 
+def registry_provider_for_route(provider_id: str) -> str:
+    """把业务 Provider ID 解析为模型 Registry 使用的稳定 ID。"""
+
+    normalized = str(provider_id or "").strip()
+    if not normalized:
+        return "new-api"
+    config = _get_provider_config(normalized) or {}
+    registry_provider = str(config.get("registry_provider") or "").strip()
+    if registry_provider:
+        return registry_provider
+    if normalized in {"newapi", "new-api"}:
+        return "new-api"
+    return normalized
+
+
 def provider_public(p: dict) -> dict:
     """脱敏返回：不暴露 api_key 明文。"""
     return {

@@ -178,16 +178,27 @@ def test_research_tool_plan_sends_and_executes_only_effective_research_tools(db_
 def _bridge_start_fixture(*, preinstalled: bool = False):
     plugins = SimpleNamespace(_plugins=[])
     plugins.register = lambda plugin: plugins._plugins.append(plugin)
-    controller = SimpleNamespace(_get_native_tool_schemas=lambda: [])
+    plugins.get_plugin = lambda name: next(
+        (
+            plugin
+            for plugin in plugins._plugins
+            if getattr(plugin, "name", "") == name
+        ),
+        None,
+    )
+    provider = SimpleNamespace()
+    controller = SimpleNamespace(llm=provider)
     if preinstalled:
         plugins._plugins.append(SimpleNamespace(name="nanobot_tool_plan_guard"))
-        controller._nanobot_tool_plan_schema_filter_installed = True
     agent = SimpleNamespace(
         plugins=plugins,
         controller=controller,
+        llm=provider,
         registry=SimpleNamespace(list_tools=lambda: []),
         start=AsyncMock(),
     )
+    if preinstalled:
+        agent._nanobot_tool_plan_schema_filter_installed = True
     config = SimpleNamespace(
         name="research-test-agent",
         system_prompt="original",
@@ -221,7 +232,7 @@ async def test_bridge_start_fails_closed_when_tool_plan_component_is_missing(
     def install_schema_filter(target):
         if missing_component == "native_schema_filter":
             return False
-        target.controller._nanobot_tool_plan_schema_filter_installed = True
+        target._nanobot_tool_plan_schema_filter_installed = True
         return True
 
     monkeypatch.setattr(tool_runtime, "install_tool_plan_guard", install_guard)

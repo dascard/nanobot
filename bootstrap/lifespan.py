@@ -54,7 +54,34 @@ from bootstrap.schedulers import start_schedulers
 async def init_bridge() -> Any:
     from nanobot_kt.bridge import init_bridge as _init_bridge
 
-    return await _init_bridge()
+    return await _init_bridge(
+        selection_policy=build_agent_runtime_selection_policy(),
+    )
+
+
+def build_agent_runtime_selection_policy():
+    """从仅启动期可变的配置构建冻结 Runtime 选择策略。"""
+
+    from core.agent_runtime import (
+        AgentRuntimeKind,
+        AgentRuntimeSelectionPolicy,
+        parse_runtime_scope_ids,
+    )
+    from core.settings_service import settings
+
+    return AgentRuntimeSelectionPolicy(
+        default_kind=AgentRuntimeKind(
+            settings.get_str("agent.runtime.default", "native").strip().lower()
+        ),
+        kt_enabled=settings.get_bool("agent.runtime.kt_enabled", False),
+        kt_percentage_basis_points=settings.get_int(
+            "agent.runtime.kt_rollout_basis_points",
+            0,
+        ),
+        kt_session_ids=parse_runtime_scope_ids(
+            settings.get_str("agent.runtime.kt_session_allowlist", "")
+        ),
+    )
 
 
 async def shutdown_bridge() -> None:
@@ -69,7 +96,7 @@ async def shutdown_bridge() -> None:
 
 
 def bind_agent_runtime(bridge: object) -> None:
-    """把 KT Adapter 绑定到框架无关 Gateway Port。"""
+    """把双 Runtime Bridge 绑定到框架无关 Gateway Port。"""
 
     from core import database
     from core.agent_link.runtime import get_agent_link_runtime
@@ -81,19 +108,34 @@ def bind_agent_runtime(bridge: object) -> None:
         bind_scheduled_workflow_callbacks,
         clear_scheduled_workflow_callbacks,
     )
+    from core.media_preprocess_runtime import (
+        bind_image_precache_port,
+        clear_image_precache_port,
+    )
     from nanobot_kt.agent_link_adapter import KtAgentLinkChatAdapter
     from nanobot_kt.bridge import NanobotBridge
-    from nanobot_kt.research_runtime import create_research_runtime
+    from bootstrap.research_runtime import build_research_runtime_factory
+    from nanobot_kt.media_preprocess_adapter import KtImagePrecacheAdapter
     from nanobot_kt.scheduled_workflow_adapter import (
         KtScheduledWorkflowCallbacks,
     )
 
     try:
+        isolated_gateway_factory = getattr(
+            bridge,
+            "create_isolated_bridge",
+            None,
+        )
+        if not callable(isolated_gateway_factory):
+            isolated_gateway_factory = NanobotBridge
         _bind(
             gateway_provider=lambda: bridge,
-            isolated_gateway_factory=NanobotBridge,
-            research_runtime_factory=create_research_runtime,
+            isolated_gateway_factory=isolated_gateway_factory,
+            research_runtime_factory=build_research_runtime_factory(
+                isolated_gateway_factory
+            ),
         )
+        bind_image_precache_port(KtImagePrecacheAdapter())
         bind_scheduled_workflow_callbacks(
             lambda: KtScheduledWorkflowCallbacks(
                 session_factory=database.SessionLocal,
@@ -104,6 +146,7 @@ def bind_agent_runtime(bridge: object) -> None:
         )
     except BaseException:
         clear_scheduled_workflow_callbacks()
+        clear_image_precache_port()
         _clear()
         raise
 
@@ -115,8 +158,10 @@ def clear_agent_runtime_bindings() -> None:
     from core.scheduled_workflow_runtime import (
         clear_scheduled_workflow_callbacks,
     )
+    from core.media_preprocess_runtime import clear_image_precache_port
 
     clear_scheduled_workflow_callbacks()
+    clear_image_precache_port()
     _clear()
 
 

@@ -49,7 +49,6 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
       - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
-      - /home/nanobot/.kohakuterrarium:size=64m,mode=0700,uid=${NANOBOT_RUNTIME_UID:-10001},gid=${NANOBOT_RUNTIME_GID:-10001},nosuid,nodev,noexec
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8000/api/v1/ready"]
       interval: 10s
@@ -97,7 +96,6 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
       - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
-      - /home/nanobot/.kohakuterrarium:size=64m,mode=0700,uid=${NANOBOT_RUNTIME_UID:-10001},gid=${NANOBOT_RUNTIME_GID:-10001},nosuid,nodev,noexec
     healthcheck:
       test: ["CMD", "python", "-m", "core.runtime_health"]
       interval: 30s
@@ -144,7 +142,6 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
       - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
-      - /home/nanobot/.kohakuterrarium:size=64m,mode=0700,uid=${NANOBOT_RUNTIME_UID:-10001},gid=${NANOBOT_RUNTIME_GID:-10001},nosuid,nodev,noexec
     healthcheck:
       test: ["CMD", "python", "-m", "core.runtime_health"]
       interval: 30s
@@ -186,7 +183,6 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
       - /app/tmp:size=128m,mode=1777,nosuid,nodev,noexec
-      - /home/nanobot/.kohakuterrarium:size=64m,mode=0700,uid=${NANOBOT_RUNTIME_UID:-10001},gid=${NANOBOT_RUNTIME_GID:-10001},nosuid,nodev,noexec
     healthcheck:
       test: ["CMD", "python", "-m", "core.runtime_health"]
       interval: 30s

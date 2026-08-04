@@ -47,6 +47,51 @@ async def test_buffered_output_write_final_emits_replace_event_without_mutating_
 
 
 @pytest.mark.asyncio
+async def test_buffered_output_runtime_signal_capture_is_context_scoped():
+    from nanobot_kt.output import BufferedOutput
+
+    output = BufferedOutput()
+    signals = []
+    with output.capture_runtime_signals(
+        lambda kind, payload: signals.append((kind, payload))
+    ):
+        await output.write_stream("增量")
+        output.on_activity("tool_error", "工具失败")
+
+    await output.write_stream("作用域外")
+
+    assert signals == [
+        ("text_delta", {"text": "增量"}),
+        (
+            "error",
+            {
+                "code": "kt_tool_error",
+                "message": "工具失败",
+                "retryable": False,
+            },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_buffered_output_does_not_duplicate_delta_when_runtime_captures_signal():
+    from nanobot_kt.output import BufferedOutput
+
+    output = BufferedOutput()
+    queue = asyncio.Queue()
+    signals = []
+    output.enable_stream(queue)
+
+    with output.capture_runtime_signals(
+        lambda kind, payload: signals.append((kind, payload))
+    ):
+        await output.write_stream("唯一增量")
+
+    assert signals == [("text_delta", {"text": "唯一增量"})]
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_buffered_output_drops_progress_when_stream_queue_is_full():
     from nanobot_kt.output import BufferedOutput
 

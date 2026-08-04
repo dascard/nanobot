@@ -18,6 +18,12 @@ from core.database import (
     get_db,
 )
 from core.tracing import row_to_dict, sanitize_llm_log_payload
+from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+from core.run_ledger.projection import (
+    assess_run_ledger_readiness,
+    project_run_ledger,
+    run_ledger_record_to_dict,
+)
 
 router = APIRouter(tags=["admin-trace"])
 
@@ -104,12 +110,97 @@ def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(veri
         .order_by(ReplyContractCheckLog.created_at.asc())
         .all()
     )
+    ledger = SqlAlchemyRunEventLedger(db)
+    ledger_head = ledger.head(run_id)
+    ledger_records = ()
+    ledger_projection = None
+    ledger_projection_complete = True
+    if ledger_head is not None:
+        ledger_records = ledger.read(
+            run_id,
+            limit=min(5000, max(1, ledger_head.last_sequence)),
+        )
+        ledger_projection_complete = (
+            len(ledger_records) == ledger_head.last_sequence
+        )
+        if ledger_projection_complete:
+            ledger_projection = project_run_ledger(ledger_records)
+    ledger_readiness = assess_run_ledger_readiness(
+        ledger_records,
+        run_id=run_id,
+        legacy_status=str(run.status or ""),
+        legacy_finished_at=run.finished_at,
+        projection_complete=ledger_projection_complete,
+        high_water_sequence=(
+            ledger_head.last_sequence if ledger_head is not None else 0
+        ),
+    )
     return {
         "run": row_to_dict(run),
+        "ledger": {
+            "available": ledger_head is not None,
+            "projection_complete": ledger_projection_complete,
+            "head": (
+                {
+                    "run_id": ledger_head.run_id,
+                    "last_sequence": ledger_head.last_sequence,
+                    "last_event_id": ledger_head.last_event_id,
+                    "last_event_sha256": ledger_head.last_event_sha256,
+                    "terminal_sequence": ledger_head.terminal_sequence,
+                }
+                if ledger_head is not None
+                else None
+            ),
+            "projection": (
+                ledger_projection.to_dict()
+                if ledger_projection is not None
+                else None
+            ),
+            "readiness": ledger_readiness.to_dict(),
+        },
         "tool_calls": [row_to_dict(row) for row in tool_calls],
         "prompt_render_logs": [row_to_dict(row) for row in prompt_logs],
         "llm_api_request_logs": [row_to_dict(x) for x in llm_logs],
         "reply_contract_check_logs": [row_to_dict(x) for x in reply_contract_logs],
+    }
+
+
+@router.get("/agent-runs/{run_id}/events")
+def list_agent_run_events(
+    run_id: str,
+    after_sequence: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    if db.query(AgentRun.run_id).filter(AgentRun.run_id == run_id).first() is None:
+        raise HTTPException(404, "Agent run not found")
+    ledger = SqlAlchemyRunEventLedger(db)
+    head = ledger.head(run_id)
+    if head is None:
+        return {
+            "items": [],
+            "run_id": run_id,
+            "after_sequence": after_sequence,
+            "next_after_sequence": after_sequence,
+            "high_water_sequence": 0,
+            "has_more": False,
+        }
+    records = ledger.read(
+        run_id,
+        after_sequence=after_sequence,
+        limit=limit,
+    )
+    next_after_sequence = (
+        records[-1].sequence if records else after_sequence
+    )
+    return {
+        "items": [run_ledger_record_to_dict(record) for record in records],
+        "run_id": run_id,
+        "after_sequence": after_sequence,
+        "next_after_sequence": next_after_sequence,
+        "high_water_sequence": head.last_sequence,
+        "has_more": next_after_sequence < head.last_sequence,
     }
 
 

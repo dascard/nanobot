@@ -14,7 +14,7 @@ from tests.async_helpers import run_async
 
 
 def test_sandbox_tool_implementation_is_owned_by_kt_adapter_layer():
-    from creatures.nanobot.prompts.skills.sandbox.tool import (
+    from nanobot_kt.tools.sandbox import (
         SandboxExecTool as LegacySandboxExecTool,
     )
     from nanobot_kt.tools.sandbox import SandboxExecTool
@@ -268,7 +268,7 @@ def test_old_host_file_tools_and_memory_subagents_are_removed_and_hard_disabled(
 
 
 def test_workspace_write_uses_trusted_context_and_stable_envelope(db_session):
-    from creatures.nanobot.prompts.skills.sandbox.tool import WorkspaceWriteTool
+    from nanobot_kt.tools.sandbox import WorkspaceWriteTool
 
     _enable_sandbox(db_session)
     backend = FakeSandboxBackend()
@@ -309,7 +309,7 @@ def test_workspace_write_uses_trusted_context_and_stable_envelope(db_session):
 
 def test_workspace_edit_uses_trusted_context_and_updates_usage(db_session):
     from core.database import Workspace
-    from creatures.nanobot.prompts.skills.sandbox.tool import (
+    from nanobot_kt.tools.sandbox import (
         WorkspaceEditTool,
     )
 
@@ -381,7 +381,7 @@ def test_sandbox_exec_rejects_model_controlled_identity_and_docker_fields(
     db_session,
     forbidden_field,
 ):
-    from creatures.nanobot.prompts.skills.sandbox.tool import SandboxExecTool
+    from nanobot_kt.tools.sandbox import SandboxExecTool
 
     _enable_sandbox(db_session, exec_enabled=True)
     backend = FakeSandboxBackend()
@@ -409,7 +409,7 @@ def test_sandbox_exec_records_exact_trace_links_and_resource_summary(db_session)
         set_tool_trace_context,
         set_trace_context,
     )
-    from creatures.nanobot.prompts.skills.sandbox.tool import SandboxExecTool
+    from nanobot_kt.tools.sandbox import SandboxExecTool
 
     _enable_sandbox(db_session, exec_enabled=True)
     backend = FakeSandboxBackend()
@@ -474,7 +474,7 @@ def test_sandbox_exec_records_exact_trace_links_and_resource_summary(db_session)
 
 def test_sandbox_exec_records_nonzero_exit_as_failed(db_session):
     from core.database import SandboxRun
-    from creatures.nanobot.prompts.skills.sandbox.tool import SandboxExecTool
+    from nanobot_kt.tools.sandbox import SandboxExecTool
 
     _enable_sandbox(db_session, exec_enabled=True)
     backend = FakeSandboxBackend()
@@ -514,7 +514,7 @@ def test_sandbox_exec_records_nonzero_exit_as_failed(db_session):
 
 def test_sandbox_exec_uses_manifest_profile_image_when_legacy_absent(db_session):
     from core.database import SandboxRun
-    from creatures.nanobot.prompts.skills.sandbox.tool import SandboxExecTool
+    from nanobot_kt.tools.sandbox import SandboxExecTool
 
     _enable_sandbox(db_session, exec_enabled=True)
     backend = FakeSandboxBackend()
@@ -560,7 +560,7 @@ def test_sandbox_exec_uses_manifest_profile_image_when_legacy_absent(db_session)
 def test_sandbox_exec_failure_terminal_survives_outer_uow_rollback(db_session):
     from core.database import SandboxRun
     from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError
-    from creatures.nanobot.prompts.skills.sandbox.tool import SandboxExecTool
+    from nanobot_kt.tools.sandbox import SandboxExecTool
 
     _enable_sandbox(db_session, exec_enabled=True)
     backend = FakeSandboxBackend()
@@ -647,7 +647,7 @@ def test_run_ledger_retries_terminal_commit_and_does_not_leave_running(
 
 def test_asset_publish_registers_authorized_immutable_reference(db_session):
     from core.database import Asset, WorkspaceAsset
-    from creatures.nanobot.prompts.skills.sandbox.tool import AssetPublishTool
+    from nanobot_kt.tools.sandbox import AssetPublishTool
 
     _enable_sandbox(db_session)
     digest = "b" * 64

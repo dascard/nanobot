@@ -24,10 +24,8 @@ def _write_evidence(root: Path) -> dict[str, Path]:
     paths["sbom"].parent.mkdir()
     paths["sbom"].write_text('{"spdxVersion":"SPDX-2.3"}\n')
     paths["verification"].write_text(
-        '{"schema_version":1,"source_sha":"'
+        '{"schema_version":2,"source_sha":"'
         + "a" * 40
-        + '","kt_sha":"'
-        + "b" * 40
         + '","suites":{"backend-full":{"run_id":"1",'
         '"job":"backend","conclusion":"success"}}}\n'
     )
@@ -61,8 +59,6 @@ def test_manifest_cli_builds_artifact_release_and_validates_target(
         "a" * 40,
         "--git-dirty",
         "false",
-        "--kt-commit",
-        "b" * 40,
         "--input",
         "python_lock=requirements-prod.lock",
         "--input",
@@ -162,8 +158,6 @@ def test_manifest_cli_rejects_duplicate_inputs_and_symlinks(
         "a" * 40,
         "--git-dirty",
         "false",
-        "--kt-commit",
-        "b" * 40,
         "--schema-migration-head",
         "20260723_release_manifest",
         "--image-reference",

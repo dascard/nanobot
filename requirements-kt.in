@@ -1,0 +1,3 @@
+# KT 仅用于显式启用的兼容 Runtime，不属于默认 Native 生产依赖。
+# 固定到已验证的 v1.4.0 commit，升级时必须重新生成锁并运行 kt-compatibility。
+kohakuterrarium @ git+https://github.com/Kohaku-Lab/KohakuTerrarium.git@9e4ff291814b65423df5e94f4fa3f84dbb82692d

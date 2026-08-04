@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from collections.abc import Callable
 from typing import Any, Protocol
 
 from core.agent_runtime import AgentRuntimeCapabilityError, RuntimeModelRoute
@@ -87,10 +86,15 @@ class KtModelPresetResolverAdapter:
         return ResolvedModelPreset(resolved, normalized)
 
 
-def create_kt_provider(transport: KtPresetTransport) -> object:
+def create_kt_provider(
+    transport: KtPresetTransport,
+    *,
+    model_id: str | None = None,
+) -> object:
     """根据解析后的 Preset 构建 KT OpenAI/Anthropic/Codex Provider。"""
 
     driver_type = str(transport.driver_type or "openai")
+    resolved_model = str(model_id or transport.model or "")
     retry_policy = dict(transport.retry_policy or {})
     max_retries = int(retry_policy.get("max_retries", 3))
     if driver_type == "codex":
@@ -106,7 +110,7 @@ def create_kt_provider(transport: KtPresetTransport) -> object:
                 raise RuntimeError("没有可用的 Codex OAuth 账号")
             account_id = account_ids[0]
         provider = AccountBoundCodexOAuthProvider(
-            model=transport.model,
+            model=resolved_model,
             account_id=account_id,
             reasoning_effort=transport.reasoning_effort or "medium",
             service_tier=transport.service_tier or None,
@@ -122,7 +126,7 @@ def create_kt_provider(transport: KtPresetTransport) -> object:
             extra_body["disable_prompt_caching"] = True
         provider = AnthropicProvider(
             api_key=transport.api_key,
-            model=transport.model,
+            model=resolved_model,
             base_url=transport.base_url or None,
             temperature=(
                 float(transport.temperature)
@@ -150,12 +154,12 @@ def create_kt_provider(transport: KtPresetTransport) -> object:
 
         apply_enable_thinking_to_payload(
             extra_body,
-            transport.model,
+            resolved_model,
             transport.enable_thinking,
         )
         provider = OpenAIProvider(
             api_key=transport.api_key,
-            model=transport.model,
+            model=resolved_model,
             base_url=transport.base_url,
             temperature=(
                 float(transport.temperature)
@@ -175,10 +179,12 @@ def create_kt_provider(transport: KtPresetTransport) -> object:
 
     provider.provider_name = transport.provider_name or transport.provider_id
     provider.provider_native_tools = frozenset(transport.provider_native_tools or ())
-    provider._profile_max_context = int(transport.max_context)
-    provider._nanobot_profile_id = transport.profile_id
-    provider._nanobot_provider_id = transport.provider_id
-    provider._nanobot_config_fingerprint = _transport_fingerprint(transport)
+    provider.nanobot_profile_id = transport.profile_id
+    provider.nanobot_provider_id = transport.provider_id
+    provider.nanobot_config_fingerprint = _transport_fingerprint(
+        transport,
+        model_id=resolved_model,
+    )
     return provider
 
 
@@ -187,27 +193,20 @@ def apply_kt_preset_model_route(
     route: RuntimeModelRoute,
     transport: KtPresetTransport,
     *,
-    legacy_openai_applier: Callable[..., None],
-    tracer_installer: Callable[..., object] | None = None,
+    tracer_installer: Any | None = None,
 ) -> None:
-    """把 Route 原子应用到 KT Agent；无 Preset 时保留旧 OpenAI 热切换。"""
-
-    if not route.profile_id:
-        legacy_openai_applier(
-            agent,
-            route,
-            transport,
-            tracer_installer=tracer_installer,
-        )
-        return
+    """通过公开 Provider 构造与 Agent 引用原子应用模型 Route。"""
 
     controller = getattr(agent, "controller", None)
     current = getattr(controller, "llm", None)
     if controller is None or current is None:
         raise AgentRuntimeCapabilityError("KT Agent 缺少 controller.llm")
 
-    fingerprint = _transport_fingerprint(transport)
-    if getattr(current, "_nanobot_config_fingerprint", "") == fingerprint:
+    fingerprint = _transport_fingerprint(
+        transport,
+        model_id=route.model_id,
+    )
+    if getattr(current, "nanobot_config_fingerprint", "") == fingerprint:
         config = getattr(current, "config", None)
         if config is not None and hasattr(config, "model"):
             config.model = route.model_id
@@ -215,15 +214,10 @@ def apply_kt_preset_model_route(
             current.model = route.model_id
         return
 
-    replacement = create_kt_provider(transport)
-    _carry_runtime_state(current, replacement)
-    controller.llm = replacement
-    if hasattr(agent, "llm"):
-        agent.llm = replacement
-    subagents = getattr(agent, "subagent_manager", None)
-    if subagents is not None and hasattr(subagents, "llm"):
-        subagents.llm = replacement
-    _ensure_provider_native_tools(agent, tuple(transport.provider_native_tools or ()))
+    replacement = create_kt_provider(transport, model_id=route.model_id)
+    _carry_public_runtime_state(current, replacement)
+    _register_emergency_drop_sync(agent, replacement)
+    _disable_kt_compaction(agent)
 
     if str(transport.driver_type) == "openai":
         if tracer_installer is None:
@@ -236,14 +230,44 @@ def apply_kt_preset_model_route(
             base_url=transport.base_url,
         )
 
+    from nanobot_kt.tool_runtime import wrap_tool_plan_provider
 
-def _carry_runtime_state(current: object, replacement: object) -> None:
-    callbacks = getattr(current, "_emergency_drop_callbacks", None)
-    if isinstance(callbacks, list):
-        replacement._emergency_drop_callbacks = list(callbacks)
+    bound_provider = wrap_tool_plan_provider(replacement)
+    controller.llm = bound_provider
+    if hasattr(agent, "llm"):
+        agent.llm = bound_provider
+    subagents = getattr(agent, "subagent_manager", None)
+    if subagents is not None and hasattr(subagents, "llm"):
+        subagents.llm = bound_provider
+    _ensure_provider_native_tools(agent, tuple(transport.provider_native_tools or ()))
+
+
+def _carry_public_runtime_state(current: object, replacement: object) -> None:
     prompt_cache_key = getattr(current, "prompt_cache_key", None)
     if hasattr(replacement, "prompt_cache_key"):
         replacement.prompt_cache_key = prompt_cache_key
+
+
+def _register_emergency_drop_sync(agent: object, provider: object) -> None:
+    register = getattr(provider, "on_emergency_drop", None)
+    if not callable(register):
+        return
+    from kohakuterrarium.core.agent_budget_recovery import (
+        sync_emergency_drop_conversation,
+    )
+
+    register(
+        lambda messages: sync_emergency_drop_conversation(agent, messages)
+    )
+
+
+def _disable_kt_compaction(agent: object) -> None:
+    """canonical Prompt Runtime 独占上下文压缩，关闭 KT 后台压缩。"""
+
+    manager = getattr(agent, "compact_manager", None)
+    config = getattr(manager, "config", None)
+    if config is not None and hasattr(config, "enabled"):
+        config.enabled = False
 
 
 def _ensure_provider_native_tools(agent: object, tool_names: tuple[str, ...]) -> None:
@@ -264,12 +288,16 @@ def _ensure_provider_native_tools(agent: object, tool_names: tuple[str, ...]) ->
             existing.add(name)
 
 
-def _transport_fingerprint(transport: KtPresetTransport) -> str:
+def _transport_fingerprint(
+    transport: KtPresetTransport,
+    *,
+    model_id: str | None = None,
+) -> str:
     payload = {
         "provider_id": transport.provider_id,
         "driver_type": transport.driver_type,
         "profile_id": transport.profile_id,
-        "model": transport.model,
+        "model": str(model_id or transport.model or ""),
         "base_url": transport.base_url,
         "api_key_sha256": hashlib.sha256(
             str(transport.api_key or "").encode("utf-8")

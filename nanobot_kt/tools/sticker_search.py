@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable
 from typing import Any
 
-from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from nanobot_kt.optional_tool_api import BaseTool, ExecutionMode, ToolResult
 
-from core.database import SessionLocal
-from core.sticker_memory import search_stickers
+from app.tool_services.sticker_search import execute_sticker_search
+from nanobot_kt.tools.result_adapter import to_kt_tool_result
 
 
 class StickerSearchTool(BaseTool):
@@ -68,59 +66,7 @@ class StickerSearchTool(BaseTool):
         if has_memory_tool_runtime_binding():
             result = await dispatch_memory_tool_call(self.tool_name, args)
             return provider_result_to_tool_result(result)
-        return await execute_sticker_search(args, session_factory=SessionLocal)
-
-
-async def execute_sticker_search(
-    args: dict[str, Any],
-    *,
-    session_factory: Callable[[], Any] = SessionLocal,
-) -> ToolResult:
-    """执行 Sticker Search；供 KT Tool 与 Memory Provider 共用。"""
-
-    query = str(args.get("query") or "").strip()
-    group_id = str(args.get("group_id") or "").strip()
-    limit = int(args.get("limit") or 3)
-    include_global = bool(args.get("include_global", True))
-    if not query:
-        return ToolResult(error="Missing 'query' argument")
-
-    db = session_factory()
-    try:
-        try:
-            results = search_stickers(
-                db,
-                query,
-                group_id=group_id,
-                limit=max(1, min(limit, 8)),
-                include_global=include_global,
-            )
-        except Exception as exc:
-            from core.semantic.provider_factory import RagDegradedBlockedError
-
-            if isinstance(exc, RagDegradedBlockedError):
-                return ToolResult(
-                    error=str(exc),
-                    metadata={
-                        "structured_content": {
-                            "query": query,
-                            "source": "sticker",
-                            "degraded": False,
-                            "blocked_reason": exc.fallback_reason,
-                            "results": [],
-                        }
-                    },
-                )
-            raise
-        payload = {
-            "query": query,
-            "count": len(results),
-            "results": results,
-            "usage_hint": "优先选择一个 result.reply_token 放进 reply(content)，reply 工具会自动展开并发送表情包；不要手抄长 URL。如果没有很贴切的候选，改用文字回复。",
-        }
-        return ToolResult(output=json.dumps(payload, ensure_ascii=False), exit_code=0)
-    finally:
-        db.close()
+        return to_kt_tool_result(await execute_sticker_search(args))
 
 
 __all__ = ["StickerSearchTool", "execute_sticker_search"]

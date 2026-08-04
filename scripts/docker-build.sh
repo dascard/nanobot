@@ -43,9 +43,6 @@ export GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 export GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 export GIT_FULL_COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 export GIT_COMMIT_DATE="$(git log -1 --format=%ci --date=iso-strict 2>/dev/null || true)"
-export GIT_KT_COMMIT="$(
-  git -C vendor/KohakuTerrarium rev-parse HEAD 2>/dev/null || true
-)"
 built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 build_tmp_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/nanobot-build"
@@ -125,7 +122,6 @@ write_build_evidence() {
   python scripts/write_runtime_build_evidence.py \
     --git-full-commit "${GIT_FULL_COMMIT}" \
     --git-dirty "${git_dirty_value}" \
-    --kt-commit "${GIT_KT_COMMIT}" \
     --build-context-sha256 "${BUILD_CONTEXT_SHA256}" \
     --build-context-manifest "${build_context_manifest}" \
     --image-reference "${runtime_image}" \

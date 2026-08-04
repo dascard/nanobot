@@ -1917,7 +1917,7 @@ def test_memory_recall_rejects_invalid_date_filters(client):
 
 
 def test_memory_query_tool_search_and_expand(db_session, monkeypatch):
-    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from nanobot_kt.tools.memory_query import MemoryQueryTool
     from core import database
 
     row = _add_digest(db_session, digest_id=31)
@@ -1948,7 +1948,7 @@ def test_memory_query_tool_search_and_expand(db_session, monkeypatch):
 
 
 def test_memory_query_tool_time_accepts_date_range(db_session, monkeypatch):
-    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from nanobot_kt.tools.memory_query import MemoryQueryTool
     from core import database
 
     _add_digest(db_session, digest_id=51)
@@ -1973,7 +1973,7 @@ def test_memory_query_tool_time_accepts_date_range(db_session, monkeypatch):
 
 
 def test_memory_query_tool_rejects_invalid_date_range(monkeypatch):
-    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from nanobot_kt.tools.memory_query import MemoryQueryTool
 
     tool = MemoryQueryTool()
     malformed = run_async(tool._execute({
@@ -1993,7 +1993,7 @@ def test_memory_query_tool_rejects_invalid_date_range(monkeypatch):
 
 
 def test_memory_query_tool_session_summary_search_and_expand(db_session, monkeypatch):
-    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from nanobot_kt.tools.memory_query import MemoryQueryTool
     from core import database
 
     row = RollingSessionSummary(

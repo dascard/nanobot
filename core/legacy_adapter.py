@@ -15,7 +15,6 @@ from core.json_utils import json_repair as _json_repair
 from config import MAX_TOOL_ROUNDS
 from core.state_manager import StateManager
 from sandbox import AnalysisSandbox
-from creatures.nanobot.prompts.skills.news_search.tool import search_and_extract_news
 from core.model_provider.chat_runtime import RuntimeChatCompletionClient
 from core.model_provider.catalog_runtime import (
     ModelCatalogWriterPort,
@@ -31,6 +30,26 @@ from core.persona_preprocess import (
 )
 
 logger = logging.getLogger("nanobot.kt_adapter")
+
+
+def search_and_extract_news(
+    query: str,
+    max_results: int = 3,
+    *,
+    persist: bool = False,
+    user_id: str = "",
+    session_id: str = "",
+) -> str:
+    """通过应用已绑定的新闻检索 Provider 执行兼容调用。"""
+    from core.news_search_runtime import get_news_search_provider
+
+    return get_news_search_provider().search_and_extract(
+        query,
+        max_results=max_results,
+        persist=persist,
+        user_id=user_id,
+        session_id=session_id,
+    )
 
 class SQLiteMemory:
     """

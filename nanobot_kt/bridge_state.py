@@ -99,7 +99,6 @@ class ReplyResolution:
 
 @dataclass
 class BridgeTraceFinalizer:
-    bridge: Any
     run_id: str
     trace_tokens: Any
     run_meta: dict[str, Any]
@@ -147,8 +146,6 @@ class BridgeTraceFinalizer:
                     exc,
                     exc_info=True,
                 )
-
-        run_step("restore_saved_tools", self.bridge._restore_saved_tools)
 
         def finish_run() -> None:
             from core.tracing import RunTracer

@@ -8,13 +8,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from threading import RLock
+from typing import TypeVar, cast
 
 from core.agent_runtime.errors import AgentRuntimeStateError
+from core.agent_runtime.gateway_contracts import (
+    AgentMessageGatewayPort,
+    ManagedAgentGatewayPort,
+    ResearchAgentRuntimePort,
+)
 
 
-AgentGatewayProvider = Callable[[], object | None]
-IsolatedAgentGatewayFactory = Callable[[], object | None]
-ResearchAgentRuntimeFactory = Callable[[], object | None]
+AgentGatewayProvider = Callable[[], AgentMessageGatewayPort | None]
+IsolatedAgentGatewayFactory = Callable[[], ManagedAgentGatewayPort | None]
+ResearchAgentRuntimeFactory = Callable[[], ResearchAgentRuntimePort | None]
+GatewayPortT = TypeVar("GatewayPortT")
 
 
 _lock = RLock()
@@ -35,9 +42,7 @@ def bind_agent_runtime(
         raise TypeError("gateway_provider 必须可调用")
     if not callable(isolated_gateway_factory):
         raise TypeError("isolated_gateway_factory 必须可调用")
-    resolved_research_factory = (
-        research_runtime_factory or isolated_gateway_factory
-    )
+    resolved_research_factory = research_runtime_factory or isolated_gateway_factory
     if not callable(resolved_research_factory):
         raise TypeError("research_runtime_factory 必须可调用")
     global _gateway_provider
@@ -80,7 +85,12 @@ def agent_runtime_binding_state() -> str:
     return "running" if bound else "stopped"
 
 
-def _resolve(factory: Callable[[], object | None] | None) -> object:
+def _resolve(
+    factory: Callable[[], object | None] | None,
+    expected_type: type[GatewayPortT],
+    *,
+    port_name: str,
+) -> GatewayPortT:
     if factory is None:
         raise AgentRuntimeStateError(
             "Agent Gateway 当前不可用",
@@ -100,25 +110,42 @@ def _resolve(factory: Callable[[], object | None] | None) -> object:
             "Agent Gateway 当前不可用",
             runtime_id="process-agent-gateway",
         )
-    return value
+    if not isinstance(value, expected_type):
+        raise AgentRuntimeStateError(
+            f"{port_name} 未实现所需 Port",
+            runtime_id="process-agent-gateway",
+        )
+    return cast(GatewayPortT, value)
 
 
-def get_agent_gateway() -> object:
+def get_agent_gateway() -> AgentMessageGatewayPort:
     with _lock:
         provider = _gateway_provider
-    return _resolve(provider)
+    return _resolve(
+        provider,
+        AgentMessageGatewayPort,
+        port_name="Agent Message Gateway",
+    )
 
 
-def create_isolated_agent_gateway() -> object:
+def create_isolated_agent_gateway() -> ManagedAgentGatewayPort:
     with _lock:
         factory = _isolated_gateway_factory
-    return _resolve(factory)
+    return _resolve(
+        factory,
+        ManagedAgentGatewayPort,
+        port_name="Isolated Agent Gateway",
+    )
 
 
-def create_research_agent_runtime() -> object:
+def create_research_agent_runtime() -> ResearchAgentRuntimePort:
     with _lock:
         factory = _research_runtime_factory
-    return _resolve(factory)
+    return _resolve(
+        factory,
+        ResearchAgentRuntimePort,
+        port_name="Research Agent Runtime",
+    )
 
 
 __all__ = [

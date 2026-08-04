@@ -1,0 +1,864 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from collections import deque
+from collections.abc import AsyncIterator, Mapping
+from datetime import datetime
+from typing import Any
+
+import pytest
+
+from core.agent_runtime import (
+    AgentRuntimeCapabilityError,
+    AgentRuntimeExecutionError,
+    AgentRuntimePort,
+    AgentTurnRequest,
+    InMemoryRunEventSink,
+    NativeAgentRuntime,
+    NativeAgentRuntimeConfig,
+    RegisteredToolExecutionPort,
+    RequestRuntimeContext,
+    RuntimeActor,
+    RuntimeActorType,
+    RuntimeChatType,
+    RuntimeLifecycleState,
+    RuntimeMessage,
+    RuntimeModelRoute,
+    RuntimeOwnerType,
+    RuntimePlanKind,
+    RuntimePlanRef,
+    RuntimePrincipal,
+    RuntimeRunEventKind,
+    RuntimeRunStatus,
+    RuntimeToolCall,
+    RuntimeToolCallStatus,
+    RuntimeToolExecutionRequest,
+    RuntimeToolExecutionResult,
+    RuntimeTurnKind,
+)
+from core.model_provider.chat_runtime import ChatCompletionRequest
+from core.tool_plan import ToolPlan
+
+
+def _tool_schema(name: str) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": f"执行 {name}",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    }
+
+
+def _tool_plan(*names: str) -> ToolPlan:
+    return ToolPlan.from_effective_tools(
+        enabled={name: True for name in names},
+        chat_type="private",
+        tool_schemas=[_tool_schema(name) for name in names],
+    )
+
+
+def _context(
+    plan: ToolPlan | None = None,
+    *,
+    plan_sha256: str = "",
+    deadline_at: datetime | None = None,
+) -> RequestRuntimeContext:
+    digest = plan_sha256 or (plan.sha256 if plan is not None else "")
+    plans = (
+        (
+            RuntimePlanRef(
+                RuntimePlanKind.TOOL,
+                "tool-plan:native-test",
+                digest,
+            ),
+        )
+        if digest
+        else ()
+    )
+    return RequestRuntimeContext(
+        request_id="request-native-1",
+        principal=RuntimePrincipal(
+            platform="qq",
+            owner_type=RuntimeOwnerType.USER,
+            owner_id="10001",
+        ),
+        session_id="private_10001",
+        chat_type=RuntimeChatType.PRIVATE,
+        trace_id="trace-native-1",
+        run_id="run-native-1",
+        turn_id="turn-native-1",
+        correlation_id="correlation-native-1",
+        actor=RuntimeActor(RuntimeActorType.USER, "10001"),
+        plans=plans,
+        deadline_at=deadline_at,
+    )
+
+
+def _assistant_response(
+    content: str,
+    *,
+    usage: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+    }
+    if usage is not None:
+        response["usage"] = dict(usage)
+    return response
+
+
+def _tool_call_response(
+    name: str,
+    arguments: Mapping[str, Any],
+    *,
+    call_id: str = "call-native-1",
+    usage: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": json.dumps(
+                                    dict(arguments),
+                                    ensure_ascii=False,
+                                ),
+                            },
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    if usage is not None:
+        response["usage"] = dict(usage)
+    return response
+
+
+class _ScriptedCompletionPort:
+    def __init__(
+        self,
+        *,
+        responses: tuple[Mapping[str, Any] | BaseException, ...] = (),
+        streams: tuple[tuple[Mapping[str, Any] | BaseException, ...], ...] = (),
+    ) -> None:
+        self._responses = deque(responses)
+        self._streams = deque(streams)
+        self.complete_requests: list[ChatCompletionRequest] = []
+        self.stream_requests: list[ChatCompletionRequest] = []
+
+    @property
+    def adapter_id(self) -> str:
+        return "completion:scripted"
+
+    async def complete_chat(
+        self,
+        request: ChatCompletionRequest,
+    ) -> Mapping[str, Any]:
+        self.complete_requests.append(request)
+        if not self._responses:
+            raise AssertionError("没有预设非流式模型响应")
+        response = self._responses.popleft()
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    async def stream_chat(
+        self,
+        request: ChatCompletionRequest,
+    ) -> AsyncIterator[Mapping[str, Any]]:
+        self.stream_requests.append(request)
+        if not self._streams:
+            raise AssertionError("没有预设流式模型响应")
+        stream = self._streams.popleft()
+        for item in stream:
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+
+class _RouteScriptedCompletionPort(_ScriptedCompletionPort):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.bound_routes: list[object] = []
+
+    def bind_route(self, route: object) -> None:
+        self.bound_routes.append(route)
+
+
+class _BlockingCompletionPort:
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    @property
+    def adapter_id(self) -> str:
+        return "completion:blocking"
+
+    async def complete_chat(
+        self,
+        request: ChatCompletionRequest,
+    ) -> Mapping[str, Any]:
+        del request
+        self.entered.set()
+        await self.release.wait()
+        return _assistant_response("不应到达")
+
+    async def stream_chat(
+        self,
+        request: ChatCompletionRequest,
+    ) -> AsyncIterator[Mapping[str, Any]]:
+        del request
+        self.entered.set()
+        await self.release.wait()
+        yield {"choices": [{"delta": {"content": "不应到达"}}]}
+
+
+def _completed_tool_result(
+    request: RuntimeToolExecutionRequest,
+    output: object,
+    *,
+    stop: bool = False,
+) -> RuntimeToolExecutionResult:
+    return RuntimeToolExecutionResult(
+        tool_call=RuntimeToolCall(
+            call_id=request.tool_call.call_id,
+            name=request.tool_call.name,
+            arguments=request.arguments,
+            status=RuntimeToolCallStatus.COMPLETED,
+            result=output,
+        ),
+        metadata={"stop": stop},
+    )
+
+
+def _runtime(
+    completion_port: _ScriptedCompletionPort | _BlockingCompletionPort,
+    *,
+    plan: ToolPlan | None = None,
+    handlers: Mapping[str, Any] | None = None,
+    config: NativeAgentRuntimeConfig | None = None,
+) -> NativeAgentRuntime:
+    bindings = dict(handlers or {})
+    tool_port = RegisteredToolExecutionPort(bindings)
+    return NativeAgentRuntime(
+        completion_port,
+        tool_port,
+        runtime_id="native:test",
+        config=config,
+        tool_plan_resolver=lambda: plan,
+        tool_binding_resolver=lambda name: f"tool.{name}.execute",
+        available_tool_names=tuple(sorted(plan.executable_tool_names)) if plan else (),
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_satisfies_port_and_projects_prompt_route_and_usage():
+    completion = _ScriptedCompletionPort(
+        responses=(
+            _assistant_response(
+                "原生完成",
+                usage={
+                    "prompt_tokens": 12,
+                    "completion_tokens": 3,
+                    "prompt_tokens_details": {"cached_tokens": 7},
+                    "completion_tokens_details": {"reasoning_tokens": 2},
+                },
+            ),
+        )
+    )
+    runtime = _runtime(completion)
+    assert isinstance(runtime, AgentRuntimePort)
+
+    await runtime.start()
+    assert runtime.state is RuntimeLifecycleState.RUNNING
+    assert runtime.replace_conversation((RuntimeMessage("system", "系统规则"),)) == 1
+    runtime.set_model_route(
+        RuntimeModelRoute(
+            route_id="reply/default",
+            model_id="model-native",
+            provider_id="new-api",
+            temperature=0.2,
+            max_tokens=256,
+            enable_thinking=False,
+        )
+    )
+    sink = InMemoryRunEventSink()
+
+    result = await runtime.run_event(
+        AgentTurnRequest(_context(), "当前消息"),
+        sink.append,
+    )
+
+    assert [(message.role, message.content) for message in result.messages] == [
+        ("system", "系统规则"),
+        ("user", "当前消息"),
+        ("assistant", "原生完成"),
+    ]
+    request = completion.complete_requests[0]
+    assert [message["role"] for message in request.messages] == [
+        "system",
+        "user",
+    ]
+    assert request.manual_model == "model-native"
+    assert request.temperature == 0.2
+    assert request.max_tokens == 256
+    assert request.enable_thinking == "false"
+    assert request.trace_id == "trace-native-1"
+    assert request.run_id == "run-native-1"
+    assert [event.kind for event in sink.events] == [
+        RuntimeRunEventKind.STATUS,
+        RuntimeRunEventKind.STATUS,
+        RuntimeRunEventKind.USAGE,
+        RuntimeRunEventKind.END,
+    ]
+    assert sink.events[2].usage.input_tokens == 12
+    assert sink.events[2].usage.cached_input_tokens == 7
+    assert sink.events[2].usage.reasoning_tokens == 2
+    assert sink.events[-1].status is RuntimeRunStatus.SUCCEEDED
+    assert runtime.read_conversation() == result.messages
+    assert runtime.clear_pending_events().total == 0
+    assert runtime.install_tool_policy().ready is True
+
+    await runtime.stop()
+    assert runtime.state is RuntimeLifecycleState.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_runs_bounded_model_tool_loop_through_frozen_binding():
+    plan = _tool_plan("memory_query")
+    completion = _ScriptedCompletionPort(
+        responses=(
+            _tool_call_response(
+                "memory_query",
+                {"query": "原生 Runtime"},
+                usage={"prompt_tokens": 10, "completion_tokens": 2},
+            ),
+            _assistant_response(
+                "根据记忆，答案如下",
+                usage={"prompt_tokens": 20, "completion_tokens": 4},
+            ),
+        )
+    )
+    seen: list[RuntimeToolExecutionRequest] = []
+
+    async def execute_memory(
+        request: RuntimeToolExecutionRequest,
+    ) -> RuntimeToolExecutionResult:
+        seen.append(request)
+        return _completed_tool_result(request, {"items": ["命中"]})
+
+    runtime = _runtime(
+        completion,
+        plan=plan,
+        handlers={"tool.memory_query.execute": execute_memory},
+    )
+    await runtime.start()
+    sink = InMemoryRunEventSink()
+
+    result = await runtime.run_event(
+        AgentTurnRequest(_context(plan), "查询记忆"),
+        sink.append,
+    )
+
+    assert len(completion.complete_requests) == 2
+    assert completion.complete_requests[0].tools == plan.sent_tool_schemas
+    second_messages = completion.complete_requests[1].messages
+    assert [message["role"] for message in second_messages] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert second_messages[1]["tool_calls"][0]["function"]["name"] == "memory_query"
+    assert second_messages[2]["tool_call_id"] == "call-native-1"
+    assert second_messages[2]["content"] == '{"items":["命中"]}'
+    assert seen[0].execution_port_id == "tool.memory_query.execute"
+    assert seen[0].idempotency_key == "request-native-1:call-native-1"
+    assert dict(seen[0].arguments) == {"query": "原生 Runtime"}
+    assert result.messages[-1].content == "根据记忆，答案如下"
+    assert result.tool_calls[0].status is RuntimeToolCallStatus.COMPLETED
+    assert runtime.inspect_tool_calls() == result.tool_calls
+    assert [event.kind for event in sink.events][-3:] == [
+        RuntimeRunEventKind.TOOL_ACTIVITY,
+        RuntimeRunEventKind.USAGE,
+        RuntimeRunEventKind.END,
+    ]
+    usage = next(event.usage for event in sink.events if event.usage is not None)
+    assert usage.input_tokens == 30
+    assert usage.output_tokens == 6
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_stops_after_terminal_reply_tool():
+    plan = _tool_plan("reply")
+    completion = _ScriptedCompletionPort(
+        responses=(_tool_call_response("reply", {"content": "直接回复"}),)
+    )
+
+    def execute_reply(
+        request: RuntimeToolExecutionRequest,
+    ) -> RuntimeToolExecutionResult:
+        return _completed_tool_result(request, "直接回复", stop=True)
+
+    runtime = _runtime(
+        completion,
+        plan=plan,
+        handlers={"tool.reply.execute": execute_reply},
+    )
+    await runtime.start()
+
+    result = await runtime.run(
+        AgentTurnRequest(_context(plan), "请回复"),
+    )
+
+    assert len(completion.complete_requests) == 1
+    assert [message.role for message in result.messages] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert result.messages[-1].content == "直接回复"
+    assert result.tool_calls[0].name == "reply"
+    assert result.tool_calls[0].result == "直接回复"
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_fails_when_terminal_reply_tool_does_not_complete():
+    plan = _tool_plan("reply")
+    completion = _ScriptedCompletionPort(
+        responses=(_tool_call_response("reply", {"content": "无法送达"}),)
+    )
+
+    async def timeout_reply(
+        request: RuntimeToolExecutionRequest,
+    ) -> RuntimeToolExecutionResult:
+        del request
+        raise TimeoutError("回复超时")
+
+    runtime = _runtime(
+        completion,
+        plan=plan,
+        handlers={"tool.reply.execute": timeout_reply},
+    )
+    await runtime.start()
+    events = []
+
+    with pytest.raises(AgentRuntimeExecutionError, match="最终动作工具执行失败"):
+        await runtime.run_event(
+            AgentTurnRequest(_context(plan), "请回复"),
+            events.append,
+        )
+
+    assert [event.kind for event in events][-3:] == [
+        RuntimeRunEventKind.TOOL_ACTIVITY,
+        RuntimeRunEventKind.ERROR,
+        RuntimeRunEventKind.END,
+    ]
+    assert events[-3].tool_call.status is RuntimeToolCallStatus.TIMED_OUT
+    assert events[-1].status is RuntimeRunStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_streams_typed_deltas_usage_and_end_event():
+    completion = _ScriptedCompletionPort(
+        streams=(
+            (
+                {"choices": [{"delta": {"content": "你"}}]},
+                {"choices": [{"delta": {"content": "好"}}]},
+                {
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 8,
+                        "completion_tokens": 2,
+                    },
+                },
+            ),
+        )
+    )
+    runtime = _runtime(completion)
+    await runtime.start()
+
+    events = [
+        event
+        async for event in runtime.run_stream(
+            AgentTurnRequest(_context(), "流式回复"),
+        )
+    ]
+
+    assert [event.kind for event in events] == [
+        RuntimeRunEventKind.STATUS,
+        RuntimeRunEventKind.STATUS,
+        RuntimeRunEventKind.TEXT_DELTA,
+        RuntimeRunEventKind.TEXT_DELTA,
+        RuntimeRunEventKind.USAGE,
+        RuntimeRunEventKind.END,
+    ]
+    assert [event.text_delta for event in events if event.text_delta] == ["你", "好"]
+    assert events[4].usage.total_tokens == 10
+    assert events[-1].status is RuntimeRunStatus.SUCCEEDED
+    assert completion.stream_requests[0].messages[-1]["content"] == "流式回复"
+    assert runtime.read_conversation()[-1].content == "你好"
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_retries_only_before_irreversible_model_output():
+    completion = _ScriptedCompletionPort(
+        responses=(
+            RuntimeError("临时连接失败"),
+            _assistant_response("重试成功"),
+        )
+    )
+    runtime = _runtime(completion)
+    await runtime.start()
+
+    result = await runtime.run(AgentTurnRequest(_context(), "请重试"))
+
+    assert result.messages[-1].content == "重试成功"
+    assert len(completion.complete_requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_rejects_tool_plan_digest_mismatch_before_model_call():
+    plan = _tool_plan("memory_query")
+    completion = _ScriptedCompletionPort(responses=(_assistant_response("不应调用"),))
+    runtime = _runtime(completion, plan=plan)
+    await runtime.start()
+
+    with pytest.raises(AgentRuntimeCapabilityError, match="摘要.*不一致"):
+        await runtime.run(
+            AgentTurnRequest(
+                _context(plan_sha256="f" * 64),
+                "摘要不匹配",
+            )
+        )
+
+    assert completion.complete_requests == []
+    assert runtime.read_conversation() == ()
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_rejects_unplanned_tool_call_and_mixed_terminal_calls():
+    plan = _tool_plan("memory_query")
+    completion = _ScriptedCompletionPort(
+        responses=(_tool_call_response("unknown_tool", {}),)
+    )
+    runtime = _runtime(completion, plan=plan)
+    await runtime.start()
+
+    with pytest.raises(AgentRuntimeCapabilityError, match="未授权工具"):
+        await runtime.run(AgentTurnRequest(_context(plan), "越权工具"))
+
+    reply_plan = _tool_plan("reply", "memory_query")
+    mixed_response = _tool_call_response("reply", {"content": "回复"})
+    mixed_response["choices"][0]["message"]["tool_calls"].append(
+        _tool_call_response(
+            "memory_query",
+            {"query": "x"},
+            call_id="call-native-2",
+        )["choices"][0]["message"]["tool_calls"][0]
+    )
+    mixed_runtime = _runtime(
+        _ScriptedCompletionPort(responses=(mixed_response,)),
+        plan=reply_plan,
+    )
+    await mixed_runtime.start()
+
+    with pytest.raises(AgentRuntimeExecutionError, match="必须单独调用"):
+        await mixed_runtime.run(
+            AgentTurnRequest(_context(reply_plan), "混合最终动作"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_enforces_model_tool_loop_limit():
+    plan = _tool_plan("memory_query")
+    completion = _ScriptedCompletionPort(
+        responses=(
+            _tool_call_response(
+                "memory_query",
+                {"query": "1"},
+                call_id="call-loop-1",
+            ),
+            _tool_call_response(
+                "memory_query",
+                {"query": "2"},
+                call_id="call-loop-2",
+            ),
+        )
+    )
+
+    def execute_memory(
+        request: RuntimeToolExecutionRequest,
+    ) -> RuntimeToolExecutionResult:
+        return _completed_tool_result(request, {"items": []})
+
+    runtime = _runtime(
+        completion,
+        plan=plan,
+        handlers={"tool.memory_query.execute": execute_memory},
+        config=NativeAgentRuntimeConfig(
+            max_model_steps=2,
+            max_tool_rounds=2,
+        ),
+    )
+    await runtime.start()
+
+    with pytest.raises(AgentRuntimeExecutionError, match="最大步数"):
+        await runtime.run(AgentTurnRequest(_context(plan), "循环"))
+
+    assert len(completion.complete_requests) == 2
+    assert len(runtime.inspect_tool_calls()) == 2
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_timeout_is_normalized_to_typed_terminal_events():
+    completion = _BlockingCompletionPort()
+    runtime = _runtime(
+        completion,
+        config=NativeAgentRuntimeConfig(request_timeout_seconds=10),
+    )
+    await runtime.start()
+    runtime.set_model_route(
+        RuntimeModelRoute(
+            route_id="reply/timeout",
+            model_id="model-native",
+            provider_id="new-api",
+            timeout_seconds=0.02,
+        )
+    )
+    events = []
+
+    with pytest.raises(TimeoutError):
+        await runtime.run_event(
+            AgentTurnRequest(_context(), "等待超时"),
+            events.append,
+        )
+
+    assert [event.kind for event in events] == [
+        RuntimeRunEventKind.STATUS,
+        RuntimeRunEventKind.STATUS,
+        RuntimeRunEventKind.ERROR,
+        RuntimeRunEventKind.END,
+    ]
+    assert events[2].error.code == "runtime_timeout"
+    assert events[2].error.retryable is True
+    assert events[-1].status is RuntimeRunStatus.TIMED_OUT
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_interrupt_cancels_active_turn_and_emits_cancelled_end():
+    completion = _BlockingCompletionPort()
+    runtime = _runtime(completion)
+    await runtime.start()
+    events = []
+
+    task = asyncio.create_task(
+        runtime.run_event(
+            AgentTurnRequest(_context(), "等待取消", stream=True),
+            events.append,
+        )
+    )
+    await asyncio.wait_for(completion.entered.wait(), timeout=1)
+
+    assert runtime.interrupt(reason="用户取消") is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert events[-1].kind is RuntimeRunEventKind.END
+    assert events[-1].status is RuntimeRunStatus.CANCELLED
+    assert runtime.interrupt(reason="重复取消") is False
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_stop_waits_for_active_turn_cancellation():
+    completion = _BlockingCompletionPort()
+    runtime = _runtime(completion)
+    await runtime.start()
+
+    task = asyncio.create_task(runtime.run(AgentTurnRequest(_context(), "停止运行")))
+    await asyncio.wait_for(completion.entered.wait(), timeout=1)
+
+    await runtime.stop()
+
+    assert runtime.state is RuntimeLifecycleState.STOPPED
+    assert task.cancelled() is True
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_marks_partial_stream_failure_as_ambiguous_without_retry():
+    completion = _ScriptedCompletionPort(
+        streams=(
+            (
+                {"choices": [{"delta": {"content": "部分"}}]},
+                RuntimeError("连接中断"),
+            ),
+            ({"choices": [{"delta": {"content": "不应重试"}}]},),
+        )
+    )
+    runtime = _runtime(completion)
+    await runtime.start()
+    events = []
+
+    with pytest.raises(AgentRuntimeExecutionError, match="部分输出后中断"):
+        await runtime.run_event(
+            AgentTurnRequest(_context(), "流式歧义", stream=True),
+            events.append,
+        )
+
+    assert [event.kind for event in events] == [
+        RuntimeRunEventKind.STATUS,
+        RuntimeRunEventKind.STATUS,
+        RuntimeRunEventKind.TEXT_DELTA,
+        RuntimeRunEventKind.ERROR,
+        RuntimeRunEventKind.END,
+    ]
+    assert events[2].text_delta == "部分"
+    assert events[3].error.code == "native_stream_ambiguous"
+    assert events[-1].status is RuntimeRunStatus.AMBIGUOUS
+    assert len(completion.stream_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_continue_turn_does_not_append_duplicate_user_message():
+    completion = _ScriptedCompletionPort(responses=(_assistant_response("继续完成"),))
+    runtime = _runtime(completion)
+    await runtime.start()
+    runtime.replace_conversation(
+        (
+            RuntimeMessage("system", "规则"),
+            RuntimeMessage("user", "原问题"),
+            RuntimeMessage("assistant", "处理中"),
+        )
+    )
+
+    result = await runtime.run(
+        AgentTurnRequest(
+            _context(),
+            "该字段不应写入 conversation",
+            kind=RuntimeTurnKind.CONTINUE,
+        )
+    )
+
+    assert [
+        message["content"] for message in completion.complete_requests[0].messages
+    ] == [
+        "规则",
+        "原问题",
+        "处理中",
+    ]
+    assert [message.content for message in result.messages] == [
+        "规则",
+        "原问题",
+        "处理中",
+        "继续完成",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_completes_bridge_reply_contract_main_path():
+    from nanobot_kt.tools.reply import REPLY_MARKER
+    from core.agent_runtime import AgentRuntimeKind
+    from core.model_provider import ReplyRoutePlan
+    from nanobot_kt.bridge import NanobotBridge
+
+    plan = _tool_plan("reply")
+    completion = _RouteScriptedCompletionPort(
+        responses=(
+            _tool_call_response(
+                "reply",
+                {"content": "Native 主链路回复"},
+            ),
+        )
+    )
+
+    def reply_handler(request: RuntimeToolExecutionRequest):
+        return _completed_tool_result(
+            request,
+            json.dumps(
+                {REPLY_MARKER: {"content": "Native 主链路回复"}},
+                ensure_ascii=False,
+            ),
+            stop=True,
+        )
+
+    runtime = _runtime(
+        completion,
+        plan=plan,
+        handlers={"tool.reply.execute": reply_handler},
+    )
+    await runtime.start()
+    bridge = NanobotBridge(runtime_kind=AgentRuntimeKind.NATIVE)
+    bridge._agent = object()
+    bridge._runtime = runtime
+    bridge._native_completion_port = completion
+    bridge._record_reply_contract_check = lambda **_kwargs: None
+    bridge._log_agent_result = lambda *_args, **_kwargs: None
+    route = ReplyRoutePlan(
+        provider_id="newapi",
+        registry_provider="new-api",
+        base_url="http://model.test/v1",
+        api_key="secret",
+        timeout=30,
+        model="model-native",
+        capabilities={
+            "supports_stream": True,
+            "supports_tools": True,
+            "supports_image": True,
+        },
+    )
+    try:
+        model_loop = await bridge._run_model_loop(
+            candidate_models=[{
+                "id": "model-native",
+                "_route_plan": route,
+            }],
+            route_plan=route,
+            event_content="当前消息",
+            query="当前消息",
+            session_id="private_native",
+            meta={"stream": False},
+            tracker=None,
+            trace_id="trace-native-bridge",
+            run_id="run-native-bridge",
+            reply_llm_source="replyer.private_chat",
+            runtime_context=_context(plan),
+        )
+        resolution = await bridge._check_reply_contract(
+            session_id="private_native",
+            response=model_loop.response,
+            result=model_loop.result,
+            terminal_output=model_loop.terminal_output,
+            target_model=model_loop.target_model,
+            query="当前消息",
+            meta={
+                "stream": False,
+                "enable_reply_contract_retry": False,
+            },
+            event_content="当前消息",
+            trace_id="trace-native-bridge",
+            run_id="run-native-bridge",
+            reply_llm_source="replyer.private_chat",
+            runtime_context=_context(plan),
+        )
+    finally:
+        await runtime.stop()
+
+    assert completion.bound_routes == [route]
+    assert len(completion.complete_requests) == 1
+    assert model_loop.target_model == "model-native"
+    assert model_loop.health_status == "success"
+    assert resolution.response == "Native 主链路回复"
+    assert resolution.finish_status == "success"

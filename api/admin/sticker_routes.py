@@ -174,21 +174,31 @@ async def create_generated_image(
     body: GeneratedImageCreate,
     _auth=Depends(verify_admin),
 ):
+    from app.tool_services.image_generation import execute_image_generation
+    from config import (
+        IMAGE_GENERATION_MODEL,
+        IMAGE_GENERATION_PROMPT_MAX_CHARS,
+    )
     from core.generated_images import GENERATED_IMAGE_REF_PATTERN, get_generated_image
-    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+    from core.media_tool_runtime import get_image_generation_provider
 
     prompt = str(body.prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=422, detail="prompt is required")
 
-    result = await ImageGenerationTool().execute({
-        "prompt": prompt,
-        "size": body.size,
-        "quality": body.quality,
-        "background": body.background,
-    })
-    if not result.success:
-        error = str(getattr(result, "error", "") or "image generation failed")
+    result = await execute_image_generation(
+        {
+            "prompt": prompt,
+            "size": body.size,
+            "quality": body.quality,
+            "background": body.background,
+        },
+        generate=get_image_generation_provider().generate,
+        model=str(IMAGE_GENERATION_MODEL or ""),
+        prompt_max_chars=IMAGE_GENERATION_PROMPT_MAX_CHARS,
+    )
+    if result.error:
+        error = str(result.error or "image generation failed")
         raise HTTPException(status_code=502, detail=error)
 
     try:

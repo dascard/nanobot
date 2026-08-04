@@ -1744,7 +1744,7 @@ def test_new_api_payload_applies_enable_thinking_policy():
 
 def test_ai_daily_simple_llm_sets_ai_daily_source(monkeypatch):
     from core.llm_trace_context import get_llm_trace_vars
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     seen = []
 

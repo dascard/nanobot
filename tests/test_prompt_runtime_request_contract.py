@@ -60,6 +60,7 @@ class _PromptRuntimeAgent:
                 include_job_status=False,
                 include_tools_list=False,
                 tool_format="native",
+                max_messages=0,
             ),
         )
         self.registry = self.controller.registry
@@ -67,8 +68,8 @@ class _PromptRuntimeAgent:
         self._interrupt_requested = False
         self.process_event_count = 0
 
-    async def _process_event(self, event: Any) -> None:
-        from creatures.nanobot.prompts.skills.reply.tool import build_reply_output
+    async def inject_event(self, event: Any) -> None:
+        from nanobot_kt.tools.reply import build_reply_output
 
         self.process_event_count += 1
         await self.controller.push_event(event)
@@ -232,6 +233,20 @@ def prompt_runtime_sdk_harness(monkeypatch, db_session):
         capture_build_tool_plan,
     )
 
+    sdk_create = AsyncMock(side_effect=lambda **_kwargs: _FakeSdkStream())
+
+    def build_sdk_client(**_kwargs):
+        return SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=sdk_create),
+            ),
+            close=AsyncMock(return_value=None),
+        )
+
+    monkeypatch.setattr(
+        "kohakuterrarium.llm.openai.AsyncOpenAI",
+        build_sdk_client,
+    )
     provider = OpenAIProvider(
         api_key=_API_KEY,
         model=_MODEL,
@@ -239,12 +254,6 @@ def prompt_runtime_sdk_harness(monkeypatch, db_session):
         temperature=0.0,
         timeout=1.0,
         max_retries=0,
-    )
-    sdk_create = AsyncMock(side_effect=lambda **_kwargs: _FakeSdkStream())
-    provider._client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(create=sdk_create),
-        ),
     )
 
     agent = _PromptRuntimeAgent(provider)
@@ -312,19 +321,13 @@ def _runtime_facts(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return json.loads(encoded)
 
 
-def test_kt_conversation_does_not_reorder_messages_before_limit():
+def test_kt_conversation_unlimited_mode_preserves_exact_message_order():
     from kohakuterrarium.core.conversation import (
         Conversation,
         ConversationConfig,
     )
-    from nanobot_kt.kt_adapter import install_conversation_order_guard
 
-    conversation = Conversation(ConversationConfig(max_messages=10))
-    agent = SimpleNamespace(
-        controller=SimpleNamespace(conversation=conversation),
-    )
-    assert install_conversation_order_guard(agent) is True
-    assert install_conversation_order_guard(agent) is False
+    conversation = Conversation(ConversationConfig(max_messages=0))
     conversation.append("system", "base")
     conversation.append("user", "history")
     conversation.append("system", "runtime tools")
@@ -336,54 +339,15 @@ def test_kt_conversation_does_not_reorder_messages_before_limit():
     ]
 
 
-def test_emergency_drop_reinstalls_order_guard_after_conversation_replacement():
-    from kohakuterrarium.core.agent_budget_recovery import (
-        sync_emergency_drop_conversation,
-    )
-    from kohakuterrarium.core.conversation import Conversation, ConversationConfig
-    from nanobot_kt.kt_adapter import install_conversation_order_guard
+def test_bridge_disables_kt_prompt_and_message_truncation():
+    from nanobot_kt.bridge import NanobotBridge
 
-    class EmergencyDropProvider:
-        def __init__(self) -> None:
-            self.callbacks = []
+    config = SimpleNamespace(system_prompt="KT prompt", max_messages=50)
 
-        def on_emergency_drop(self, callback) -> None:
-            self.callbacks.append(callback)
+    NanobotBridge.__new__(NanobotBridge)._disable_config_prompt(config)
 
-        def notify(self, messages) -> None:
-            for callback in list(self.callbacks):
-                callback(messages)
-
-    provider = EmergencyDropProvider()
-    controller = SimpleNamespace(
-        conversation=Conversation(ConversationConfig(max_messages=10)),
-        llm=provider,
-    )
-    agent = SimpleNamespace(controller=controller)
-    provider.on_emergency_drop(
-        lambda messages: sync_emergency_drop_conversation(agent, messages),
-    )
-
-    assert install_conversation_order_guard(agent) is True
-    assert len(provider.callbacks) == 2
-    original_conversation = controller.conversation
-    provider.notify([
-        {"role": "system", "content": "base"},
-        {"role": "user", "content": "history"},
-        {"role": "system", "content": "runtime tools"},
-    ])
-
-    assert len(provider.callbacks) == 2
-    assert controller.conversation is not original_conversation
-    assert controller.conversation._nanobot_order_guard_installed is True
-    controller.conversation.config.max_messages = 10
-    controller.conversation.append("assistant", "answer")
-    assert controller.conversation.to_messages() == [
-        {"role": "system", "content": "base"},
-        {"role": "user", "content": "history"},
-        {"role": "system", "content": "runtime tools"},
-        {"role": "assistant", "content": "answer"},
-    ]
+    assert config.system_prompt == ""
+    assert config.max_messages == 0
 
 
 @pytest.mark.asyncio
@@ -404,34 +368,6 @@ async def test_bridge_rebuilds_exact_conversation_metadata_each_request(
         len(str(_message_value(message, "content") or ""))
         for message in messages
     )
-
-
-def test_kt_conversation_truncation_preserves_relative_order():
-    from kohakuterrarium.core.conversation import (
-        Conversation,
-        ConversationConfig,
-    )
-    from nanobot_kt.kt_adapter import install_conversation_order_guard
-
-    conversation = Conversation(
-        ConversationConfig(max_messages=4, keep_system=True),
-    )
-    agent = SimpleNamespace(
-        controller=SimpleNamespace(conversation=conversation),
-    )
-    assert install_conversation_order_guard(agent) is True
-    conversation.append("system", "base")
-    conversation.append("user", "old history")
-    conversation.append("user", "current")
-    conversation.append("system", "runtime tools")
-    conversation.append("assistant", "answer")
-
-    assert conversation.to_messages() == [
-        {"role": "system", "content": "base"},
-        {"role": "user", "content": "current"},
-        {"role": "system", "content": "runtime tools"},
-        {"role": "assistant", "content": "answer"},
-    ]
 
 
 @pytest.mark.asyncio

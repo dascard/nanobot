@@ -26,7 +26,6 @@ from clients.model_registry import (
     ModelFailureTracker,
     registry,
     model_cost_value,
-    model_intelligence_value,
     model_routing_sort_key,
     model_supports_capabilities,
     normalize_model_record,
@@ -322,6 +321,13 @@ class NewAPIClient:
                 cooldown_max_s=settings.get_int("model.cooldown_max_seconds", 1800),
             )
         return cls._failure_tracker
+
+    @classmethod
+    def get_shared_session(cls) -> aiohttp.ClientSession | None:
+        """返回当前事件循环可复用的进程级 Session。"""
+
+        session = cls._shared_session
+        return session if cls._session_usable_in_current_loop(session) else None
 
     def __init__(
         self,

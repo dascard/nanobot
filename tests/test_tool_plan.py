@@ -544,7 +544,8 @@ async def test_tool_plan_guard_rejects_disabled_dispatch():
     assert "测试禁用" in str(exc.value)
 
 
-def test_tool_plan_native_schema_filter_uses_sent_tool_schemas():
+@pytest.mark.asyncio
+async def test_tool_plan_native_schema_filter_uses_sent_tool_schemas():
     from types import SimpleNamespace
 
     from core.tool_plan import ToolPlan, tool_plan_scope
@@ -574,34 +575,43 @@ def test_tool_plan_native_schema_filter_uses_sent_tool_schemas():
         chat_type="private",
         tool_schemas=[web_search_schema],
     )
-    controller = SimpleNamespace(
-        _get_native_tool_schemas=lambda: [
-            SimpleNamespace(
-                name="web_search",
-                description="KT 内置 Web Search",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "max_results": {"type": "integer"},
-                    },
-                    "required": ["query"],
-                },
-            )
-        ]
-    )
-    agent = SimpleNamespace(controller=controller)
+    captured_tools = []
+
+    class Provider:
+        async def chat(self, _messages, *, tools=None, **_kwargs):
+            captured_tools.extend(tools or [])
+            yield ""
+
+    provider = Provider()
+    controller = SimpleNamespace(llm=provider)
+    agent = SimpleNamespace(controller=controller, llm=provider)
 
     assert install_tool_plan_native_schema_filter(agent) is True
 
     with tool_plan_scope(plan):
-        schemas = controller._get_native_tool_schemas()
+        async for _chunk in controller.llm.chat(
+            [],
+            tools=[
+                SimpleNamespace(
+                    name="web_search",
+                    description="KT 内置 Web Search",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "max_results": {"type": "integer"},
+                        },
+                    },
+                )
+            ],
+        ):
+            pass
 
-    assert [schema.name for schema in schemas] == ["web_search"]
+    assert [schema.name for schema in captured_tools] == ["web_search"]
     assert [schema.to_api_format() for schema in _tool_plan_native_schemas(plan)] == list(
         plan.sent_tool_schemas
     )
-    props = schemas[0].parameters["properties"]
+    props = captured_tools[0].parameters["properties"]
     assert {"query", "limit", "provider"} <= set(props)
     assert "max_results" not in props
 

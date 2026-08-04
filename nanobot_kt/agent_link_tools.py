@@ -7,8 +7,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from kohakuterrarium.llm.message import ImagePart, TextPart
-from kohakuterrarium.modules.tool.base import (
+from nanobot_kt.optional_message_api import ImagePart, TextPart
+from nanobot_kt.optional_tool_api import (
     BaseTool,
     ExecutionMode,
     ToolResult,

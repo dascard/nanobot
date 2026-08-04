@@ -106,7 +106,7 @@ def test_python_sandbox_cannot_reach_popen_via_object_graph(tmp_path):
 
 
 def test_python_sandbox_tool_returns_disabled_without_executing():
-    from creatures.nanobot.prompts.skills.python_sandbox.tool import PythonSandboxTool
+    from nanobot_kt.tools.python_sandbox import PythonSandboxTool
 
     recording_sandbox = _RecordingSandbox()
     tool = PythonSandboxTool()

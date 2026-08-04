@@ -18,7 +18,7 @@ def _mock_qwen_response(content: str) -> MagicMock:
 
 
 def test_tool_metadata():
-    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
+    from nanobot_kt.tools.image_summary import ImageSummaryTool
 
     tool = ImageSummaryTool()
     assert tool.tool_name == "image_summary"
@@ -30,7 +30,7 @@ def test_tool_metadata():
 
 
 def test_execute_requires_images():
-    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
+    from nanobot_kt.tools.image_summary import ImageSummaryTool
 
     tool = ImageSummaryTool()
     result = run_async(tool.execute({"files": []}))
@@ -39,8 +39,8 @@ def test_execute_requires_images():
 
 
 def test_execute_uses_to_thread_for_qwen_call(monkeypatch):
-    from creatures.nanobot.prompts.skills.image_summary import tool as image_tool
-    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
+    import nanobot_kt.tools.image_summary as image_tool
+    from nanobot_kt.tools.image_summary import ImageSummaryTool
 
     calls = []
 
@@ -71,7 +71,7 @@ def test_execute_uses_to_thread_for_qwen_call(monkeypatch):
 
 
 def test_execute_calls_local_qwen_with_multimodal_payload():
-    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
+    from nanobot_kt.tools.image_summary import ImageSummaryTool
     from kohakuterrarium.llm.message import ImagePart
 
     mock_response = _mock_qwen_response(
@@ -100,7 +100,7 @@ def test_execute_calls_local_qwen_with_multimodal_payload():
     tool = ImageSummaryTool()
 
     with patch(
-        "creatures.nanobot.prompts.skills.image_summary.tool.prepare_image_parts",
+        "nanobot_kt.tools.image_summary.prepare_image_parts",
         return_value=[
             ImagePart(
                 url="data:image/jpeg;base64,ZmFrZQ==",
@@ -150,7 +150,7 @@ def test_execute_calls_local_qwen_with_multimodal_payload():
 
 def test_execute_records_direct_llm_request():
     from core.llm_trace_context import llm_trace_scope
-    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
+    from nanobot_kt.tools.image_summary import ImageSummaryTool
     from kohakuterrarium.llm.message import ImagePart
 
     recorded = []
@@ -163,7 +163,7 @@ def test_execute_records_direct_llm_request():
         side_effect=lambda **kwargs: recorded.append(kwargs),
     ):
         with patch(
-            "creatures.nanobot.prompts.skills.image_summary.tool._get_image_summary_route",
+            "nanobot_kt.tools.image_summary._get_image_summary_route",
             return_value={
                 "base_url": "http://vision.test/v1",
                 "api_key": "vision-key",
@@ -176,7 +176,7 @@ def test_execute_records_direct_llm_request():
             },
         ):
             with patch(
-                "creatures.nanobot.prompts.skills.image_summary.tool.prepare_image_parts",
+                "nanobot_kt.tools.image_summary.prepare_image_parts",
                 return_value=[
                     ImagePart(
                         url="data:image/jpeg;base64,ZmFrZQ==",
@@ -209,7 +209,7 @@ def test_execute_records_direct_llm_request():
 
 
 def test_execute_accepts_json_codeblock():
-    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
+    from nanobot_kt.tools.image_summary import ImageSummaryTool
     from kohakuterrarium.llm.message import ImagePart
 
     mock_response = _mock_qwen_response(
@@ -220,7 +220,7 @@ def test_execute_accepts_json_codeblock():
     tool = ImageSummaryTool()
 
     with patch(
-        "creatures.nanobot.prompts.skills.image_summary.tool.prepare_image_parts",
+        "nanobot_kt.tools.image_summary.prepare_image_parts",
         return_value=[
             ImagePart(
                 url="data:image/jpeg;base64,ZmFrZQ==",

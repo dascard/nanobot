@@ -1,30 +1,34 @@
-"""
-NanobotBridge — Lifecycle manager that wraps KT's Agent for HTTP request/response usage.
+"""Native／可选 KT Agent 的 HTTP 请求生命周期 Bridge。"""
 
-Replaces the old manual NanobotKTController + UnifiedProvider setup.
-The bridge creates a KT Agent from the creature config, manages its lifecycle,
-and provides a simple async handle_message() interface for use in routes.py.
-"""
+from __future__ import annotations
 
 import asyncio
 import hashlib
 import logging
+from collections.abc import Callable
+from functools import partial
 from uuid import uuid4
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 from zoneinfo import ZoneInfo
 
-from kohakuterrarium.core.agent import Agent
-from kohakuterrarium.core.config import load_agent_config
-from kohakuterrarium.llm.message import make_multimodal_content
-from openai import AsyncOpenAI
-
 from nanobot_kt.output import BufferedOutput
+from nanobot_kt.bridge_runtime_support import (
+    bind_bridge_runtime_correlation,
+    build_child_bridge,
+    compatibility_runtime_selection_policy,
+)
 from nanobot_kt.request_scope import BridgeRequestScope
 from nanobot_kt.image_pipeline import prepare_image_parts
+from nanobot_kt.optional_message_api import make_multimodal_content
 from nanobot_kt.reply_contract import RichTerminalOutput
 from nanobot_kt.message_adapter import MessageContractBridgeMixin
+from nanobot_kt.runtime_context_adapter import (
+    build_fallback_request_runtime_context,
+    build_request_runtime_context,
+)
 from nanobot_kt.bridge_state import (
     BridgeEventPayload,
     BridgeRuntimeToolState as BridgeRuntimeToolState,
@@ -45,19 +49,18 @@ from nanobot_kt.model_attempts import (
 from clients.new_api_client import NewAPIClient
 from clients.model_registry import model_supports_capabilities, registry
 from core.agent_runtime import (
+    AgentRuntimeKind,
     AgentRuntimePort,
+    AgentRuntimeSelection,
+    AgentRuntimeSelectionPolicy,
     AgentTurnRequest,
     RequestRuntimeContext,
     RuntimeAttribute,
-    RuntimeChatType,
-    RuntimeFeature,
     RuntimeLifecycleState,
     RuntimeMessage,
     RuntimeModelRoute,
-    RuntimeOwnerType,
-    RuntimePlanKind,
-    RuntimePlanRef,
-    RuntimePrincipal,
+    RuntimeRunEvent,
+    RuntimeRunEventKind,
     RuntimeTurnKind,
 )
 from core.llm_sdk_tracing import install_openai_chat_completion_tracer
@@ -71,18 +74,19 @@ from config import (
 logger = logging.getLogger("nanobot.kt.bridge")
 
 if TYPE_CHECKING:
-    from nanobot_kt.model_runtime import ReplyRoutePlan
+    from clients.reply_route_chat_completion_adapter import (
+        ReplyRouteChatCompletionAdapter,
+    )
+    from core.model_provider.route_plan import ReplyRoutePlan
     from nanobot_kt.prompt_runtime import PromptRuntimeInput
+
+
+# 仅用于兼容测试注入；生产路径在显式选择 KT 后才解析上游 API。
+Agent = load_agent_config = None
 
 
 def _current_time_label() -> str:
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S CST")
-
-
-def _registry_provider_for_route(provider_id: str) -> str:
-    from nanobot_kt.model_runtime import registry_provider_for_route
-
-    return registry_provider_for_route(provider_id)
 
 
 def _is_news_request(query: str) -> bool:
@@ -151,23 +155,18 @@ def _sha256_text(text: str) -> str:
     return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
 
 
-def _strip_kt_framework_prompt_sections(text: str) -> str:
-    """移除 KT 自动追加的工具/技能说明。
+async def _project_runtime_stream_event(
+    event: RuntimeRunEvent,
+    stream_queue: asyncio.Queue[dict[str, Any]],
+) -> None:
+    """把框架无关的 Runtime 事件投影为既有 SSE 字典协议。"""
 
-    真实工具权限由 API tools schema 和服务端 ToolPlan 决定；这些大段说明容易
-    和运行时裁剪后的 schema 不一致。
-    """
-    content = str(text or "")
-    markers = (
-        "\n\n## Available Sub-Agents",
-        "\n\n## Available Functions",
-        "\n\n## Skills",
-        "\n\n## Tool Usage",
-    )
-    indexes = [content.find(marker) for marker in markers if content.find(marker) >= 0]
-    if not indexes:
-        return content
-    return content[: min(indexes)].rstrip()
+    if event.kind is RuntimeRunEventKind.TEXT_DELTA and event.text_delta:
+        await stream_queue.put({"status": "delta", "text": event.text_delta})
+    elif event.kind is RuntimeRunEventKind.ERROR and event.error is not None:
+        await stream_queue.put(
+            {"status": "error", "message": event.error.message}
+        )
 
 
 class NanobotBridge(MessageContractBridgeMixin):
@@ -184,11 +183,22 @@ class NanobotBridge(MessageContractBridgeMixin):
     # 每轮重建 conversation，不跨请求复用（DB 是唯一事实源）
     CONVERSATION_TTL_SECONDS = 0
 
-    def __init__(self, creature_path: str = "creatures/nanobot"):
+    def __init__(
+        self,
+        creature_path: str = "creatures/nanobot",
+        *,
+        runtime_kind: AgentRuntimeKind | str = AgentRuntimeKind.KT,
+    ):
+        try:
+            self.runtime_kind = AgentRuntimeKind(runtime_kind)
+        except ValueError as exc:
+            raise ValueError("runtime_kind 必须是 native 或 kt") from exc
         self.creature_path = creature_path
         self._output = BufferedOutput()
-        self._agent: Agent | None = None
+        self._agent: Any | None = None
         self._runtime: AgentRuntimePort | None = None
+        self._runtime_name = Path(creature_path).name or "agent"
+        self._native_completion_port: ReplyRouteChatCompletionAdapter | None = None
         self._memory_runtime: Any = None
         self._active_route_plan: ReplyRoutePlan | None = None
         self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session 分锁
@@ -196,19 +206,33 @@ class NanobotBridge(MessageContractBridgeMixin):
         self._kt_session_key = f"nanobot-bridge-{uuid4().hex}"
 
     def _build_runtime(self, *, initially_started: bool) -> AgentRuntimePort:
+        from core.runtime.event_bus import emit_agent_lifecycle_event
+
+        if getattr(self, "runtime_kind", AgentRuntimeKind.KT) is AgentRuntimeKind.NATIVE:
+            from nanobot_kt.bridge_runtime_support import (
+                build_native_bridge_runtime,
+            )
+
+            runtime, completion_port = build_native_bridge_runtime(
+                name=self._runtime_name,
+                completion_port=self._native_completion_port,
+            )
+            self._native_completion_port = completion_port
+            return runtime
+
         if self._agent is None:
             raise RuntimeError("KT Agent 尚未创建")
-        from core.runtime.event_bus import emit_agent_lifecycle_event
-        from nanobot_kt.runtime_adapter import build_kt13_runtime
-
         config = getattr(self._agent, "config", None)
         name = str(getattr(config, "name", "") or "agent")
-        return build_kt13_runtime(
+        from nanobot_kt.runtime_adapter import build_kt_runtime
+
+        return build_kt_runtime(
             self._agent,
-            runtime_id=f"kt13:{name}",
+            runtime_id=f"kt:{name}",
             route_applier=self._apply_runtime_model_route,
             event_sinks=(emit_agent_lifecycle_event,),
             initially_started=initially_started,
+            output_sink=self._output,
         )
 
     def _require_runtime(self) -> AgentRuntimePort:
@@ -228,23 +252,19 @@ class NanobotBridge(MessageContractBridgeMixin):
         if transport is None:
             raise RuntimeError("模型传输计划尚未绑定")
         from nanobot_kt.model_provider_adapter import apply_kt_preset_model_route
-        from nanobot_kt.runtime_adapter import apply_kt_openai_model_route
 
         apply_kt_preset_model_route(
             agent,
             route,
             transport,
-            legacy_openai_applier=lambda *args, **kwargs: apply_kt_openai_model_route(
-                *args,
-                client_factory=AsyncOpenAI,
-                **kwargs,
-            ),
             tracer_installer=install_openai_chat_completion_tracer,
         )
 
     def _disable_config_prompt(self, config: Any) -> None:
-        """禁用 KT config 内置 prompt，主链路统一由 canonical prompt runtime 注入。"""
+        """关闭 KT 自有 Prompt 与历史裁剪，统一交给 canonical runtime。"""
+
         config.system_prompt = ""
+        config.max_messages = 0
 
     async def start(self) -> None:
         """启动 Bridge；任一步失败都清理已创建的 KT Session。"""
@@ -256,32 +276,45 @@ class NanobotBridge(MessageContractBridgeMixin):
             raise
 
     async def _start(self) -> None:
-        """Initialize the KT agent from creature config."""
-        logger.info(f"Loading KT agent from {self.creature_path}")
-        config = load_agent_config(self.creature_path)
-        from nanobot_kt.tool_registration_adapter import (
-            apply_tool_registration_projection,
+        """从 creature 配置初始化所选 Runtime。"""
+        logger.info(
+            "Loading %s agent runtime from %s",
+            self.runtime_kind.value,
+            self.creature_path,
         )
-
-        tool_projection = apply_tool_registration_projection(config)
         from core.tool_schema_preview import validate_registered_tool_schemas
 
         validate_registered_tool_schemas()
-        # KT 默认按 config.name 复用进程级 Session；每个 Bridge 必须拥有独立
-        # Session，避免共享 Agent 与隔离定时任务互相覆盖 channels/scratchpad。
-        config.session_key = self._kt_session_key
-        self._disable_config_prompt(config)
-        config.include_tools_in_prompt = False
-        config.include_hints_in_prompt = False
-        config.skill_index_budget_bytes = 0
-        logger.info(
-            "[Prompt] config prompt disabled; canonical prompt runtime will inject messages"
-        )
-        self._agent = Agent(
-            config,
-            output_module=self._output,
-            pwd="./workspace",  # 文件操作沙箱：read/write/edit 等工具只能在此目录内操作
-        )
+        tool_projection = None
+        agent_type: type[Any] | None = None
+        if self.runtime_kind is AgentRuntimeKind.KT:
+            from nanobot_kt.optional_agent_api import resolve_kt_agent_api
+            agent_factory, config_loader = resolve_kt_agent_api(
+                Agent, load_agent_config
+            )
+            from nanobot_kt.tool_registration_adapter import (
+                apply_tool_registration_projection,
+            )
+
+            config = config_loader(self.creature_path)
+            tool_projection = apply_tool_registration_projection(config)
+            # KT 默认按 config.name 复用进程级 Session；每个 Bridge 必须拥有
+            # 独立 Session，避免共享 Agent 与隔离任务互相覆盖状态。
+            config.session_key = self._kt_session_key
+            self._disable_config_prompt(config)
+            config.include_tools_in_prompt = False
+            config.include_hints_in_prompt = False
+            config.skill_index_budget_bytes = 0
+            self._runtime_name = str(config.name or self._runtime_name)
+            logger.info(
+                "[Prompt] config prompt disabled; canonical prompt runtime will inject messages"
+            )
+            self._agent = agent_factory(
+                config,
+                output_module=self._output,
+                pwd="./workspace",
+            )
+            agent_type = agent_factory
         self._runtime = self._build_runtime(initially_started=False)
         # ToolPlan 是执行权限边界，必须在 Agent 可能处理事件前完成安装与校验。
         tool_policy = self._runtime.install_tool_policy()
@@ -302,32 +335,46 @@ class NanobotBridge(MessageContractBridgeMixin):
         except BaseException:
             await self._runtime.stop()
             raise
-        self._strip_framework_prompt_from_conversation()
-
         self._output.set_interrupt_callback(
             lambda reason: self._require_runtime().interrupt(reason=reason)
         )
 
         tools_list = list(self._runtime.list_tool_names())
-        from nanobot_kt.tool_registration_adapter import (
-            build_tool_registry_runtime_info,
-        )
+        if self.runtime_kind is AgentRuntimeKind.NATIVE:
+            from nanobot_kt.bridge_runtime_support import (
+                build_native_tool_registry_runtime_info,
+            )
 
-        self._tool_registry_info = build_tool_registry_runtime_info(
-            tools_list,
-            tool_projection,
-            # 测试可注入最小 Fake Agent；真实 KT 必须严格匹配冻结快照。
-            strict=self._agent.__class__ is Agent,
-        )
+            self._tool_registry_info = build_native_tool_registry_runtime_info(
+                tools_list
+            )
+        else:
+            from nanobot_kt.tool_registration_adapter import (
+                build_tool_registry_runtime_info,
+            )
+
+            self._tool_registry_info = build_tool_registry_runtime_info(
+                tools_list,
+                tool_projection,
+                strict=(
+                    agent_type is not None
+                    and self._agent is not None
+                    and self._agent.__class__ is agent_type
+                ),
+            )
         if not tools_list:
             logger.warning(
-                "[ToolRegistry] KT tool list empty; registry type=%s",
+                "[ToolRegistry] Runtime tool list empty; registry type=%s",
                 type(self._agent.registry).__name__
-                if hasattr(self._agent, "registry")
+                if self._agent is not None and hasattr(self._agent, "registry")
                 else "N/A",
             )
         logger.info(
-            f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}"
+            "%s Agent '%s' initialized with %d tools: %s",
+            self.runtime_kind.value,
+            self._runtime_name,
+            len(tools_list),
+            tools_list,
         )
 
     async def _cleanup_failed_start(self) -> None:
@@ -360,6 +407,8 @@ class NanobotBridge(MessageContractBridgeMixin):
     def _remove_kt_session(self) -> Exception | None:
         """移除当前 Bridge 独占的 KT 进程级 Session。"""
 
+        if self.runtime_kind is AgentRuntimeKind.NATIVE:
+            return None
         try:
             from kohakuterrarium.core.session import remove_session
 
@@ -372,36 +421,6 @@ class NanobotBridge(MessageContractBridgeMixin):
                 type(exc).__name__,
             )
             return exc
-
-    def _strip_framework_prompt_from_conversation(self) -> None:
-        """清理 KT 聚合器自动追加的 framework prompt 段落。"""
-        try:
-            runtime = self._require_runtime()
-            messages = list(runtime.read_conversation())
-            if not messages:
-                return
-            for index, msg in enumerate(messages):
-                if _conversation_msg_role(msg) != "system":
-                    continue
-                before = _conversation_msg_content(msg)
-                after = _strip_kt_framework_prompt_sections(before)
-                if after != before:
-                    messages[index] = RuntimeMessage(
-                        role=msg.role,
-                        content=after,
-                        name=msg.name,
-                        tool_call_id=msg.tool_call_id,
-                        tool_calls=msg.tool_calls,
-                    )
-                    runtime.replace_conversation(tuple(messages))
-                    logger.info(
-                        "[Prompt] stripped KT framework sections chars=%d→%d",
-                        len(before),
-                        len(after),
-                    )
-                break
-        except Exception as e:
-            logger.warning("[Prompt] strip KT framework sections failed: %s", e)
 
     async def stop(self) -> None:
         """Shutdown the agent."""
@@ -422,12 +441,15 @@ class NanobotBridge(MessageContractBridgeMixin):
         except BaseException as exc:
             if first_error is None:
                 first_error = exc
-        finally:
+        try:
             self._output.set_interrupt_callback(None)
             session_error = self._remove_kt_session()
             if first_error is None and session_error is not None:
                 first_error = session_error
-        logger.info("KT Agent stopped")
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+        logger.info("%s Agent stopped", self.runtime_kind.value)
         if first_error is not None:
             raise first_error
 
@@ -677,7 +699,7 @@ class NanobotBridge(MessageContractBridgeMixin):
         返回 reply 文本内容；同时将 reply_meta 存入 per-session dict。
         如果是 no_reply() 工具，则记录 no_reply 标志并返回空字符串。
         """
-        if not self._agent:
+        if all(getattr(self, name, None) is None for name in ("_runtime", "_agent")):
             return ""
         try:
             from nanobot_kt.reply_contract import extract_reply_tool_output
@@ -753,7 +775,7 @@ class NanobotBridge(MessageContractBridgeMixin):
         try:
             from nanobot_kt.reply_contract import count_final_action_tool_calls
 
-            if self._agent is None:
+            if all(getattr(self, name, None) is None for name in ("_runtime", "_agent")):
                 return {}
             messages = self._require_runtime().read_conversation()
             return count_final_action_tool_calls(messages)
@@ -836,7 +858,6 @@ class NanobotBridge(MessageContractBridgeMixin):
         retry_prompt = self._build_reply_contract_retry_prompt(raw_model_output)
 
         self._output.clear()
-        self._clear_controller_event_state()
         from core.final_tools import final_tools_scope
         from core.llm_trace_context import llm_trace_scope
         from core.tool_execution_policy import (
@@ -870,7 +891,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 cache_context=cache_context,
             ),
         ):
-            turn = await self._require_runtime().execute_turn(
+            turn = await self._require_runtime().run(
                 AgentTurnRequest(
                     context=runtime_context,
                     content=retry_prompt,
@@ -889,35 +910,11 @@ class NanobotBridge(MessageContractBridgeMixin):
 
         return parse_structured_final_action(buffer_text)
 
-    def _restore_saved_tools(self):
-        """兼容旧清理路径；ToolPlan 模式不再改写 registry._tools。"""
-        self._saved_tools = {}
-        self._tool_cleanup_needed = False
-
-    def _clear_controller_event_state(self) -> None:
-        """清理 KT controller 的跨请求事件残留。
-
-        Nanobot 的 HTTP 入口是无状态的：每个请求都会从 DB 重建上下文。
-        KT controller 本身是长生命周期对象，上一轮未消费的 pending event
-        如果留到下一轮，会优先于当前 user_input 被处理，导致真实 LLM 请求缺失
-        本轮 <user_input>。
-        """
-        if self._agent is None:
-            return
-        reset = self._require_runtime().clear_pending_events()
-        if reset.total:
-            logger.warning(
-                "[SessionRuntime] Cleared stale KT event state pending=%d queued=%d injections=%d",
-                reset.pending_events,
-                reset.queued_events,
-                reset.pending_injections,
-            )
-
     def _extract_last_rich_tool_output(
         self,
         allowed_report_kinds: tuple[str, ...] = ("ai_daily", "group_analysis"),
     ) -> RichTerminalOutput | None:
-        if not self._agent:
+        if all(getattr(self, name, None) is None for name in ("_runtime", "_agent")):
             return None
 
         try:
@@ -985,94 +982,6 @@ class NanobotBridge(MessageContractBridgeMixin):
             required_capabilities=required_capabilities,
         )
 
-    def _build_request_runtime_context(
-        self,
-        *,
-        request_id: str,
-        platform: str,
-        user_id: str,
-        group_id: str,
-        session_id: str,
-        is_group: bool,
-        is_super_user: bool,
-        trace_id: str,
-        run_id: str,
-        message_id: str,
-        capabilities: dict[str, bool],
-        prompt_key: str,
-        prompt_sha256: str,
-        tool_plan: Any,
-    ) -> RequestRuntimeContext:
-        owner_id = group_id if is_group else user_id
-        if not owner_id:
-            owner_id = session_id
-        plans: list[RuntimePlanRef] = []
-        prompt_digest = str(prompt_sha256 or "").strip().lower()
-        if len(prompt_digest) == 64:
-            plans.append(
-                RuntimePlanRef(
-                    RuntimePlanKind.PROMPT,
-                    f"prompt:{prompt_key}",
-                    prompt_digest,
-                )
-            )
-        tool_digest = str(getattr(tool_plan, "sha256", "") or "").strip().lower()
-        if len(tool_digest) == 64:
-            plans.append(
-                RuntimePlanRef(
-                    RuntimePlanKind.TOOL,
-                    "tool-plan:current",
-                    tool_digest,
-                )
-            )
-        return RequestRuntimeContext(
-            request_id=request_id or run_id,
-            principal=RuntimePrincipal(
-                platform=platform,
-                owner_type=(
-                    RuntimeOwnerType.GROUP if is_group else RuntimeOwnerType.USER
-                ),
-                owner_id=owner_id,
-            ),
-            session_id=session_id,
-            chat_type=(RuntimeChatType.GROUP if is_group else RuntimeChatType.PRIVATE),
-            trace_id=trace_id,
-            run_id=run_id,
-            message_id=message_id,
-            capabilities=frozenset(
-                name for name, enabled in capabilities.items() if enabled
-            ),
-            features=(
-                RuntimeFeature("super_user", is_super_user, "request"),
-                RuntimeFeature(
-                    "stream", capabilities.get("supports_stream", False), "request"
-                ),
-            ),
-            plans=tuple(plans),
-        )
-
-    def _fallback_request_runtime_context(
-        self,
-        *,
-        session_id: str,
-        trace_id: str,
-        run_id: str,
-    ) -> RequestRuntimeContext:
-        """仅供旧单元夹具使用；生产请求使用完整的受信上下文。"""
-
-        return RequestRuntimeContext(
-            request_id=run_id or trace_id or session_id,
-            principal=RuntimePrincipal(
-                platform="qq",
-                owner_type=RuntimeOwnerType.USER,
-                owner_id=session_id,
-            ),
-            session_id=session_id,
-            chat_type=RuntimeChatType.PRIVATE,
-            trace_id=trace_id,
-            run_id=run_id,
-        )
-
     def _set_runtime_model_route(self, target_model: str, route_plan: Any) -> None:
         temperature_raw = getattr(route_plan, "temperature", None)
         try:
@@ -1096,6 +1005,18 @@ class NanobotBridge(MessageContractBridgeMixin):
             or getattr(route_plan, "registry_provider", "")
             or "unknown"
         )
+        if (
+            getattr(self, "runtime_kind", AgentRuntimeKind.KT)
+            is AgentRuntimeKind.NATIVE
+        ):
+            completion_port = getattr(self, "_native_completion_port", None)
+            if completion_port is None:
+                raise BridgeUnavailableError(
+                    "Native Chat Completion Adapter 尚未初始化"
+                )
+            # 先验证并冻结传输计划，再更新 Runtime 模型元数据。失败发生在
+            # 模型或工具调用之前，不允许偷偷回落到 KT 重放本轮请求。
+            completion_port.bind_route(route_plan)
         self._active_route_plan = route_plan
         self._require_runtime().set_model_route(
             RuntimeModelRoute(
@@ -1125,6 +1046,7 @@ class NanobotBridge(MessageContractBridgeMixin):
         reply_llm_source: str,
         runtime_context: RequestRuntimeContext,
         runtime_attributes: tuple[RuntimeAttribute, ...] = (),
+        stream_queue: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> ModelLoopResult:
         model_iterator = iter(candidate_models)
         max_attempts = min(len(candidate_models), 8) if candidate_models else 5
@@ -1164,6 +1086,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 f"cost={candidate.get('cost_input_1m')})"
             )
 
+            runtime_error_text = ""
             try:
                 logger.info(
                     "[NanobotBridge] Calling AgentRuntimePort (Attempt %d, kind=%s)...",
@@ -1184,19 +1107,28 @@ class NanobotBridge(MessageContractBridgeMixin):
                     route_attempt_index=attempt + 1,
                     cache_context=cache_context,
                 ):
-                    turn = await self._require_runtime().execute_turn(
-                        AgentTurnRequest(
-                            context=runtime_context,
-                            content=(
-                                event_content
-                                if turn_kind is RuntimeTurnKind.USER_INPUT
-                                else ""
-                            ),
-                            stream=bool(meta["stream"]),
-                            kind=turn_kind,
-                            event_attributes=runtime_attributes,
-                        )
+                    turn_request = AgentTurnRequest(
+                        context=runtime_context,
+                        content=(
+                            event_content
+                            if turn_kind is RuntimeTurnKind.USER_INPUT
+                            else ""
+                        ),
+                        stream=bool(meta["stream"]),
+                        kind=turn_kind,
+                        event_attributes=runtime_attributes,
                     )
+                    runtime = self._require_runtime()
+                    if bool(meta["stream"]) and stream_queue is not None:
+                        turn = await runtime.run_event(
+                            turn_request,
+                            lambda event: _project_runtime_stream_event(
+                                event,
+                                stream_queue,
+                            ),
+                        )
+                    else:
+                        turn = await runtime.run(turn_request)
                 result = turn.raw_result
                 logger.info(
                     "[NanobotBridge] AgentRuntimePort returned: type=%s",
@@ -1206,9 +1138,11 @@ class NanobotBridge(MessageContractBridgeMixin):
                 logger.error(
                     f"[NanobotBridge] Agent processing error: {e}", exc_info=True
                 )
-                self._output._buffer.append(f"\n[系统内部错误] {str(e)}")
+                runtime_error_text = f"\n[系统内部错误] {str(e)}"
 
             response = self._output.get_response()
+            if runtime_error_text:
+                response = f"{response}{runtime_error_text}"
             logger.info(
                 f"[NanobotBridge] Attempt {attempt + 1} response: "
                 f"len={len(response)}, empty={not response.strip()}, "
@@ -1220,9 +1154,9 @@ class NanobotBridge(MessageContractBridgeMixin):
             terminal_output = self._extract_last_rich_tool_output()
             if terminal_output:
                 logger.info(
-                    "[NanobotBridge] Using preserved tool HTML output (replacing buffer)"
+                    "[NanobotBridge] Using preserved tool HTML output"
                 )
-                self._output._buffer = [terminal_output.html]
+                response = terminal_output.html
                 await record_candidate_health(
                     tracker, candidate, target_model, "success", session_id
                 )
@@ -1536,7 +1470,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 raw_model_output=raw_output,
                 runtime_context=(
                     runtime_context
-                    or self._fallback_request_runtime_context(
+                    or build_fallback_request_runtime_context(
                         session_id=session_id,
                         trace_id=trace_id,
                         run_id=run_id,
@@ -1633,7 +1567,7 @@ class NanobotBridge(MessageContractBridgeMixin):
         If stream_queue is provided, concise progress events are pushed
         during processing (one per distinct tool call, plus errors).
         """
-        if not self._agent:
+        if all(getattr(self, name, None) is None for name in ("_runtime", "_agent")):
             return "Error: Agent not initialized"
         if not str(session_id or "").strip():
             raise ValueError("session_id 不能为空")
@@ -1706,13 +1640,10 @@ class NanobotBridge(MessageContractBridgeMixin):
                 meta=run_meta,
             )
             trace_tokens = set_trace_context(trace_id, run_handle.run_id)
-            from core.tracing_context import set_runtime_correlation
-            correlation_tokens = set_runtime_correlation(
-                request_id=str(meta.get("message_id") or run_handle.run_id),
-                session_id=session_id,
+            correlation_tokens = bind_bridge_runtime_correlation(
+                meta, session_id, trace_id, run_handle.run_id
             )
             trace_finalizer = BridgeTraceFinalizer(
-                bridge=self,
                 run_id=run_handle.run_id,
                 trace_tokens=trace_tokens,
                 correlation_tokens=correlation_tokens,
@@ -1755,7 +1686,6 @@ class NanobotBridge(MessageContractBridgeMixin):
             runtime.replace_conversation(())
             if before_len:
                 logger.info("[SessionRuntime] Reset conversation: %d→0", before_len)
-            self._clear_controller_event_state()
 
             # --- Prompt runtime 输入：只收集结构化上下文，不在 bridge 手工注入 prompt ---
             persona_text = str(meta.get("persona_text", "")).strip()
@@ -1995,9 +1925,6 @@ class NanobotBridge(MessageContractBridgeMixin):
                 f"[NanobotBridge] Agent initialized: {self._agent is not None}"
             )
             logger.debug(f"[NanobotBridge] Output module: {self._output}")
-            logger.debug(
-                f"[NanobotBridge] Agent output_module attr: {getattr(self._agent, '_output_module', 'NOT SET')}"
-            )
             event_payload = await self._prepare_event_payload(
                 prompt_event_content=prompt_build.event_content,
                 files=meta.get("files"),
@@ -2009,7 +1936,7 @@ class NanobotBridge(MessageContractBridgeMixin):
             image_parts = event_payload.image_parts
             event_content = event_payload.event_content
             required_capabilities = event_payload.required_capabilities
-            runtime_context = self._build_request_runtime_context(
+            runtime_context = build_request_runtime_context(
                 request_id=str(meta.get("message_id") or run_handle.run_id),
                 platform=platform,
                 user_id=user_id,
@@ -2019,6 +1946,14 @@ class NanobotBridge(MessageContractBridgeMixin):
                 is_super_user=is_super_user,
                 trace_id=trace_id,
                 run_id=run_handle.run_id,
+                turn_id=str(
+                    meta.get("message_id")
+                    or meta.get("request_id")
+                    or run_handle.run_id
+                ),
+                correlation_id=str(
+                    meta.get("correlation_id") or trace_id
+                ),
                 message_id=str(meta.get("message_id") or ""),
                 capabilities=required_capabilities,
                 prompt_key=prompt_build.prompt_key,
@@ -2277,6 +2212,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 reply_llm_source=reply_llm_source,
                 runtime_context=runtime_context,
                 runtime_attributes=runtime_attributes,
+                stream_queue=stream_queue,
             )
             response = model_loop.response
             result = model_loop.result
@@ -2288,17 +2224,12 @@ class NanobotBridge(MessageContractBridgeMixin):
                 trace_finalizer.finish("empty", model="")
                 return ""
 
-            logger.info("[NanobotBridge] Checking output buffer...")
-            response = self._output.get_response()
-            buffer_list = (
-                self._output._buffer if hasattr(self._output, "_buffer") else []
-            )
-            buffer_len = len(buffer_list)
+            logger.info("[NanobotBridge] Checking runtime output...")
 
-            # 如果 output buffer 为空，尝试从返回值获取
+            # 如果公开输出为空，尝试从 Runtime 返回值获取
             if not response and result:
                 logger.info(
-                    "[NanobotBridge] Buffer empty, using _process_event return value"
+                    "[NanobotBridge] Output empty, using runtime return value"
                 )
                 response = str(result) if result else ""
 
@@ -2310,13 +2241,17 @@ class NanobotBridge(MessageContractBridgeMixin):
                 response = final_terminal.html
 
             logger.info(
-                f"[NanobotBridge] After processing: response_len={len(response)}, buffer_chunks={buffer_len}"
+                "[NanobotBridge] After processing: response_len=%d",
+                len(response),
             )
             if response:
                 logger.debug(f"[NanobotBridge] Response preview: {response[:200]}")
             else:
                 logger.warning("[NanobotBridge] EMPTY RESPONSE!")
-                logger.warning(f"[NanobotBridge] buffer={buffer_list}, result={result}")
+                logger.warning(
+                    "[NanobotBridge] runtime_result_type=%s",
+                    type(result).__name__ if result is not None else "None",
+                )
 
             reply_resolution = await self._check_reply_contract(
                 session_id=session_id,
@@ -2416,7 +2351,7 @@ class NanobotBridge(MessageContractBridgeMixin):
             return response
 
     @property
-    def agent(self) -> Agent | None:
+    def agent(self) -> Any | None:
         """Access the underlying KT agent for advanced operations."""
         return self._agent
 
@@ -2436,11 +2371,29 @@ class BridgeUnavailableError(RuntimeError):
 
 
 class NanobotBridgePool(MessageContractBridgeMixin):
-    """按会话隔离 KT Agent，避免全局单例锁阻塞不同用户。"""
+    """按会话隔离并固定 Agent Runtime，避免跨 Runtime 隐式重放。"""
 
-    def __init__(self, creature_path: str = "creatures/nanobot"):
+    def __init__(
+        self,
+        creature_path: str = "creatures/nanobot",
+        *,
+        selection_policy: AgentRuntimeSelectionPolicy | None = None,
+        bridge_factory: Callable[[AgentRuntimeKind], NanobotBridge] | None = None,
+    ):
         self.creature_path = creature_path
+        # 直接构造 Pool 的旧调用仍保持 KT 行为；生产 Composition Root 必须
+        # 显式注入 Native-default 策略，避免测试夹具和兼容调用被暗中改写。
+        if selection_policy is None:
+            selection_policy = compatibility_runtime_selection_policy()
+        self._selection_policy = selection_policy
+        self._bridge_factory = bridge_factory or partial(
+            build_child_bridge,
+            NanobotBridge,
+            self.creature_path,
+        )
         self._bridges: dict[str, NanobotBridge] = {}
+        self._bridge_runtime_kinds: dict[str, AgentRuntimeKind] = {}
+        self._last_runtime_kinds: dict[str, AgentRuntimeKind] = {}
         self._bridge_last_used: dict[str, float] = {}
         self._bridge_inflight: dict[str, int] = {}
         self._stop_tasks: set[asyncio.Task] = set()
@@ -2449,6 +2402,9 @@ class NanobotBridgePool(MessageContractBridgeMixin):
         self._lifecycle_state = BridgeLifecycleState.NEW
         self.BRIDGE_TTL_SECONDS = 600  # 10 分钟无使用则回收
         self.BRIDGE_STOP_TIMEOUT_SECONDS = 30  # stop 等待 inflight 的上限，超时强制回收
+
+    def create_isolated_bridge(self) -> NanobotBridge:
+        return self._bridge_factory(self._selection_policy.default_kind)
 
     async def start(self) -> None:
         async with self._create_lock:
@@ -2512,6 +2468,8 @@ class NanobotBridgePool(MessageContractBridgeMixin):
                         if not inflight:
                             bridges = list(self._bridges.values())
                             self._bridges.clear()
+                            self._bridge_runtime_kinds.clear()
+                            self._last_runtime_kinds.clear()
                             self._bridge_last_used.clear()
                             self._bridge_inflight.clear()
                             break
@@ -2526,6 +2484,8 @@ class NanobotBridgePool(MessageContractBridgeMixin):
                         async with self._create_lock:
                             bridges = list(self._bridges.values())
                             self._bridges.clear()
+                            self._bridge_runtime_kinds.clear()
+                            self._last_runtime_kinds.clear()
                             self._bridge_last_used.clear()
                             self._bridge_inflight.clear()
                         forced = True
@@ -2582,7 +2542,11 @@ class NanobotBridgePool(MessageContractBridgeMixin):
         task.add_done_callback(_done)
         return task
 
-    async def _get_or_create_bridge_locked(self, key: str) -> NanobotBridge:
+    async def _get_or_create_bridge_locked(
+        self,
+        key: str,
+        selection: AgentRuntimeSelection,
+    ) -> NanobotBridge:
         import time as _t
 
         if self._lifecycle_state is not BridgeLifecycleState.RUNNING:
@@ -2600,6 +2564,7 @@ class NanobotBridgePool(MessageContractBridgeMixin):
         ]
         for k in stale:
             b = self._bridges.pop(k, None)
+            self._bridge_runtime_kinds.pop(k, None)
             self._bridge_last_used.pop(k, None)
             self._bridge_inflight.pop(k, None)
             if b:
@@ -2607,22 +2572,35 @@ class NanobotBridgePool(MessageContractBridgeMixin):
         if stale:
             logger.info("[BridgePool] Cleaned %d stale bridges", len(stale))
 
-        bridge = self._bridges.get(key)
-        if bridge is None:
-            bridge = NanobotBridge(self.creature_path)
-            await bridge.start()
-            self._bridges[key] = bridge
-            logger.info("[NanobotBridgePool] created child bridge for session=%s", key)
+        from nanobot_kt.bridge_runtime_support import reconcile_selected_bridge
+
+        bridge = await reconcile_selected_bridge(
+            self,
+            key,
+            selection,
+            unavailable_error=BridgeUnavailableError,
+        )
         self._bridge_last_used[key] = _t.time()
         return bridge
 
     async def _get_bridge(self, key: str) -> NanobotBridge:
-        async with self._create_lock:
-            return await self._get_or_create_bridge_locked(key)
+        from nanobot_kt.bridge_runtime_support import select_runtime_for_bridge_key
 
-    async def _acquire_bridge(self, key: str) -> NanobotBridge:
+        selection = select_runtime_for_bridge_key(
+            self._selection_policy,
+            key,
+            session_id=key,
+        )
         async with self._create_lock:
-            bridge = await self._get_or_create_bridge_locked(key)
+            return await self._get_or_create_bridge_locked(key, selection)
+
+    async def _acquire_bridge(
+        self,
+        key: str,
+        selection: AgentRuntimeSelection,
+    ) -> NanobotBridge:
+        async with self._create_lock:
+            bridge = await self._get_or_create_bridge_locked(key, selection)
             self._bridge_inflight[key] = self._bridge_inflight.get(key, 0) + 1
             return bridge
 
@@ -2654,7 +2632,17 @@ class NanobotBridgePool(MessageContractBridgeMixin):
                 f"BridgePool 当前不可用: {self._lifecycle_state.value}"
             )
         key = self._session_key(user_id=user_id, session_id=session_id)
-        bridge = await self._acquire_bridge(key)
+        # 请求进入 Pool 时只选择一次；此后无论启动、模型或工具调用如何失败，
+        # 都不会重新选择另一个 Runtime，也不会跨 Runtime 重放本轮副作用。
+        from nanobot_kt.bridge_runtime_support import select_runtime_for_bridge_key
+
+        selection = select_runtime_for_bridge_key(
+            self._selection_policy,
+            key,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        bridge = await self._acquire_bridge(key, selection)
         try:
             return await bridge.handle_message(
                 query,
@@ -2713,7 +2701,10 @@ def get_bridge() -> NanobotBridgePool:
     return _bridge
 
 
-async def init_bridge() -> NanobotBridgePool:
+async def init_bridge(
+    *,
+    selection_policy: AgentRuntimeSelectionPolicy | None = None,
+) -> NanobotBridgePool:
     """Initialize and start the global bridge. Called from server.py lifespan."""
     global _bridge, _bridge_lifecycle_state
     async with _bridge_lifecycle_lock:
@@ -2721,6 +2712,14 @@ async def init_bridge() -> NanobotBridgePool:
             _bridge_lifecycle_state is BridgeLifecycleState.RUNNING
             and _bridge is not None
         ):
+            if (
+                selection_policy is not None
+                and _bridge._selection_policy.policy_sha256
+                != selection_policy.policy_sha256
+            ):
+                raise BridgeUnavailableError(
+                    "全局 Bridge 已用不同 Runtime 策略启动；修改策略需要重启"
+                )
             return _bridge
         if _bridge_lifecycle_state in {
             BridgeLifecycleState.STARTING,
@@ -2731,7 +2730,7 @@ async def init_bridge() -> NanobotBridgePool:
             )
 
         _bridge_lifecycle_state = BridgeLifecycleState.STARTING
-        candidate = NanobotBridgePool()
+        candidate = NanobotBridgePool(selection_policy=selection_policy)
         try:
             await candidate.start()
         except BaseException:

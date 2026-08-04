@@ -1,5 +1,5 @@
 import pytest
-from creatures.nanobot.prompts.skills.news_search.tool import WebTools
+from nanobot_kt.tools.ai_daily import WebTools
 # 真实网络测试：需要外网可访问，且 HTTP 代理（SOCKS）环境正确配置
 # 若环境不通则自动跳过，不阻塞 CI
 _skip_live = pytest.mark.skipif(

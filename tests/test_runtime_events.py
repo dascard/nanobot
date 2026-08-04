@@ -120,6 +120,7 @@ def test_default_runtime_event_registry_covers_cross_cutting_boundaries():
 
     assert {descriptor.name for descriptor in RUNTIME_EVENT_REGISTRY.list()} == {
         "agent.lifecycle",
+        "agent.runtime_selection",
         "compatibility.alias_used",
         "delivery.attempt",
         "http.request",

@@ -642,9 +642,7 @@ class _SimulationResearchBridge:
         plugins = _SimulationPluginManager()
         self._agent = SimpleNamespace(
             plugins=plugins,
-            controller=SimpleNamespace(
-                _nanobot_tool_plan_schema_filter_installed=True,
-            ),
+            _nanobot_tool_plan_schema_filter_installed=True,
         )
 
     async def start(self) -> None:
@@ -682,9 +680,8 @@ class _SimulationResearchBridge:
             getattr(plugin, "name", "") == "nanobot_tool_plan_guard"
             for plugin in plugins
         )
-        controller = self._agent.controller
         return guard_ready and bool(
-            controller._nanobot_tool_plan_schema_filter_installed
+            self._agent._nanobot_tool_plan_schema_filter_installed
         )
 
     def install_research_budget_guard(

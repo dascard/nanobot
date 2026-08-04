@@ -6,7 +6,7 @@ import json
 import time
 from typing import Any
 
-from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from nanobot_kt.optional_tool_api import BaseTool, ExecutionMode, ToolResult
 
 from app.memory_digest.retrieval_service import (
     MemoryDigestRetrievalService,

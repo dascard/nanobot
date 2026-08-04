@@ -134,16 +134,9 @@ def _resolve_source(args: argparse.Namespace, root: Path):
         git_dirty = bool(status)
     else:
         git_dirty = args.git_dirty == "true"
-    kt_commit = args.kt_commit
-    if kt_commit is None:
-        kt_commit = _git(
-            root / "vendor/KohakuTerrarium",
-            ("rev-parse", "HEAD"),
-        )
     return ArtifactSource(
         git_full_commit=git_full_commit,
         git_dirty=git_dirty,
-        kt_commit=kt_commit,
     )
 
 
@@ -316,7 +309,6 @@ def _parser() -> argparse.ArgumentParser:
         "--git-dirty",
         choices=("true", "false"),
     )
-    artifact.add_argument("--kt-commit")
     artifact.add_argument("--input", action="append", default=[])
     artifact.add_argument("--input-sha", action="append", default=[])
     artifact.add_argument("--schema-migration-head")
@@ -339,7 +331,7 @@ def _parser() -> argparse.ArgumentParser:
     artifact.add_argument("--built-at")
     artifact.add_argument(
         "--builder-version",
-        default="release-manifest-v1",
+        default="release-manifest-v2",
     )
     artifact.add_argument("--output", type=Path, required=True)
     artifact.set_defaults(handler=_artifact_command)

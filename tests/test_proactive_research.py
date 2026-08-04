@@ -63,9 +63,8 @@ class FakeBridge:
         self.plugin_manager = FakePluginManager()
         self._agent = SimpleNamespace(
             plugins=self.plugin_manager,
-            controller=SimpleNamespace(
-                _nanobot_tool_plan_schema_filter_installed=True,
-            ),
+            controller=SimpleNamespace(),
+            _nanobot_tool_plan_schema_filter_installed=True,
         )
 
     async def start(self) -> None:
@@ -94,10 +93,9 @@ class FakeBridge:
             getattr(plugin, "name", "") == "nanobot_tool_plan_guard"
             for plugin in plugins
         )
-        controller = getattr(self._agent, "controller", None)
         schema_ready = bool(
             getattr(
-                controller,
+                self._agent,
                 "_nanobot_tool_plan_schema_filter_installed",
                 False,
             )
@@ -707,9 +705,8 @@ async def test_run_proactive_research_blocks_when_budget_guard_cannot_be_install
         plugins=SimpleNamespace(
             _plugins=[SimpleNamespace(name="nanobot_tool_plan_guard")],
         ),
-        controller=SimpleNamespace(
-            _nanobot_tool_plan_schema_filter_installed=True,
-        ),
+        controller=SimpleNamespace(),
+        _nanobot_tool_plan_schema_filter_installed=True,
     )
 
     result = await api.run_proactive_research(
@@ -731,7 +728,7 @@ async def test_run_proactive_research_blocks_when_runtime_tool_guard_is_missing(
     if missing == "tool_plan_guard":
         bridge.plugin_manager._plugins = []
     else:
-        bridge._agent.controller._nanobot_tool_plan_schema_filter_installed = False
+        bridge._agent._nanobot_tool_plan_schema_filter_installed = False
 
     result = await api.run_proactive_research(
         _request(api, request_id=f"research-missing-{missing}"),
@@ -1561,7 +1558,7 @@ def test_ten_legal_web_results_survive_tracing_and_source_extraction(db_session)
 
 @pytest.mark.asyncio
 async def test_reply_tool_dry_run_does_not_record_sticker_usage(monkeypatch):
-    from creatures.nanobot.prompts.skills.reply.tool import ReplyTool
+    from nanobot_kt.tools.reply import ReplyTool
 
     recorded = []
     monkeypatch.setattr(

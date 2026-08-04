@@ -9,7 +9,7 @@ def test_runtime_cache_imports_without_runtime_tool_dependencies():
 import sys
 from creatures.nanobot.prompts.skills.news_search import runtime_cache
 blocked = [
-    "creatures.nanobot.prompts.skills.news_search.tool",
+    "nanobot_kt.tools.ai_daily",
     "duckduckgo_search",
     "trafilatura",
     "kohakuterrarium.modules.tool.base",
@@ -51,7 +51,7 @@ def test_runtime_cache_key_preserves_daily_and_query_contract():
 
 def test_tool_cache_facade_shares_runtime_state_and_honors_legacy_ttl(monkeypatch):
     from creatures.nanobot.prompts.skills.news_search import runtime_cache
-    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    import nanobot_kt.tools.ai_daily as news_tool
 
     key = runtime_cache._news_search_cache_key("AI news", 3)
     news_tool._NEWS_SEARCH_CACHE.clear()

@@ -25,6 +25,22 @@ class BoundaryRule:
 
 RULES = (
     BoundaryRule(
+        ROOT / "core" / "agent_manifest",
+        frozenset(
+            {
+                "api",
+                "app",
+                "clients",
+                "creatures",
+                "fastapi",
+                "nanobot_kt",
+                "sandboxd",
+                "sqlalchemy",
+            }
+        ),
+        "Agent Manifest 合同层不得依赖框架或 Adapter",
+    ),
+    BoundaryRule(
         ROOT / "core" / "agent_runtime",
         frozenset(
             {
@@ -133,14 +149,32 @@ FORBIDDEN_KT_PRIVATE_MEMBERS = frozenset(
     {
         "_api_key",
         "_client",
+        "_emergency_drop_callbacks",
         "_event_queue",
+        "_extra_headers",
+        "_get_native_tool_schemas",
         "_interrupt_requested",
+        "_max_retries",
         "_messages",
+        "_metadata",
+        "_maybe_truncate",
+        "_path_guard",
         "_pending_events",
         "_pending_injections",
+        "_plugins",
         "_process_event",
+        "_profile_max_context",
+        "_rebuild_client",
+        "_retry_policy",
+        "_running",
         "_timeout",
+        "_tokens",
+        "_tools",
     }
+)
+
+CREATURE_TOOL_PATHS = tuple(
+    sorted((ROOT / "creatures" / "nanobot" / "prompts" / "skills").rglob("tool.py"))
 )
 
 DATABASE_PORT_CONTRACT_PATHS = (
@@ -309,19 +343,85 @@ def check_rule(rule: BoundaryRule) -> list[str]:
     return errors
 
 
-def check_bridge_private_access() -> list[str]:
-    """KT 私有兼容访问只能存在于 nanobot_kt/runtime_adapter.py。"""
+def _display_path(path: Path) -> Path:
+    try:
+        return path.relative_to(ROOT)
+    except ValueError:
+        return path
 
-    path = ROOT / "nanobot_kt" / "bridge.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    errors: list[str] = []
+
+def _private_member_calls(tree: ast.AST) -> list[tuple[int, str]]:
+    calls: list[tuple[int, str]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Attribute):
+        if isinstance(node, ast.Attribute):
+            if node.attr in FORBIDDEN_KT_PRIVATE_MEMBERS:
+                calls.append((node.lineno, node.attr))
             continue
-        if node.attr in FORBIDDEN_KT_PRIVATE_MEMBERS:
+        if not isinstance(node, ast.Call) or len(node.args) < 2:
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id not in {
+            "getattr",
+            "hasattr",
+            "setattr",
+            "delattr",
+        }:
+            continue
+        member = node.args[1]
+        if (
+            isinstance(member, ast.Constant)
+            and isinstance(member.value, str)
+            and member.value in FORBIDDEN_KT_PRIVATE_MEMBERS
+        ):
+            calls.append((node.lineno, member.value))
+    return sorted(set(calls))
+
+
+def check_bridge_private_access(
+    paths: tuple[Path, ...] | None = None,
+) -> list[str]:
+    """Nanobot KT Adapter 禁止访问已知框架私有成员。"""
+
+    candidates = paths or tuple(
+        sorted((ROOT / "nanobot_kt").rglob("*.py"))
+    )
+    errors: list[str] = []
+    for path in candidates:
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        for line, member in _private_member_calls(tree):
             errors.append(
-                f"{path.relative_to(ROOT)}:{node.lineno}: 禁止访问 KT 私有成员 "
-                f"{node.attr}；必须通过 AgentRuntimePort"
+                f"{_display_path(path)}:{line}: 禁止访问 KT 私有成员 {member}；"
+                "请改用公开 API 或 Nanobot 自有实现"
+            )
+    return errors
+
+
+def check_creature_tool_boundaries(
+    paths: tuple[Path, ...] | None = None,
+) -> list[str]:
+    """creature 工具核心不得依赖 KT 框架或 Nanobot KT Adapter。"""
+
+    errors: list[str] = []
+    for path in paths or CREATURE_TOOL_PATHS:
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        display_path = _display_path(path)
+        imports = tuple(imported_modules(tree))
+        forbidden_imports = [
+            (line, module)
+            for line, module in imports
+            if module == "nanobot_kt"
+            or module.startswith("nanobot_kt.")
+            or module == "kohakuterrarium"
+            or module.startswith("kohakuterrarium.")
+        ]
+        for line, module in forbidden_imports:
+            errors.append(
+                f"{display_path}:{line}: creature 工具核心不得直接依赖 {module}"
             )
     return errors
 
@@ -406,12 +506,12 @@ def check_core_client_dependencies() -> list[str]:
 def check_kt_framework_boundaries(
     paths: tuple[Path, ...] | None = None,
 ) -> list[str]:
-    """core/app 不得直接导入 KT，包含函数内动态 import。"""
+    """core/app/api 不得直接导入 KT，包含函数内动态 import。"""
 
     if paths is None:
         paths = tuple(
             path
-            for root in (ROOT / "core", ROOT / "app")
+            for root in (ROOT / "core", ROOT / "app", ROOT / "api")
             for path in sorted(root.rglob("*.py"))
         )
     errors: list[str] = []
@@ -432,7 +532,7 @@ def check_kt_framework_boundaries(
                 or module.startswith("kohakuterrarium.")
             ):
                 errors.append(
-                    f"{display_path}:{line}: core/app 不得依赖 {module}；"
+                    f"{display_path}:{line}: core/app/api 不得依赖 {module}；"
                     "请通过框架无关 Port 和 Composition Root 注入 Adapter"
                 )
     return errors
@@ -810,6 +910,7 @@ def main() -> int:
     errors.extend(check_database_port_boundaries())
     errors.extend(check_core_client_dependencies())
     errors.extend(check_kt_framework_boundaries())
+    errors.extend(check_creature_tool_boundaries())
     errors.extend(check_message_contract_boundaries())
     errors.extend(check_monolith_growth_boundaries())
     errors.extend(check_identity_prefix_inference_boundaries())

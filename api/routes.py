@@ -42,7 +42,7 @@ from core.identity import is_super_user_id
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from core.time_utils import db_now_naive
 from core import user_block_rules
-from nanobot_kt.bridge import get_bridge
+from core.agent_runtime.gateway import get_agent_gateway as get_bridge
 from clients.classifier_client import get_guardrail
 from app.group_ingress import helpers as group_ingress_helpers
 from api import (

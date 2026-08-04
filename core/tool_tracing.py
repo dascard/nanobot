@@ -28,7 +28,12 @@ def _tool_event_context(tool_call_id: str):
     )
 
 
-def begin_tool_trace(tool_name: str, args: Any) -> tuple[str, float]:
+def begin_tool_trace(
+    tool_name: str,
+    args: Any,
+    *,
+    tool_call_id: str = "",
+) -> tuple[str, float]:
     started = time.time()
     try:
         from core.tracing import ToolTracer
@@ -40,6 +45,7 @@ def begin_tool_trace(tool_name: str, args: Any) -> tuple[str, float]:
             run_id,
             tool_name,
             args,
+            tool_call_id=tool_call_id,
         )
     except Exception:
         return "", started

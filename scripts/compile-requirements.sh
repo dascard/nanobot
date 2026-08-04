@@ -14,7 +14,6 @@ compile_args=(
   --python-version 3.11
   --python-platform x86_64-manylinux_2_36
   --torch-backend cpu
-  --no-emit-package kohakuterrarium
   --emit-index-url
   --emit-index-annotation
   --custom-compile-command scripts/compile-requirements.sh
@@ -27,6 +26,11 @@ uv pip compile requirements.txt \
 uv pip compile requirements-test.txt \
   "${compile_args[@]}" \
   --output-file requirements-test.lock
+
+uv pip compile requirements-kt.in \
+  --constraint requirements-test.lock \
+  "${compile_args[@]}" \
+  --output-file requirements-kt.lock
 
 uv pip compile docker/sandbox/python/requirements.in \
   --python-version 3.11 \

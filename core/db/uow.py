@@ -19,7 +19,7 @@ class UnitOfWork:
         self.db: Session | None = None
 
     def __enter__(self) -> "UnitOfWork":
-        self.db = self._session_factory()
+        self.open()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -35,6 +35,14 @@ class UnitOfWork:
         if self.db is None:
             raise RuntimeError("UnitOfWork session is not open")
         self.db.commit()
+
+    def open(self) -> Session:
+        """显式打开一次工作单元，供不便整体缩进的应用服务管理生命周期。"""
+
+        if self.db is not None:
+            raise RuntimeError("UnitOfWork session is already open")
+        self.db = self._session_factory()
+        return self.db
 
     def rollback(self) -> None:
         if self.db is None:

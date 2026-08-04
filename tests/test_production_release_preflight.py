@@ -25,7 +25,6 @@ def _artifact():
         source=ArtifactSource(
             git_full_commit="a" * 40,
             git_dirty=False,
-            kt_commit="b" * 40,
         ),
         input_hashes={
             "prompt_defaults": "1" * 64,
@@ -105,21 +104,19 @@ def test_production_paths_require_independent_release_and_prompt_roots(tmp_path)
         )
 
 
-def test_release_source_identity_requires_clean_matching_head_and_kt(
+def test_release_source_identity_requires_clean_matching_head(
     tmp_path,
     monkeypatch,
 ):
     import core.release.production_preflight as preflight
 
     source = tmp_path / "release"
-    (source / "vendor/KohakuTerrarium").mkdir(parents=True)
+    source.mkdir(parents=True)
     artifact = _artifact()
 
     def clean_git(root, *arguments):
         if arguments[:2] == ("status", "--porcelain"):
             return ""
-        if root == source / "vendor/KohakuTerrarium":
-            return artifact.source.kt_commit
         return artifact.source.git_full_commit
 
     monkeypatch.setattr(preflight, "_git", clean_git)
@@ -157,9 +154,8 @@ def test_release_artifact_evidence_recomputes_all_bound_hashes(tmp_path):
     verification = evidence / "verification-results.json"
     verification.write_text(
         json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
             "source_sha": "a" * 40,
-            "kt_sha": "b" * 40,
             "suites": {
                 "backend-full": {
                     "run_id": "123",
@@ -177,7 +173,6 @@ def test_release_artifact_evidence_recomputes_all_bound_hashes(tmp_path):
         source=ArtifactSource(
             git_full_commit="a" * 40,
             git_dirty=False,
-            kt_commit="b" * 40,
         ),
         input_hashes={
             "python_lock": dependency_hash,
@@ -410,7 +405,6 @@ def test_prompt_release_verifier_requires_explicit_local_override_acceptance(
         source=ArtifactSource(
             git_full_commit="a" * 40,
             git_dirty=False,
-            kt_commit="b" * 40,
         ),
         input_hashes={
             "prompt_defaults": prompt_hash,

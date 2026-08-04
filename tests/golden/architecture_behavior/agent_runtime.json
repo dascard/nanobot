@@ -1,0 +1,1796 @@
+{
+  "cases": [
+    {
+      "conversation": [
+        {
+          "content": "你是中文助手。",
+          "name": "",
+          "role": "system",
+          "tool_call_id": "",
+          "tool_calls": []
+        },
+        {
+          "content": "你好",
+          "name": "",
+          "role": "user",
+          "tool_call_id": "",
+          "tool_calls": []
+        },
+        {
+          "content": "你好，有什么可以帮你？",
+          "name": "",
+          "role": "assistant",
+          "tool_call_id": "",
+          "tool_calls": []
+        }
+      ],
+      "final_state": "stopped",
+      "id": "ordinary_chat",
+      "inspected_tool_calls": [],
+      "interrupt_accepted": false,
+      "interrupt_reason": "",
+      "lifecycle": [
+        {
+          "current_state": "starting",
+          "previous_state": "new",
+          "reason": "",
+          "sequence": 1
+        },
+        {
+          "current_state": "running",
+          "previous_state": "starting",
+          "reason": "",
+          "sequence": 2
+        },
+        {
+          "current_state": "stopping",
+          "previous_state": "running",
+          "reason": "",
+          "sequence": 3
+        },
+        {
+          "current_state": "stopped",
+          "previous_state": "stopping",
+          "reason": "",
+          "sequence": 4
+        }
+      ],
+      "pending_reset": {
+        "pending_events": 0,
+        "pending_injections": 0,
+        "queued_events": 0
+      },
+      "replace_count": 1,
+      "request_count": 1,
+      "routes": [
+        {
+          "enable_thinking": "false",
+          "max_tokens": 512,
+          "model_id": "fixture-model",
+          "profile_id": "fixture-profile",
+          "provider_id": "fixture-provider",
+          "route_id": "reply:runtime-baseline",
+          "temperature": 0.2,
+          "timeout_seconds": 30
+        }
+      ],
+      "runtime_id": "fake:ordinary-chat",
+      "tool_names": [
+        "reply"
+      ],
+      "tool_policy": {
+        "guard_installed": true,
+        "missing": [],
+        "ready": true,
+        "schema_filter_installed": true
+      },
+      "turns": [
+        {
+          "events": [
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-ordinary",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-ordinary",
+              "sequence": 1,
+              "status": "accepted",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-ordinary",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-ordinary",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-ordinary",
+              "sequence": 2,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-ordinary",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-ordinary",
+              "error": null,
+              "kind": "end",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-ordinary",
+              "sequence": 3,
+              "status": "succeeded",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-ordinary",
+              "usage": null
+            }
+          ],
+          "request": {
+            "content": "你好",
+            "context": {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "capabilities": [
+                "memory",
+                "tools"
+              ],
+              "chat_type": "private",
+              "correlation_id": "correlation-ordinary",
+              "deadline_at": "2026-08-03T12:00:30+08:00",
+              "features": [
+                {
+                  "enabled": false,
+                  "name": "sandbox",
+                  "source": "behavior_fixture"
+                }
+              ],
+              "message_id": "message-ordinary",
+              "plans": [
+                {
+                  "identity": "prompt-plan:runtime-baseline",
+                  "kind": "prompt",
+                  "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                {
+                  "identity": "tool-plan:runtime-baseline",
+                  "kind": "tool",
+                  "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+                }
+              ],
+              "principal": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "request_id": "req-ordinary",
+              "run_id": "run-ordinary",
+              "session_id": "private_runtime-baseline-user",
+              "trace_id": "trace-ordinary",
+              "turn_id": "turn-ordinary"
+            },
+            "event_attributes": [
+              {
+                "key": "entrypoint",
+                "value": "chat"
+              }
+            ],
+            "kind": "user_input",
+            "stream": false
+          },
+          "result": {
+            "messages": [
+              {
+                "content": "你是中文助手。",
+                "name": "",
+                "role": "system",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "你好",
+                "name": "",
+                "role": "user",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "你好，有什么可以帮你？",
+                "name": "",
+                "role": "assistant",
+                "tool_call_id": "",
+                "tool_calls": []
+              }
+            ],
+            "raw_result": {
+              "text": "你好，有什么可以帮你？",
+              "type": "text"
+            },
+            "tool_calls": []
+          }
+        }
+      ]
+    },
+    {
+      "conversation": [
+        {
+          "content": "你是中文助手。",
+          "name": "",
+          "role": "system",
+          "tool_call_id": "",
+          "tool_calls": []
+        },
+        {
+          "content": "请流式回答",
+          "name": "",
+          "role": "user",
+          "tool_call_id": "",
+          "tool_calls": []
+        },
+        {
+          "content": "流式回复",
+          "name": "",
+          "role": "assistant",
+          "tool_call_id": "",
+          "tool_calls": []
+        }
+      ],
+      "final_state": "stopped",
+      "id": "streaming_chat",
+      "inspected_tool_calls": [],
+      "interrupt_accepted": false,
+      "interrupt_reason": "",
+      "lifecycle": [
+        {
+          "current_state": "starting",
+          "previous_state": "new",
+          "reason": "",
+          "sequence": 1
+        },
+        {
+          "current_state": "running",
+          "previous_state": "starting",
+          "reason": "",
+          "sequence": 2
+        },
+        {
+          "current_state": "stopping",
+          "previous_state": "running",
+          "reason": "",
+          "sequence": 3
+        },
+        {
+          "current_state": "stopped",
+          "previous_state": "stopping",
+          "reason": "",
+          "sequence": 4
+        }
+      ],
+      "pending_reset": {
+        "pending_events": 0,
+        "pending_injections": 0,
+        "queued_events": 0
+      },
+      "replace_count": 1,
+      "request_count": 1,
+      "routes": [
+        {
+          "enable_thinking": "false",
+          "max_tokens": 512,
+          "model_id": "fixture-model",
+          "profile_id": "fixture-profile",
+          "provider_id": "fixture-provider",
+          "route_id": "reply:runtime-baseline",
+          "temperature": 0.2,
+          "timeout_seconds": 30
+        }
+      ],
+      "runtime_id": "fake:streaming-chat",
+      "tool_names": [
+        "reply"
+      ],
+      "tool_policy": {
+        "guard_installed": true,
+        "missing": [],
+        "ready": true,
+        "schema_filter_installed": true
+      },
+      "turns": [
+        {
+          "events": [
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-stream",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-stream",
+              "sequence": 1,
+              "status": "accepted",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-stream",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-stream",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-stream",
+              "sequence": 2,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-stream",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-stream",
+              "error": null,
+              "kind": "text_delta",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-stream",
+              "sequence": 3,
+              "status": "running",
+              "text_delta": "流",
+              "tool_call": null,
+              "turn_id": "turn-stream",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-stream",
+              "error": null,
+              "kind": "text_delta",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-stream",
+              "sequence": 4,
+              "status": "running",
+              "text_delta": "式",
+              "tool_call": null,
+              "turn_id": "turn-stream",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-stream",
+              "error": null,
+              "kind": "end",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-stream",
+              "sequence": 5,
+              "status": "succeeded",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-stream",
+              "usage": null
+            }
+          ],
+          "request": {
+            "content": "请流式回答",
+            "context": {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "capabilities": [
+                "memory",
+                "tools"
+              ],
+              "chat_type": "private",
+              "correlation_id": "correlation-stream",
+              "deadline_at": "2026-08-03T12:00:30+08:00",
+              "features": [
+                {
+                  "enabled": false,
+                  "name": "sandbox",
+                  "source": "behavior_fixture"
+                }
+              ],
+              "message_id": "message-stream",
+              "plans": [
+                {
+                  "identity": "prompt-plan:runtime-baseline",
+                  "kind": "prompt",
+                  "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                {
+                  "identity": "tool-plan:runtime-baseline",
+                  "kind": "tool",
+                  "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+                }
+              ],
+              "principal": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "request_id": "req-stream",
+              "run_id": "run-stream",
+              "session_id": "private_runtime-baseline-user",
+              "trace_id": "trace-stream",
+              "turn_id": "turn-stream"
+            },
+            "event_attributes": [
+              {
+                "key": "entrypoint",
+                "value": "chat_stream"
+              }
+            ],
+            "kind": "user_input",
+            "stream": true
+          },
+          "result": {
+            "messages": [
+              {
+                "content": "你是中文助手。",
+                "name": "",
+                "role": "system",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "请流式回答",
+                "name": "",
+                "role": "user",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "流式回复",
+                "name": "",
+                "role": "assistant",
+                "tool_call_id": "",
+                "tool_calls": []
+              }
+            ],
+            "raw_result": {
+              "events": [
+                {
+                  "status": "delta",
+                  "text": "流"
+                },
+                {
+                  "status": "delta",
+                  "text": "式"
+                },
+                {
+                  "reply": "流式回复",
+                  "status": "done"
+                }
+              ]
+            },
+            "tool_calls": []
+          }
+        }
+      ]
+    },
+    {
+      "conversation": [
+        {
+          "content": "必要时使用工具，并最终调用 reply。",
+          "name": "",
+          "role": "system",
+          "tool_call_id": "",
+          "tool_calls": []
+        },
+        {
+          "content": "查一下基线消息",
+          "name": "",
+          "role": "user",
+          "tool_call_id": "",
+          "tool_calls": []
+        },
+        {
+          "content": "",
+          "name": "",
+          "role": "assistant",
+          "tool_call_id": "",
+          "tool_calls": [
+            {
+              "arguments": {
+                "query": "基线消息"
+              },
+              "call_id": "call-search",
+              "name": "web_search",
+              "result": null,
+              "status": "requested"
+            }
+          ]
+        },
+        {
+          "content": {
+            "items": [
+              "结果一"
+            ]
+          },
+          "name": "web_search",
+          "role": "tool",
+          "tool_call_id": "call-search",
+          "tool_calls": []
+        },
+        {
+          "content": "",
+          "name": "",
+          "role": "assistant",
+          "tool_call_id": "",
+          "tool_calls": [
+            {
+              "arguments": {
+                "text": "找到结果一。"
+              },
+              "call_id": "call-reply",
+              "name": "reply",
+              "result": null,
+              "status": "requested"
+            }
+          ]
+        },
+        {
+          "content": "已发送",
+          "name": "reply",
+          "role": "tool",
+          "tool_call_id": "call-reply",
+          "tool_calls": []
+        }
+      ],
+      "final_state": "stopped",
+      "id": "multi_round_tools",
+      "inspected_tool_calls": [
+        {
+          "arguments": {
+            "query": "基线消息"
+          },
+          "call_id": "call-search",
+          "name": "web_search",
+          "result": {
+            "items": [
+              "结果一"
+            ]
+          },
+          "status": "completed"
+        },
+        {
+          "arguments": {
+            "text": "找到结果一。"
+          },
+          "call_id": "call-reply",
+          "name": "reply",
+          "result": "已发送",
+          "status": "completed"
+        }
+      ],
+      "interrupt_accepted": false,
+      "interrupt_reason": "",
+      "lifecycle": [
+        {
+          "current_state": "starting",
+          "previous_state": "new",
+          "reason": "",
+          "sequence": 1
+        },
+        {
+          "current_state": "running",
+          "previous_state": "starting",
+          "reason": "",
+          "sequence": 2
+        },
+        {
+          "current_state": "stopping",
+          "previous_state": "running",
+          "reason": "",
+          "sequence": 3
+        },
+        {
+          "current_state": "stopped",
+          "previous_state": "stopping",
+          "reason": "",
+          "sequence": 4
+        }
+      ],
+      "pending_reset": {
+        "pending_events": 0,
+        "pending_injections": 0,
+        "queued_events": 0
+      },
+      "replace_count": 1,
+      "request_count": 3,
+      "routes": [
+        {
+          "enable_thinking": "false",
+          "max_tokens": 512,
+          "model_id": "fixture-model",
+          "profile_id": "fixture-profile",
+          "provider_id": "fixture-provider",
+          "route_id": "reply:runtime-baseline",
+          "temperature": 0.2,
+          "timeout_seconds": 30
+        }
+      ],
+      "runtime_id": "fake:multi-round-tools",
+      "tool_names": [
+        "reply",
+        "web_search"
+      ],
+      "tool_policy": {
+        "guard_installed": true,
+        "missing": [],
+        "ready": true,
+        "schema_filter_installed": true
+      },
+      "turns": [
+        {
+          "events": [
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 1,
+              "status": "accepted",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 2,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "tool_activity",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 3,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": {
+                "arguments": {
+                  "query": "基线消息"
+                },
+                "call_id": "call-search",
+                "name": "web_search",
+                "result": null,
+                "status": "requested"
+              },
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "end",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 4,
+              "status": "succeeded",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-tools",
+              "usage": null
+            }
+          ],
+          "request": {
+            "content": "查一下基线消息",
+            "context": {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "capabilities": [
+                "memory",
+                "tools"
+              ],
+              "chat_type": "private",
+              "correlation_id": "correlation-tools",
+              "deadline_at": "2026-08-03T12:00:30+08:00",
+              "features": [
+                {
+                  "enabled": false,
+                  "name": "sandbox",
+                  "source": "behavior_fixture"
+                }
+              ],
+              "message_id": "message-tools",
+              "plans": [
+                {
+                  "identity": "prompt-plan:runtime-baseline",
+                  "kind": "prompt",
+                  "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                {
+                  "identity": "tool-plan:runtime-baseline",
+                  "kind": "tool",
+                  "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+                }
+              ],
+              "principal": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "request_id": "req-tools",
+              "run_id": "run-tools",
+              "session_id": "private_runtime-baseline-user",
+              "trace_id": "trace-tools",
+              "turn_id": "turn-tools"
+            },
+            "event_attributes": [
+              {
+                "key": "entrypoint",
+                "value": "chat"
+              }
+            ],
+            "kind": "user_input",
+            "stream": false
+          },
+          "result": {
+            "messages": [
+              {
+                "content": "必要时使用工具，并最终调用 reply。",
+                "name": "",
+                "role": "system",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "查一下基线消息",
+                "name": "",
+                "role": "user",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "",
+                "name": "",
+                "role": "assistant",
+                "tool_call_id": "",
+                "tool_calls": [
+                  {
+                    "arguments": {
+                      "query": "基线消息"
+                    },
+                    "call_id": "call-search",
+                    "name": "web_search",
+                    "result": null,
+                    "status": "requested"
+                  }
+                ]
+              }
+            ],
+            "raw_result": "tool-requested",
+            "tool_calls": [
+              {
+                "arguments": {
+                  "query": "基线消息"
+                },
+                "call_id": "call-search",
+                "name": "web_search",
+                "result": null,
+                "status": "requested"
+              }
+            ]
+          }
+        },
+        {
+          "events": [
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 1,
+              "status": "accepted",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 2,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "tool_activity",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 3,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": {
+                "arguments": {
+                  "query": "基线消息"
+                },
+                "call_id": "call-search",
+                "name": "web_search",
+                "result": {
+                  "items": [
+                    "结果一"
+                  ]
+                },
+                "status": "completed"
+              },
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "tool_activity",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 4,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": {
+                "arguments": {
+                  "text": "找到结果一。"
+                },
+                "call_id": "call-reply",
+                "name": "reply",
+                "result": null,
+                "status": "requested"
+              },
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "end",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 5,
+              "status": "succeeded",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-tools",
+              "usage": null
+            }
+          ],
+          "request": {
+            "content": {
+              "call_id": "call-search",
+              "result": {
+                "items": [
+                  "结果一"
+                ]
+              }
+            },
+            "context": {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "capabilities": [
+                "memory",
+                "tools"
+              ],
+              "chat_type": "private",
+              "correlation_id": "correlation-tools",
+              "deadline_at": "2026-08-03T12:00:30+08:00",
+              "features": [
+                {
+                  "enabled": false,
+                  "name": "sandbox",
+                  "source": "behavior_fixture"
+                }
+              ],
+              "message_id": "message-tools",
+              "plans": [
+                {
+                  "identity": "prompt-plan:runtime-baseline",
+                  "kind": "prompt",
+                  "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                {
+                  "identity": "tool-plan:runtime-baseline",
+                  "kind": "tool",
+                  "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+                }
+              ],
+              "principal": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "request_id": "req-tools",
+              "run_id": "run-tools",
+              "session_id": "private_runtime-baseline-user",
+              "trace_id": "trace-tools",
+              "turn_id": "turn-tools"
+            },
+            "event_attributes": [
+              {
+                "key": "tool_name",
+                "value": "web_search"
+              }
+            ],
+            "kind": "continue",
+            "stream": false
+          },
+          "result": {
+            "messages": [
+              {
+                "content": "必要时使用工具，并最终调用 reply。",
+                "name": "",
+                "role": "system",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "查一下基线消息",
+                "name": "",
+                "role": "user",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "",
+                "name": "",
+                "role": "assistant",
+                "tool_call_id": "",
+                "tool_calls": [
+                  {
+                    "arguments": {
+                      "query": "基线消息"
+                    },
+                    "call_id": "call-search",
+                    "name": "web_search",
+                    "result": null,
+                    "status": "requested"
+                  }
+                ]
+              },
+              {
+                "content": {
+                  "items": [
+                    "结果一"
+                  ]
+                },
+                "name": "web_search",
+                "role": "tool",
+                "tool_call_id": "call-search",
+                "tool_calls": []
+              },
+              {
+                "content": "",
+                "name": "",
+                "role": "assistant",
+                "tool_call_id": "",
+                "tool_calls": [
+                  {
+                    "arguments": {
+                      "text": "找到结果一。"
+                    },
+                    "call_id": "call-reply",
+                    "name": "reply",
+                    "result": null,
+                    "status": "requested"
+                  }
+                ]
+              }
+            ],
+            "raw_result": "reply-requested",
+            "tool_calls": [
+              {
+                "arguments": {
+                  "query": "基线消息"
+                },
+                "call_id": "call-search",
+                "name": "web_search",
+                "result": {
+                  "items": [
+                    "结果一"
+                  ]
+                },
+                "status": "completed"
+              },
+              {
+                "arguments": {
+                  "text": "找到结果一。"
+                },
+                "call_id": "call-reply",
+                "name": "reply",
+                "result": null,
+                "status": "requested"
+              }
+            ]
+          }
+        },
+        {
+          "events": [
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 1,
+              "status": "accepted",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 2,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "tool_activity",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 3,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": {
+                "arguments": {
+                  "query": "基线消息"
+                },
+                "call_id": "call-search",
+                "name": "web_search",
+                "result": {
+                  "items": [
+                    "结果一"
+                  ]
+                },
+                "status": "completed"
+              },
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "tool_activity",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 4,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": {
+                "arguments": {
+                  "text": "找到结果一。"
+                },
+                "call_id": "call-reply",
+                "name": "reply",
+                "result": "已发送",
+                "status": "completed"
+              },
+              "turn_id": "turn-tools",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-tools",
+              "error": null,
+              "kind": "end",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-tools",
+              "sequence": 5,
+              "status": "succeeded",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-tools",
+              "usage": null
+            }
+          ],
+          "request": {
+            "content": {
+              "call_id": "call-reply",
+              "result": "已发送"
+            },
+            "context": {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "capabilities": [
+                "memory",
+                "tools"
+              ],
+              "chat_type": "private",
+              "correlation_id": "correlation-tools",
+              "deadline_at": "2026-08-03T12:00:30+08:00",
+              "features": [
+                {
+                  "enabled": false,
+                  "name": "sandbox",
+                  "source": "behavior_fixture"
+                }
+              ],
+              "message_id": "message-tools",
+              "plans": [
+                {
+                  "identity": "prompt-plan:runtime-baseline",
+                  "kind": "prompt",
+                  "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                {
+                  "identity": "tool-plan:runtime-baseline",
+                  "kind": "tool",
+                  "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+                }
+              ],
+              "principal": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "request_id": "req-tools",
+              "run_id": "run-tools",
+              "session_id": "private_runtime-baseline-user",
+              "trace_id": "trace-tools",
+              "turn_id": "turn-tools"
+            },
+            "event_attributes": [
+              {
+                "key": "tool_name",
+                "value": "reply"
+              }
+            ],
+            "kind": "continue",
+            "stream": false
+          },
+          "result": {
+            "messages": [
+              {
+                "content": "必要时使用工具，并最终调用 reply。",
+                "name": "",
+                "role": "system",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "查一下基线消息",
+                "name": "",
+                "role": "user",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "",
+                "name": "",
+                "role": "assistant",
+                "tool_call_id": "",
+                "tool_calls": [
+                  {
+                    "arguments": {
+                      "query": "基线消息"
+                    },
+                    "call_id": "call-search",
+                    "name": "web_search",
+                    "result": null,
+                    "status": "requested"
+                  }
+                ]
+              },
+              {
+                "content": {
+                  "items": [
+                    "结果一"
+                  ]
+                },
+                "name": "web_search",
+                "role": "tool",
+                "tool_call_id": "call-search",
+                "tool_calls": []
+              },
+              {
+                "content": "",
+                "name": "",
+                "role": "assistant",
+                "tool_call_id": "",
+                "tool_calls": [
+                  {
+                    "arguments": {
+                      "text": "找到结果一。"
+                    },
+                    "call_id": "call-reply",
+                    "name": "reply",
+                    "result": null,
+                    "status": "requested"
+                  }
+                ]
+              },
+              {
+                "content": "已发送",
+                "name": "reply",
+                "role": "tool",
+                "tool_call_id": "call-reply",
+                "tool_calls": []
+              }
+            ],
+            "raw_result": "completed",
+            "tool_calls": [
+              {
+                "arguments": {
+                  "query": "基线消息"
+                },
+                "call_id": "call-search",
+                "name": "web_search",
+                "result": {
+                  "items": [
+                    "结果一"
+                  ]
+                },
+                "status": "completed"
+              },
+              {
+                "arguments": {
+                  "text": "找到结果一。"
+                },
+                "call_id": "call-reply",
+                "name": "reply",
+                "result": "已发送",
+                "status": "completed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "conversation": [
+        {
+          "content": "你是中文助手。",
+          "name": "",
+          "role": "system",
+          "tool_call_id": "",
+          "tool_calls": []
+        },
+        {
+          "content": "开始一个长回复",
+          "name": "",
+          "role": "user",
+          "tool_call_id": "",
+          "tool_calls": []
+        },
+        {
+          "content": "部分",
+          "name": "",
+          "role": "assistant",
+          "tool_call_id": "",
+          "tool_calls": []
+        }
+      ],
+      "final_state": "stopped",
+      "id": "interrupted_stream",
+      "inspected_tool_calls": [],
+      "interrupt_accepted": true,
+      "interrupt_reason": "client_disconnect",
+      "lifecycle": [
+        {
+          "current_state": "starting",
+          "previous_state": "new",
+          "reason": "",
+          "sequence": 1
+        },
+        {
+          "current_state": "running",
+          "previous_state": "starting",
+          "reason": "",
+          "sequence": 2
+        },
+        {
+          "current_state": "stopping",
+          "previous_state": "running",
+          "reason": "",
+          "sequence": 3
+        },
+        {
+          "current_state": "stopped",
+          "previous_state": "stopping",
+          "reason": "",
+          "sequence": 4
+        }
+      ],
+      "pending_reset": {
+        "pending_events": 0,
+        "pending_injections": 0,
+        "queued_events": 0
+      },
+      "replace_count": 1,
+      "request_count": 1,
+      "routes": [
+        {
+          "enable_thinking": "false",
+          "max_tokens": 512,
+          "model_id": "fixture-model",
+          "profile_id": "fixture-profile",
+          "provider_id": "fixture-provider",
+          "route_id": "reply:runtime-baseline",
+          "temperature": 0.2,
+          "timeout_seconds": 30
+        }
+      ],
+      "runtime_id": "fake:interrupted-stream",
+      "tool_names": [
+        "reply"
+      ],
+      "tool_policy": {
+        "guard_installed": true,
+        "missing": [],
+        "ready": true,
+        "schema_filter_installed": true
+      },
+      "turns": [
+        {
+          "events": [
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-interrupt",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-interrupt",
+              "sequence": 1,
+              "status": "accepted",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-interrupt",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-interrupt",
+              "error": null,
+              "kind": "status",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-interrupt",
+              "sequence": 2,
+              "status": "running",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-interrupt",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-interrupt",
+              "error": null,
+              "kind": "text_delta",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-interrupt",
+              "sequence": 3,
+              "status": "running",
+              "text_delta": "部分",
+              "tool_call": null,
+              "turn_id": "turn-interrupt",
+              "usage": null
+            },
+            {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "artifact": null,
+              "attributes": [],
+              "correlation_id": "correlation-interrupt",
+              "error": null,
+              "kind": "end",
+              "owner": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "run_id": "run-interrupt",
+              "sequence": 4,
+              "status": "succeeded",
+              "text_delta": "",
+              "tool_call": null,
+              "turn_id": "turn-interrupt",
+              "usage": null
+            }
+          ],
+          "request": {
+            "content": "开始一个长回复",
+            "context": {
+              "actor": {
+                "actor_id": "runtime-baseline-user",
+                "actor_type": "user",
+                "parent_actor_id": ""
+              },
+              "capabilities": [
+                "memory",
+                "tools"
+              ],
+              "chat_type": "private",
+              "correlation_id": "correlation-interrupt",
+              "deadline_at": "2026-08-03T12:00:30+08:00",
+              "features": [
+                {
+                  "enabled": false,
+                  "name": "sandbox",
+                  "source": "behavior_fixture"
+                }
+              ],
+              "message_id": "message-interrupt",
+              "plans": [
+                {
+                  "identity": "prompt-plan:runtime-baseline",
+                  "kind": "prompt",
+                  "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                {
+                  "identity": "tool-plan:runtime-baseline",
+                  "kind": "tool",
+                  "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+                }
+              ],
+              "principal": {
+                "owner_id": "runtime-baseline-user",
+                "owner_type": "user",
+                "platform": "qq"
+              },
+              "request_id": "req-interrupt",
+              "run_id": "run-interrupt",
+              "session_id": "private_runtime-baseline-user",
+              "trace_id": "trace-interrupt",
+              "turn_id": "turn-interrupt"
+            },
+            "event_attributes": [
+              {
+                "key": "entrypoint",
+                "value": "chat_stream"
+              }
+            ],
+            "kind": "user_input",
+            "stream": true
+          },
+          "result": {
+            "messages": [
+              {
+                "content": "你是中文助手。",
+                "name": "",
+                "role": "system",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "开始一个长回复",
+                "name": "",
+                "role": "user",
+                "tool_call_id": "",
+                "tool_calls": []
+              },
+              {
+                "content": "部分",
+                "name": "",
+                "role": "assistant",
+                "tool_call_id": "",
+                "tool_calls": []
+              }
+            ],
+            "raw_result": {
+              "events": [
+                {
+                  "status": "delta",
+                  "text": "部分"
+                }
+              ]
+            },
+            "tool_calls": []
+          }
+        }
+      ]
+    }
+  ],
+  "framework_dependency": "none",
+  "runtime_contract": "core.agent_runtime.AgentRuntimePort",
+  "schema_version": 1
+}

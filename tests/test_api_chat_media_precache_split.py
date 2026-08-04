@@ -113,3 +113,34 @@ def test_schedule_image_precache_adds_precache_task_with_normalized_files():
             },
         )
     ]
+
+
+def test_schedule_image_precache_skips_when_runtime_is_unavailable(monkeypatch, caplog):
+    from api.chat_media_precache import schedule_image_precache
+    from core.media_preprocess_runtime import ImagePrecacheRuntimeUnavailableError
+
+    class FakeBackgroundTasks:
+        def __init__(self):
+            self.calls = []
+
+        def add_task(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    def unavailable_port():
+        raise ImagePrecacheRuntimeUnavailableError("测试环境未启动")
+
+    monkeypatch.setattr(
+        "core.media_preprocess_runtime.get_image_precache_port",
+        unavailable_port,
+    )
+    tasks = FakeBackgroundTasks()
+
+    schedule_image_precache(
+        tasks,
+        ["img://a"],
+        source_type="chat_request",
+        source_name_prefix="session_message",
+    )
+
+    assert tasks.calls == []
+    assert "图片预缓存运行时未启动" in caplog.text

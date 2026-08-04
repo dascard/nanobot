@@ -16,7 +16,7 @@ from foundation.message_contract import (
     InboundMessageContract,
     MessageContractError,
 )
-from nanobot_kt.bridge import get_bridge as _default_get_bridge
+from core.agent_runtime.gateway import get_agent_gateway as _default_get_bridge
 
 router = APIRouter(tags=["group-message"])
 
@@ -29,9 +29,10 @@ def _current_bridge_provider():
 
 
 def _precache_image_sources(*args: Any, **kwargs: Any):
-    from nanobot_kt.image_pipeline import precache_image_sources
+    from core.media_preprocess_runtime import get_image_precache_port
 
-    return precache_image_sources(*args, **kwargs)
+    sources = tuple(args[0]) if args else tuple(kwargs.pop("sources", ()))
+    return get_image_precache_port().precache(sources, **kwargs)
 
 
 def _normalize_request_client_meta(req: Any, *, expected_chat_type: str) -> dict[str, Any]:

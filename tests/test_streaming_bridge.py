@@ -55,12 +55,28 @@ def _make_request_scope_bridge(monkeypatch, *, prompt_error, finish_calls):
     bridge = NanobotBridge.__new__(NanobotBridge)
     bridge.creature_path = "creatures/nanobot"
     bridge._output = output
+    class FakeConversation:
+        def __init__(self):
+            self.messages = []
+
+        def get_messages(self):
+            return list(self.messages)
+
+        def clear(self, keep_system=True):
+            if not keep_system:
+                self.messages.clear()
+
+        def append(self, role, content, **kwargs):
+            self.messages.append(
+                SimpleNamespace(role=role, content=content, **kwargs)
+            )
+
     bridge._agent = SimpleNamespace(
         controller=SimpleNamespace(
-            conversation=SimpleNamespace(_messages=[]),
+            conversation=FakeConversation(),
         ),
         executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
-        _interrupt_requested=False,
+        interrupt=lambda: None,
     )
     bridge._session_locks = {}
     bridge._last_prompt_render_meta = {}
@@ -68,10 +84,6 @@ def _make_request_scope_bridge(monkeypatch, *, prompt_error, finish_calls):
     async def fail_prompt_runtime(_prompt_input):
         raise prompt_error
 
-    monkeypatch.setattr(
-        "nanobot_kt.kt_adapter.reset_conversation_to_system",
-        lambda _agent: (0, 0),
-    )
     monkeypatch.setattr("core.tracing.new_trace_id", lambda: "trace-request")
     monkeypatch.setattr(
         "core.tracing.RunTracer.start_run",
@@ -232,7 +244,7 @@ async def test_cancelled_waiter_does_not_disable_active_request_stream():
     await lock.acquire()
 
     bridge = NanobotBridge.__new__(NanobotBridge)
-    bridge._agent = SimpleNamespace(_interrupt_requested=False)
+    bridge._agent = SimpleNamespace(interrupt=lambda: None)
     bridge._output = output
     bridge._session_locks = {"same-session": lock}
     waiting_task = asyncio.create_task(
@@ -403,7 +415,7 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
                 "total_tokens": 0,
             }
 
-        async def _process_event(self, event):
+        async def inject_event(self, event):
             await self._process_event_with_controller(event, self.controller)
             self.controller.conversation.append(
                 "assistant",
@@ -503,18 +515,29 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
     )
     monkeypatch.setattr("core.settings_service.settings.get", lambda key, default=None: default)
     monkeypatch.setattr("nanobot_kt.prompt_runtime.build_prompt_runtime", fake_build_prompt_runtime)
+    unit_route = SimpleNamespace(
+        provider_id="unit",
+        registry_provider="unit",
+        driver_type="openai",
+        profile_id="",
+        timeout=1.0,
+        temperature=None,
+        max_tokens=None,
+        enable_thinking="auto",
+        base_url="http://unit.test/v1",
+        api_key="test",
+    )
     monkeypatch.setattr(
-        "nanobot_kt.model_runtime.resolve_reply_route_plan",
-        lambda **_kwargs: SimpleNamespace(
-            provider_id="unit",
-            registry_provider="unit",
-            timeout=1.0,
-            temperature=None,
-            max_tokens=None,
-            enable_thinking="auto",
-            base_url="http://unit.test/v1",
-            api_key="test",
-        ),
+        "nanobot_kt.model_runtime.resolve_reply_route_plans",
+        lambda **_kwargs: [unit_route],
+    )
+
+    def apply_unit_route(agent, route, _transport, **_kwargs):
+        agent.controller.llm.config.model = route.model_id
+
+    monkeypatch.setattr(
+        "nanobot_kt.model_provider_adapter.apply_kt_preset_model_route",
+        apply_unit_route,
     )
     monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient", FakeNewAPIClient)
     monkeypatch.setattr(

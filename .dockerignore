@@ -29,17 +29,15 @@ webui/data/
 
 # 测试、文档和仅供开发使用的项目
 tests/
-vendor/KohakuTerrarium/tests/
-vendor/KohakuTerrarium/build/
 docs/
 design-system/
 cc2codex/
 patches/**
-!patches/kohakuterrarium/
-!patches/kohakuterrarium/stream-message-flag.patch
 test_*.py
 goal.md
 prompt-v2-*-snapshot.md
+requirements-kt.in
+requirements-kt.lock
 
 # 运行数据、模型、凭据和生成产物不得进入构建上下文
 .env

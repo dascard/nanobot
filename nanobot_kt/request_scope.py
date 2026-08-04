@@ -3,22 +3,24 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from contextvars import ContextVar, Token
+from contextvars import Token
 from types import TracebackType
 from typing import Any
+
+from core.agent_runtime.request_scope import (
+    is_runtime_request_dry_run,
+    reset_runtime_request_dry_run,
+    set_runtime_request_dry_run,
+)
 
 
 logger = logging.getLogger("nanobot.kt.request_scope")
 
-_REQUEST_DRY_RUN: ContextVar[bool] = ContextVar(
-    "nanobot_bridge_request_dry_run",
-    default=False,
-)
-
 
 def is_request_dry_run() -> bool:
-    """返回当前异步请求是否处于只读 dry-run。"""
-    return _REQUEST_DRY_RUN.get()
+    """兼容旧导入；dry-run 的事实源已迁入 Runtime Core。"""
+
+    return is_runtime_request_dry_run()
 
 
 class BridgeRequestScope:
@@ -43,7 +45,7 @@ class BridgeRequestScope:
     async def __aenter__(self) -> "BridgeRequestScope":
         await self._lock.acquire()
         self._lock_acquired = True
-        self._dry_run_token = _REQUEST_DRY_RUN.set(self._dry_run)
+        self._dry_run_token = set_runtime_request_dry_run(self._dry_run)
         return self
 
     async def __aexit__(
@@ -124,7 +126,7 @@ class BridgeRequestScope:
         finally:
             try:
                 if self._dry_run_token is not None:
-                    _REQUEST_DRY_RUN.reset(self._dry_run_token)
+                    reset_runtime_request_dry_run(self._dry_run_token)
                     self._dry_run_token = None
             finally:
                 if self._lock_acquired:
