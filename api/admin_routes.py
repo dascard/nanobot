@@ -54,6 +54,7 @@ from api.admin.group_learning_routes import (
 from api.admin.runtime_module_routes import (
     router as runtime_module_router,
 )
+from api.admin.run_evidence_routes import router as run_evidence_router
 from api.admin.log_routes import (
     FrontendErrorBody as FrontendErrorBody,
     _group_log_level_events as _group_log_level_events,
@@ -322,6 +323,7 @@ router.include_router(proactive_outreach_router)
 router.include_router(outbound_delivery_router)
 router.include_router(reply_router)
 router.include_router(eval_router)
+router.include_router(run_evidence_router)
 router.include_router(trace_router)
 router.include_router(log_router)
 

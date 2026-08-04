@@ -11,6 +11,16 @@ _TRACE_ROUTE_SIGNATURES = (
 )
 
 
+_RUN_EVIDENCE_ROUTE_SIGNATURES = (
+    ("GET", "/api/v1/admin/agent-runs/{run_id}/evidence/governance"),
+    ("GET", "/api/v1/admin/agent-runs/{run_id}/evidence/export-manifest"),
+    ("PUT", "/api/v1/admin/agent-runs/{run_id}/evidence/legal-holds/{hold_id}"),
+    ("DELETE", "/api/v1/admin/agent-runs/{run_id}/evidence/legal-holds/{hold_id}"),
+    ("POST", "/api/v1/admin/agent-runs/{run_id}/evidence/erasure-preview"),
+    ("DELETE", "/api/v1/admin/agent-runs/{run_id}/evidence"),
+)
+
+
 _LOG_ROUTE_SIGNATURES = (
     ("GET", "/api/v1/admin/audit-logs"),
     ("GET", "/api/v1/admin/logs"),
@@ -86,6 +96,16 @@ def test_admin_log_routes_are_registered_from_split_module():
         assert {route.endpoint.__module__ for route in routes} == {"api.admin.log_routes"}
 
 
+def test_admin_run_evidence_routes_are_registered_from_split_module():
+    for method, path in _RUN_EVIDENCE_ROUTE_SIGNATURES:
+        routes = _admin_routes_for(path, method)
+
+        assert routes, f"missing route: {method} {path}"
+        assert {route.endpoint.__module__ for route in routes} == {
+            "api.admin.run_evidence_routes"
+        }
+
+
 def test_legacy_admin_routes_observability_imports_still_work():
     from api import admin_routes
     from api.admin import log_routes, trace_routes
@@ -129,7 +149,11 @@ def test_split_observability_routes_use_legacy_admin_token_monkeypatch(client, m
 
 
 def test_admin_observability_routes_are_not_registered_twice():
-    for method, path in _TRACE_ROUTE_SIGNATURES + _LOG_ROUTE_SIGNATURES:
+    for method, path in (
+        _TRACE_ROUTE_SIGNATURES
+        + _RUN_EVIDENCE_ROUTE_SIGNATURES
+        + _LOG_ROUTE_SIGNATURES
+    ):
         assert len(_admin_routes_for(path, method)) == 1, f"{method} {path}"
 
 

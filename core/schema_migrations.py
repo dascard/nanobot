@@ -99,6 +99,7 @@ _LLM_CACHE_DIAGNOSTICS_V2_VERSION = (
     "20260803_llm_cache_miss_and_shape"
 )
 _RUN_LEDGER_V1_VERSION = "20260804_run_event_ledger_v1"
+_RUN_EVIDENCE_GOVERNANCE_V1_VERSION = "20260804_run_evidence_governance_v1"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3577,6 +3578,56 @@ def _run_event_ledger_v1(
     ))
 
 
+def _run_evidence_governance_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建证据治理表，并把事实删除收敛为短事务授权路径。"""
+
+    from core.db.models.run_ledger import (
+        RunLedgerErasureAuthorization,
+        RunLedgerErasureReceipt,
+        RunLedgerLegalHold,
+    )
+
+    for model in (
+        RunLedgerLegalHold,
+        RunLedgerErasureAuthorization,
+        RunLedgerErasureReceipt,
+    ):
+        model.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+
+    conn.execute(text("DROP TRIGGER IF EXISTS trg_run_ledger_events_no_delete"))
+    conn.execute(text(
+        "CREATE TRIGGER trg_run_ledger_events_no_delete "
+        "BEFORE DELETE ON run_ledger_events "
+        "WHEN NOT EXISTS ("
+        "SELECT 1 FROM run_ledger_erasure_authorizations AS authorization "
+        "WHERE authorization.run_id = OLD.run_id "
+        "AND datetime(authorization.expires_at) > CURRENT_TIMESTAMP"
+        ") "
+        "BEGIN "
+        "SELECT RAISE(ABORT, 'run_ledger_events_append_only'); "
+        "END"
+    ))
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS "
+        "trg_run_ledger_stream_heads_no_delete "
+        "BEFORE DELETE ON run_ledger_stream_heads "
+        "WHEN NOT EXISTS ("
+        "SELECT 1 FROM run_ledger_erasure_authorizations AS authorization "
+        "WHERE authorization.run_id = OLD.run_id "
+        "AND datetime(authorization.expires_at) > CURRENT_TIMESTAMP"
+        ") "
+        "BEGIN "
+        "SELECT RAISE(ABORT, 'run_ledger_stream_heads_erasure_guard'); "
+        "END"
+    ))
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -4529,6 +4580,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _RUN_LEDGER_V1_VERSION,
         "versioned append-only run event ledger",
         _run_event_ledger_v1,
+    ),
+    (
+        _RUN_EVIDENCE_GOVERNANCE_V1_VERSION,
+        "run evidence retention access export and erasure governance",
+        _run_evidence_governance_v1,
     ),
 ]
 

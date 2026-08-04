@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 4.1，Run/Event Ledger 已成为执行写入与管理端权威事实源）
+> 状态：执行中（阶段 4.2，运行证据保留、访问、导出与删除治理已完成）
 >
 > 建立日期：2026-08-03
 >
@@ -583,12 +583,28 @@ Native Runtime 能独立提供主回复链路。从工作区移除的 submodule 
 
 - [x] 默认记录 hash、大小、时间、状态、模型/工具标识和脱敏摘要。
 - [x] 不记录 API key、OAuth token、隐藏推理和无必要的完整工具输出。
-- [ ] 提供保留期、ACL、导出清单和删除策略。
+- [x] 提供保留期、ACL、导出清单和删除策略。
 
 上述两项仅指新 Run Ledger 合同：payload 只允许有界 JSON scalar，敏感正文类字段名在合同层拒绝，
 输入、输出、错误、工具参数／结果和权限资源均只写 UTF-8 大小、字符数与 SHA-256；测试覆盖了原文不落账。
 既有 LLM／Tool Trace 仍按原兼容合同保存自己的诊断内容，不因 Ledger shadow 双写而自动满足新的保留、
-ACL、导出或删除要求；这些治理能力及旧证据迁移仍属于 4.2 后续任务。
+ACL、导出或删除要求。阶段 4.2 已新增框架无关的精确 owner／service／admin ACL、成功／失败／不确定终态
+差异化保留期、安全导出清单、法律保留和受控删除：owner 不明的 legacy Run 只允许管理员读取，Service
+身份必须精确绑定单个 Run 且不能删除；导出只包含 Ledger 事件元数据、摘要链、投影以及旧 Trace 的按表
+数量和聚合摘要，不导出 Ledger payload、旧 Trace 行、隐藏推理或秘密值。
+
+删除必须针对终态 Run，法律保留时一律拒绝；保留期到期和隐私请求使用不同的显式 reason code，并同时
+要求 request ID、原始 Run ID 二次确认和当前导出清单 SHA-256。SQLite trigger 继续默认拒绝 Event／Head
+删除，只在五分钟短事务授权存在时允许治理服务删除完整流；服务在同一事务中核对 high-water、删除
+Ledger、AgentRun、Tool、Prompt、LLM、Reply Contract 和 Runtime Telemetry 证据，并写入只含 Run／请求
+哈希、数量、策略版本和终态事件摘要的永久回执。重复请求只重放同一回执，变更后的清单、复用 request ID、
+活跃 Run、过期授权、部分删除和跨 owner 访问均 fail closed。
+
+验证证据：运行证据治理、Ledger、Schema Migration、受管设置、管理路由、OpenAPI、行为 Golden 和
+Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终完整
+`python -m pytest tests/ -v` 为 6507 passed、12 skipped、0 failed。真实 SQLite migration 下已验证普通删除、
+协调头删除和过期授权删除均被 trigger 拒绝，治理服务可在受控授权事务内完整删除且不遗留授权行；安全
+导出与删除回执测试确认旧 Trace 正文和 Authorization 内容不会进入清单或永久回执。
 
 #### 4.3 Checkpoint、Resume、Fork 和 Rewind
 

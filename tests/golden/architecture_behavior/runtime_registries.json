@@ -6093,6 +6093,60 @@
       "value_type": "float"
     },
     {
+      "category": "observability",
+      "dangerous": true,
+      "default": 365,
+      "env_name": "NANOBOT_RUN_LEDGER_RETENTION_AMBIGUOUS_DAYS",
+      "key": "run_ledger.retention_ambiguous_days",
+      "owner_module": "core.run_ledger",
+      "restart_required": false,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "observability",
+      "dangerous": true,
+      "default": 90,
+      "env_name": "NANOBOT_RUN_LEDGER_RETENTION_FAILED_DAYS",
+      "key": "run_ledger.retention_failed_days",
+      "owner_module": "core.run_ledger",
+      "restart_required": false,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "observability",
+      "dangerous": true,
+      "default": 30,
+      "env_name": "NANOBOT_RUN_LEDGER_RETENTION_SUCCEEDED_DAYS",
+      "key": "run_ledger.retention_succeeded_days",
+      "owner_module": "core.run_ledger",
+      "restart_required": false,
+      "safety_class": "dangerous",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
       "category": "system",
       "dangerous": true,
       "default": "./data",

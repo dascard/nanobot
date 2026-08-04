@@ -117,6 +117,16 @@ def _validate_agent_runtime_settings(values: Mapping[str, object]) -> None:
         raise ValueError("KT 未启用时不能配置 KT 默认值或灰度范围")
 
 
+def _validate_run_evidence_retention_settings(
+    values: Mapping[str, object],
+) -> None:
+    succeeded = int(values.get("run_ledger.retention_succeeded_days", 30))
+    failed = int(values.get("run_ledger.retention_failed_days", 90))
+    ambiguous = int(values.get("run_ledger.retention_ambiguous_days", 365))
+    if not succeeded <= failed <= ambiguous:
+        raise ValueError("Run 证据保留期必须满足成功 <= 失败 <= 不确定")
+
+
 SETTING_DEFS: dict[str, SettingDef] = {
     "runtime.data_dir": SettingDef(
         key="runtime.data_dir",
@@ -205,6 +215,45 @@ SETTING_DEFS: dict[str, SettingDef] = {
         source_precedence=("environment", "default"),
         owner_module="runtime.agent",
         safety_class="invariant",
+    ),
+    "run_ledger.retention_succeeded_days": SettingDef(
+        key="run_ledger.retention_succeeded_days",
+        env_name="NANOBOT_RUN_LEDGER_RETENTION_SUCCEEDED_DAYS",
+        default=30,
+        value_type="int",
+        category="observability",
+        description="成功 Run 的证据保留天数",
+        min_value=1,
+        max_value=3650,
+        dangerous=True,
+        owner_module="core.run_ledger",
+        cross_field_validator=_validate_run_evidence_retention_settings,
+    ),
+    "run_ledger.retention_failed_days": SettingDef(
+        key="run_ledger.retention_failed_days",
+        env_name="NANOBOT_RUN_LEDGER_RETENTION_FAILED_DAYS",
+        default=90,
+        value_type="int",
+        category="observability",
+        description="失败、取消和超时 Run 的证据保留天数",
+        min_value=1,
+        max_value=3650,
+        dangerous=True,
+        owner_module="core.run_ledger",
+        cross_field_validator=_validate_run_evidence_retention_settings,
+    ),
+    "run_ledger.retention_ambiguous_days": SettingDef(
+        key="run_ledger.retention_ambiguous_days",
+        env_name="NANOBOT_RUN_LEDGER_RETENTION_AMBIGUOUS_DAYS",
+        default=365,
+        value_type="int",
+        category="observability",
+        description="外部副作用结果不确定 Run 的证据保留天数",
+        min_value=1,
+        max_value=3650,
+        dangerous=True,
+        owner_module="core.run_ledger",
+        cross_field_validator=_validate_run_evidence_retention_settings,
     ),
     "log.level": SettingDef(
         key="log.level",

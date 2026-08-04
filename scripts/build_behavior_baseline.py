@@ -76,6 +76,9 @@ PROACTIVE_OUTREACH_PROMPT_BASELINE_SHA256 = (
 PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256 = (
     "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552"
 )
+RUN_EVIDENCE_RETENTION_REGISTRY_BASELINE_SHA256 = (
+    "23e82ea5390f676e7ac8ae7b478f0cfc9e2b6f5c46ee012951d9314f15b9591a"
+)
 
 SNAPSHOT_CLASSIFICATIONS = {
     "agent_runtime": "preserve",
@@ -1367,12 +1370,27 @@ def _manifest(
                 "before_sha256": (
                     PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["runtime_registries"]
+                "after_sha256": (
+                    RUN_EVIDENCE_RETENTION_REGISTRY_BASELINE_SHA256
                 ),
                 "reason": (
                     "升级主动外呼话题与 Judge 输出合同，登记独立质量复核"
                     "模型路由及其受管配置。"
+                ),
+            },
+            {
+                "id": "agent_harness_run_evidence_retention_registry",
+                "snapshot_id": "runtime_registries",
+                "stage": "Agent Harness 阶段 4.2",
+                "before_sha256": (
+                    RUN_EVIDENCE_RETENTION_REGISTRY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["runtime_registries"]
+                ),
+                "reason": (
+                    "登记成功、失败与不确定 Run 的差异化证据保留期；"
+                    "默认保留顺序和跨字段约束均 fail closed。"
                 ),
             },
         ],

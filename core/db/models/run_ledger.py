@@ -151,4 +151,92 @@ class RunLedgerStreamHead(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.now, index=True)
 
 
-__all__ = ["RunLedgerEventRow", "RunLedgerStreamHead"]
+class RunLedgerLegalHold(Base):
+    """对单个 Run 的显式法律／审计保留；释放只写时间，不删除历史。"""
+
+    __tablename__ = "run_ledger_legal_holds"
+    __table_args__ = (
+        Index(
+            "ix_run_ledger_legal_hold_active",
+            "run_id",
+            "released_at",
+        ),
+    )
+
+    hold_id = Column(String(160), primary_key=True)
+    run_id = Column(String(160), nullable=False, index=True)
+    reason_code = Column(String(64), nullable=False)
+    placed_by = Column(String(160), nullable=False)
+    placed_at = Column(DateTime, nullable=False, default=datetime.now)
+    released_by = Column(String(160), nullable=False, default="")
+    released_at = Column(DateTime, nullable=True)
+
+
+class RunLedgerErasureAuthorization(Base):
+    """SQLite 删除 trigger 使用的短事务授权，不是长期业务事实。"""
+
+    __tablename__ = "run_ledger_erasure_authorizations"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            name="uq_run_ledger_erasure_authorization_run",
+        ),
+        CheckConstraint(
+            "expected_event_count > 0",
+            name="ck_run_ledger_erasure_event_count_positive",
+        ),
+    )
+
+    authorization_id = Column(String(160), primary_key=True)
+    run_id = Column(String(160), nullable=False, index=True)
+    expected_event_count = Column(Integer, nullable=False)
+    requested_by = Column(String(160), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+
+class RunLedgerErasureReceipt(Base):
+    """删除后的最小回执；只保留摘要、数量和治理信息。"""
+
+    __tablename__ = "run_ledger_erasure_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id_sha256",
+            name="uq_run_ledger_erasure_receipt_request",
+        ),
+        CheckConstraint(
+            "ledger_event_count >= 0",
+            name="ck_run_ledger_erasure_receipt_event_count_nonnegative",
+        ),
+        Index(
+            "ix_run_ledger_erasure_receipt_erased_at",
+            "erased_at",
+        ),
+    )
+
+    receipt_id = Column(String(160), primary_key=True)
+    request_id_sha256 = Column(String(64), nullable=False)
+    request_fingerprint_sha256 = Column(String(64), nullable=False)
+    run_id_sha256 = Column(String(64), nullable=False, index=True)
+    manifest_sha256 = Column(String(64), nullable=False)
+    terminal_event_sha256 = Column(String(64), nullable=False, default="")
+    ledger_event_count = Column(Integer, nullable=False, default=0)
+    legacy_counts_json = Column(
+        Text,
+        nullable=False,
+        default="{}",
+        server_default=text("'{}'"),
+    )
+    reason_code = Column(String(64), nullable=False)
+    requested_by = Column(String(160), nullable=False)
+    policy_version = Column(String(160), nullable=False)
+    erased_at = Column(DateTime, nullable=False, default=datetime.now)
+
+
+__all__ = [
+    "RunLedgerErasureAuthorization",
+    "RunLedgerErasureReceipt",
+    "RunLedgerEventRow",
+    "RunLedgerLegalHold",
+    "RunLedgerStreamHead",
+]

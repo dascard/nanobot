@@ -66,7 +66,13 @@ from core.db.models.persona import (
     SystemPrompt,
 )
 from core.db.models.proactive import ProactiveOutreachLease, ProactiveOutreachLog
-from core.db.models.run_ledger import RunLedgerEventRow, RunLedgerStreamHead
+from core.db.models.run_ledger import (
+    RunLedgerErasureAuthorization,
+    RunLedgerErasureReceipt,
+    RunLedgerEventRow,
+    RunLedgerLegalHold,
+    RunLedgerStreamHead,
+)
 from core.db.models.session_memory import (
     ConversationBlock,
     ConversationBlockEpisode,
@@ -157,7 +163,10 @@ __all__ = [
     "ReplyEvalResult",
     "ReplyEvalRun",
     "RuntimeToolDecision",
+    "RunLedgerErasureAuthorization",
+    "RunLedgerErasureReceipt",
     "RunLedgerEventRow",
+    "RunLedgerLegalHold",
     "RunLedgerStreamHead",
     "SANDBOX_EXECUTION_PROFILES",
     "SANDBOX_LEASE_NONTERMINAL_STATUSES",

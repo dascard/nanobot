@@ -135,9 +135,17 @@
       "reason": "升级主动外呼话题与 Judge 输出合同，登记独立质量复核模型路由及其受管配置。",
       "snapshot_id": "runtime_registries",
       "stage": "主动外呼事实性治理"
+    },
+    {
+      "after_sha256": "fea0d0ef250eae8217fb4bbb84bf55f1ffdc99d442dcfecb3aa9d57afcd9c352",
+      "before_sha256": "23e82ea5390f676e7ac8ae7b478f0cfc9e2b6f5c46ee012951d9314f15b9591a",
+      "id": "agent_harness_run_evidence_retention_registry",
+      "reason": "登记成功、失败与不确定 Run 的差异化证据保留期；默认保留顺序和跨字段约束均 fail closed。",
+      "snapshot_id": "runtime_registries",
+      "stage": "Agent Harness 阶段 4.2"
     }
   ],
-  "baseline_git_commit": "0a3998313864b40f3193f2f0c8ac996558e5a034",
+  "baseline_git_commit": "b1e483c2a8d544d699fd280aa31a1d0d23803ccf",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -198,7 +206,7 @@
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "23e82ea5390f676e7ac8ae7b478f0cfc9e2b6f5c46ee012951d9314f15b9591a"
+      "sha256": "fea0d0ef250eae8217fb4bbb84bf55f1ffdc99d442dcfecb3aa9d57afcd9c352"
     },
     {
       "classification": "security_invariant",

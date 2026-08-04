@@ -235,7 +235,14 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     assert outreach_registry_change["before_sha256"] == (
         group_learning_rule_controls_change["after_sha256"]
     )
-    assert outreach_registry_change["after_sha256"] == _sha256(
+    evidence_registry_change = approved[
+        "agent_harness_run_evidence_retention_registry"
+    ]
+    assert outreach_registry_change["after_sha256"] == (
+        evidence_registry_change["before_sha256"]
+    )
+    assert evidence_registry_change["snapshot_id"] == "runtime_registries"
+    assert evidence_registry_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "runtime_registries.json"
     )
     prompt_snapshot = json.loads(
