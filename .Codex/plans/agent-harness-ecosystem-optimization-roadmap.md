@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 6.4 已完成，准备阶段 6.5）
+> 状态：执行中（阶段 6.5 已完成，准备阶段 7.1）
 >
 > 建立日期：2026-08-03
 >
@@ -974,13 +974,49 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 6.5 ACP、A2A 和 Headless 互操作试验
 
-- [ ] 评估 ACP 的 session、stream、tool activity 和 pending interaction 映射。
-- [ ] 评估 A2A 的 task、artifact 和状态交换。
-- [ ] 在 Agent Link 之外只实现薄 Adapter。
-- [ ] 内部事实源仍是 Nanobot Run/Event/Artifact 合同。
-- [ ] 通过兼容性和安全测试后再决定是否正式开放。
+- [x] 评估 ACP 的 session、stream、tool activity 和 pending interaction 映射。
+- [x] 评估 A2A 的 task、artifact 和状态交换。
+- [x] 在 Agent Link 之外只实现薄 Adapter。
+- [x] 内部事实源仍是 Nanobot Run/Event/Artifact 合同。
+- [x] 通过兼容性和安全测试后再决定是否正式开放。
 
 验收条件：Skill、MCP 和协议均可替换或停用；不存在凭据泄漏、隐式覆盖和绕过权限的扩展路径。
+
+实施记录（2026-08-04）：
+
+- 重新核验三个官方事实源的当前主干：ACP `541daf8fa488c6b93aad4a874ac050b3daf9b282`
+  （schema v1.20.0，wire version 仍为整数 `1`；v2 明确仍是 Draft）、A2A
+  `6dad7a125d0534a2be7617f4e13224303e54e944`（稳定协议 `1.0`，规范事实源为
+  `package lf.a2a.v1` proto）和 Maka `076e653ffa31583668380662dc632717918e3f96`
+  （Headless TaskRun 从 Runtime Event／Result 投影，评测器与交互 Runtime 分离）。实现不依据二手文章冻结字段。
+- 新增默认关闭、仅 ADMIN 可显式启用的 ACP v1 Agent Adapter。`initialize`、`session/new`、
+  `session/prompt`、`session/cancel` 和 `session/close` 会调用每个 session 独占的真实
+  `AgentRuntimePort`；`RuntimeRunEvent` 直接投影为 message chunk、tool call/update、usage 和
+  resource link，工具参数、工具结果、raw result、owner 和 host path 不进入 wire。ACP 不能提交 MCP
+  Server、附加目录或非宿主分配的 cwd；资源链接只作为无授权含义的引用文本进入 Runtime。
+- `AcpPermissionPort` 先执行内部 `PermissionPort`；只有内部结果为 `ask` 才创建有上限、有超时、可取消的
+  `session/request_permission`。阶段 7.1 建立 session grant 前只公布 `allow_once` 与 `reject_once`，格式错误、
+  超时、取消和客户端失败全部稳定映射为 deny；宿主必须把该 Port 放在权威 Ledger Adapter 内层。
+- 新增实际 HTTPS A2A 1.0 JSON-RPC Client Adapter，只支持受信配置固定的 `JSONRPC` AgentInterface 和
+  精确 HTTPS origin allowlist；禁用环境代理、重定向、自动发现、自动重试、SSE、push 和 Server 入口，
+  每次请求固定发送 `A2A-Version: 1.0`。凭据只由 transport 注入 Authorization header，异常、响应和
+  Task metadata 均不能回写凭据、owner、tenant 或本地 Run identity。首版只创建新任务，不接受未绑定的
+ 远端 task/context continuation。
+- A2A `Task`、`Message`、`TaskState`、`Artifact` 和 `Part` 解析为有界不可变远端投影；阻塞
+  `SendMessage` 只接受终态或 `INPUT_REQUIRED`／`AUTH_REQUIRED`，inline raw/data/text 有单项和总量上限，
+  Artifact URL 不会自动抓取。远端 Task 永远不是本地 Run，远端 Artifact 也不会冒充已经发布的本地
+  `RuntimeArtifactRef`；本地 `RuntimeRunIdentity` 只绑定一次交换的来源。
+- 新增真实 Headless Runtime Adapter，直接调用既有 `run_event()`。宿主的权威 Event handler 始终先执行，
+  随后才形成一次调用内的不可变事件引用和脱敏 evidence digest；不创建新 Event Store，不记录正文、工具
+  参数／结果或 owner／actor，且支持事件数、文本量、并发和显式取消上限。
+- 三个 Feature 都登记为 experimental、default off、ADMIN only，缺少协议兼容、安全、身份／凭据边界、
+  Event Ledger 或 operator gate 时构造即失败。兼容性与安全专项回归为 23 passed；相邻 Runtime／Ledger／
+  生命周期回归为 50 passed。实际生成的 ACP Initialize、NewSession、Prompt、Session Update 与 Permission
+  Request 已通过官方 `schema/v1/schema.json` Draft 2020-12 校验；架构边界、OpenAPI、Release、Verification、
+  Behavior、决策规则、Task SLO、Ruff、Python 编译、Prompt 模板一致性和 diff whitespace 门禁均通过。
+- 正式开放决策：当前保持实验、默认关闭，不增加网络监听和公开 API。待阶段 7 完成统一权限／预算、身份、
+  ACL 与可撤销 session grant 后，再单独评审 ACP transport 与 A2A 远端任务 continuation；这不影响显式调用
+  当前 Adapter 时执行真实 Runtime／HTTPS 路径，不存在 shadow 分流。
 
 ### 阶段 7：权限、Sandbox、身份、工作区和记忆
 

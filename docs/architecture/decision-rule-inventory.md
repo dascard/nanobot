@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`dd8f9f412c06a4ddf2b1e0ad0be0afbc7f70bcd6`
-- 规则总数：8097
+- 源提交：`a4a4bc0b50aeb97f74cdc3e8179933ed82370b62`
+- 规则总数：8145
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1511 |
+| `configurable_policy` | 1526 |
 | `data_consistency` | 476 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4321 |
-| `security_invariant` | 1615 |
+| `protocol_syntax` | 4351 |
+| `security_invariant` | 1618 |
 
 ## 文件汇总
 
@@ -92,6 +92,7 @@
 | `core/context_compaction.py` | 30 |
 | `core/legacy_adapter.py` | 30 |
 | `sandboxd/docker_backend.py` | 30 |
+| `core/interoperability/a2a.py` | 29 |
 | `core/mcp/contracts.py` | 29 |
 | `api/admin/rag_benchmark_routes.py` | 28 |
 | `app/memory_digest/jobs.py` | 28 |
@@ -149,6 +150,7 @@
 | `webui/src/features/prompt/PromptPages.jsx` | 19 |
 | `api/admin/prompt_v2_routes.py` | 18 |
 | `app/persona/retrieval_service.py` | 18 |
+| `core/interoperability/acp.py` | 18 |
 | `core/outbound/control_transitions.py` | 18 |
 | `core/sandbox/lease_service.py` | 18 |
 | `core/sql_readonly.py` | 18 |
@@ -572,6 +574,7 @@
 | `core/agent_step.py` | 1 |
 | `core/data_clean.py` | 1 |
 | `core/group_learning/reserved_terms.py` | 1 |
+| `core/interoperability/headless.py` | 1 |
 | `core/llm_trace_context.py` | 1 |
 | `core/model_provider/catalog_runtime.py` | 1 |
 | `core/model_provider/chat_runtime.py` | 1 |

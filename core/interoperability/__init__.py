@@ -1,0 +1,78 @@
+"""默认关闭的 ACP、A2A 与 Headless 薄互操作 Adapter。"""
+
+from core.interoperability.a2a import (
+    A2A_FEATURE_ID,
+    A2A_PROTOCOL_BINDING,
+    A2A_PROTOCOL_VERSION,
+    A2AClientAdapter,
+    A2AClientRequest,
+    A2AExchange,
+    A2AInterface,
+    A2AParseLimits,
+    A2APartKind,
+    A2AProtocolError,
+    A2ARemoteArtifact,
+    A2ARemoteMessage,
+    A2ARemotePart,
+    A2ARemoteTask,
+    A2ATaskState,
+    A2ATransportError,
+    A2ATransportLimits,
+    HttpsA2AJsonRpcTransport,
+)
+from core.interoperability.acp import (
+    ACP_FEATURE_ID,
+    ACP_PROTOCOL_VERSION,
+    AcpAdapterConfig,
+    AcpAgentAdapter,
+    AcpPermissionPort,
+    AcpProtocolError,
+)
+from core.interoperability.contracts import (
+    InteroperabilityDisabledError,
+    InteroperabilityError,
+)
+from core.interoperability.headless import (
+    HEADLESS_FEATURE_ID,
+    HeadlessExecutionError,
+    HeadlessLimits,
+    HeadlessRunEvidence,
+    HeadlessRunResult,
+    HeadlessRuntimeAdapter,
+)
+
+
+__all__ = [
+    "A2A_FEATURE_ID",
+    "A2A_PROTOCOL_BINDING",
+    "A2A_PROTOCOL_VERSION",
+    "ACP_FEATURE_ID",
+    "ACP_PROTOCOL_VERSION",
+    "HEADLESS_FEATURE_ID",
+    "A2AClientAdapter",
+    "A2AClientRequest",
+    "A2AExchange",
+    "A2AInterface",
+    "A2AParseLimits",
+    "A2APartKind",
+    "A2AProtocolError",
+    "A2ARemoteArtifact",
+    "A2ARemoteMessage",
+    "A2ARemotePart",
+    "A2ARemoteTask",
+    "A2ATaskState",
+    "A2ATransportError",
+    "A2ATransportLimits",
+    "AcpAdapterConfig",
+    "AcpAgentAdapter",
+    "AcpPermissionPort",
+    "AcpProtocolError",
+    "HeadlessExecutionError",
+    "HeadlessLimits",
+    "HeadlessRunEvidence",
+    "HeadlessRunResult",
+    "HeadlessRuntimeAdapter",
+    "HttpsA2AJsonRpcTransport",
+    "InteroperabilityDisabledError",
+    "InteroperabilityError",
+]
