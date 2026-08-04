@@ -1693,7 +1693,6 @@ class NanobotBridge(MessageContractBridgeMixin):
                 or ("" if is_group else session_id)
                 or ""
             ).strip()
-
             from core.final_tools import set_current_final_tools
             from core.tool_plan import set_current_tool_plan
             from core.runtime_tool_service import record_runtime_tool_decision
@@ -1718,6 +1717,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     session_id=session_id,
                     runtime_preset=runtime_preset,
                     agent_id=getattr(self, "_runtime_name", "nanobot") or "nanobot",
+                    query=query,
                 )
                 tool_plan = extension_binding.tool_plan
                 meta["project_context"] = extension_binding.project_context

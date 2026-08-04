@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 6.1 已完成，准备阶段 6.2）
+> 状态：执行中（阶段 6.2 已完成，准备阶段 6.3）
 >
 > 建立日期：2026-08-03
 >
@@ -884,10 +884,29 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 6.2 Skill 检索和治理
 
-- [ ] 用 Registry 和现有 RAG 建立 Skill 描述索引。
-- [ ] 记录能力标签、权限、依赖、Prompt 成本和适用范围。
-- [ ] 延迟注入 Skill 正文和工具 schema。
-- [ ] 记录每个版本的调用、成功率、成本和评测结果。
+- [x] 用 Registry 和现有 RAG 建立 Skill 描述索引。
+- [x] 记录能力标签、权限、依赖、Prompt 成本和适用范围。
+- [x] 延迟注入 Skill 正文和工具 schema。
+- [x] 记录每个版本的调用、成功率、成本和评测结果。
+
+实施记录（2026-08-04）：
+
+- 每次请求先从可见的精确版本锁构建不可变 Skill Registry 快照，再把不含正文、资源、owner 和内部
+  scope key 的描述投影同步到现有 `semantic_index_items` 与 FTS；检索使用精确 source ID 白名单、
+  FTS 与词法回退，不新增第二套向量事实源。结果按适用范围过滤并补全依赖闭包，空查询或未命中时
+  返回空锁，单项索引故障不会阻塞其他 Skill。
+- Skill 元数据和运行时锁升级为 v2，显式记录能力标签、适用范围、工具、权限、依赖、正文与目录
+  Prompt 成本；受管版本仍从不可变 `SKILL.md` 校验摘要后生成请求级锁，旧 v1 锁保持兼容读取。
+- 生产桥接路径以原始用户查询选择最小运行时锁。只有存在命中项时才注入精简目录和带枚举的
+  `skill` 工具 schema；Skill 正文与单个资源继续在实际调用时按精确锁延迟读取，未选中的 Skill
+  无法通过猜名访问。Native 与 KT Adapter 消费同一份已筛选运行时属性，本能力不是 shadow 路径。
+- 新增只追加的版本调用事实和评测事实，记录成功、失败、时延、Prompt token、资源字节、评测
+  分数及成本；Admin API 可写入版本评测并汇总调用量、成功率与成本，事实表禁止更新和删除，且
+  不保存正文、用户查询或 owner 明文。
+- Agent Skills、检索治理、版本迁移、Admin API、Runtime、Prompt、OpenAPI 和桥接定向回归通过；
+  完整 `python -m pytest tests/ -v` 为 6609 passed、12 skipped、0 failed。架构边界、OpenAPI、
+  行为 Golden、Release／Verification Golden、决策规则、Task SLO、Ruff 致命规则、Python 编译和
+  `git diff --check` 均纳入本模块最终门禁。
 
 #### 6.3 MCP 控制面
 

@@ -88,6 +88,9 @@ AGENT_HARNESS_CONTEXT_COMPACTION_PROMPT_BASELINE_SHA256 = (
 AGENT_HARNESS_PLAN_MODE_PROMPT_BASELINE_SHA256 = (
     "693f7364403276a6b4c99371842648211aa0a30c627db811f5f5fc075b54d699"
 )
+AGENT_HARNESS_MANAGED_SKILLS_PROMPT_BASELINE_SHA256 = (
+    "f4beef882f28d25f9ab921cc44505a51b7f45927dfefe9d31b54781f1f696e6d"
+)
 PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256 = (
     "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552"
 )
@@ -1403,12 +1406,27 @@ def _manifest(
                 "before_sha256": (
                     AGENT_HARNESS_PLAN_MODE_PROMPT_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["prompt_runtime"]
+                "after_sha256": (
+                    AGENT_HARNESS_MANAGED_SKILLS_PROMPT_BASELINE_SHA256
                 ),
                 "reason": (
                     "登记请求级 Skill 目录、精确锁按需加载和授权指导边界；"
                     "目录描述与资源仍按不可信数据处理。"
+                ),
+            },
+            {
+                "id": "agent_harness_skill_retrieval_governance_prompt",
+                "snapshot_id": "prompt_runtime",
+                "stage": "Agent Harness 阶段 6.2",
+                "before_sha256": (
+                    AGENT_HARNESS_MANAGED_SKILLS_PROMPT_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["prompt_runtime"]
+                ),
+                "reason": (
+                    "同步按本轮查询和适用范围检索最小 Skill 候选、依赖闭包、"
+                    "延迟 schema 与未入选版本不授权的运行边界。"
                 ),
             },
             {

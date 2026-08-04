@@ -137,6 +137,14 @@
       "stage": "Agent Harness 阶段 6.1"
     },
     {
+      "after_sha256": "2bea17f21d71f93bf88174c1f0fdd56f624ca49f3227b02febd14a5cefed68e1",
+      "before_sha256": "f4beef882f28d25f9ab921cc44505a51b7f45927dfefe9d31b54781f1f696e6d",
+      "id": "agent_harness_skill_retrieval_governance_prompt",
+      "reason": "同步按本轮查询和适用范围检索最小 Skill 候选、依赖闭包、延迟 schema 与未入选版本不授权的运行边界。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "Agent Harness 阶段 6.2"
+    },
+    {
       "after_sha256": "59ca2e9a073385589f81b7374a91030605c583122f2c3af2b74b27b1b1e40d9c",
       "before_sha256": "89ab0c4a6e53be676d39cc717f74948d79a1008ad37802b53827656b49c96661",
       "id": "stage6_news_registry",
@@ -217,7 +225,7 @@
       "stage": "Agent Harness 阶段 6.1"
     }
   ],
-  "baseline_git_commit": "187995c2109539b354b04559871ce71b43cb7221",
+  "baseline_git_commit": "7cea905f03c284ee634e3c53acf6af0d59379897",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -271,7 +279,7 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "f4beef882f28d25f9ab921cc44505a51b7f45927dfefe9d31b54781f1f696e6d"
+      "sha256": "2bea17f21d71f93bf88174c1f0fdd56f624ca49f3227b02febd14a5cefed68e1"
     },
     {
       "classification": "preserve",

@@ -6,6 +6,8 @@ metadata:
   version: "1.0.0"
   nanobot.dependencies: ""
   nanobot.permissions: "tool:schedule_task"
+  nanobot.capabilities: "reminder,定时任务,提醒,持续关注"
+  nanobot.applies-to: "chat,private,group"
 allowed-tools: schedule_task
 ---
 

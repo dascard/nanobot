@@ -90,6 +90,13 @@ class SkillVersionSnapshot:
     trusted: bool
     file_count: int
     bundle_size: int
+    capability_tags: tuple[str, ...]
+    applies_to: tuple[str, ...]
+    allowed_tools: tuple[str, ...]
+    dependencies: tuple[str, ...]
+    required_permissions: tuple[str, ...]
+    body_prompt_tokens: int
+    catalog_prompt_tokens: int
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -105,6 +112,13 @@ class SkillVersionSnapshot:
             "trusted": self.trusted,
             "file_count": self.file_count,
             "bundle_size": self.bundle_size,
+            "capability_tags": list(self.capability_tags),
+            "applies_to": list(self.applies_to),
+            "allowed_tools": list(self.allowed_tools),
+            "dependencies": list(self.dependencies),
+            "required_permissions": list(self.required_permissions),
+            "body_prompt_tokens": self.body_prompt_tokens,
+            "catalog_prompt_tokens": self.catalog_prompt_tokens,
         }
 
 
@@ -777,8 +791,10 @@ class SkillLifecycleService:
                 SkillPackageRow.package_id,
             )
         ).scalars()
-        return tuple(
-            SkillVersionSnapshot(
+        snapshots: list[SkillVersionSnapshot] = []
+        for row in rows:
+            document = self._parsed_package_document(row)
+            snapshots.append(SkillVersionSnapshot(
                 package_id=str(row.package_id),
                 target=SkillScopeTarget(row.scope, row.scope_key),
                 skill_name=str(row.skill_name),
@@ -790,14 +806,37 @@ class SkillLifecycleService:
                 trusted=bool(row.trusted),
                 file_count=int(row.file_count),
                 bundle_size=int(row.bundle_size),
-            )
-            for row in rows
+                capability_tags=document.capability_tags,
+                applies_to=document.applies_to,
+                allowed_tools=document.allowed_tools,
+                dependencies=document.dependencies,
+                required_permissions=document.required_permissions,
+                body_prompt_tokens=document.body_prompt_tokens,
+                catalog_prompt_tokens=document.catalog_prompt_tokens,
+            ))
+        return tuple(snapshots)
+
+    @staticmethod
+    def _parsed_package_document(package: SkillPackageRow) -> ParsedSkillBundle:
+        """只解析 SKILL.md 元数据与正文；资源摘要仍以不可变 package 为准。"""
+
+        bundle = parse_skill_bundle(
+            bytes(package.skill_md),
+            expected_name=str(package.skill_name),
         )
+        if (
+            bundle.skill_md_sha256 != str(package.skill_md_sha256)
+            or bundle.version != str(package.version)
+            or bundle.description != str(package.description)
+        ):
+            raise SkillVersionConflictError("Skill 不可变文档投影不一致")
+        return bundle
 
     def lock_entry_from_package(
         self,
         package: SkillPackageRow,
     ) -> RuntimeSkillLockEntry:
+        document = self._parsed_package_document(package)
         return RuntimeSkillLockEntry(
             package_id=package.package_id,
             scope=package.scope,
@@ -820,6 +859,10 @@ class SkillLifecycleService:
                 package.required_permissions_json,
                 "required_permissions",
             ),
+            capability_tags=document.capability_tags,
+            applies_to=document.applies_to,
+            body_prompt_tokens=document.body_prompt_tokens,
+            catalog_prompt_tokens=document.catalog_prompt_tokens,
             source_kind=package.source_kind,
         )
 

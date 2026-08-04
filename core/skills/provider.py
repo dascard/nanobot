@@ -181,6 +181,10 @@ class BundledSkillCatalog:
                     allowed_tools=bundle.allowed_tools,
                     dependencies=bundle.dependencies,
                     required_permissions=bundle.required_permissions,
+                    capability_tags=bundle.capability_tags,
+                    applies_to=bundle.applies_to,
+                    body_prompt_tokens=bundle.body_prompt_tokens,
+                    catalog_prompt_tokens=bundle.catalog_prompt_tokens,
                     source_kind="bundled",
                 )
                 records[entry.package_id] = BundledSkillRecord(entry, bundle)

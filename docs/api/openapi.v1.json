@@ -8316,6 +8316,73 @@
         "title": "SkillBindingActionRequest",
         "type": "object"
       },
+      "SkillEvaluationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cost_microunits": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Cost Microunits",
+            "type": "integer"
+          },
+          "evaluator_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Evaluator Id",
+            "type": "string"
+          },
+          "evaluator_version": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Evaluator Version",
+            "type": "string"
+          },
+          "evidence_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Evidence Sha256",
+            "type": "string"
+          },
+          "package_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Package Id",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "prompt_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "number"
+          },
+          "suite_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Suite Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "package_id",
+          "suite_id",
+          "evaluator_id",
+          "evaluator_version",
+          "passed",
+          "score",
+          "evidence_sha256"
+        ],
+        "title": "SkillEvaluationRequest",
+        "type": "object"
+      },
       "SkillInstallRequest": {
         "additionalProperties": false,
         "properties": {
@@ -26869,6 +26936,70 @@
         "x-nanobot-pagination": "none"
       }
     },
+    "/api/v1/admin/skills/evaluations": {
+      "post": {
+        "operationId": "post_api_v1_admin_skills_evaluations",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillEvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Skills Evaluations Record Skill Evaluation",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Record Skill Evaluation",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
     "/api/v1/admin/skills/install": {
       "post": {
         "operationId": "post_api_v1_admin_skills_install",
@@ -26929,6 +27060,60 @@
           }
         },
         "summary": "Install Skill",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/skills/metrics": {
+      "get": {
+        "operationId": "get_api_v1_admin_skills_metrics",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Api V1 Admin Skills Metrics Skill Metrics",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Skill Metrics",
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"
       }

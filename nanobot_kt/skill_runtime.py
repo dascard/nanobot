@@ -15,7 +15,9 @@ from core.skills import (
     SqlAlchemySkillProvider,
     render_skill_catalog,
     runtime_skill_targets,
+    select_skills_for_query,
 )
+from core.token_utils import estimate_tokens
 from core.tool_plan import (
     SKILL_LOCK_PENDING_REASON,
     ToolPlan,
@@ -114,6 +116,7 @@ def build_skill_bridge_binding(
     owner_id: str,
     agent_id: str,
     session_id: str,
+    query: str = "",
     session_goal_mode: str = "",
     project_id: str = "",
 ) -> SkillBridgeBinding:
@@ -145,12 +148,32 @@ def build_skill_bridge_binding(
         agent_id=agent_id,
         project_id=project_id,
     )
-    lock = SqlAlchemySkillProvider(db).resolve_lock(
+    visible_lock = SqlAlchemySkillProvider(db).resolve_lock(
         SkillResolutionContext(
             targets=targets,
             executable_tool_names=tool_plan.executable_tool_names,
         )
     )
+    if not visible_lock.entries:
+        return SkillBridgeBinding(
+            tool_plan=tool_plan,
+            project_context=project_context,
+            lock=None,
+            run_meta_update=MappingProxyType(
+                {
+                    "skill_count": 0,
+                    "skill_candidate_count": 0,
+                    "skill_diagnostic_count": len(visible_lock.diagnostics),
+                }
+            ),
+        )
+    selection = select_skills_for_query(
+        db,
+        lock=visible_lock,
+        query=query,
+        runtime_chat_type=runtime_chat_type,
+    )
+    lock = selection.selected_lock
     if not lock.entries:
         return SkillBridgeBinding(
             tool_plan=tool_plan,
@@ -159,14 +182,20 @@ def build_skill_bridge_binding(
             run_meta_update=MappingProxyType(
                 {
                     "skill_count": 0,
-                    "skill_diagnostic_count": len(lock.diagnostics),
+                    "skill_candidate_count": len(visible_lock.entries),
+                    "skill_registry_sha256": selection.registry.sha256,
+                    "skill_selection_mode": selection.retrieval_mode,
+                    "skill_indexed_count": selection.indexed_count,
+                    "skill_diagnostic_count": len(visible_lock.diagnostics),
                 }
             ),
         )
     names = tuple(entry.name for entry in lock.entries)
+    schema = _skill_schema(names, db=db)
+    catalog = render_skill_catalog(lock)
     skill_plan = enable_registered_tool(
         tool_plan,
-        _skill_schema(names, db=db),
+        schema,
         chat_type=runtime_chat_type,
         platform=platform,
         session_id=session_id,
@@ -185,7 +214,7 @@ def build_skill_bridge_binding(
         tool_plan=skill_plan,
         project_context=_join_project_context(
             project_context,
-            render_skill_catalog(lock),
+            catalog,
         ),
         lock=lock,
         targets_json=targets_json,
@@ -194,7 +223,23 @@ def build_skill_bridge_binding(
         run_meta_update=MappingProxyType(
             {
                 "skill_count": len(lock.entries),
+                "skill_candidate_count": len(visible_lock.entries),
                 "skill_lock_sha256": lock.sha256,
+                "skill_registry_sha256": selection.registry.sha256,
+                "skill_selection_mode": selection.retrieval_mode,
+                "skill_indexed_count": selection.indexed_count,
+                "skill_catalog_prompt_tokens": estimate_tokens(catalog),
+                "skill_body_prompt_tokens_if_loaded": sum(
+                    entry.body_prompt_tokens for entry in lock.entries
+                ),
+                "skill_schema_prompt_tokens": estimate_tokens(
+                    json.dumps(
+                        schema,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                ),
                 "skill_diagnostic_count": len(lock.diagnostics),
             }
         ),
@@ -213,6 +258,7 @@ def build_request_extension_binding(
     session_id: str,
     runtime_preset: str,
     agent_id: str,
+    query: str = "",
 ) -> RequestExtensionBridgeBinding:
     """按固定顺序组合目标策略与受管 Skill，不暴露平行授权路径。"""
 
@@ -238,6 +284,7 @@ def build_request_extension_binding(
         owner_id=group_id if is_group else user_id,
         agent_id=agent_id,
         session_id=session_id,
+        query=query,
         session_goal_mode=(
             goal.policy.mode.value if goal.policy is not None else ""
         ),

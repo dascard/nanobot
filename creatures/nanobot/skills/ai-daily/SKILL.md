@@ -6,6 +6,8 @@ metadata:
   version: "1.0.0"
   nanobot.dependencies: ""
   nanobot.permissions: "tool:ai_daily"
+  nanobot.capabilities: "ai-news,科技新闻,日报,最新资讯"
+  nanobot.applies-to: "chat,private,group,scheduled"
 allowed-tools: ai_daily
 ---
 

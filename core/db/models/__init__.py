@@ -94,6 +94,8 @@ from core.db.models.session_goal import (
 )
 from core.db.models.skill import (
     SkillBindingRow,
+    SkillEvaluationRow,
+    SkillInvocationRow,
     SkillLifecycleEventRow,
     SkillPackageFileRow,
     SkillPackageRow,
@@ -202,6 +204,8 @@ __all__ = [
     "SessionGoalRow",
     "SessionPlanAssetRow",
     "SkillBindingRow",
+    "SkillEvaluationRow",
+    "SkillInvocationRow",
     "SkillLifecycleEventRow",
     "SkillPackageFileRow",
     "SkillPackageRow",

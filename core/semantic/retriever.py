@@ -131,6 +131,7 @@ def fts_recall_hits(
     query: str,
     *,
     source_types: set[str],
+    source_ids: set[str] | None = None,
     user_id: str = "",
     session_id: str = "",
     limit: int = 200,
@@ -157,6 +158,18 @@ def fts_recall_hits(
             params[key] = source_type
             placeholders.append(f":{key}")
         clauses.append(f"i.source_type IN ({', '.join(placeholders)})")
+    normalized_source_ids = sorted(
+        str(item or "").strip()
+        for item in (source_ids or set())
+        if str(item or "").strip()
+    )
+    if normalized_source_ids:
+        placeholders = []
+        for index, source_id in enumerate(normalized_source_ids):
+            key = f"source_id_{index}"
+            params[key] = source_id
+            placeholders.append(f":{key}")
+        clauses.append(f"i.source_id IN ({', '.join(placeholders)})")
     if user_id:
         params["user_id"] = user_id
         clauses.append("i.user_id = :user_id")

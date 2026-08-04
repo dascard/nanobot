@@ -17,6 +17,7 @@ from core.skills import (
     SkillContractError,
     SkillLifecycleError,
     SkillLifecycleService,
+    SkillGovernanceService,
     SkillNotFoundError,
     SkillScopeTarget,
     SkillVersionConflictError,
@@ -67,6 +68,20 @@ class SkillUpgradeRequest(SkillBindingActionRequest):
     target_version: str = Field(min_length=1, max_length=64)
 
 
+class SkillEvaluationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    package_id: str = Field(min_length=1, max_length=80)
+    suite_id: str = Field(min_length=1, max_length=128)
+    evaluator_id: str = Field(min_length=1, max_length=128)
+    evaluator_version: str = Field(min_length=1, max_length=64)
+    passed: bool
+    score: float = Field(ge=0, le=1)
+    prompt_tokens: int = Field(default=0, ge=0)
+    cost_microunits: int = Field(default=0, ge=0)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 def _target(scope: ManagedScope, scope_key: str) -> SkillScopeTarget:
     return SkillScopeTarget(scope, scope_key)
 
@@ -89,6 +104,17 @@ def _raise_api_error(exc: Exception) -> None:
     if isinstance(exc, SkillLifecycleError):
         raise HTTPException(409, str(exc)) from exc
     raise exc
+
+
+def _entry_for_package(db: Session, package_id: str):
+    service = SkillLifecycleService(db)
+    package = service.package_by_id(package_id)
+    if package is not None:
+        return service.lock_entry_from_package(package)
+    bundled = default_bundled_skill_catalog().get(package_id)
+    if bundled is not None:
+        return bundled.entry
+    raise SkillNotFoundError("Skill 版本不存在")
 
 
 @router.get("")
@@ -116,9 +142,72 @@ def list_skills(
                 )
             ],
             "bundled": [item.entry.to_dict() for item in bundled.records()],
+            "governance": [
+                item.to_dict()
+                for item in SkillGovernanceService(db).version_metrics()
+            ],
             "diagnostics": list(bundled.diagnostics),
         }
     except (SkillContractError, SkillLifecycleError) as exc:
+        _raise_api_error(exc)
+        raise AssertionError("unreachable")
+
+
+@router.get("/metrics")
+def skill_metrics(db: Session = Depends(get_db)) -> dict[str, object]:
+    return {
+        "versions": [
+            item.to_dict()
+            for item in SkillGovernanceService(db).version_metrics()
+        ]
+    }
+
+
+@router.post("/evaluations")
+def record_skill_evaluation(
+    body: SkillEvaluationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    try:
+        entry = _entry_for_package(db, body.package_id)
+        evaluation_id = SkillGovernanceService(db).record_evaluation(
+            entry,
+            suite_id=body.suite_id,
+            evaluator_id=body.evaluator_id,
+            evaluator_version=body.evaluator_version,
+            passed=body.passed,
+            score=body.score,
+            prompt_tokens=body.prompt_tokens,
+            cost_microunits=body.cost_microunits,
+            evidence_sha256=body.evidence_sha256,
+            actor_id="admin",
+        )
+        db.commit()
+        audit_request(
+            db,
+            request,
+            "skill.evaluate",
+            "skill_package",
+            entry.package_id,
+            {
+                "evaluation_id": evaluation_id,
+                "skill_name": entry.name,
+                "version": entry.version,
+                "suite_id": body.suite_id,
+                "passed": body.passed,
+                "score": body.score,
+                "evidence_sha256": body.evidence_sha256,
+            },
+        )
+        return {
+            "evaluation_id": evaluation_id,
+            "package_id": entry.package_id,
+            "skill_name": entry.name,
+            "version": entry.version,
+        }
+    except (SkillContractError, SkillLifecycleError) as exc:
+        db.rollback()
         _raise_api_error(exc)
         raise AssertionError("unreachable")
 

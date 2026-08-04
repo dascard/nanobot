@@ -6,6 +6,8 @@ metadata:
   version: "1.0.0"
   nanobot.dependencies: ""
   nanobot.permissions: "tool:sql_analysis"
+  nanobot.capabilities: "sql,历史统计,聊天记录,只读分析"
+  nanobot.applies-to: "chat,private,group"
 allowed-tools: sql_analysis
 ---
 

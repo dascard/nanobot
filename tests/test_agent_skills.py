@@ -52,6 +52,8 @@ def _skill_md(
     permissions: str = "",
     license_text: str = "",
     compatibility: str = "",
+    capabilities: str = "",
+    applies_to: str = "",
     body: str = "# 测试指导\n\n按当前用户要求完成任务。",
 ) -> bytes:
     allowed_line = f"allowed-tools: {allowed_tools}\n" if allowed_tools else ""
@@ -69,6 +71,8 @@ def _skill_md(
         f'  version: "{version}"\n'
         f'  nanobot.dependencies: "{dependencies}"\n'
         f'  nanobot.permissions: "{permissions}"\n'
+        f'  nanobot.capabilities: "{capabilities}"\n'
+        f'  nanobot.applies-to: "{applies_to}"\n'
         f"{allowed_line}"
         "---\n\n"
         f"{body}\n"
@@ -122,6 +126,10 @@ def test_skill_bundle_strictly_validates_agent_skills_extensions():
     assert bundle.allowed_tools == ("sql_analysis", "web_search")
     assert bundle.dependencies == ("base-guide@1.0.0",)
     assert bundle.required_permissions == ("network:search", "tool:web_search")
+    assert bundle.capability_tags == ("research-guide",)
+    assert bundle.applies_to == ("chat",)
+    assert bundle.body_prompt_tokens > 0
+    assert bundle.catalog_prompt_tokens > 0
     assert bundle.resource_paths == ("references/guide.md",)
     assert len(bundle.bundle_sha256) == 64
     standard_only = parse_skill_bundle(
@@ -155,6 +163,8 @@ def test_skill_bundle_strictly_validates_agent_skills_extensions():
         SkillBundleFile("references//guide.md", b"secret")
     with pytest.raises(SkillContractError, match="SemVer"):
         _bundle("bad-version", "1.0.0-01")
+    with pytest.raises(SkillContractError, match="至少 2 个字符"):
+        _bundle("bad-capability", "1.0.0", capabilities="a")
 
 
 def test_bundled_catalog_is_fixed_bounded_and_fault_isolated(tmp_path: Path):
@@ -549,7 +559,7 @@ def test_kt_adapter_disables_upstream_skill_discovery(monkeypatch):
     assert "skills_registry" not in agent.session.extra
 
 
-def test_skill_bridge_exposes_bounded_catalog_enum_and_plan_mode_isolation(
+def test_skill_bridge_lazily_exposes_retrieved_catalog_schema_and_plan_isolation(
     db_session,
 ):
     base_plan = build_tool_plan(
@@ -569,6 +579,7 @@ def test_skill_bridge_exposes_bounded_catalog_enum_and_plan_mode_isolation(
         owner_id="u1",
         agent_id="nanobot",
         session_id="private-u1",
+        query="请提醒我明天喝水",
     )
 
     assert binding.lock is not None
@@ -581,12 +592,11 @@ def test_skill_bridge_exposes_bounded_catalog_enum_and_plan_mode_isolation(
         if item["function"]["name"] == "skill"
     )
     assert skill_schema["function"]["parameters"]["properties"]["name"]["enum"] == [
-        "ai-daily",
         "schedule-task",
-        "sql-analysis",
     ]
     assert '<skill_catalog trust="untrusted_routing_metadata">' in binding.project_context
     assert "# AI 日报与资讯聚合" not in binding.project_context
+    assert "ai-daily" not in binding.project_context
     assert all("instructions" not in str(item.value) for item in binding.runtime_attributes)
 
     plan_mode = build_skill_bridge_binding(
@@ -600,6 +610,7 @@ def test_skill_bridge_exposes_bounded_catalog_enum_and_plan_mode_isolation(
         agent_id="nanobot",
         session_id="private-u1",
         session_goal_mode="plan",
+        query="请提醒我明天喝水",
     )
     assert plan_mode.lock is None
     assert not plan_mode.tool_plan.can_execute("skill")
@@ -623,6 +634,7 @@ def test_skill_bridge_exposes_bounded_catalog_enum_and_plan_mode_isolation(
         owner_id="u1",
         agent_id="nanobot",
         session_id="private-u1",
+        query="请提醒我明天喝水",
     )
     assert source_disabled.lock is None
     assert source_disabled.tool_plan.disabled["skill"] == "来源上下文禁用(防递归)"
@@ -663,7 +675,9 @@ def test_skill_tool_loads_only_locked_body_and_requested_utf8_resource(db_sessio
         owner_id="u1",
         agent_id="nanobot",
         session_id="private-u1",
+        query="请使用 managed-guide 完成任务",
     )
+    db_session.commit()
     context = {
         "platform": "qq",
         "is_group": False,
@@ -700,6 +714,21 @@ def test_skill_tool_loads_only_locked_body_and_requested_utf8_resource(db_sessio
     assert "二进制资源" in binary_result.error
     assert "授权目录" in unknown_result.error
     assert "只接受 name" in injected_result.error
+
+    from core.skills import SkillGovernanceService
+
+    metrics = {
+        item.skill_name: item
+        for item in SkillGovernanceService(db_session).version_metrics()
+    }
+    managed_metrics = metrics["managed-guide"]
+    assert managed_metrics.call_count == 3
+    assert managed_metrics.success_count == 2
+    assert managed_metrics.failure_count == 1
+    assert managed_metrics.prompt_tokens > 0
+    assert managed_metrics.resource_bytes == (
+        len("可信资料".encode("utf-8")) + len(b"\x00\x01")
+    )
 
 
 def test_native_and_kt_runtime_adapters_forward_only_present_skill_lock_fields():
@@ -852,14 +881,16 @@ def test_skill_admin_api_has_literal_upload_and_full_reversible_lifecycle(
 
 def test_skill_schema_migration_creates_immutable_version_tables():
     from core.schema_migrations import (
-        _AGENT_SKILLS_LIFECYCLE_V1_VERSION,
+        _AGENT_SKILLS_GOVERNANCE_V2_VERSION,
         MIGRATIONS,
+        _agent_skills_governance_v2,
         _agent_skills_lifecycle_v1,
     )
 
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
         _agent_skills_lifecycle_v1(connection, engine, None)
+        _agent_skills_governance_v2(connection, engine, None)
         connection.execute(text(
             "INSERT INTO skill_packages("
             "package_id, scope, scope_key, skill_name, version, description, "
@@ -881,8 +912,27 @@ def test_skill_schema_migration_creates_immutable_version_tables():
         "skill_package_files",
         "skill_bindings",
         "skill_lifecycle_events",
+        "skill_invocations",
+        "skill_evaluations",
     } <= set(inspect(engine).get_table_names())
-    assert MIGRATIONS[-1][0] == _AGENT_SKILLS_LIFECYCLE_V1_VERSION
+    assert MIGRATIONS[-1][0] == _AGENT_SKILLS_GOVERNANCE_V2_VERSION
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO skill_invocations("
+            "invocation_id, package_id, skill_name, version, scope, "
+            "lock_sha256, status, result_kind, prompt_tokens, resource_bytes, "
+            "latency_ms) VALUES ("
+            "'skillcall_0123456789abcdef0123456789abcdef', "
+            "'skillpkg_0123456789abcdef0123456789abcdef', "
+            "'immutable-guide', '1.0.0', 'user', "
+            f"'{('c' * 64)}', 'succeeded', 'body', 10, 0, 1)"
+        ))
+    with pytest.raises(IntegrityError, match="skill_invocations_append_only"):
+        with engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE skill_invocations SET prompt_tokens=11 "
+                "WHERE skill_name='immutable-guide'"
+            ))
     with pytest.raises(IntegrityError, match="skill_packages_immutable"):
         with engine.begin() as connection:
             connection.execute(text(

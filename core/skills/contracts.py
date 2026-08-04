@@ -14,6 +14,8 @@ from typing import Mapping
 
 import yaml
 
+from core.token_utils import estimate_tokens
+
 
 SKILL_MD_MAX_BYTES = 512 * 1024
 SKILL_FILE_MAX_BYTES = 2 * 1024 * 1024
@@ -40,6 +42,13 @@ _PERMISSION_PATTERN = re.compile(
 )
 _ALLOWED_TOOL_PATTERN = re.compile(
     r"^[A-Za-z][A-Za-z0-9_.-]{0,127}(?:\([^\r\n()]{1,128}\))?$"
+)
+_CAPABILITY_TAG_PATTERN = re.compile(
+    r"^(?:[a-z0-9][a-z0-9._-]{0,63}|"
+    r"[\u3400-\u9fff][\u3400-\u9fffA-Za-z0-9._-]{0,31})$"
+)
+_APPLICABILITY_VALUES = frozenset(
+    {"all", "chat", "private", "group", "scheduled", "task"}
 )
 _TARGET_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
 _PACKAGE_ID_PATTERN = re.compile(r"^(?:skillpkg|bundled)_[0-9a-f]{32,64}$")
@@ -209,6 +218,10 @@ class ParsedSkillBundle:
     allowed_tools: tuple[str, ...]
     dependencies: tuple[str, ...]
     required_permissions: tuple[str, ...]
+    capability_tags: tuple[str, ...]
+    applies_to: tuple[str, ...]
+    body_prompt_tokens: int
+    catalog_prompt_tokens: int
     skill_md: bytes
     body: str
     files: tuple[SkillBundleFile, ...]
@@ -320,6 +333,52 @@ def _allowed_tools(value: object) -> tuple[str, ...]:
     return tools
 
 
+def _capability_tags(value: str, *, fallback_name: str) -> tuple[str, ...]:
+    tags = _csv_items(value, field="skill.capability_tags")
+    if not tags:
+        tags = (fallback_name,)
+    elif any(len(item) < 2 for item in tags):
+        raise SkillContractError("skill.capability_tags 每个标签至少 2 个字符")
+    if len(tags) > 32 or any(
+        not _CAPABILITY_TAG_PATTERN.fullmatch(item) for item in tags
+    ):
+        raise SkillContractError("skill.capability_tags 包含无效标签")
+    return tags
+
+
+def _applies_to(value: str) -> tuple[str, ...]:
+    applies_to = _csv_items(value, field="skill.applies_to") or ("chat",)
+    if len(applies_to) > 6 or any(
+        item not in _APPLICABILITY_VALUES for item in applies_to
+    ):
+        raise SkillContractError("skill.applies_to 包含无效适用范围")
+    if "all" in applies_to and len(applies_to) != 1:
+        raise SkillContractError("skill.applies_to=all 不能与其他范围并存")
+    return applies_to
+
+
+def _catalog_prompt_tokens(
+    *,
+    name: str,
+    description: str,
+    capability_tags: tuple[str, ...],
+    applies_to: tuple[str, ...],
+) -> int:
+    return estimate_tokens(
+        json.dumps(
+            {
+                "name": name,
+                "description": description,
+                "capabilities": capability_tags,
+                "applies_to": applies_to,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+
+
 def parse_skill_bundle(
     skill_md: bytes,
     *,
@@ -368,6 +427,11 @@ def parse_skill_bundle(
     if any(not _PERMISSION_PATTERN.fullmatch(item) for item in permissions):
         raise SkillContractError("skill.required_permissions 包含无效声明")
     allowed_tools = _allowed_tools(frontmatter.get("allowed-tools"))
+    capability_tags = _capability_tags(
+        metadata.get("nanobot.capabilities", ""),
+        fallback_name=name,
+    )
+    applies_to = _applies_to(metadata.get("nanobot.applies-to", ""))
     normalized_files = tuple(sorted(files, key=lambda item: item.relative_path))
     if len(normalized_files) > SKILL_BUNDLE_MAX_FILES:
         raise SkillContractError("Skill 资源文件数量超过上限")
@@ -408,6 +472,15 @@ def parse_skill_bundle(
         allowed_tools=allowed_tools,
         dependencies=dependencies,
         required_permissions=permissions,
+        capability_tags=capability_tags,
+        applies_to=applies_to,
+        body_prompt_tokens=estimate_tokens(body),
+        catalog_prompt_tokens=_catalog_prompt_tokens(
+            name=name,
+            description=description,
+            capability_tags=capability_tags,
+            applies_to=applies_to,
+        ),
         skill_md=raw,
         body=body,
         files=normalized_files,
@@ -431,6 +504,10 @@ class RuntimeSkillLockEntry:
     allowed_tools: tuple[str, ...]
     dependencies: tuple[str, ...]
     required_permissions: tuple[str, ...]
+    capability_tags: tuple[str, ...]
+    applies_to: tuple[str, ...]
+    body_prompt_tokens: int
+    catalog_prompt_tokens: int
     source_kind: str
 
     def __post_init__(self) -> None:
@@ -471,7 +548,13 @@ class RuntimeSkillLockEntry:
         if source_kind not in {"bundled", "managed"}:
             raise SkillContractError("skill lock source_kind 无效")
         object.__setattr__(self, "source_kind", source_kind)
-        for field in ("allowed_tools", "dependencies", "required_permissions"):
+        for field in (
+            "allowed_tools",
+            "dependencies",
+            "required_permissions",
+            "capability_tags",
+            "applies_to",
+        ):
             values = tuple(sorted(str(item) for item in getattr(self, field)))
             if len(values) != len(set(values)):
                 raise SkillContractError(f"skill lock {field} 不能重复")
@@ -486,8 +569,24 @@ class RuntimeSkillLockEntry:
         ):
             raise SkillContractError("skill lock required_permissions 包含无效声明")
 
-    def to_dict(self) -> dict[str, object]:
-        return {
+        if len(self.capability_tags) > 32 or any(
+            not _CAPABILITY_TAG_PATTERN.fullmatch(item)
+            for item in self.capability_tags
+        ):
+            raise SkillContractError("skill lock capability_tags 包含无效标签")
+        if not self.applies_to or len(self.applies_to) > 6 or any(
+            item not in _APPLICABILITY_VALUES for item in self.applies_to
+        ):
+            raise SkillContractError("skill lock applies_to 包含无效适用范围")
+        if "all" in self.applies_to and len(self.applies_to) != 1:
+            raise SkillContractError("skill lock applies_to=all 不能与其他范围并存")
+        for field in ("body_prompt_tokens", "catalog_prompt_tokens"):
+            value = getattr(self, field)
+            if type(value) is not int or value < 0:
+                raise SkillContractError(f"skill lock {field} 必须是非负整数")
+
+    def to_dict(self, *, schema_version: int = 2) -> dict[str, object]:
+        payload: dict[str, object] = {
             "package_id": self.package_id,
             "scope": self.scope.value,
             "name": self.name,
@@ -502,12 +601,23 @@ class RuntimeSkillLockEntry:
             "required_permissions": list(self.required_permissions),
             "source_kind": self.source_kind,
         }
+        if schema_version >= 2:
+            payload.update(
+                {
+                    "capability_tags": list(self.capability_tags),
+                    "applies_to": list(self.applies_to),
+                    "body_prompt_tokens": self.body_prompt_tokens,
+                    "catalog_prompt_tokens": self.catalog_prompt_tokens,
+                }
+            )
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSkillLock:
     entries: tuple[RuntimeSkillLockEntry, ...]
     diagnostics: tuple[str, ...] = ()
+    schema_version: int = 2
     sha256: str = ""
 
     def __post_init__(self) -> None:
@@ -515,9 +625,14 @@ class RuntimeSkillLock:
         if len({item.name for item in entries}) != len(entries):
             raise SkillContractError("skill lock 不能包含重名有效 Skill")
         diagnostics = tuple(sorted(set(str(item) for item in self.diagnostics)))
+        schema_version = self.schema_version
+        if type(schema_version) is not int or schema_version not in {1, 2}:
+            raise SkillContractError("skill lock schema_version 无效")
         payload = {
-            "schema_version": 1,
-            "entries": [item.to_dict() for item in entries],
+            "schema_version": schema_version,
+            "entries": [
+                item.to_dict(schema_version=schema_version) for item in entries
+            ],
             "diagnostics": list(diagnostics),
         }
         digest = hashlib.sha256(
@@ -533,14 +648,18 @@ class RuntimeSkillLock:
             raise SkillContractError("skill lock sha256 与内容不匹配")
         object.__setattr__(self, "entries", entries)
         object.__setattr__(self, "diagnostics", diagnostics)
+        object.__setattr__(self, "schema_version", schema_version)
         object.__setattr__(self, "sha256", digest)
 
     def to_runtime_json(self) -> str:
         return json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": self.schema_version,
                 "sha256": self.sha256,
-                "entries": [item.to_dict() for item in self.entries],
+                "entries": [
+                    item.to_dict(schema_version=self.schema_version)
+                    for item in self.entries
+                ],
                 "diagnostics": list(self.diagnostics),
             },
             ensure_ascii=False,
@@ -556,18 +675,22 @@ class RuntimeSkillLock:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise SkillContractError("skill lock runtime payload 不是 JSON") from exc
-        if (
-            not isinstance(payload, dict)
-            or set(payload) != {"schema_version", "sha256", "entries", "diagnostics"}
-            or payload.get("schema_version") != 1
-        ):
+        if not isinstance(payload, dict) or set(payload) != {
+            "schema_version",
+            "sha256",
+            "entries",
+            "diagnostics",
+        }:
+            raise SkillContractError("skill lock runtime schema 无效")
+        schema_version = payload.get("schema_version")
+        if type(schema_version) is not int or schema_version not in {1, 2}:
             raise SkillContractError("skill lock runtime schema 无效")
         raw_entries = payload.get("entries")
         if not isinstance(raw_entries, list) or len(raw_entries) > 256:
             raise SkillContractError("skill lock entries 无效")
         entries: list[RuntimeSkillLockEntry] = []
         for item in raw_entries:
-            if not isinstance(item, dict) or set(item) != {
+            expected_fields = {
                 "package_id",
                 "scope",
                 "name",
@@ -581,13 +704,26 @@ class RuntimeSkillLock:
                 "dependencies",
                 "required_permissions",
                 "source_kind",
-            }:
+            }
+            if schema_version >= 2:
+                expected_fields.update(
+                    {
+                        "capability_tags",
+                        "applies_to",
+                        "body_prompt_tokens",
+                        "catalog_prompt_tokens",
+                    }
+                )
+            if not isinstance(item, dict) or set(item) != expected_fields:
                 raise SkillContractError("skill lock entry 无效")
-            for list_field in (
+            list_fields = (
                 "allowed_tools",
                 "dependencies",
                 "required_permissions",
-            ):
+            )
+            if schema_version >= 2:
+                list_fields = (*list_fields, "capability_tags", "applies_to")
+            for list_field in list_fields:
                 values = item.get(list_field)
                 if not isinstance(values, list) or any(
                     not isinstance(value, str) for value in values
@@ -595,6 +731,12 @@ class RuntimeSkillLock:
                     raise SkillContractError(
                         f"skill lock {list_field} 无效"
                     )
+            for int_field in ("body_prompt_tokens", "catalog_prompt_tokens"):
+                if schema_version >= 2 and (
+                    type(item.get(int_field)) is not int
+                    or int(item[int_field]) < 0
+                ):
+                    raise SkillContractError(f"skill lock {int_field} 无效")
             entries.append(
                 RuntimeSkillLockEntry(
                     package_id=item.get("package_id", ""),
@@ -611,6 +753,20 @@ class RuntimeSkillLock:
                     required_permissions=tuple(
                         item.get("required_permissions") or ()
                     ),
+                    capability_tags=tuple(
+                        item.get("capability_tags") or (item.get("name", ""),)
+                    ),
+                    applies_to=tuple(item.get("applies_to") or ("chat",)),
+                    body_prompt_tokens=(
+                        item["body_prompt_tokens"]
+                        if schema_version >= 2
+                        else 0
+                    ),
+                    catalog_prompt_tokens=(
+                        item["catalog_prompt_tokens"]
+                        if schema_version >= 2
+                        else 0
+                    ),
                     source_kind=item.get("source_kind", ""),
                 )
             )
@@ -622,7 +778,19 @@ class RuntimeSkillLock:
         return cls(
             entries=tuple(entries),
             diagnostics=tuple(str(item) for item in diagnostics),
+            schema_version=schema_version,
             sha256=str(payload.get("sha256") or ""),
+        )
+
+    def select(self, names: tuple[str, ...]) -> "RuntimeSkillLock":
+        """从完整可见锁生成本轮最小授权锁；新投影始终使用最新 schema。"""
+
+        selected_names = frozenset(normalize_skill_name(item) for item in names)
+        return RuntimeSkillLock(
+            entries=tuple(
+                entry for entry in self.entries if entry.name in selected_names
+            ),
+            diagnostics=self.diagnostics,
         )
 
 
@@ -631,7 +799,7 @@ def render_skill_catalog(lock: RuntimeSkillLock) -> str:
 
     if not lock.entries:
         return ""
-    selected: list[dict[str, str]] = []
+    selected: list[dict[str, object]] = []
     omitted = 0
     for entry in lock.entries:
         candidate = {
@@ -639,6 +807,8 @@ def render_skill_catalog(lock: RuntimeSkillLock) -> str:
             "description": entry.description,
             "version": entry.version,
             "scope": entry.scope.value,
+            "capabilities": list(entry.capability_tags),
+            "applies_to": list(entry.applies_to),
         }
         probe = json.dumps(
             [*selected, candidate],

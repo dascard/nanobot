@@ -225,7 +225,14 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     assert managed_skills_prompt_change["before_sha256"] == (
         session_goal_prompt_change["after_sha256"]
     )
-    assert managed_skills_prompt_change["after_sha256"] == _sha256(
+    skill_retrieval_prompt_change = approved[
+        "agent_harness_skill_retrieval_governance_prompt"
+    ]
+    assert skill_retrieval_prompt_change["snapshot_id"] == "prompt_runtime"
+    assert skill_retrieval_prompt_change["before_sha256"] == (
+        managed_skills_prompt_change["after_sha256"]
+    )
+    assert skill_retrieval_prompt_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "prompt_runtime.json"
     )
     context_compaction_registry_change = approved[

@@ -31,6 +31,20 @@ from core.skills.provider import (
     default_bundled_skill_catalog,
     runtime_skill_targets,
 )
+from core.skills.discovery import (
+    SKILL_DESCRIPTION_INDEX_VERSION,
+    SKILL_DESCRIPTION_SOURCE_TYPE,
+    SkillRegistryDescriptor,
+    SkillSelectionResult,
+    SkillSelectionScore,
+    build_skill_registry,
+    select_skills_for_query,
+    synchronize_skill_description_index,
+)
+from core.skills.governance import (
+    SkillGovernanceService,
+    SkillVersionGovernanceSnapshot,
+)
 
 
 __all__ = [
@@ -42,6 +56,7 @@ __all__ = [
     "SkillBundleFile",
     "SkillBindingSnapshot",
     "SkillContractError",
+    "SkillGovernanceService",
     "SkillScope",
     "SkillScopeTarget",
     "SkillLifecycleError",
@@ -49,13 +64,22 @@ __all__ = [
     "SkillNotFoundError",
     "SkillResolutionContext",
     "SkillVersionConflictError",
+    "SkillVersionGovernanceSnapshot",
     "SkillVersionSnapshot",
     "SqlAlchemySkillProvider",
+    "SKILL_DESCRIPTION_INDEX_VERSION",
+    "SKILL_DESCRIPTION_SOURCE_TYPE",
+    "SkillRegistryDescriptor",
+    "SkillSelectionResult",
+    "SkillSelectionScore",
+    "build_skill_registry",
     "default_bundled_skill_catalog",
     "normalize_semver",
     "normalize_skill_name",
     "parse_skill_bundle",
     "render_skill_catalog",
+    "select_skills_for_query",
+    "synchronize_skill_description_index",
     "runtime_skill_targets",
     "semver_key",
     "skill_scope_priority",

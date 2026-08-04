@@ -254,8 +254,112 @@ class SkillLifecycleEventRow(Base):
     )
 
 
+class SkillInvocationRow(Base):
+    """一次精确 Skill 版本加载事实，用于成功率和 Prompt 成本统计。"""
+
+    __tablename__ = "skill_invocations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('succeeded', 'failed')",
+            name="ck_skill_invocation_status",
+        ),
+        CheckConstraint(
+            "scope IN ('builtin', 'project', 'agent', 'user')",
+            name="ck_skill_invocation_scope",
+        ),
+        CheckConstraint(
+            "result_kind IN ('body', 'resource')",
+            name="ck_skill_invocation_result_kind",
+        ),
+        CheckConstraint(
+            "prompt_tokens >= 0 AND resource_bytes >= 0 AND latency_ms >= 0",
+            name="ck_skill_invocation_costs",
+        ),
+        Index(
+            "ix_skill_invocation_package_time",
+            "package_id",
+            "occurred_at",
+        ),
+    )
+
+    invocation_id = Column(String(80), primary_key=True)
+    package_id = Column(String(80), nullable=False, index=True)
+    skill_name = Column(String(64), nullable=False, index=True)
+    version = Column(String(64), nullable=False)
+    scope = Column(String(16), nullable=False)
+    lock_sha256 = Column(String(64), nullable=False)
+    status = Column(String(16), nullable=False)
+    result_kind = Column(String(16), nullable=False)
+    prompt_tokens = Column(Integer, nullable=False, default=0)
+    resource_bytes = Column(Integer, nullable=False, default=0)
+    latency_ms = Column(Integer, nullable=False, default=0)
+    error_code = Column(
+        String(128), nullable=False, default="", server_default=text("''")
+    )
+    run_id = Column(
+        String(128), nullable=False, default="", server_default=text("''")
+    )
+    trace_id = Column(
+        String(128), nullable=False, default="", server_default=text("''")
+    )
+    occurred_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class SkillEvaluationRow(Base):
+    """针对不可变 Skill 版本的追加式离线或灰度评测结果。"""
+
+    __tablename__ = "skill_evaluations"
+    __table_args__ = (
+        CheckConstraint(
+            "passed IN (0, 1)",
+            name="ck_skill_evaluation_passed",
+        ),
+        CheckConstraint(
+            "score_micros >= 0 AND score_micros <= 1000000",
+            name="ck_skill_evaluation_score",
+        ),
+        CheckConstraint(
+            "prompt_tokens >= 0 AND cost_microunits >= 0",
+            name="ck_skill_evaluation_costs",
+        ),
+        Index(
+            "ix_skill_evaluation_package_time",
+            "package_id",
+            "occurred_at",
+        ),
+    )
+
+    evaluation_id = Column(String(80), primary_key=True)
+    package_id = Column(String(80), nullable=False, index=True)
+    skill_name = Column(String(64), nullable=False, index=True)
+    version = Column(String(64), nullable=False)
+    bundle_sha256 = Column(String(64), nullable=False)
+    suite_id = Column(String(128), nullable=False, index=True)
+    evaluator_id = Column(String(128), nullable=False)
+    evaluator_version = Column(String(64), nullable=False)
+    passed = Column(Boolean, nullable=False)
+    score_micros = Column(Integer, nullable=False)
+    prompt_tokens = Column(Integer, nullable=False, default=0)
+    cost_microunits = Column(Integer, nullable=False, default=0)
+    evidence_sha256 = Column(String(64), nullable=False)
+    created_by = Column(String(255), nullable=False)
+    occurred_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
 __all__ = [
     "SkillBindingRow",
+    "SkillEvaluationRow",
+    "SkillInvocationRow",
     "SkillLifecycleEventRow",
     "SkillPackageFileRow",
     "SkillPackageRow",
