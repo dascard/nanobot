@@ -24,6 +24,7 @@ class AssetTokenClaims:
     recipient_type: str
     recipient_id: str
     expires_at: int
+    artifact_id: str = ""
 
 
 def _b64encode(raw: bytes) -> str:
@@ -74,6 +75,7 @@ class AssetTokenSigner:
         recipient_id: str,
         ttl_seconds: int | None = None,
         now: int | None = None,
+        artifact_id: str = "",
     ) -> str:
         try:
             sha256 = validate_sha256(asset_sha256)
@@ -87,13 +89,22 @@ class AssetTokenSigner:
         )
         if not 60 <= ttl <= 86400:
             raise AssetTokenError("资产 Token 有效期配置无效")
+        normalized_artifact_id = str(artifact_id or "").strip()
+        if normalized_artifact_id and not (
+            normalized_artifact_id.startswith("art_")
+            and 8 <= len(normalized_artifact_id) <= 64
+            and normalized_artifact_id.replace("_", "").isalnum()
+        ):
+            raise AssetTokenError("Artifact 标识无效")
         payload = {
-            "v": 1,
+            "v": 2 if normalized_artifact_id else 1,
             "sha256": sha256,
             "recipient_type": recipient_type,
             "recipient_id": recipient_id,
             "exp": int(now if now is not None else time.time()) + ttl,
         }
+        if normalized_artifact_id:
+            payload["artifact_id"] = normalized_artifact_id
         encoded = _b64encode(json.dumps(
             payload,
             ensure_ascii=False,
@@ -134,11 +145,15 @@ class AssetTokenSigner:
             payload = json.loads(_b64decode(encoded).decode("utf-8"))
         except (UnicodeError, json.JSONDecodeError, TypeError) as exc:
             raise AssetTokenError("资产 Token 无效") from exc
-        if not isinstance(payload, dict) or set(payload) != {
-            "v", "sha256", "recipient_type", "recipient_id", "exp",
-        }:
+        if not isinstance(payload, dict):
             raise AssetTokenError("资产 Token 无效")
-        if payload.get("v") != 1:
+        version = payload.get("v")
+        expected_keys = {
+            "v", "sha256", "recipient_type", "recipient_id", "exp",
+        }
+        if version == 2:
+            expected_keys.add("artifact_id")
+        if version not in {1, 2} or set(payload) != expected_keys:
             raise AssetTokenError("资产 Token 无效")
         try:
             try:
@@ -150,6 +165,13 @@ class AssetTokenSigner:
                 payload.get("recipient_id"),
             )
             expires_at = int(payload.get("exp"))
+            artifact_id = str(payload.get("artifact_id") or "").strip()
+            if version == 2 and not (
+                artifact_id.startswith("art_")
+                and 8 <= len(artifact_id) <= 64
+                and artifact_id.replace("_", "").isalnum()
+            ):
+                raise AssetTokenError("资产 Token 无效")
         except (ValueError, TypeError) as exc:
             raise AssetTokenError("资产 Token 无效") from exc
         if expires_at <= int(now if now is not None else time.time()):
@@ -166,6 +188,7 @@ class AssetTokenSigner:
             recipient_type=claim_type,
             recipient_id=claim_id,
             expires_at=expires_at,
+            artifact_id=artifact_id,
         )
 
 

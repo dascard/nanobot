@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime
 
 from fastapi import FastAPI
@@ -203,8 +204,24 @@ def _business_rows(db_session):
     db_session.flush()
     db_session.add(WorkspaceAsset(
         workspace_id=WORKSPACE_ID,
+        artifact_id="art_" + "a" * 48,
         asset_sha256=ASSET_SHA256,
         logical_name="inputs/report.txt",
+        version=1,
+        source_kind="legacy",
+        acl_platform="qq",
+        acl_owner_type="user",
+        acl_owner_id="10001",
+        acl_sha256=hashlib.sha256(json.dumps(
+            {
+                "platform": "qq",
+                "owner_type": "user",
+                "owner_id": "10001",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest(),
     ))
     db_session.commit()
 

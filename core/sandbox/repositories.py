@@ -154,8 +154,74 @@ class WorkspaceAssetRepository:
                 WorkspaceAsset.workspace_id == workspace_id,
                 WorkspaceAsset.asset_sha256 == sha256,
             )
+            .order_by(
+                WorkspaceAsset.version.desc(),
+                WorkspaceAsset.id.desc(),
+            )
             .first()
         )
+
+    def get_by_artifact_id(
+        self,
+        artifact_id: str,
+    ) -> tuple[WorkspaceAsset, Asset, Workspace] | None:
+        return (
+            self.db.query(WorkspaceAsset, Asset, Workspace)
+            .join(Asset, Asset.sha256 == WorkspaceAsset.asset_sha256)
+            .join(Workspace, Workspace.id == WorkspaceAsset.workspace_id)
+            .filter(WorkspaceAsset.artifact_id == str(artifact_id or ""))
+            .one_or_none()
+        )
+
+    def get_owned_artifact(
+        self,
+        artifact_id: str,
+        principal: Principal,
+    ) -> tuple[WorkspaceAsset, Asset, Workspace] | None:
+        return (
+            self.db.query(WorkspaceAsset, Asset, Workspace)
+            .join(Asset, Asset.sha256 == WorkspaceAsset.asset_sha256)
+            .join(Workspace, Workspace.id == WorkspaceAsset.workspace_id)
+            .filter(
+                WorkspaceAsset.artifact_id == str(artifact_id or ""),
+                Workspace.platform == principal.platform,
+                Workspace.owner_type == principal.owner_type,
+                Workspace.owner_id == principal.owner_id,
+                Workspace.status == "active",
+                WorkspaceAsset.acl_platform == principal.platform,
+                WorkspaceAsset.acl_owner_type == principal.owner_type,
+                WorkspaceAsset.acl_owner_id == principal.owner_id,
+            )
+            .one_or_none()
+        )
+
+    def get_by_content_and_name(
+        self,
+        workspace_id: str,
+        sha256: str,
+        logical_name: str,
+    ) -> WorkspaceAsset | None:
+        return (
+            self.db.query(WorkspaceAsset)
+            .filter(
+                WorkspaceAsset.workspace_id == workspace_id,
+                WorkspaceAsset.asset_sha256 == sha256,
+                WorkspaceAsset.logical_name == logical_name,
+            )
+            .order_by(WorkspaceAsset.version.desc())
+            .first()
+        )
+
+    def next_version(self, workspace_id: str, logical_name: str) -> int:
+        current = (
+            self.db.query(func.max(WorkspaceAsset.version))
+            .filter(
+                WorkspaceAsset.workspace_id == workspace_id,
+                WorkspaceAsset.logical_name == logical_name,
+            )
+            .scalar()
+        )
+        return int(current or 0) + 1
 
     def get_by_logical_name(
         self,
@@ -167,6 +233,10 @@ class WorkspaceAssetRepository:
             .filter(
                 WorkspaceAsset.workspace_id == workspace_id,
                 WorkspaceAsset.logical_name == logical_name,
+            )
+            .order_by(
+                WorkspaceAsset.version.desc(),
+                WorkspaceAsset.id.desc(),
             )
             .first()
         )
@@ -180,7 +250,11 @@ class WorkspaceAssetRepository:
             self.db.query(WorkspaceAsset, Asset)
             .join(Asset, Asset.sha256 == WorkspaceAsset.asset_sha256)
             .filter(WorkspaceAsset.workspace_id == workspace_id)
-            .order_by(WorkspaceAsset.id.asc())
+            .order_by(
+                WorkspaceAsset.logical_name.asc(),
+                WorkspaceAsset.version.asc(),
+                WorkspaceAsset.id.asc(),
+            )
             .all()
         )
 

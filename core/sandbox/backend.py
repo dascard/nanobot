@@ -35,6 +35,8 @@ class SandboxBackend(Protocol):
 
     def publish_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
 
+    def materialize_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
+
     def stage_assets(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
 
     def run(self, payload: Mapping[str, Any]) -> dict[str, Any]: ...
@@ -184,6 +186,9 @@ class FakeSandboxBackend:
 
     def publish_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._call("publish_asset", payload)
+
+    def materialize_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._call("materialize_asset", payload)
 
     def stage_assets(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._call("stage_assets", payload)

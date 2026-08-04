@@ -16,6 +16,9 @@ from core.database import (
     WorkspaceQuotaBinding,
     get_db,
 )
+from core.artifact_port import SqlAlchemyArtifactPort
+from core.asset_tokens import signer_from_settings
+from core.sandbox.backend import FakeSandboxBackend
 from core.sandbox.client import AsyncSandboxdAssetClient
 from core.sandbox.contracts import SandboxErrorCode, SandboxServiceError, success_result
 from core.sandbox.paths import SandboxStorageLayout
@@ -148,7 +151,7 @@ class _FakeAssetClient:
         assert len(workspace_id) == 36
         assert media_type == "text/plain"
         assert content_length == len(ASSET_CONTENT)
-        assert request_id.startswith("assetup_")
+        assert request_id.startswith("artifactup_")
         self.upload_calls += 1
         async for chunk in content:
             self.upload_chunks.append(bytes(chunk))
@@ -159,6 +162,35 @@ class _FakeAssetClient:
                 "size_bytes": len(ASSET_CONTENT),
                 "media_type": "text/plain",
                 "storage_key": SandboxStorageLayout.asset_storage_key(ASSET_SHA256),
+            },
+        )
+
+    async def materialize_asset(self, payload, *, request_id):
+        assert request_id.startswith("artifactmat_")
+        assert payload["workspace_id"] == WORKSPACE_ID
+        assert payload["sha256"] == ASSET_SHA256
+        return success_result(
+            "写入完成",
+            data={
+                "path": payload["path"],
+                "sha256": ASSET_SHA256,
+                "size_bytes": len(ASSET_CONTENT),
+                "used_bytes": len(ASSET_CONTENT),
+                "usage_delta_bytes": len(ASSET_CONTENT),
+            },
+        )
+
+    async def publish_asset(self, payload, *, request_id):
+        assert request_id.startswith("artifactpub_")
+        return success_result(
+            "发布完成",
+            data={
+                "sha256": ASSET_SHA256,
+                "size_bytes": len(ASSET_CONTENT),
+                "media_type": "text/plain",
+                "storage_key": SandboxStorageLayout.asset_storage_key(
+                    ASSET_SHA256
+                ),
             },
         )
 
@@ -212,6 +244,19 @@ def _asset_api_client(db_session, monkeypatch, fake_client, *, bearer_override=T
     )
     settings.invalidate()
     monkeypatch.setattr(asset_routes, "_asset_client", lambda _db: fake_client)
+    backend = FakeSandboxBackend()
+
+    def artifact_port(db, *, metadata_only=False):
+        if metadata_only:
+            return SqlAlchemyArtifactPort.for_metadata(db)
+        return SqlAlchemyArtifactPort(
+            db,
+            backend=backend,
+            asset_client_factory=lambda: fake_client,
+            max_asset_bytes=512 * 1024 * 1024,
+        )
+
+    monkeypatch.setattr(asset_routes, "_artifact_port", artifact_port)
     return TestClient(app)
 
 
@@ -396,14 +441,11 @@ def test_external_asset_api_uploads_registers_authorization_and_streams_download
 
     assert upload.status_code == 200
     payload = upload.json()["data"]
-    assert payload["source_ref"] == f"asset://sha256/{ASSET_SHA256}"
+    assert payload["source_ref"].startswith("artifact://art_")
+    assert payload["content_ref"] == f"asset://sha256/{ASSET_SHA256}"
     assert payload["logical_name"] == "inputs/report.txt"
-    assert payload["recipient_type"] == "session"
-    assert payload["recipient_id"] == CHAT_STREAM_ID
-    assert payload["transport_token"]
-    assert payload["reply_token"] == (
-        f"[asset_download:{payload['transport_token']}]"
-    )
+    assert payload["reply_token"] == f"[artifact:{payload['artifact_id']}]"
+    assert "transport_token" not in payload
     assert fake.upload_calls == 1
     assert b"".join(fake.upload_chunks) == ASSET_CONTENT
 
@@ -416,13 +458,20 @@ def test_external_asset_api_uploads_registers_authorization_and_streams_download
     assert link.workspace_id == workspace.id
     assert link.asset_sha256 == asset.sha256
 
+    owner_id = f"qq:user:{GRANT_ID}"
+    transport_token = signer_from_settings(db_session).issue(
+        ASSET_SHA256,
+        artifact_id=payload["artifact_id"],
+        recipient_type="session",
+        recipient_id=owner_id,
+    )
     download_params = {
-        "token": payload["transport_token"],
+        "token": transport_token,
         "recipient_type": "session",
-        "recipient_id": CHAT_STREAM_ID,
+        "recipient_id": owner_id,
     }
     download = client.get(
-        f"/api/v1/assets/{ASSET_SHA256}/download",
+        f"/api/v1/assets/artifacts/{payload['artifact_id']}/download",
         params=download_params,
         headers={"Range": "bytes=2-5"},
     )
@@ -441,16 +490,16 @@ def test_external_asset_api_uploads_registers_authorization_and_streams_download
     assert "/run/" not in download.text
 
     wrong_recipient = client.get(
-        f"/api/v1/assets/{ASSET_SHA256}/download",
-        params={**download_params, "recipient_id": "qq:other:private"},
+        f"/api/v1/assets/artifacts/{payload['artifact_id']}/download",
+        params={**download_params, "recipient_id": "qq:user:other"},
     )
     wrong_asset = client.get(
-        f"/api/v1/assets/{'f' * 64}/download",
+        f"/api/v1/assets/artifacts/art_{'f' * 48}/download",
         params=download_params,
     )
     tampered = client.get(
-        f"/api/v1/assets/{ASSET_SHA256}/download",
-        params={**download_params, "token": payload["transport_token"] + "x"},
+        f"/api/v1/assets/artifacts/{payload['artifact_id']}/download",
+        params={**download_params, "token": transport_token + "x"},
     )
     for response in (wrong_recipient, wrong_asset, tampered):
         assert response.status_code == 404
@@ -498,12 +547,19 @@ def test_external_asset_api_preserves_416_and_requires_trusted_bearer(
     )
     assert upload.status_code == 200
     payload = upload.json()["data"]
+    owner_id = f"qq:user:{GRANT_ID}"
+    transport_token = signer_from_settings(db_session).issue(
+        ASSET_SHA256,
+        artifact_id=payload["artifact_id"],
+        recipient_type="session",
+        recipient_id=owner_id,
+    )
     unsatisfied = client.get(
-        f"/api/v1/assets/{ASSET_SHA256}/download",
+        f"/api/v1/assets/artifacts/{payload['artifact_id']}/download",
         params={
-            "token": payload["transport_token"],
+            "token": transport_token,
             "recipient_type": "session",
-            "recipient_id": CHAT_STREAM_ID,
+            "recipient_id": owner_id,
         },
         headers={"Range": "bytes=999-1000"},
     )

@@ -136,14 +136,15 @@ class Asset(Base):
 
 
 class WorkspaceAsset(Base):
-    """Workspace 对物理 Asset 的授权链接。"""
+    """Workspace 对物理 Asset 的不可变版本与 owner ACL 快照。"""
 
     __tablename__ = "workspace_assets"
     __table_args__ = (
         UniqueConstraint(
             "workspace_id",
             "logical_name",
-            name="uq_workspace_asset_logical_name",
+            "version",
+            name="uq_workspace_asset_logical_version",
         ),
         UniqueConstraint(
             "workspace_id",
@@ -151,7 +152,21 @@ class WorkspaceAsset(Base):
             "logical_name",
             name="uq_workspace_asset_link",
         ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_workspace_asset_version_positive",
+        ),
+        CheckConstraint(
+            "source_kind IN ('legacy', 'upload', 'import', 'tool', 'model', 'runtime')",
+            name="ck_workspace_asset_source_kind",
+        ),
+        CheckConstraint(
+            "acl_owner_type IN ('user', 'group', 'project')",
+            name="ck_workspace_asset_acl_owner_type",
+        ),
+        Index("ix_workspace_asset_artifact_id", "artifact_id", unique=True),
         Index("ix_workspace_asset_sha256", "asset_sha256"),
+        Index("ix_workspace_asset_source_run_id", "source_run_id"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -161,12 +176,35 @@ class WorkspaceAsset(Base):
         nullable=False,
         index=True,
     )
+    artifact_id = Column(String(64), nullable=False)
     asset_sha256 = Column(
         String(64),
         ForeignKey("assets.sha256", ondelete="RESTRICT"),
         nullable=False,
     )
     logical_name = Column(String(512), nullable=False)
+    version = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
+    source_run_id = Column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    source_kind = Column(
+        String(16),
+        nullable=False,
+        default="legacy",
+        server_default=text("'legacy'"),
+    )
+    acl_platform = Column(String(32), nullable=False)
+    acl_owner_type = Column(String(16), nullable=False)
+    acl_owner_id = Column(String(255), nullable=False)
+    acl_sha256 = Column(String(64), nullable=False)
     created_at = Column(
         DateTime,
         nullable=False,

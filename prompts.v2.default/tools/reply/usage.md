@@ -10,7 +10,7 @@ description: reply 工具的使用边界和输出约束。
 - `content` 只放真正要发给用户看的内容，不要放分析过程、工具选择理由、系统标签或 JSON 外壳。
 - 群聊回复应短、自然、贴合上下文；私聊可以更完整，但仍然避免客服腔。
 - 需要引用或 @ 时才设置 `reply_to_message_id`、`mentions`、`quote`、`at_sender` 或 `send_mode`。
-- `reply(content)` 可以包含自然语言、`[sticker:<id>]` 和 `[generated_image:<id>]`。
+- `reply(content)` 可以包含自然语言、`[sticker:<id>]` 和 `[artifact:<id>]`；`[generated_image:<id>]` 仅用于历史兼容。
 - 这些短 token 是 Nanobot 内部稳定引用，出口 renderer 会转换成当前平台可发送内容。
 - 优先使用工具返回的 `reply_token`，不要手写平台私有消息码；平台私有码只用于兼容旧输出，不是推荐格式。
 - 不要声称已经调用工具、已经发送消息或已经记住内容，除非实际工具调用已经完成。

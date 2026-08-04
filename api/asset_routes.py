@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hmac
-import secrets
 from collections.abc import AsyncIterable, AsyncIterator
 from typing import Annotated, Literal
 
@@ -12,14 +11,21 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from api.common_auth import verify_token
+from core.agent_runtime import (
+    RuntimeArtifactResolveRequest,
+    RuntimeOwnerType,
+    RuntimePrincipal,
+)
+from core.artifact_port import (
+    ArtifactStreamPublishRequest,
+    SqlAlchemyArtifactPort,
+)
 from core.asset_tokens import AssetTokenError, signer_from_settings
-from core.asset_transport import build_asset_reply_token
-from core.database import Asset, Workspace, WorkspaceAsset, get_db
-from core.sandbox.asset_service import AssetService
+from core.asset_transport import build_artifact_reply_token
+from core.database import Workspace, get_db
 from core.sandbox.asset_store import safe_media_type
 from core.sandbox.client import AsyncSandboxdAssetClient
 from core.sandbox.contracts import (
-    PublishedAsset,
     SandboxErrorCode,
     SandboxServiceError,
     success_result,
@@ -28,9 +34,7 @@ from core.sandbox.paths import validate_relative_path, validate_sha256
 from core.sandbox.tool_service import (
     authorize_sandbox_access,
     resolve_sandbox_setting,
-    workspace_policy_from_settings,
 )
-from core.sandbox.workspace_service import WorkspaceService
 
 
 router = APIRouter(tags=["assets"])
@@ -92,6 +96,16 @@ def _asset_client(db: Session) -> AsyncSandboxdAssetClient:
     )
 
 
+def _artifact_port(
+    db: Session,
+    *,
+    metadata_only: bool = False,
+) -> SqlAlchemyArtifactPort:
+    if metadata_only:
+        return SqlAlchemyArtifactPort.for_metadata(db)
+    return SqlAlchemyArtifactPort.from_settings(db)
+
+
 def _upload_error(error: SandboxServiceError) -> HTTPException:
     if error.code in {
         SandboxErrorCode.AUTHORIZATION_FAILED,
@@ -111,6 +125,68 @@ def _upload_error(error: SandboxServiceError) -> HTTPException:
     else:
         status_code = 400
     return HTTPException(status_code=status_code, detail=error.to_result())
+
+
+def _owner_from_transport_recipient(recipient_id: str) -> RuntimePrincipal:
+    parts = str(recipient_id or "").split(":", 2)
+    if len(parts) != 3:
+        raise AssetTokenError("Artifact Token owner 无效")
+    platform, owner_type, owner_id = parts
+    try:
+        return RuntimePrincipal(
+            platform=platform,
+            owner_type=RuntimeOwnerType(owner_type),
+            owner_id=owner_id,
+        )
+    except (TypeError, ValueError) as exc:
+        raise AssetTokenError("Artifact Token owner 无效") from exc
+
+
+async def _stream_asset_response(
+    *,
+    db: Session,
+    sha256: str,
+    media_type: str,
+    range_header: str,
+    filename: str,
+    disposition: str,
+) -> StreamingResponse:
+    client = _asset_client(db)
+    try:
+        upstream = await client.open_asset(sha256, range_header=range_header)
+    except SandboxServiceError as exc:
+        await client.close()
+        if exc.code in {
+            SandboxErrorCode.ASSET_NOT_FOUND,
+            SandboxErrorCode.ASSET_NOT_AUTHORIZED,
+        }:
+            raise HTTPException(404, "资产不存在或下载凭据无效") from exc
+        raise HTTPException(503, "资产下载暂时不可用") from exc
+
+    async def body_iterator():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.close()
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": f'{disposition}; filename="{filename}"',
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+    }
+    for header_name in ("content-length", "content-range"):
+        if upstream.headers.get(header_name):
+            headers[header_name.title()] = upstream.headers[header_name]
+    return StreamingResponse(
+        body_iterator(),
+        status_code=upstream.status_code,
+        headers=headers,
+        media_type=media_type,
+    )
 
 
 @router.post("/assets/upload")
@@ -140,11 +216,6 @@ async def upload_asset(
             context,
         )
         normalized_name = _safe_logical_name(logical_name)
-        signer = signer_from_settings(db)
-        workspace_service = WorkspaceService(
-            db,
-            policy=workspace_policy_from_settings(db),
-        )
         workspace = db.get(Workspace, access.workspace_id)
         if workspace is None or workspace.status != "active":
             raise SandboxServiceError(
@@ -170,78 +241,52 @@ async def upload_asset(
         resolved_media_type = safe_media_type(
             media_type or request.headers.get("content-type") or "application/octet-stream",
         )
-        client = _asset_client(db)
+        owner = RuntimePrincipal(
+            platform=str(workspace.platform),
+            owner_type=RuntimeOwnerType(str(workspace.owner_type)),
+            owner_id=str(workspace.owner_id),
+        )
+        port = _artifact_port(db)
         try:
-            response = await client.upload_asset(
+            artifact = await port.publish_stream(ArtifactStreamPublishRequest(
+                owner=owner,
                 workspace_id=workspace.id,
+                virtual_path=normalized_name,
                 media_type=resolved_media_type,
                 content=_bounded_upload_stream(
                     request.stream(),
                     max_bytes=max_asset_bytes,
                 ),
                 content_length=content_length,
-                request_id=f"assetup_{secrets.token_hex(16)}",
-            )
+                source_kind="upload",
+                overwrite=True,
+            ))
         finally:
-            await client.close()
-        data = response.get("data") if isinstance(response.get("data"), dict) else {}
-        try:
-            published = PublishedAsset(
-                sha256=str(data.get("sha256") or ""),
-                size_bytes=int(data.get("size_bytes")),
-                media_type=str(data.get("media_type") or resolved_media_type),
-                storage_key=str(data.get("storage_key") or ""),
-            )
-        except (TypeError, ValueError) as exc:
-            raise SandboxServiceError(
-                SandboxErrorCode.RUNTIME_UNAVAILABLE,
-                "Sandbox 控制面返回了无效资产元数据",
-                retryable=True,
-                stop=False,
-            ) from exc
-        asset_service = AssetService(
-            db,
-            workspace_service=workspace_service,
-            max_asset_bytes=max_asset_bytes,
-        )
-        asset, link = asset_service.register_published_for_workspace(
-            workspace.id,
-            published,
-            logical_name=normalized_name,
-        )
-        transport_token = signer.issue(
-            asset.sha256,
-            recipient_type="session",
-            recipient_id=str(access.identity.chat_stream_id),
-        )
-        claims = signer.verify(transport_token)
-        reply_token = build_asset_reply_token(transport_token)
+            port.close()
+        reply_token = build_artifact_reply_token(artifact.artifact_id)
         db.commit()
         return success_result(
             "资产上传并授权完成",
             data={
-                "source_ref": f"asset://sha256/{asset.sha256}",
-                "logical_name": link.logical_name,
-                "size_bytes": int(asset.size_bytes),
-                "media_type": asset.media_type,
-                "transport_token": transport_token,
+                "source_ref": artifact.uri,
+                "content_ref": f"asset://sha256/{artifact.sha256}",
+                "artifact_id": artifact.artifact_id,
+                "logical_name": normalized_name,
+                "version": artifact.version,
+                "size_bytes": artifact.size_bytes,
+                "media_type": artifact.media_type,
                 "reply_token": reply_token,
-                "recipient_type": claims.recipient_type,
-                "recipient_id": claims.recipient_id,
-                "expires_at": claims.expires_at,
             },
             artifacts=[{
-                "type": "asset",
-                "ref": f"asset://sha256/{asset.sha256}",
-                "logical_name": link.logical_name,
-                "size_bytes": int(asset.size_bytes),
-                "transport_token": transport_token,
+                "type": "artifact",
+                "ref": artifact.uri,
+                "artifact_id": artifact.artifact_id,
+                "logical_name": normalized_name,
+                "version": artifact.version,
+                "size_bytes": artifact.size_bytes,
                 "reply_token": reply_token,
             }],
         )
-    except AssetTokenError as exc:
-        db.rollback()
-        raise HTTPException(503, "资产下载凭据未安全配置") from exc
     except SandboxServiceError as exc:
         db.rollback()
         raise _upload_error(exc) from exc
@@ -269,9 +314,8 @@ async def download_asset(
         )
         if not hmac.compare_digest(claims.asset_sha256, digest):
             raise AssetTokenError("资产 Token 与资源不匹配")
-        asset = db.get(Asset, digest)
-        if asset is None:
-            raise AssetTokenError("资产不存在")
+        if claims.artifact_id:
+            raise AssetTokenError("Artifact Token 必须使用稳定下载端点")
         from core.sandbox.access_policy import SandboxAccessPolicy
 
         decision = SandboxAccessPolicy(db).evaluate(
@@ -282,49 +326,106 @@ async def download_asset(
         )
         if not decision.allowed:
             raise AssetTokenError("资产授权已失效")
-        authorized = (
-            db.query(WorkspaceAsset.id)
-            .filter(
-                WorkspaceAsset.workspace_id == decision.workspace_id,
-                WorkspaceAsset.asset_sha256 == digest,
-            )
-            .first()
-        )
-        if authorized is None:
+        workspace = db.get(Workspace, decision.workspace_id)
+        if workspace is None or workspace.status != "active":
             raise AssetTokenError("资产授权已失效")
-    except (AssetTokenError, SandboxServiceError):
+        artifact = _artifact_port(
+            db,
+            metadata_only=True,
+        ).resolve_sha_for_workspace_sync(
+            workspace_id=str(workspace.id),
+            sha256=digest,
+        )
+    except (AssetTokenError, PermissionError, SandboxServiceError):
         raise HTTPException(404, "资产不存在或下载凭据无效") from None
 
-    client = _asset_client(db)
+    return await _stream_asset_response(
+        db=db,
+        sha256=digest,
+        media_type=artifact.media_type,
+        range_header=range_header,
+        filename=digest,
+        disposition="attachment",
+    )
+
+
+async def _authorized_artifact_response(
+    *,
+    artifact_id: str,
+    token: str,
+    recipient_type: str,
+    recipient_id: str,
+    range_header: str,
+    disposition: str,
+    db: Session,
+) -> StreamingResponse:
     try:
-        upstream = await client.open_asset(digest, range_header=range_header)
-    except SandboxServiceError as exc:
-        await client.close()
-        if exc.code in {SandboxErrorCode.ASSET_NOT_FOUND, SandboxErrorCode.ASSET_NOT_AUTHORIZED}:
-            raise HTTPException(404, "资产不存在或下载凭据无效") from exc
-        raise HTTPException(503, "资产下载暂时不可用") from exc
+        signer = signer_from_settings(db)
+        claims = signer.verify(
+            token,
+            recipient_type=recipient_type,
+            recipient_id=recipient_id,
+        )
+        if not claims.artifact_id or not hmac.compare_digest(
+            claims.artifact_id,
+            str(artifact_id or ""),
+        ):
+            raise AssetTokenError("Artifact Token 与资源不匹配")
+        owner = _owner_from_transport_recipient(claims.recipient_id)
+        port = _artifact_port(db, metadata_only=True)
+        artifact = port.resolve_sync(RuntimeArtifactResolveRequest(
+            artifact_id=artifact_id,
+            owner=owner,
+        ))
+        if not hmac.compare_digest(claims.asset_sha256, artifact.sha256):
+            raise AssetTokenError("Artifact Token 与内容不匹配")
+    except (AssetTokenError, PermissionError, SandboxServiceError):
+        raise HTTPException(404, "资产不存在或下载凭据无效") from None
+    return await _stream_asset_response(
+        db=db,
+        sha256=artifact.sha256,
+        media_type=artifact.media_type,
+        range_header=range_header,
+        filename=artifact.artifact_id,
+        disposition=disposition,
+    )
 
-    async def body_iterator():
-        try:
-            async for chunk in upstream.aiter_bytes():
-                yield chunk
-        finally:
-            await upstream.aclose()
-            await client.close()
 
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "private, no-store",
-        "Content-Disposition": f'attachment; filename="{digest}"',
-        "Referrer-Policy": "no-referrer",
-        "X-Content-Type-Options": "nosniff",
-    }
-    for header_name in ("content-length", "content-range"):
-        if upstream.headers.get(header_name):
-            headers[header_name.title()] = upstream.headers[header_name]
-    return StreamingResponse(
-        body_iterator(),
-        status_code=upstream.status_code,
-        headers=headers,
-        media_type=asset.media_type,
+@router.get("/assets/artifacts/{artifact_id}/download")
+async def download_artifact(
+    artifact_id: str,
+    token: Annotated[str, Query(min_length=1, max_length=8192)],
+    recipient_type: Annotated[Literal["session"], Query()],
+    recipient_id: Annotated[str, Query(min_length=1, max_length=512)],
+    range_header: Annotated[str, Header(alias="Range", max_length=128)] = "",
+    db: Session = Depends(get_db),
+):
+    return await _authorized_artifact_response(
+        artifact_id=artifact_id,
+        token=token,
+        recipient_type=recipient_type,
+        recipient_id=recipient_id,
+        range_header=range_header,
+        disposition="attachment",
+        db=db,
+    )
+
+
+@router.get("/assets/artifacts/{artifact_id}/preview")
+async def preview_artifact(
+    artifact_id: str,
+    token: Annotated[str, Query(min_length=1, max_length=8192)],
+    recipient_type: Annotated[Literal["session"], Query()],
+    recipient_id: Annotated[str, Query(min_length=1, max_length=512)],
+    range_header: Annotated[str, Header(alias="Range", max_length=128)] = "",
+    db: Session = Depends(get_db),
+):
+    return await _authorized_artifact_response(
+        artifact_id=artifact_id,
+        token=token,
+        recipient_type=recipient_type,
+        recipient_id=recipient_id,
+        range_header=range_header,
+        disposition="inline",
+        db=db,
     )

@@ -616,6 +616,30 @@
     }
   ],
   "overrides": {
+    "decision.be7c037b8cc09553c003": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：所有消息历史必须移除内联二进制，不能把大结果或秘密载荷当作正文持久化"
+    },
+    "decision.a5cd840ac1c93dcd84a1": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：消息历史必须移除 file URI，避免泄露宿主文件系统边界"
+    },
+    "decision.fd5cea9e6c0cd7f54688": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：消息历史必须移除 Windows 宿主路径，稳定引用只能使用 Artifact 合同"
+    },
+    "decision.0ebb0c6519ab9cdf6417": {
+      "category": "security_invariant",
+      "disposition": "preserve",
+      "review_status": "reviewed",
+      "reason": "人工复核：消息历史必须移除 POSIX 宿主路径，模型只能看到受控虚拟路径和 Artifact 引用"
+    },
     "decision.0e9980040d8b1baa0cc2": {
       "category": "protocol_syntax",
       "disposition": "policy",

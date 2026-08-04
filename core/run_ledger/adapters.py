@@ -296,6 +296,9 @@ def runtime_event_terminal_event(
 def artifact_published_event(
     *,
     correlation: TelemetryCorrelation,
+    artifact_id: str,
+    version: int,
+    source_run_id: str,
     workspace_id: str,
     sha256: str,
     size_bytes: int,
@@ -310,8 +313,7 @@ def artifact_published_event(
         event_id=_bounded_event_id(
             "artifact",
             correlation.run_id,
-            workspace_id,
-            sha256,
+            artifact_id,
         ),
         run_id=correlation.run_id,
         event_type="artifact.recorded",
@@ -320,8 +322,10 @@ def artifact_published_event(
         correlation=correlation,
         status="published",
         payload={
-            "artifact_id": f"sha256:{sha256}",
+            "artifact_id": str(artifact_id or ""),
             "artifact_sha256": sha256,
+            "artifact_version": max(1, int(version)),
+            "source_run_id": str(source_run_id or ""),
             "workspace_id": str(workspace_id or ""),
             "media_type": str(media_type or "application/octet-stream"),
             "size_bytes": max(0, int(size_bytes or 0)),

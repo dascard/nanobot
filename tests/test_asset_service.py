@@ -204,54 +204,60 @@ def test_asset_registration_appends_body_free_run_ledger_fact(db_session):
     assert "private/report.txt" not in str(dict(artifact.event.payload))
 
 
-def test_asset_registration_maps_concurrent_logical_name_conflict(db_session):
+def test_asset_registration_creates_new_immutable_logical_version(db_session):
     principal = _principal("owner-A")
     workspace_service = WorkspaceService(db_session)
     workspace = workspace_service.ensure_default(principal)
     first_digest = "a" * 64
     second_digest = "b" * 64
-    for digest in (first_digest, second_digest):
-        db_session.add(Asset(
-            sha256=digest,
-            size_bytes=4,
-            media_type="text/plain",
-            storage_key=SandboxStorageLayout.asset_storage_key(digest),
-        ))
-    db_session.add(WorkspaceAsset(
-        workspace_id=workspace.id,
-        asset_sha256=first_digest,
-        logical_name="same.txt",
-    ))
-    db_session.commit()
     service = AssetService(
         db_session,
         workspace_service=workspace_service,
         max_asset_bytes=1024,
     )
-    real_get = service.link_repository.get_by_logical_name
-    calls = {"count": 0}
+    _first_asset, first = service.register_published(
+        principal,
+        PublishedAsset(
+            sha256=first_digest,
+            size_bytes=4,
+            media_type="text/plain",
+            storage_key=SandboxStorageLayout.asset_storage_key(first_digest),
+        ),
+        logical_name="same.txt",
+        source_run_id="run-first",
+        source_kind="tool",
+    )
+    _second_asset, second = service.register_published(
+        principal,
+        PublishedAsset(
+            sha256=second_digest,
+            size_bytes=4,
+            media_type="text/plain",
+            storage_key=SandboxStorageLayout.asset_storage_key(second_digest),
+        ),
+        logical_name="same.txt",
+        source_run_id="run-second",
+        source_kind="model",
+    )
 
-    def raced_get(workspace_id, logical_name):
-        calls["count"] += 1
-        if calls["count"] == 1:
-            return None
-        return real_get(workspace_id, logical_name)
+    assert first.version == 1
+    assert second.version == 2
+    assert first.artifact_id != second.artifact_id
+    assert first.source_run_id == "run-first"
+    assert second.source_run_id == "run-second"
+    assert service.link_repository.get_by_logical_name(
+        workspace.id,
+        "same.txt",
+    ).artifact_id == second.artifact_id
 
-    service.link_repository.get_by_logical_name = raced_get
-    with pytest.raises(SandboxServiceError) as conflict:
-        service.register_published(
-            principal,
-            PublishedAsset(
-                sha256=second_digest,
-                size_bytes=4,
-                media_type="text/plain",
-                storage_key=SandboxStorageLayout.asset_storage_key(second_digest),
-            ),
-            logical_name="same.txt",
-        )
-
-    assert calls["count"] == 2
-    assert conflict.value.code is SandboxErrorCode.ASSET_NAME_CONFLICT
+    imported_asset, imported = service.import_authorized_ref_for_workspace(
+        workspace.id,
+        f"artifact://{first.artifact_id}",
+        logical_name="",
+    )
+    assert imported_asset.sha256 == first.asset_sha256
+    assert imported.logical_name == first.logical_name
+    assert imported.artifact_id == first.artifact_id
 
 
 @pytest.mark.parametrize("kind", ["symlink", "fifo"])

@@ -162,6 +162,18 @@ class AssetPublishRequest(WorkspaceRequest):
     media_type: str = Field(default="application/octet-stream", max_length=255)
 
 
+class AssetMaterializeRequest(WorkspaceRequest):
+    sha256: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    storage_key: str = Field(min_length=1, max_length=255)
+    path: str = Field(min_length=1, max_length=4096)
+    quota_bytes: int = Field(gt=0, le=1024 * 1024 * 1024 * 1024)
+    overwrite: bool = False
+
+
 class StagedAsset(StrictModel):
     sha256: str = Field(min_length=64, max_length=64)
     storage_key: str = Field(min_length=1, max_length=255)
@@ -1286,6 +1298,30 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
             media_type=body.media_type,
         )
         return success_result("资产发布完成", data=data)
+
+    @app.post("/v1/assets/materialize")
+    def materialize_asset(
+        body: AssetMaterializeRequest,
+        current: RuntimeDependency,
+    ):
+        data = current.workspace_files.materialize_asset(
+            body.workspace_id,
+            sha256=body.sha256,
+            storage_key=body.storage_key,
+            path=body.path,
+            quota_bytes=body.quota_bytes,
+            overwrite=body.overwrite,
+        )
+        return success_result(
+            "暂存内容已写入 owner Workspace",
+            data=data,
+            artifacts=[{
+                "type": "workspace_file",
+                "ref": f"workspace://current/{data['path']}",
+                "path": data["path"],
+                "size_bytes": data["size_bytes"],
+            }],
+        )
 
     @app.post("/v1/assets/upload")
     async def upload_asset(

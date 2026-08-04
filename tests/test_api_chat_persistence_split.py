@@ -119,6 +119,58 @@ def test_persist_chat_turn_html_answer_full_archive_summary_context(db_session):
     assert turn_meta["kind"] == "artifact_summary"
 
 
+def test_persist_chat_turn_keeps_artifact_refs_but_removes_binary_and_host_paths(
+    db_session,
+):
+    artifact_id = "art_" + "a" * 48
+    req = _make_req(
+        user_id="u-artifact-history",
+        session_id="private_u-artifact-history",
+        query=(
+            "请处理 data:image/png;base64,QUJDREVGR0g= "
+            "以及 /srv/nanobot/private/input.png"
+        ),
+        files=[
+            "file:///home/service/private.png",
+            f"artifact://{artifact_id}",
+            "https://cdn.example/input.png?signature=secret",
+        ],
+    )
+    answer = (
+        f"结果 [artifact:{artifact_id}] "
+        "base64://QUJDREVGR0g= /mnt/d/private/output.png "
+        f"[asset_download:{'a' * 32}.{'b' * 32}]"
+    )
+
+    routes._persist_chat_turn(db_session, req, answer)
+
+    contents = [
+        row.content
+        for row in db_session.query(ChatLog)
+        .filter_by(user_id="u-artifact-history")
+        .all()
+    ] + [
+        row.content
+        for row in db_session.query(ConversationTurn)
+        .filter_by(user_id="u-artifact-history")
+        .all()
+    ]
+    serialized = "\n".join(contents)
+    assert f"[artifact:{artifact_id}]" in serialized
+    assert f"artifact://{artifact_id}" in serialized
+    assert "https://cdn.example/input.png" in serialized
+    for forbidden in (
+        "base64://",
+        "data:image",
+        "/srv/nanobot",
+        "/mnt/d/private",
+        "file:///home",
+        "signature=secret",
+        "[asset_download:",
+    ):
+        assert forbidden not in serialized
+
+
 def test_persist_chat_turn_source_ids_prepend_message_id_without_duplicate(db_session):
     req = _make_req(
         user_id="u-source",

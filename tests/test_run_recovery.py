@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import deque
 from collections.abc import AsyncIterator, Mapping
@@ -70,6 +71,19 @@ from core.run_recovery import (
 )
 from core.telemetry.contracts import TelemetryCorrelation
 from core.tool_plan import ToolPlan
+
+
+def _artifact_acl_sha256(owner_id: str) -> str:
+    return hashlib.sha256(json.dumps(
+        {
+            "platform": "qq",
+            "owner_type": "user",
+            "owner_id": owner_id,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
 
 
 class _ScriptedCompletionPort:
@@ -771,8 +785,15 @@ def test_artifact_plan_pins_policy_without_freezing_unrelated_inventory(db_sessi
         ),
         WorkspaceAsset(
             workspace_id=workspace.id,
+            artifact_id="art_" + "a" * 48,
             asset_sha256=digest,
             logical_name="unrelated.txt",
+            version=1,
+            source_kind="legacy",
+            acl_platform="qq",
+            acl_owner_type="user",
+            acl_owner_id="10001",
+            acl_sha256=_artifact_acl_sha256("10001"),
         ),
     ])
     db_session.commit()
@@ -812,8 +833,15 @@ async def test_preflight_rejects_artifact_acl_drift(db_session):
     )
     link = WorkspaceAsset(
         workspace_id=workspace.id,
+        artifact_id="art_" + "b" * 48,
         asset_sha256=digest,
         logical_name="report.txt",
+        version=1,
+        source_kind="legacy",
+        acl_platform="qq",
+        acl_owner_type="user",
+        acl_owner_id="10001",
+        acl_sha256=_artifact_acl_sha256("10001"),
     )
     db_session.add_all([workspace, asset, link])
     db_session.commit()
@@ -836,7 +864,8 @@ async def test_preflight_rejects_artifact_acl_drift(db_session):
             result={
                 "status": "success",
                 "data": {
-                    "ref": f"asset://sha256/{digest}",
+                    "ref": f"artifact://{link.artifact_id}",
+                    "artifact_id": link.artifact_id,
                     "size_bytes": 4,
                     "media_type": "text/plain",
                 },
@@ -855,6 +884,13 @@ async def test_preflight_rejects_artifact_acl_drift(db_session):
         model_route=route,
         last_tool_result=result,
     ))
+    state = SqlAlchemyRunRecoveryService(db_session).load_checkpoint(
+        checkpoint.checkpoint_id,
+        _principal(),
+    )
+    assert state.artifact_proofs[0].artifact_id == (
+        f"artifact://{link.artifact_id}"
+    )
     _terminate_run(db_session, identity)
     db_session.delete(link)
     db_session.commit()

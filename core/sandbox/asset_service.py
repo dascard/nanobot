@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -39,6 +42,54 @@ def _safe_logical_name(value: str) -> str:
             "资产逻辑文件名无效",
         )
     return normalized
+
+
+_SOURCE_KINDS = frozenset({
+    "legacy",
+    "upload",
+    "import",
+    "tool",
+    "model",
+    "runtime",
+})
+
+
+def _source_kind(value: str) -> str:
+    normalized = str(value or "runtime").strip().lower()
+    if normalized not in _SOURCE_KINDS:
+        raise ValueError(f"Artifact source_kind 无效：{normalized or '<empty>'}")
+    return normalized
+
+
+def _acl_snapshot(workspace: Workspace) -> tuple[str, str]:
+    payload = json.dumps(
+        {
+            "platform": str(workspace.platform),
+            "owner_type": str(workspace.owner_type),
+            "owner_id": str(workspace.owner_id),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return payload, hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _artifact_id(
+    *,
+    workspace_id: str,
+    logical_name: str,
+    version: int,
+    sha256: str,
+) -> str:
+    digest = hashlib.sha256(
+        json.dumps(
+            [workspace_id, logical_name, int(version), sha256],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"art_{digest[:48]}"
 
 
 class AssetService:
@@ -87,12 +138,16 @@ class AssetService:
         published: PublishedAsset,
         *,
         logical_name: str,
+        source_run_id: str = "",
+        source_kind: str = "runtime",
     ) -> tuple[Asset, WorkspaceAsset]:
         workspace = self.workspace_service.current(principal)
         return self.register_published_for_workspace(
             workspace.id,
             published,
             logical_name=logical_name,
+            source_run_id=source_run_id,
+            source_kind=source_kind,
         )
 
     def register_published_for_workspace(
@@ -101,8 +156,10 @@ class AssetService:
         published: PublishedAsset,
         *,
         logical_name: str,
+        source_run_id: str = "",
+        source_kind: str = "runtime",
     ) -> tuple[Asset, WorkspaceAsset]:
-        """为已经由 SandboxAccessPolicy 授权的 Workspace 注册资产。"""
+        """登记已从 owner Workspace 发布的不可变 Artifact 版本。"""
 
         workspace = self._require_workspace(workspace_id)
         sha256 = validate_sha256(published.sha256)
@@ -117,6 +174,15 @@ class AssetService:
             raise _asset_runtime_error()
         normalized_name = _safe_logical_name(logical_name)
         media_type = _safe_media_type(published.media_type)
+        normalized_source_kind = _source_kind(source_kind)
+        from core.runtime.event_bus import current_runtime_event_context
+
+        correlation = current_runtime_event_context()
+        normalized_source_run_id = str(
+            source_run_id or correlation.run_id or ""
+        ).strip()
+        if len(normalized_source_run_id) > 64:
+            raise ValueError("Artifact source_run_id 超过 64 字符")
 
         asset = self.asset_repository.get(sha256)
         if asset is None:
@@ -141,50 +207,64 @@ class AssetService:
         ):
             raise _asset_runtime_error()
 
-        existing_link = self.link_repository.get_by_logical_name(
+        existing_link = self.link_repository.get_by_content_and_name(
             workspace.id,
+            sha256,
             normalized_name,
         )
         if existing_link is not None:
-            if existing_link.asset_sha256 != sha256:
-                raise SandboxServiceError(
-                    SandboxErrorCode.ASSET_NAME_CONFLICT,
-                    "当前 Workspace 已存在同名的其他资产",
-                    hint="请使用新的逻辑文件名",
-                )
-            self._record_published_asset(workspace, asset)
+            self._record_published_artifact(workspace, asset, existing_link)
             return asset, existing_link
 
-        candidate_link = WorkspaceAsset(
-            workspace_id=workspace.id,
-            asset_sha256=sha256,
-            logical_name=normalized_name,
-        )
-        try:
-            with self.db.begin_nested():
-                self.link_repository.add(candidate_link)
-                self.db.flush()
-            link = candidate_link
-        except IntegrityError:
-            link = self.link_repository.get_by_logical_name(
+        _acl_json, acl_sha256 = _acl_snapshot(workspace)
+        link: WorkspaceAsset | None = None
+        for _attempt in range(4):
+            version = self.link_repository.next_version(
                 workspace.id,
                 normalized_name,
             )
-            if link is None:
-                raise _asset_runtime_error() from None
-            if link.asset_sha256 != sha256:
-                raise SandboxServiceError(
-                    SandboxErrorCode.ASSET_NAME_CONFLICT,
-                    "当前 Workspace 已存在同名的其他资产",
-                    hint="请使用新的逻辑文件名",
-                ) from None
-        self._record_published_asset(workspace, asset)
+            candidate_link = WorkspaceAsset(
+                workspace_id=workspace.id,
+                artifact_id=_artifact_id(
+                    workspace_id=str(workspace.id),
+                    logical_name=normalized_name,
+                    version=version,
+                    sha256=sha256,
+                ),
+                asset_sha256=sha256,
+                logical_name=normalized_name,
+                version=version,
+                source_run_id=normalized_source_run_id,
+                source_kind=normalized_source_kind,
+                acl_platform=str(workspace.platform),
+                acl_owner_type=str(workspace.owner_type),
+                acl_owner_id=str(workspace.owner_id),
+                acl_sha256=acl_sha256,
+            )
+            try:
+                with self.db.begin_nested():
+                    self.link_repository.add(candidate_link)
+                    self.db.flush()
+                link = candidate_link
+                break
+            except IntegrityError:
+                link = self.link_repository.get_by_content_and_name(
+                    workspace.id,
+                    sha256,
+                    normalized_name,
+                )
+                if link is not None:
+                    break
+        if link is None:
+            raise _asset_runtime_error()
+        self._record_published_artifact(workspace, asset, link)
         return asset, link
 
-    def _record_published_asset(
+    def _record_published_artifact(
         self,
         workspace: Workspace,
         asset: Asset,
+        link: WorkspaceAsset,
     ) -> None:
         """与资产登记共用事务写入不可变版本事实，不保存路径或 URI。"""
 
@@ -199,6 +279,9 @@ class AssetService:
 
         event = artifact_published_event(
             correlation=correlation,
+            artifact_id=str(link.artifact_id),
+            version=int(link.version),
+            source_run_id=str(link.source_run_id or ""),
             workspace_id=str(workspace.id),
             sha256=str(asset.sha256),
             size_bytes=int(asset.size_bytes),
@@ -246,8 +329,12 @@ class AssetService:
         *,
         logical_name: str,
     ) -> tuple[Asset, WorkspaceAsset]:
-        prefix = "asset://sha256/"
-        if not str(source_ref).startswith(prefix):
+        raw_ref = str(source_ref or "")
+        if not (
+            raw_ref.startswith("asset://sha256/")
+            or raw_ref.startswith("artifact://")
+            or (raw_ref.startswith("[artifact:") and raw_ref.endswith("]"))
+        ):
             raise SandboxServiceError(
                 SandboxErrorCode.ASSET_NOT_AUTHORIZED,
                 "资产不存在或当前 Workspace 无权访问",
@@ -266,17 +353,33 @@ class AssetService:
         *,
         logical_name: str,
     ) -> tuple[Asset, WorkspaceAsset]:
-        prefix = "asset://sha256/"
-        if not str(source_ref).startswith(prefix):
-            raise SandboxServiceError(
-                SandboxErrorCode.ASSET_NOT_AUTHORIZED,
-                "资产不存在或当前 Workspace 无权访问",
+        raw_ref = str(source_ref or "")
+        asset_prefix = "asset://sha256/"
+        artifact_prefix = "artifact://"
+        marker_prefix = "[artifact:"
+        if raw_ref.startswith(asset_prefix):
+            sha256 = validate_sha256(raw_ref[len(asset_prefix):])
+            source_link, asset = self.require_authorized_for_workspace(
+                workspace_id,
+                sha256,
             )
-        sha256 = validate_sha256(str(source_ref)[len(prefix):])
-        _source_link, asset = self.require_authorized_for_workspace(
-            workspace_id,
-            sha256,
-        )
+        else:
+            if raw_ref.startswith(artifact_prefix):
+                artifact_id = raw_ref[len(artifact_prefix):]
+            elif raw_ref.startswith(marker_prefix) and raw_ref.endswith("]"):
+                artifact_id = raw_ref[len(marker_prefix):-1]
+            else:
+                raise SandboxServiceError(
+                    SandboxErrorCode.ASSET_NOT_AUTHORIZED,
+                    "资产不存在或当前 Workspace 无权访问",
+                )
+            resolved = self.link_repository.get_by_artifact_id(artifact_id)
+            if resolved is None or resolved[0].workspace_id != workspace_id:
+                raise SandboxServiceError(
+                    SandboxErrorCode.ASSET_NOT_AUTHORIZED,
+                    "资产不存在或当前 Workspace 无权访问",
+                )
+            source_link, asset, _workspace = resolved
         return self.register_published_for_workspace(
             workspace_id,
             PublishedAsset(
@@ -285,7 +388,8 @@ class AssetService:
                 media_type=asset.media_type,
                 storage_key=asset.storage_key,
             ),
-            logical_name=logical_name,
+            logical_name=str(logical_name or source_link.logical_name),
+            source_kind="import",
         )
 
     def _require_workspace(self, workspace_id: str) -> Workspace:

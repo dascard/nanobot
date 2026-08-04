@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 4.3，Checkpoint、Resume、Fork 和 Rewind 已完成）
+> 状态：执行中（阶段 4.5，Artifact 生命周期已完成，准备阶段 5.1）
 >
 > 建立日期：2026-08-03
 >
@@ -690,10 +690,35 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 4.5 Artifact 生命周期
 
-- [ ] 工具和模型先写 owner workspace。
-- [ ] 发布时生成 hash、MIME、大小、来源 Run、ACL 和不可变版本。
-- [ ] 预览、下载、消息渲染和跨会话引用只通过 `ArtifactPort`。
-- [ ] 不把 base64 或宿主真实路径写进消息历史。
+- [x] 工具和模型先写 owner workspace。
+- [x] 发布时生成 hash、MIME、大小、来源 Run、ACL 和不可变版本。
+- [x] 预览、下载、消息渲染和跨会话引用只通过 `ArtifactPort`。
+- [x] 不把 base64 或宿主真实路径写进消息历史。
+
+实现与验证证据：
+
+- 新增框架无关 `ArtifactPort` 合同和生产 `SqlAlchemyArtifactPort`。模型及工具生成内容先经
+  `sandboxd` 将校验过的 CAS 临时对象物化到 owner workspace，再注册逻辑 Artifact；服务端决定
+  workspace、存储键和目标路径，模型不能提交宿主路径或 Docker 参数。数据库以
+  `(workspace_id, logical_name, version)` 保证不可变版本，记录稳定 Artifact ID、SHA-256、MIME、
+  大小、来源 Run／来源类型、ACL hash 和创建时间；同名同内容重试保持幂等，同名新内容产生新版本。
+- `asset_publish`、`asset_import`、聊天上传和图片生成均切换到生产 Artifact Port。图片模型输出在内存中
+  验证 PNG 后流式发布，不再落入仓库 `generated_images/`；管理端测试生成入口也返回稳定
+  `[artifact:<id>:v<version>]` 引用和签名预览地址。旧 generated-image 列表和文件读取仅保留为历史数据
+  的只读兼容入口，新写入路径不再双写旧文件或元数据。
+- 下载、预览、QQ／Web 消息最终渲染及跨会话引用统一先解析稳定 Artifact URI，并在最终传输边界按
+  当前 owner 生成短期签名令牌；令牌 v2 绑定 Artifact ID、版本、owner、用途和过期时间。恢复服务会
+  对 Checkpoint 中的 Artifact 逐项复核版本、workspace、ACL、hash、MIME 和大小，旧
+  `asset://sha256` proof 只作为迁移兼容读取，不再成为新写入合同。
+- `ChatLog` 与 `ConversationTurn` 在 ORM 持久化边界统一清除 data/base64、`file://`、Windows／POSIX
+  宿主路径和旧短凭据；聊天、工具、ambient 与群聊等直接写入路径共用同一保护。消息正文只保存稳定
+  Artifact 引用，不依赖 base64 或宿主真实路径重建大结果。
+- 已同步检查并更新 image generation、asset publish/import、reply、sticker 和 QQ common 的 canonical
+  Prompt Runtime 默认模板及受版本管理的运行时副本；`variables.py` 与 `template_registry.py` 的变量和
+  注册合同仍然准确。Artifact／恢复／消息持久化／Sandbox／Prompt Runtime 联合定向回归 576 passed，
+  管理端和 Artifact 最新回归 162 passed；最终完整 `python -m pytest tests/ -v` 为 6542 passed、
+  12 skipped、0 failed。架构边界、OpenAPI 生成物、行为基线、Release／Verification Golden、决策规则、
+  Task SLO、致命静态错误检查、Python 编译和 `git diff --check` 均通过。
 
 验收条件：可重建任意已保留 Run 的状态和可见上下文；恢复不会重复有副作用操作；大结果不再依赖消息正文保存。
 

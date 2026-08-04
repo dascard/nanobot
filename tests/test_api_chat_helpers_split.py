@@ -68,13 +68,33 @@ def test_chatlog_and_conversation_content_keep_different_file_archive_contracts(
         "看看\n"
         "[图片附件 2 张]\n"
         "[图片1] http://img.example/a.png\n"
-        "[图片2] token://b"
+        "[图片2] [本地附件引用已移除]"
     )
     assert conversation_content == (
         "看看\n[用户附带了 2 张图片，请结合图片内容理解并回答]"
     )
     assert "http://img.example/a.png" not in conversation_content
     assert "token://b" not in conversation_content
+
+
+def test_all_message_history_models_remove_binary_host_paths_and_credentials():
+    from core.database import ChatLog, ConversationTurn
+
+    artifact_id = "art_" + "a" * 48
+    unsafe = (
+        "结果 [artifact:" + artifact_id + "] "
+        "base64://QUJDREVGR0g= /srv/nanobot/private/output.png "
+        "[asset_download:" + "x" * 40 + "]"
+    )
+
+    for row in (
+        ChatLog(content=unsafe),
+        ConversationTurn(content=unsafe),
+    ):
+        assert f"[artifact:{artifact_id}]" in row.content
+        assert "base64://" not in row.content
+        assert "/srv/nanobot" not in row.content
+        assert "asset_download" not in row.content
 
 
 def test_chat_stream_event_contract_is_available_through_parent_facade():

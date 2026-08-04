@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from api.admin.common import audit_request as _audit_request
 from api.admin.common import verify_admin
+from core.asset_transport import ARTIFACT_REF_PATTERN, artifact_preview_url
 from core.database import StickerMemory, get_db
 
 logger = logging.getLogger("nanobot.admin")
@@ -172,6 +174,7 @@ def list_generated_images(
 @router.post("/generated-images")
 async def create_generated_image(
     body: GeneratedImageCreate,
+    db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
     from app.tool_services.image_generation import execute_image_generation
@@ -179,24 +182,37 @@ async def create_generated_image(
         IMAGE_GENERATION_MODEL,
         IMAGE_GENERATION_PROMPT_MAX_CHARS,
     )
-    from core.generated_images import GENERATED_IMAGE_REF_PATTERN, get_generated_image
+    from core.agent_runtime.request_scope import runtime_context_scope
     from core.media_tool_runtime import get_image_generation_provider
 
     prompt = str(body.prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=422, detail="prompt is required")
 
-    result = await execute_image_generation(
-        {
-            "prompt": prompt,
-            "size": body.size,
-            "quality": body.quality,
-            "background": body.background,
-        },
-        generate=get_image_generation_provider().generate,
-        model=str(IMAGE_GENERATION_MODEL or ""),
-        prompt_max_chars=IMAGE_GENERATION_PROMPT_MAX_CHARS,
-    )
+    operation_id = f"admin_image_{uuid.uuid4().hex}"
+    with runtime_context_scope({
+        "chat_type": "system",
+        "runtime_chat_type": "system",
+        "platform": "nanobot",
+        "owner_type": "project",
+        "owner_id": "admin-generated-images",
+        "run_id": operation_id,
+        "turn_id": operation_id,
+        "correlation_id": operation_id,
+        "actor_type": "system",
+        "actor_id": "admin-generated-images",
+    }):
+        result = await execute_image_generation(
+            {
+                "prompt": prompt,
+                "size": body.size,
+                "quality": body.quality,
+                "background": body.background,
+            },
+            generate=get_image_generation_provider().generate,
+            model=str(IMAGE_GENERATION_MODEL or ""),
+            prompt_max_chars=IMAGE_GENERATION_PROMPT_MAX_CHARS,
+        )
     if result.error:
         error = str(result.error or "image generation failed")
         raise HTTPException(status_code=502, detail=error)
@@ -209,15 +225,34 @@ async def create_generated_image(
         raise HTTPException(status_code=500, detail="invalid image generation output")
 
     reply_token = str(payload.get("reply_token") or "")
-    match = GENERATED_IMAGE_REF_PATTERN.search(reply_token)
+    match = ARTIFACT_REF_PATTERN.fullmatch(reply_token)
     if not match:
         raise HTTPException(status_code=500, detail="image generation output missing reply_token")
-
     try:
-        item = get_generated_image(match.group(1))
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="generated image file not found")
-    item["image_url"] = f"/api/v1/admin/generated-images/{item['id']}/image"
+        image_url = artifact_preview_url(match.group(1), db=db)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="generated Artifact preview unavailable",
+        ) from exc
+    item = {
+        "id": match.group(1),
+        "artifact_id": match.group(1),
+        "ref": str(payload.get("ref") or ""),
+        "reply_token": reply_token,
+        "prompt": prompt,
+        "prompt_preview": prompt[:200],
+        "model": str(payload.get("model") or ""),
+        "size": str(payload.get("size") or ""),
+        "quality": str(payload.get("quality") or ""),
+        "background": str(payload.get("background") or ""),
+        "mime": str(payload.get("mime") or "image/png"),
+        "bytes": int(payload.get("image_bytes") or 0),
+        "version": int(payload.get("version") or 1),
+        "source_run_id": str(payload.get("source_run_id") or ""),
+        "created_at": "",
+        "image_url": image_url,
+    }
     return {
         "ok": True,
         "item": item,

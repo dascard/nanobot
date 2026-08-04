@@ -508,6 +508,8 @@ class RuntimeArtifactRef:
     sha256: str = ""
     media_type: str = "application/octet-stream"
     size_bytes: int = 0
+    version: int = 1
+    source_run_id: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -530,6 +532,13 @@ class RuntimeArtifactRef:
         )
         if type(self.size_bytes) is not int or self.size_bytes < 0:
             raise ValueError("artifact.size_bytes 必须是非负整数")
+        if type(self.version) is not int or self.version < 1:
+            raise ValueError("artifact.version 必须是正整数")
+        object.__setattr__(
+            self,
+            "source_run_id",
+            str(self.source_run_id or "").strip(),
+        )
 
 
 @dataclass(frozen=True, slots=True)

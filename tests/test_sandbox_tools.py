@@ -53,6 +53,11 @@ def _trusted_agent_runtime_context():
         "group_id": "",
         "platform": "qq",
         "session_id": "private_super-1",
+        "run_id": "run_sandbox_tool_test",
+        "turn_id": "turn_sandbox_tool_test",
+        "correlation_id": "corr_sandbox_tool_test",
+        "owner_type": "user",
+        "owner_id": "super-1",
     }):
         yield
 
@@ -690,15 +695,11 @@ def test_asset_publish_registers_authorized_immutable_reference(db_session):
     body = json.loads(result.output)
 
     assert body["status"] == "success"
-    assert body["data"]["ref"] == f"asset://sha256/{digest}"
-    assert body["data"]["transport_token"]
-    assert body["data"]["reply_token"] == (
-        f"[asset_download:{body['data']['transport_token']}]"
-    )
-    assert body["data"]["recipient_type"] == "session"
-    assert body["data"]["recipient_id"] == "qq:super-1:private"
-    assert body["data"]["expires_at"] > 0
-    assert body["artifacts"][0]["transport_token"] == body["data"]["transport_token"]
+    assert body["data"]["ref"].startswith("artifact://art_")
+    assert body["data"]["content_ref"] == f"asset://sha256/{digest}"
+    assert body["data"]["reply_token"].startswith("[artifact:art_")
+    assert "transport_token" not in body["data"]
+    assert body["data"]["version"] == 1
     assert body["artifacts"][0]["reply_token"] == body["data"]["reply_token"]
     assert db_session.query(Asset).filter_by(sha256=digest).count() == 1
     assert db_session.query(WorkspaceAsset).filter_by(asset_sha256=digest).count() == 1

@@ -27,7 +27,6 @@ from core.agent_runtime import (
     runtime_model_route_sha256,
 )
 from core.db.models import (
-    Asset,
     RunCheckpointRow,
     RunSideEffectReceipt,
 )
@@ -185,35 +184,47 @@ def _proofs_from_result(
 
     artifact_values: dict[str, RunRecoveryArtifactProof] = {}
     candidates = list(_sequence(output.get("artifacts")))
-    if data.get("ref"):
+    if data.get("ref") or data.get("artifact_id"):
         candidates.append(data)
-    prefix = "asset://sha256/"
+    if db is None:
+        return (
+            tuple(file_values[key] for key in sorted(file_values)),
+            (),
+        )
+    from core.artifact_port import SqlAlchemyArtifactPort
+
+    port = SqlAlchemyArtifactPort.for_metadata(db)
+    artifact_prefix = "artifact://"
+    content_prefix = "asset://sha256/"
     for item in candidates:
         row = _mapping(item)
         reference = str(row.get("ref") or "")
-        if not reference.startswith(prefix):
-            continue
-        digest = reference[len(prefix):].lower()
-        if not _is_sha256(digest):
-            continue
-        asset = db.get(Asset, digest) if db is not None else None
         try:
+            if reference.startswith(artifact_prefix):
+                artifact = port.resolve_for_workspace_sync(
+                    workspace_id=workspace_id,
+                    artifact_id=reference[len(artifact_prefix):],
+                )
+            elif str(row.get("artifact_id") or "").startswith("art_"):
+                artifact = port.resolve_for_workspace_sync(
+                    workspace_id=workspace_id,
+                    artifact_id=str(row.get("artifact_id") or ""),
+                )
+            elif reference.startswith(content_prefix):
+                artifact = port.resolve_sha_for_workspace_sync(
+                    workspace_id=workspace_id,
+                    sha256=reference[len(content_prefix):],
+                )
+            else:
+                continue
             proof = RunRecoveryArtifactProof(
                 workspace_id=workspace_id,
-                artifact_id=reference,
-                sha256=digest,
-                size_bytes=int(
-                    getattr(asset, "size_bytes", row.get("size_bytes") or 0)
-                ),
-                media_type=str(
-                    getattr(
-                        asset,
-                        "media_type",
-                        row.get("media_type") or "application/octet-stream",
-                    )
-                ),
+                artifact_id=artifact.uri,
+                sha256=artifact.sha256,
+                size_bytes=artifact.size_bytes,
+                media_type=artifact.media_type,
             )
-        except (TypeError, ValueError):
+        except (PermissionError, TypeError, ValueError):
             continue
         artifact_values[proof.artifact_id] = proof
     return (

@@ -163,6 +163,28 @@ def test_schema_migrations_records_applied_versions():
         for row in inspector.get_indexes("workspaces")
     }
     assert "ix_workspace_owner" in workspace_indexes
+    workspace_asset_columns = {
+        column["name"]
+        for column in inspector.get_columns("workspace_assets")
+    }
+    assert {
+        "artifact_id",
+        "version",
+        "source_run_id",
+        "source_kind",
+        "acl_platform",
+        "acl_owner_type",
+        "acl_owner_id",
+        "acl_sha256",
+    } <= workspace_asset_columns
+    workspace_asset_indexes = {
+        row["name"]
+        for row in inspector.get_indexes("workspace_assets")
+    }
+    assert {
+        "ix_workspace_asset_artifact_id",
+        "ix_workspace_asset_source_run_id",
+    } <= workspace_asset_indexes
     sandbox_run_columns = {
         column["name"]
         for column in inspector.get_columns("sandbox_runs")
@@ -183,6 +205,8 @@ def test_schema_migrations_records_applied_versions():
         "stdout_bytes",
         "stderr_bytes",
     } <= sandbox_run_columns
+
+
     grant_columns = {
         column["name"]
         for column in inspector.get_columns("sandbox_access_grants")
@@ -311,6 +335,88 @@ def test_schema_migrations_records_applied_versions():
 
     assert [row[0] for row in rows] == sorted(version for version, _, _ in MIGRATIONS)
     assert project_sequence == 10000
+
+
+def test_artifact_lifecycle_migration_backfills_owner_acl_and_version():
+    from core.schema_migrations import MIGRATIONS, run_schema_migrations
+
+    version = "20260804_artifact_lifecycle_v1"
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations ("
+            "version TEXT PRIMARY KEY, name TEXT NOT NULL, "
+            "applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(
+            text(
+                "INSERT INTO schema_migrations(version, name) "
+                "VALUES (:version, :name)"
+            ),
+            [
+                {"version": item_version, "name": name}
+                for item_version, name, _migration in MIGRATIONS
+                if item_version != version
+            ],
+        )
+        conn.execute(text(
+            "CREATE TABLE workspaces ("
+            "id VARCHAR(36) PRIMARY KEY, platform VARCHAR(32) NOT NULL, "
+            "owner_type VARCHAR(16) NOT NULL, owner_id VARCHAR(255) NOT NULL)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE assets ("
+            "sha256 VARCHAR(64) PRIMARY KEY, size_bytes BIGINT NOT NULL, "
+            "media_type VARCHAR(255) NOT NULL, storage_key VARCHAR(255) NOT NULL)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE workspace_assets ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "workspace_id VARCHAR(36) NOT NULL, asset_sha256 VARCHAR(64) NOT NULL, "
+            "logical_name VARCHAR(512) NOT NULL, "
+            "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "UNIQUE (workspace_id, logical_name), "
+            "UNIQUE (workspace_id, asset_sha256, logical_name))"
+        ))
+        conn.execute(text(
+            "INSERT INTO workspaces VALUES "
+            "('00000000-0000-0000-0000-000000000001', 'qq', 'user', '10001')"
+        ))
+        conn.execute(text(
+            "INSERT INTO assets VALUES ("
+            f"'{'a' * 64}', 4, 'text/plain', 'sha256/{'a' * 64}')"
+        ))
+        conn.execute(text(
+            "INSERT INTO workspace_assets(workspace_id, asset_sha256, logical_name) "
+            "VALUES ('00000000-0000-0000-0000-000000000001', "
+            f"'{'a' * 64}', 'reports/a.txt')"
+        ))
+
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    unique_columns = {
+        tuple(row["column_names"])
+        for row in inspector.get_unique_constraints("workspace_assets")
+    }
+    assert ("workspace_id", "logical_name", "version") in unique_columns
+    assert ("workspace_id", "logical_name") not in unique_columns
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT artifact_id, version, source_run_id, source_kind, "
+            "acl_platform, acl_owner_type, acl_owner_id, acl_sha256 "
+            "FROM workspace_assets"
+        )).mappings().one()
+    assert row["artifact_id"].startswith("art_")
+    assert row["version"] == 1
+    assert row["source_run_id"] == ""
+    assert row["source_kind"] == "legacy"
+    assert (row["acl_platform"], row["acl_owner_type"], row["acl_owner_id"]) == (
+        "qq",
+        "user",
+        "10001",
+    )
+    assert len(row["acl_sha256"]) == 64
 
 
 def test_scheduled_task_owner_migration_scopes_valid_rows_and_blocks_unknown():

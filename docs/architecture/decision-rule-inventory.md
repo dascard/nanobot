@@ -1,10 +1,10 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`9ae80e181b1a444f872086af54e708955fa6709e`
-- 规则总数：7665
+- 源提交：`016f30d7f9858a09c5e35b2e02a6eb485a2c8ae4`
+- 规则总数：7733
 - 扫描错误：0
-- 人工复核队列：713
+- 人工复核队列：717
 - 完整逐项记录：`decision-rule-inventory.json`
 
 ## 分类汇总
@@ -12,28 +12,28 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 136 |
-| `configurable_policy` | 1387 |
-| `data_consistency` | 462 |
+| `configurable_policy` | 1391 |
+| `data_consistency` | 464 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4112 |
-| `security_invariant` | 1532 |
+| `protocol_syntax` | 4145 |
+| `security_invariant` | 1561 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `core/schema_migrations.py` | 225 |
+| `core/schema_migrations.py` | 233 |
 | `scripts/manage-sandbox-production.sh` | 179 |
 | `core/scheduled_workflow.py` | 133 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
 | `core/proactive_research.py` | 82 |
 | `core/scheduled_task_contract.py` | 79 |
-| `sandboxd/filesystem.py` | 76 |
+| `sandboxd/filesystem.py` | 77 |
 | `api/admin/sandbox_routes.py` | 75 |
 | `api/admin/model_routes.py` | 73 |
-| `sandboxd/app.py` | 70 |
+| `sandboxd/app.py` | 71 |
 | `core/semantic/backfill.py` | 68 |
 | `core/outbound/delivery_claims.py` | 65 |
 | `core/outbound_delivery_schema.py` | 64 |
@@ -47,11 +47,11 @@
 | `core/tracing.py` | 53 |
 | `app/memory_digest/llm_builder.py` | 51 |
 | `core/proactive_outreach_schema.py` | 51 |
+| `core/run_recovery/service.py` | 50 |
 | `api/admin/model_preset_routes.py` | 49 |
 | `clients/model_registry.py` | 49 |
 | `api/admin/reply_routes.py` | 48 |
 | `core/daily_digest.py` | 47 |
-| `core/run_recovery/service.py` | 47 |
 | `core/sandbox/process_service.py` | 47 |
 | `core/scheduled_task_outbound.py` | 47 |
 | `clients/classifier_client.py` | 46 |
@@ -117,6 +117,7 @@
 | `core/run_ledger/projection.py` | 23 |
 | `sandboxd/lease_store.py` | 23 |
 | `core/sandbox/access_policy.py` | 22 |
+| `core/sandbox/tool_service.py` | 22 |
 | `api/admin/proactive_outreach_routes.py` | 21 |
 | `core/db/group_learning_command_adapter.py` | 21 |
 | `core/prompt_v2/task_contracts.py` | 21 |
@@ -144,7 +145,6 @@
 | `core/outbound/control_transitions.py` | 18 |
 | `core/prompt_v2/compiler.py` | 18 |
 | `core/sandbox/lease_service.py` | 18 |
-| `core/sandbox/tool_service.py` | 18 |
 | `core/sql_readonly.py` | 18 |
 | `core/task_runtime/validators.py` | 18 |
 | `core/tool_contracts/ai_daily.py` | 18 |
@@ -154,6 +154,7 @@
 | `api/history_log_routes.py` | 17 |
 | `app/group_analysis/analyzer.py` | 17 |
 | `core/agent_manifest/validation.py` | 17 |
+| `core/asset_tokens.py` | 17 |
 | `core/semantic/adapters.py` | 17 |
 | `core/settings_specs.py` | 17 |
 | `scripts/migrate-sandbox-project-map.py` | 17 |
@@ -188,6 +189,7 @@
 | `api/chat_response_contract.py` | 14 |
 | `app/session_memory/summarizer.py` | 14 |
 | `config.py` | 14 |
+| `core/agent_runtime/contracts.py` | 14 |
 | `core/ai_daily_ingest.py` | 14 |
 | `core/config_registry.py` | 14 |
 | `core/eval_sampling/store.py` | 14 |
@@ -204,7 +206,6 @@
 | `webui/src/features/triggers/TriggersPage.test.jsx` | 14 |
 | `app/group_learning/migration_audit.py` | 13 |
 | `clients/reply_route_chat_completion_adapter.py` | 13 |
-| `core/agent_runtime/contracts.py` | 13 |
 | `core/db/group_learning_schedule_adapter.py` | 13 |
 | `core/group_runtime/state.py` | 13 |
 | `core/prompt_v2/template_baseline.py` | 13 |
@@ -231,7 +232,7 @@
 | `api/admin/persona_routes.py` | 11 |
 | `api/agent_link_routes.py` | 11 |
 | `core/agent_runtime/service_ports.py` | 11 |
-| `core/asset_tokens.py` | 11 |
+| `core/asset_transport.py` | 11 |
 | `core/generated_images.py` | 11 |
 | `core/proactive/serialization.py` | 11 |
 | `core/prompt_v2/task_templates.py` | 11 |
@@ -251,12 +252,15 @@
 | `core/eval_sampling/timing_signal_audit.py` | 10 |
 | `core/model_provider/route_registry.py` | 10 |
 | `core/outbound/projection.py` | 10 |
+| `core/persisted_content.py` | 10 |
 | `core/prompt_v2/template_resolution.py` | 10 |
 | `core/runtime/events.py` | 10 |
+| `core/sandbox/asset_service.py` | 10 |
 | `scripts/build_semantic_task_baseline.py` | 10 |
 | `scripts/docker-build.sh` | 10 |
 | `scripts/sandbox-smoke-summary.py` | 10 |
 | `scripts/sandbox-smoke-test.sh` | 10 |
+| `api/asset_routes.py` | 9 |
 | `api/routes.py` | 9 |
 | `app/group_learning/candidate_service.py` | 9 |
 | `app/group_memory/retrieval_service.py` | 9 |
@@ -276,9 +280,11 @@
 | `webui/src/features/manifest.jsx` | 9 |
 | `webui/src/features/triggers/TriggersPage.jsx` | 9 |
 | `api/admin/group_memory_routes.py` | 8 |
+| `api/chat_content_helpers.py` | 8 |
 | `app/group_ingress/service.py` | 8 |
 | `core/jobs/policies.py` | 8 |
 | `core/prompt_v2/template_loader.py` | 8 |
+| `core/sandbox/repositories.py` | 8 |
 | `core/semantic/fts.py` | 8 |
 | `core/session_guidance.py` | 8 |
 | `core/task_runtime/slo.py` | 8 |
@@ -295,6 +301,7 @@
 | `api/admin/web_search_routes.py` | 7 |
 | `api/memory_routes.py` | 7 |
 | `core/agent_link/protocol.py` | 7 |
+| `core/artifact_port.py` | 7 |
 | `core/client_meta.py` | 7 |
 | `core/evolution.py` | 7 |
 | `core/inbound_claim_lifecycle.py` | 7 |
@@ -332,7 +339,6 @@
 | `app/session_memory/group_rollup.py` | 6 |
 | `core/admin/idempotency.py` | 6 |
 | `core/agent_runtime/extension_ports.py` | 6 |
-| `core/asset_transport.py` | 6 |
 | `core/chat_delivery_service.py` | 6 |
 | `core/content_rules/adapters.py` | 6 |
 | `core/eval_sampling/db_sampler.py` | 6 |
@@ -353,7 +359,6 @@
 | `webui/src/features/models/ModelsPage.jsx` | 6 |
 | `webui/src/features/proactive-outreach/ProactiveOutreachPage.jsx` | 6 |
 | `webui/src/features/session-config/SessionConfigsPage.jsx` | 6 |
-| `api/asset_routes.py` | 5 |
 | `api/group_utility_routes.py` | 5 |
 | `app/group_ingress/message_adapter.py` | 5 |
 | `app/group_memory/injection_service.py` | 5 |
@@ -368,7 +373,7 @@
 | `core/group_learning/aspects.py` | 5 |
 | `core/model_provider/contracts.py` | 5 |
 | `core/run_ledger/governance_service.py` | 5 |
-| `core/sandbox/repositories.py` | 5 |
+| `core/run_recovery/coordinator.py` | 5 |
 | `core/task_runtime/contracts.py` | 5 |
 | `core/telemetry/job_observer.py` | 5 |
 | `core/telemetry/persistence.py` | 5 |
@@ -404,7 +409,6 @@
 | `core/prompt_v2/context_adapters.py` | 4 |
 | `core/prompt_v2/schema.py` | 4 |
 | `core/prompt_v2/template_validation.py` | 4 |
-| `core/run_recovery/coordinator.py` | 4 |
 | `core/sandbox/identity.py` | 4 |
 | `core/sandbox/workspace_service.py` | 4 |
 | `core/tool_execution_policy.py` | 4 |
@@ -455,7 +459,6 @@
 | `core/run_recovery/proofs.py` | 3 |
 | `core/runtime/extensions.py` | 3 |
 | `core/runtime_health.py` | 3 |
-| `core/sandbox/asset_service.py` | 3 |
 | `core/telemetry/runtime.py` | 3 |
 | `core/tool_plan.py` | 3 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/dedup.py` | 3 |
@@ -520,7 +523,6 @@
 | `webui/src/features/models/RouteBindingsPanel.jsx` | 2 |
 | `webui/src/features/tools/ToolsPage.jsx` | 2 |
 | `api/admin/runtime_module_routes.py` | 1 |
-| `api/chat_content_helpers.py` | 1 |
 | `api/chat_non_streaming_result.py` | 1 |
 | `api/chat_persona_context.py` | 1 |
 | `api/chat_persona_lookup.py` | 1 |
@@ -1781,6 +1783,18 @@
 | `decision.84fdcf3e4c8920610e6d` | `core/outbound_delivery_service.py:479` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：category == "success" |  |  |  |  |  |
 |  | 原因：人工复核：success 不产生失败码是投递 Telemetry 的确定性协议 |  |  |  |  |  |
+| `decision.be7c037b8cc09553c003` | `core/persisted_content.py:29` | `python.regex_call` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+|  | 摘要：_INLINE_DATA_RE.sub("[内联二进制已移除]", text) |  |  |  |  |  |
+|  | 原因：人工复核：所有消息历史必须移除内联二进制，不能把大结果或秘密载荷当作正文持久化 |  |  |  |  |  |
+| `decision.a5cd840ac1c93dcd84a1` | `core/persisted_content.py:30` | `python.regex_call` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+|  | 摘要：_FILE_URI_RE.sub("[宿主文件路径已移除]", text) |  |  |  |  |  |
+|  | 原因：人工复核：消息历史必须移除 file URI，避免泄露宿主文件系统边界 |  |  |  |  |  |
+| `decision.fd5cea9e6c0cd7f54688` | `core/persisted_content.py:31` | `python.regex_call` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+|  | 摘要：_WINDOWS_HOST_PATH_RE.sub("[宿主文件路径已移除]", text) |  |  |  |  |  |
+|  | 原因：人工复核：消息历史必须移除 Windows 宿主路径，稳定引用只能使用 Artifact 合同 |  |  |  |  |  |
+| `decision.0ebb0c6519ab9cdf6417` | `core/persisted_content.py:32` | `python.regex_call` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+|  | 摘要：_POSIX_HOST_PATH_RE.sub("[宿主文件路径已移除]", text) |  |  |  |  |  |
+|  | 原因：人工复核：消息历史必须移除 POSIX 宿主路径，模型只能看到受控虚拟路径和 Artifact 引用 |  |  |  |  |  |
 | `decision.60013418eaf1d57b0775` | `core/persona_preprocess.py:181` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
 |  | 摘要：should_store.strip().lower() not in {"false", "0", "no", "否"} |  |  |  |  |  |
 |  | 原因：人工复核：布尔自由文本属于待迁移的旧模型输出格式 |  |  |  |  |  |
@@ -1886,7 +1900,7 @@
 | `decision.8c15d5f61f464fc0f5b3` | `core/prompt_v2/variables.py:89` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 6 | `reviewed` |
 |  | 摘要：normalized in { "tasks/classifier_legacy", "tasks/private_decision", "tasks/news_daily_quality", "tasks/news_relevance_review", "tasks/group_analysis_topics", "tasks/group_analysis_titles", "tasks/group_analysis_quotes", "tasks/group_analy… |  |  |  |  |  |
 |  | 原因：人工复核：共享 message 变量适用的 Task key 集合属于 Prompt Runtime 类型化协议 |  |  |  |  |  |
-| `decision.308707ec7b6bc1b6ff38` | `core/qq_outbound_renderer.py:96` | `python.regex_call` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.308707ec7b6bc1b6ff38` | `core/qq_outbound_renderer.py:103` | `python.regex_call` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：_UNTRUSTED_CQ_FILE_RE.sub( "（文件消息已拒绝，请使用资产下载链接）", expanded, ) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.de8470021ca17ec7bc09` | `core/route_metadata.py:55` | `python.literal_collection` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
@@ -1919,13 +1933,13 @@
 | `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:924` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:709` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:710` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:709` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:710` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2360` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2361` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |

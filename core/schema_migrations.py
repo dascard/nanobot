@@ -102,6 +102,7 @@ _RUN_LEDGER_V1_VERSION = "20260804_run_event_ledger_v1"
 _RUN_EVIDENCE_GOVERNANCE_V1_VERSION = "20260804_run_evidence_governance_v1"
 _RUN_RECOVERY_V1_VERSION = "20260804_run_checkpoint_recovery_v1"
 _RUN_DURABLE_TASK_V1_VERSION = "20260804_run_durable_task_v1"
+_ARTIFACT_LIFECYCLE_V1_VERSION = "20260804_artifact_lifecycle_v1"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -4437,6 +4438,274 @@ def _scheduled_task_workflow_execution_needs_backup(conn: Any) -> bool:
     )).first() is not None
 
 
+_WORKSPACE_ARTIFACT_COLUMNS = frozenset({
+    "id",
+    "workspace_id",
+    "artifact_id",
+    "asset_sha256",
+    "logical_name",
+    "version",
+    "source_run_id",
+    "source_kind",
+    "acl_platform",
+    "acl_owner_type",
+    "acl_owner_id",
+    "acl_sha256",
+    "created_at",
+})
+
+
+def _workspace_artifact_schema_current(conn: Any) -> bool:
+    if "workspace_assets" not in _table_names(conn):
+        return False
+    if not _WORKSPACE_ARTIFACT_COLUMNS <= _columns(conn, "workspace_assets"):
+        return False
+    unique_columns = {
+        tuple(str(column) for column in constraint.get("column_names") or ())
+        for constraint in inspect(conn).get_unique_constraints("workspace_assets")
+    }
+    return (
+        ("workspace_id", "logical_name", "version") in unique_columns
+        and ("workspace_id", "logical_name") not in unique_columns
+    )
+
+
+def _artifact_acl_sha256(platform: str, owner_type: str, owner_id: str) -> str:
+    payload = json.dumps(
+        {
+            "platform": str(platform),
+            "owner_type": str(owner_type),
+            "owner_id": str(owner_id),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _migrated_artifact_id(
+    workspace_id: str,
+    logical_name: str,
+    version: int,
+    asset_sha256: str,
+) -> str:
+    payload = json.dumps(
+        [workspace_id, logical_name, int(version), asset_sha256],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f"art_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:48]}"
+
+
+def _legacy_workspace_artifact_rows(conn: Any) -> list[dict[str, Any]]:
+    rows = conn.execute(text(
+        "SELECT wa.id, wa.workspace_id, wa.asset_sha256, wa.logical_name, "
+        "wa.created_at, w.platform, w.owner_type, w.owner_id "
+        "FROM workspace_assets wa "
+        "JOIN workspaces w ON w.id = wa.workspace_id "
+        "ORDER BY wa.id"
+    )).mappings().all()
+    return [
+        {
+            **dict(row),
+            "artifact_id": _migrated_artifact_id(
+                str(row["workspace_id"]),
+                str(row["logical_name"]),
+                1,
+                str(row["asset_sha256"]),
+            ),
+            "version": 1,
+            "source_run_id": "",
+            "source_kind": "legacy",
+            "acl_platform": str(row["platform"]),
+            "acl_owner_type": str(row["owner_type"]),
+            "acl_owner_id": str(row["owner_id"]),
+            "acl_sha256": _artifact_acl_sha256(
+                str(row["platform"]),
+                str(row["owner_type"]),
+                str(row["owner_id"]),
+            ),
+        }
+        for row in rows
+    ]
+
+
+def _create_workspace_artifact_indexes(conn: Any) -> None:
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS ix_workspace_assets_workspace_id "
+        "ON workspace_assets(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_workspace_asset_sha256 "
+        "ON workspace_assets(asset_sha256)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_workspace_asset_artifact_id "
+        "ON workspace_assets(artifact_id)",
+        "CREATE INDEX IF NOT EXISTS ix_workspace_asset_source_run_id "
+        "ON workspace_assets(source_run_id)",
+    ])
+
+
+def _artifact_lifecycle_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """把 Workspace 授权链接升级为 owner-scoped 不可变 Artifact 版本。"""
+
+    if "workspace_assets" not in _table_names(conn):
+        return
+    if _workspace_artifact_schema_current(conn):
+        _create_workspace_artifact_indexes(conn)
+        return
+    required_legacy = {
+        "id",
+        "workspace_id",
+        "asset_sha256",
+        "logical_name",
+        "created_at",
+    }
+    missing = sorted(required_legacy - _columns(conn, "workspace_assets"))
+    if missing:
+        raise SchemaMigrationValidationError(
+            f"workspace_assets 缺少 Artifact 迁移所需列：{missing}"
+        )
+    rows = _legacy_workspace_artifact_rows(conn)
+    dialect = str(getattr(conn.dialect, "name", ""))
+    if dialect != "sqlite":
+        _add_missing_columns(
+            conn,
+            "workspace_assets",
+            {
+                "artifact_id": "VARCHAR(64)",
+                "version": "INTEGER NOT NULL DEFAULT 1",
+                "source_run_id": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "source_kind": "VARCHAR(16) NOT NULL DEFAULT 'legacy'",
+                "acl_platform": "VARCHAR(32)",
+                "acl_owner_type": "VARCHAR(16)",
+                "acl_owner_id": "VARCHAR(255)",
+                "acl_sha256": "VARCHAR(64)",
+            },
+        )
+        for row in rows:
+            conn.execute(
+                text(
+                    "UPDATE workspace_assets SET artifact_id=:artifact_id, "
+                    "version=:version, source_run_id=:source_run_id, "
+                    "source_kind=:source_kind, acl_platform=:acl_platform, "
+                    "acl_owner_type=:acl_owner_type, acl_owner_id=:acl_owner_id, "
+                    "acl_sha256=:acl_sha256 WHERE id=:id"
+                ),
+                row,
+            )
+        for column in (
+            "artifact_id",
+            "acl_platform",
+            "acl_owner_type",
+            "acl_owner_id",
+            "acl_sha256",
+        ):
+            conn.execute(text(
+                f"ALTER TABLE workspace_assets ALTER COLUMN {column} SET NOT NULL"
+            ))
+        conn.execute(text(
+            "ALTER TABLE workspace_assets DROP CONSTRAINT IF EXISTS "
+            "uq_workspace_asset_logical_name"
+        ))
+        conn.execute(text(
+            "ALTER TABLE workspace_assets ADD CONSTRAINT "
+            "uq_workspace_asset_logical_version "
+            "UNIQUE (workspace_id, logical_name, version)"
+        ))
+        conn.execute(text(
+            "ALTER TABLE workspace_assets ADD CONSTRAINT "
+            "ck_workspace_asset_version_positive CHECK (version >= 1)"
+        ))
+        conn.execute(text(
+            "ALTER TABLE workspace_assets ADD CONSTRAINT "
+            "ck_workspace_asset_source_kind CHECK (source_kind IN "
+            "('legacy', 'upload', 'import', 'tool', 'model', 'runtime'))"
+        ))
+        conn.execute(text(
+            "ALTER TABLE workspace_assets ADD CONSTRAINT "
+            "ck_workspace_asset_acl_owner_type CHECK (acl_owner_type IN "
+            "('user', 'group', 'project'))"
+        ))
+        _create_workspace_artifact_indexes(conn)
+        return
+
+    temporary_table = "workspace_assets__artifact_migration"
+    if temporary_table in _table_names(conn):
+        raise SchemaMigrationValidationError(
+            f"迁移临时表已存在：{temporary_table}"
+        )
+    conn.execute(text(
+        f"CREATE TABLE {temporary_table} ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "workspace_id VARCHAR(36) NOT NULL, "
+        "artifact_id VARCHAR(64) NOT NULL, "
+        "asset_sha256 VARCHAR(64) NOT NULL, "
+        "logical_name VARCHAR(512) NOT NULL, "
+        "version INTEGER NOT NULL DEFAULT 1, "
+        "source_run_id VARCHAR(64) NOT NULL DEFAULT '', "
+        "source_kind VARCHAR(16) NOT NULL DEFAULT 'legacy', "
+        "acl_platform VARCHAR(32) NOT NULL, "
+        "acl_owner_type VARCHAR(16) NOT NULL, "
+        "acl_owner_id VARCHAR(255) NOT NULL, "
+        "acl_sha256 VARCHAR(64) NOT NULL, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CONSTRAINT fk_workspace_asset_workspace "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE, "
+        "CONSTRAINT fk_workspace_asset_asset "
+        "FOREIGN KEY (asset_sha256) REFERENCES assets(sha256) ON DELETE RESTRICT, "
+        "CONSTRAINT uq_workspace_asset_logical_version "
+        "UNIQUE (workspace_id, logical_name, version), "
+        "CONSTRAINT uq_workspace_asset_link "
+        "UNIQUE (workspace_id, asset_sha256, logical_name), "
+        "CONSTRAINT ck_workspace_asset_version_positive CHECK (version >= 1), "
+        "CONSTRAINT ck_workspace_asset_source_kind CHECK (source_kind IN "
+        "('legacy', 'upload', 'import', 'tool', 'model', 'runtime')), "
+        "CONSTRAINT ck_workspace_asset_acl_owner_type CHECK (acl_owner_type IN "
+        "('user', 'group', 'project'))"
+        ")"
+    ))
+    insert_sql = text(
+        f"INSERT INTO {temporary_table} ("
+        "id, workspace_id, artifact_id, asset_sha256, logical_name, version, "
+        "source_run_id, source_kind, acl_platform, acl_owner_type, acl_owner_id, "
+        "acl_sha256, created_at) VALUES ("
+        ":id, :workspace_id, :artifact_id, :asset_sha256, :logical_name, :version, "
+        ":source_run_id, :source_kind, :acl_platform, :acl_owner_type, :acl_owner_id, "
+        ":acl_sha256, :created_at)"
+    )
+    for row in rows:
+        conn.execute(insert_sql, row)
+    copied = conn.execute(text(
+        f"SELECT COUNT(*) FROM {temporary_table}"
+    )).scalar_one()
+    if int(copied) != len(rows):
+        raise SchemaMigrationValidationError(
+            "workspace_assets Artifact 迁移前后行数不一致"
+        )
+    conn.execute(text("DROP TABLE workspace_assets"))
+    conn.execute(text(
+        f"ALTER TABLE {temporary_table} RENAME TO workspace_assets"
+    ))
+    _create_workspace_artifact_indexes(conn)
+    violations = conn.execute(text(
+        "PRAGMA foreign_key_check(workspace_assets)"
+    )).fetchall()
+    if violations:
+        raise SchemaMigrationValidationError(
+            "workspace_assets Artifact 迁移后外键校验失败"
+        )
+
+
+def _artifact_lifecycle_v1_needs_backup(conn: Any) -> bool:
+    return (
+        "workspace_assets" in _table_names(conn)
+        and not _workspace_artifact_schema_current(conn)
+    )
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -4671,6 +4940,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "run durable task lease heartbeat fencing and reconciliation",
         _run_durable_task_v1,
     ),
+    (
+        _ARTIFACT_LIFECYCLE_V1_VERSION,
+        "owner scoped immutable artifact versions",
+        _artifact_lifecycle_v1,
+    ),
 ]
 
 
@@ -4719,6 +4993,11 @@ def _prepare_schema_migration_backup(
         not in applied_before_transaction
         and _sandbox_execution_profiles_and_leases_needs_backup(conn)
     )
+    artifact_lifecycle_backup_needed = (
+        _ARTIFACT_LIFECYCLE_V1_VERSION
+        not in applied_before_transaction
+        and _artifact_lifecycle_v1_needs_backup(conn)
+    )
     scheduled_task_owner_backup_needed = (
         _SCHEDULED_TASK_OWNER_IDENTITY_VERSION
         not in applied_before_transaction
@@ -4741,6 +5020,7 @@ def _prepare_schema_migration_backup(
         or sandbox_lease_backup_needed
         or scheduled_task_owner_backup_needed
         or scheduled_task_workflow_backup_needed
+        or artifact_lifecycle_backup_needed
     ):
         backup_path = _migration_backup_path(engine, db_path)
         if backup_path is not None:

@@ -814,6 +814,177 @@ class WorkspaceFileService:
             write_gid=self.config.workspace_gid,
         )
 
+    @staticmethod
+    def _fd_sha256(file_fd: int, size_bytes: int) -> str:
+        digest = hashlib.sha256()
+        position = 0
+        while position < size_bytes:
+            chunk = os.pread(
+                file_fd,
+                min(1024 * 1024, size_bytes - position),
+                position,
+            )
+            if not chunk:
+                break
+            digest.update(chunk)
+            position += len(chunk)
+        if position != size_bytes:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "资产存储暂时不可用",
+                retryable=True,
+                stop=False,
+            )
+        return digest.hexdigest()
+
+    def materialize_asset(
+        self,
+        workspace_id: str,
+        *,
+        sha256: str,
+        storage_key: str,
+        path: str,
+        quota_bytes: int,
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """把尚未登记的 CAS 暂存内容安全写入 owner Workspace。"""
+
+        workspace_id = validate_workspace_id(workspace_id)
+        digest = validate_sha256(sha256)
+        expected_key = self.layout.asset_storage_key(digest)
+        if str(storage_key or "") != expected_key:
+            raise SandboxServiceError(
+                SandboxErrorCode.ASSET_NOT_AUTHORIZED,
+                "暂存资产标识无效",
+            )
+        normalized_path = "/".join(validate_relative_path(path))
+        effective_quota = min(
+            max(1, int(quota_bytes)),
+            self.config.workspace_quota_bytes,
+        )
+        source_filesystem = SafeWorkspaceFilesystem(self.layout.assets_root)
+        workspace_lock = self.acquire_workspace_write(workspace_id)
+        try:
+            target_filesystem = self.filesystem(workspace_id)
+            with source_filesystem.open_regular_file(expected_key) as (
+                source_fd,
+                size_bytes,
+            ):
+                if size_bytes > self.config.asset_max_bytes:
+                    raise SandboxServiceError(
+                        SandboxErrorCode.ASSET_TOO_LARGE,
+                        "资产超过允许的单文件大小上限",
+                    )
+                if not secrets.compare_digest(
+                    self._fd_sha256(source_fd, size_bytes),
+                    digest,
+                ):
+                    raise SandboxServiceError(
+                        SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                        "资产存储完整性校验失败",
+                    )
+                previous_size = 0
+                try:
+                    with target_filesystem.open_regular_file(normalized_path) as (
+                        target_fd,
+                        current_size,
+                    ):
+                        previous_size = current_size
+                        current_sha256 = self._fd_sha256(
+                            target_fd,
+                            current_size,
+                        )
+                    if secrets.compare_digest(current_sha256, digest):
+                        current_usage = self.usage_ledger.snapshot(
+                            workspace_id
+                        ).workspace_bytes
+                        return {
+                            "path": normalized_path,
+                            "sha256": digest,
+                            "size_bytes": size_bytes,
+                            "previous_size_bytes": previous_size,
+                            "used_bytes": current_usage,
+                            "usage_delta_bytes": 0,
+                            "materialized": True,
+                            "idempotent": True,
+                        }
+                    if not overwrite:
+                        raise SandboxServiceError(
+                            SandboxErrorCode.EDIT_CONFLICT,
+                            "Workspace 目标路径已存在其他内容",
+                        )
+                except SandboxServiceError as exc:
+                    if exc.code is not SandboxErrorCode.INVALID_PATH:
+                        raise
+                    previous_size = 0
+
+                with self._quota_guard:
+                    current_usage = self.usage_ledger.snapshot(
+                        workspace_id
+                    ).workspace_bytes
+                    usage_after = current_usage - previous_size + size_bytes
+                    growth_bytes = max(0, usage_after - current_usage)
+                    self.disk_guard.ensure_available(
+                        additional_bytes=growth_bytes
+                    )
+                    if usage_after > effective_quota:
+                        raise SandboxServiceError(
+                            SandboxErrorCode.WORKSPACE_QUOTA_EXCEEDED,
+                            "工作区空间配额已用完",
+                        )
+                    projected_total = (
+                        self.usage_ledger.total_workspace_bytes()
+                        + sum(
+                            reservation.growth_bytes
+                            for reservation in self._run_growth_reservations.values()
+                        )
+                        + growth_bytes
+                    )
+                    if projected_total > self.config.total_quota_bytes:
+                        raise SandboxServiceError(
+                            SandboxErrorCode.WORKSPACE_QUOTA_EXCEEDED,
+                            "Sandbox 总空间预算已用完",
+                        )
+                    written = target_filesystem.copy_from_fd(
+                        normalized_path,
+                        source_fd,
+                        size_bytes=size_bytes,
+                        max_bytes=self.config.asset_max_bytes,
+                        overwrite=bool(overwrite),
+                    )
+                    observed_usage = self.usage_ledger.adjust_workspace(
+                        workspace_id,
+                        written.size_bytes - written.previous_size_bytes,
+                    )
+                with target_filesystem.open_regular_file(normalized_path) as (
+                    target_fd,
+                    current_size,
+                ):
+                    observed_digest = self._fd_sha256(target_fd, current_size)
+                if current_size != size_bytes or not secrets.compare_digest(
+                    observed_digest,
+                    digest,
+                ):
+                    self.usage_ledger.mark_dirty(workspace_id)
+                    raise SandboxServiceError(
+                        SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                        "Workspace 资产写后校验失败",
+                    )
+            return {
+                "path": written.path,
+                "sha256": digest,
+                "size_bytes": written.size_bytes,
+                "previous_size_bytes": written.previous_size_bytes,
+                "used_bytes": observed_usage,
+                "usage_delta_bytes": (
+                    written.size_bytes - written.previous_size_bytes
+                ),
+                "materialized": True,
+                "idempotent": False,
+            }
+        finally:
+            workspace_lock.release()
+
     def list_files(
         self,
         workspace_id: str,

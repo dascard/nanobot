@@ -427,17 +427,51 @@ class TestGeneratedImagesAdmin:
     def test_create_generated_image_response(self, client, auth_header, monkeypatch, tmp_path):
         import base64
 
-        from core import generated_images
+        import api.admin.sticker_routes as sticker_routes
+        from core import generated_artifact
         import core.media_tool_runtime as media_runtime
 
         seen = {}
-        monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
+
+        async def fake_publish(image_b64, *, prompt, metadata):
+            raw = base64.b64decode(image_b64, validate=True)
+            assert raw.startswith(b"\x89PNG\r\n\x1a\n")
+            assert prompt == "画一只红熊猫喝奶茶"
+            assert metadata["model"] == "gpt-image"
+            artifact_id = "art_" + "a" * 48
+            return {
+                "artifact_id": artifact_id,
+                "ref": f"artifact://{artifact_id}",
+                "content_ref": "asset://sha256/" + "b" * 64,
+                "sha256": "b" * 64,
+                "mime": "image/png",
+                "image_bytes": len(raw),
+                "version": 1,
+                "source_run_id": "run-admin-image",
+                "reply_token": f"[artifact:{artifact_id}]",
+            }
+
+        monkeypatch.setattr(
+            generated_artifact,
+            "publish_generated_image_artifact",
+            fake_publish,
+        )
+        monkeypatch.setattr(
+            sticker_routes,
+            "artifact_preview_url",
+            lambda artifact_id, *, db: (
+                f"/api/v1/assets/artifacts/{artifact_id}/preview?token=test"
+            ),
+            raising=False,
+        )
 
         class FakeGenerationProvider:
             def generate(self, **kwargs):
                 seen["args"] = dict(kwargs)
                 return {
-                    "image_b64": base64.b64encode(b"fake-png").decode("ascii"),
+                    "image_b64": base64.b64encode(
+                        b"\x89PNG\r\n\x1a\nfake-png"
+                    ).decode("ascii"),
                     "revised_prompt": "",
                     "text_output": "",
                 }
@@ -470,13 +504,13 @@ class TestGeneratedImagesAdmin:
         assert data["item"]["prompt"] == "画一只红熊猫喝奶茶"
         assert data["item"]["model"] == "gpt-image"
         assert data["item"]["image_url"] == (
-            f"/api/v1/admin/generated-images/{data['item']['id']}/image"
+            f"/api/v1/assets/artifacts/{data['item']['id']}"
+            "/preview?token=test"
         )
         assert data["tool_output"]["reply_token"] == data["item"]["reply_token"]
-
-        image = client.get(data["item"]["image_url"], headers=auth_header)
-        assert image.status_code == 200
-        assert image.content == b"fake-png"
+        assert data["item"]["ref"].startswith("artifact://art_")
+        assert list(tmp_path.glob("*.png")) == []
+        assert list(tmp_path.glob("*.json")) == []
 
     def test_create_generated_image_tool_failure_returns_502(self, client, auth_header, monkeypatch):
         import core.media_tool_runtime as media_runtime

@@ -6,10 +6,9 @@ import asyncio
 import json
 import logging
 import urllib.error
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from core.generated_images import save_generated_image
 from core.tool_contracts.result import ToolServiceResult
 
 
@@ -24,6 +23,7 @@ ALLOWED_IMAGE_BACKGROUNDS = frozenset(
     {"auto", "transparent", "opaque"}
 )
 GenerateCallable = Callable[..., dict[str, Any]]
+PublishCallable = Callable[..., Awaitable[Mapping[str, Any]]]
 
 
 def normalize_image_option(
@@ -41,6 +41,7 @@ async def execute_image_generation(
     generate: GenerateCallable,
     model: str,
     prompt_max_chars: int,
+    publish: PublishCallable | None = None,
 ) -> ToolServiceResult:
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
@@ -76,8 +77,12 @@ async def execute_image_generation(
             quality=quality,
             background=background,
         )
-        saved = save_generated_image(
-            result["image_b64"],
+        if publish is None:
+            from core.generated_artifact import publish_generated_image_artifact
+
+            publish = publish_generated_image_artifact
+        artifact = dict(await publish(
+            str(result["image_b64"]),
             prompt=prompt,
             metadata={
                 "model": model,
@@ -85,16 +90,21 @@ async def execute_image_generation(
                 "quality": quality,
                 "background": background,
             },
-        )
+        ))
         payload = {
-            "mime": "image/png",
+            "artifact_id": artifact["artifact_id"],
+            "ref": artifact["ref"],
+            "content_ref": artifact["content_ref"],
+            "sha256": artifact["sha256"],
+            "version": artifact["version"],
+            "source_run_id": artifact.get("source_run_id", ""),
+            "mime": artifact["mime"],
             "model": model,
             "size": size,
             "quality": quality,
             "background": background,
-            "reply_token": saved["reply_token"],
-            "saved_path": saved["path"],
-            "image_bytes": saved["bytes"],
+            "reply_token": artifact["reply_token"],
+            "image_bytes": artifact["image_bytes"],
             "revised_prompt": result.get("revised_prompt", ""),
             "text_output": result.get("text_output", ""),
             "usage_hint": (
@@ -130,6 +140,7 @@ __all__ = [
     "ALLOWED_IMAGE_QUALITIES",
     "ALLOWED_IMAGE_SIZES",
     "GenerateCallable",
+    "PublishCallable",
     "execute_image_generation",
     "normalize_image_option",
 ]

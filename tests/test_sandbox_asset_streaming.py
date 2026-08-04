@@ -243,6 +243,75 @@ def test_sandboxd_stream_upload_and_single_range_download(tmp_path):
     assert [path.name for path in blobs] == [digest]
 
 
+def test_sandboxd_materializes_staging_blob_before_workspace_publish(tmp_path):
+    token, runtime = _runtime(tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    content = b"owner-workspace-first"
+    digest = hashlib.sha256(content).hexdigest()
+    storage_key = runtime.asset_files.layout.asset_storage_key(digest)
+    path = ".nanobot/results/report.txt"
+
+    with TestClient(create_app(runtime)) as client:
+        ensured = client.post(
+            "/v1/workspaces/ensure",
+            headers={**headers, "X-Nanobot-Request-ID": "ensure-artifact"},
+            json={"workspace_id": WORKSPACE_ID},
+        )
+        uploaded = client.post(
+            "/v1/assets/upload",
+            params={"workspace_id": WORKSPACE_ID, "media_type": "text/plain"},
+            headers=headers,
+            content=content,
+        )
+        materialized = client.post(
+            "/v1/assets/materialize",
+            headers=headers,
+            json={
+                "workspace_id": WORKSPACE_ID,
+                "sha256": digest,
+                "storage_key": storage_key,
+                "path": path,
+                "quota_bytes": 1024 * 1024,
+                "overwrite": False,
+            },
+        )
+        repeated = client.post(
+            "/v1/assets/materialize",
+            headers=headers,
+            json={
+                "workspace_id": WORKSPACE_ID,
+                "sha256": digest,
+                "storage_key": storage_key,
+                "path": path,
+                "quota_bytes": 1024 * 1024,
+                "overwrite": False,
+            },
+        )
+        published = client.post(
+            "/v1/assets/publish",
+            headers=headers,
+            json={
+                "workspace_id": WORKSPACE_ID,
+                "path": path,
+                "media_type": "text/plain",
+            },
+        )
+
+    assert ensured.status_code == 200
+    assert uploaded.status_code == 200
+    assert materialized.status_code == 200
+    assert materialized.json()["data"]["usage_delta_bytes"] == len(content)
+    assert repeated.status_code == 200
+    assert repeated.json()["data"]["idempotent"] is True
+    assert repeated.json()["data"]["usage_delta_bytes"] == 0
+    assert published.status_code == 200
+    assert published.json()["data"]["sha256"] == digest
+    workspace_file = (
+        runtime.workspace_files.layout.workspace_data_dir(WORKSPACE_ID) / path
+    )
+    assert workspace_file.read_bytes() == content
+
+
 def test_sandboxd_handles_empty_asset_size_limit_and_not_found(tmp_path):
     token, runtime = _runtime(tmp_path, asset_max_bytes=4)
     headers = {"Authorization": f"Bearer {token}"}

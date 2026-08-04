@@ -8,7 +8,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.generated_images import public_generated_image_url
-from core.asset_transport import expand_asset_download_refs_in_content
+from core.asset_transport import (
+    expand_artifact_refs_in_content,
+    expand_asset_download_refs_in_content,
+)
 from core.message_envelope import sanitize_reply_meta
 from core.sticker_memory import expand_sticker_refs_in_content
 
@@ -91,6 +94,10 @@ def _render_text(text: str, *, warnings: list[str]) -> str:
     expanded = _GENERATED_IMAGE_RE.sub(
         lambda match: _render_generated_image_token(match.group(1), warnings=warnings),
         text,
+    )
+    expanded = expand_artifact_refs_in_content(
+        expanded,
+        render_images=True,
     )
     expanded = expand_asset_download_refs_in_content(expanded)
     expanded = _UNTRUSTED_CQ_FILE_RE.sub(

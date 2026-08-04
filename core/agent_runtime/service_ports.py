@@ -241,6 +241,21 @@ class RuntimeArtifactReadRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeArtifactResolveRequest:
+    artifact_id: str
+    owner: RuntimePrincipal
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "artifact_id",
+            _required(self.artifact_id, "artifact_id"),
+        )
+        if not isinstance(self.owner, RuntimePrincipal):
+            raise ValueError("artifact owner 无效")
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeArtifactContent:
     artifact: RuntimeArtifactRef
     data: bytes
@@ -271,6 +286,11 @@ class ArtifactPort(Protocol):
         request: RuntimeArtifactReadRequest,
     ) -> RuntimeArtifactContent: ...
 
+    async def resolve(
+        self,
+        request: RuntimeArtifactResolveRequest,
+    ) -> RuntimeArtifactRef: ...
+
 
 class InMemoryArtifactPort:
     """测试用 owner/workspace 隔离 ArtifactPort。"""
@@ -280,6 +300,7 @@ class InMemoryArtifactPort:
         self._artifacts: dict[str, bytes] = {}
         self._refs: dict[str, RuntimeArtifactRef] = {}
         self._owners: dict[str, set[str]] = {}
+        self._artifact_owners: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     async def stage_source(
@@ -322,11 +343,12 @@ class InMemoryArtifactPort:
             if request.expected_sha256 and request.expected_sha256 != digest:
                 raise ValueError("Artifact 来源摘要与 expected_sha256 不一致")
             artifact = RuntimeArtifactRef(
-                artifact_id=f"artifact:{digest}",
-                uri=f"asset://sha256/{digest}",
+                artifact_id=f"art_{digest}",
+                uri=f"artifact://art_{digest}",
                 sha256=digest,
                 media_type=request.media_type,
                 size_bytes=len(data),
+                source_run_id=request.identity.run_id,
             )
             existing_ref = self._refs.get(digest)
             if existing_ref is not None and existing_ref != artifact:
@@ -336,7 +358,25 @@ class InMemoryArtifactPort:
             self._owners.setdefault(digest, set()).add(
                 request.identity.owner.canonical_id
             )
+            self._artifact_owners.setdefault(
+                artifact.artifact_id,
+                request.identity.owner.canonical_id,
+            )
             return self._refs[digest]
+
+    async def resolve(
+        self,
+        request: RuntimeArtifactResolveRequest,
+    ) -> RuntimeArtifactRef:
+        if not isinstance(request, RuntimeArtifactResolveRequest):
+            raise TypeError("request 必须是 RuntimeArtifactResolveRequest")
+        async with self._lock:
+            if self._artifact_owners.get(request.artifact_id) != request.owner.canonical_id:
+                raise PermissionError("Artifact 不存在或 owner 未授权")
+            for artifact in self._refs.values():
+                if artifact.artifact_id == request.artifact_id:
+                    return artifact
+        raise PermissionError("Artifact 不存在或 owner 未授权")
 
     async def read(
         self,
@@ -509,6 +549,7 @@ __all__ = [
     "RuntimeArtifactContent",
     "RuntimeArtifactPublishRequest",
     "RuntimeArtifactReadRequest",
+    "RuntimeArtifactResolveRequest",
     "RuntimeCheckpoint",
     "RuntimePermissionDecision",
     "RuntimePermissionOutcome",

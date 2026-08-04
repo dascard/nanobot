@@ -1,8 +1,11 @@
 from tests.async_helpers import run_async
 import base64
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 
@@ -27,6 +30,34 @@ class _MockSSEResponse:
 
 def _sse_data(payload: dict) -> str:
     return "data: " + json.dumps(payload, ensure_ascii=False)
+
+
+@pytest.fixture(autouse=True)
+def _publish_generated_images_as_artifacts(monkeypatch):
+    from core import generated_artifact
+
+    async def publish(image_b64, *, prompt, metadata):
+        del prompt, metadata
+        raw = base64.b64decode(image_b64, validate=True)
+        digest = hashlib.sha256(raw).hexdigest()
+        artifact_id = f"art_{digest[:48]}"
+        return {
+            "artifact_id": artifact_id,
+            "ref": f"artifact://{artifact_id}",
+            "content_ref": f"asset://sha256/{digest}",
+            "sha256": digest,
+            "mime": "image/png",
+            "image_bytes": len(raw),
+            "version": 1,
+            "source_run_id": "run-image-test",
+            "reply_token": f"[artifact:{artifact_id}]",
+        }
+
+    monkeypatch.setattr(
+        generated_artifact,
+        "publish_generated_image_artifact",
+        publish,
+    )
 
 
 # ── 基础元数据测试 ──
@@ -170,14 +201,15 @@ def test_execute_calls_new_api_responses_and_returns_generated_image_token(monke
 
     assert result.success
     payload = json.loads(result.output)
-    assert payload["reply_token"].startswith("[generated_image:")
+    assert payload["reply_token"].startswith("[artifact:art_")
     assert "send_code" not in payload
     assert payload["mime"] == "image/png"
     assert payload["model"] == "gpt-image"
     assert payload["text_output"] == "正在生成"
-    saved_path = Path(payload["saved_path"])
-    assert saved_path.parent == tmp_path
-    assert saved_path.read_bytes() == png_data
+    assert "saved_path" not in payload
+    assert "image_b64" not in payload
+    assert payload["ref"].startswith("artifact://art_")
+    assert payload["image_bytes"] == len(png_data)
 
     mock_opener.open.assert_called_once()
     req = mock_opener.open.call_args.args[0]
@@ -240,7 +272,7 @@ def test_execute_partial_image_then_completed(monkeypatch, tmp_path):
 
     assert result.success
     payload = json.loads(result.output)
-    assert payload["reply_token"].startswith("[generated_image:")
+    assert payload["reply_token"].startswith("[artifact:art_")
 
 
 # ── completed.output 聚合成功 ──
@@ -282,7 +314,7 @@ def test_execute_completed_output_aggregation(monkeypatch, tmp_path):
 
     assert result.success
     payload = json.loads(result.output)
-    assert payload["reply_token"].startswith("[generated_image:")
+    assert payload["reply_token"].startswith("[artifact:art_")
 
 
 # ── 失败分型测试 ──

@@ -5,8 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Index, Integer, String, Text
+from sqlalchemy.orm import validates
 
 from core.db.base import Base
+from core.persisted_content import sanitize_persisted_content
 
 
 class User(Base):
@@ -44,6 +46,10 @@ class ChatLog(Base):
     source_message_ids_json = Column(Text, default="[]")
     meta_json = Column(Text, default="{}")
 
+    @validates("content")
+    def _sanitize_content(self, _key: str, value: object) -> str:
+        return sanitize_persisted_content(value)
+
 
 class ConversationTurn(Base):
     """精简会话工作记忆，只存 user/assistant 对话。"""
@@ -57,6 +63,10 @@ class ConversationTurn(Base):
     created_at = Column(DateTime, default=datetime.now)
     source_message_ids_json = Column(Text, default="[]")
     meta_json = Column(Text, default="{}")
+
+    @validates("content")
+    def _sanitize_content(self, _key: str, value: object) -> str:
+        return sanitize_persisted_content(value)
 
 
 class SensitiveData(Base):

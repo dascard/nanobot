@@ -259,6 +259,9 @@ class HttpSandboxdBackend:
     def publish_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/assets/publish", payload=payload)
 
+    def materialize_asset(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/v1/assets/materialize", payload=payload)
+
     def stage_assets(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/assets/stage", payload=payload)
 
@@ -590,6 +593,52 @@ class AsyncSandboxdAssetClient:
                 stop=False,
             ) from exc
         return await self._response_body(response)
+
+    async def _post_json(
+        self,
+        path: str,
+        payload: Mapping[str, Any],
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        try:
+            response = await self.client.post(
+                path,
+                headers=self._headers(request_id=request_id),
+                json=dict(payload),
+            )
+        except httpx.HTTPError as exc:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Sandbox 资产传输暂时不可用",
+                retryable=True,
+                stop=False,
+            ) from exc
+        return await self._response_body(response)
+
+    async def materialize_asset(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return await self._post_json(
+            "/v1/assets/materialize",
+            payload,
+            request_id=request_id,
+        )
+
+    async def publish_asset(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return await self._post_json(
+            "/v1/assets/publish",
+            payload,
+            request_id=request_id,
+        )
 
     async def open_asset(
         self,

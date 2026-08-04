@@ -51,6 +51,7 @@ class _PreparedChatTurn:
     user_meta: dict[str, Any]
     assistant_turn_meta: dict[str, Any]
     assistant_chat_meta: dict[str, Any]
+    archive_assistant_content: str
     turn_answer: str
 
 
@@ -75,17 +76,20 @@ def _source_message_ids_json(
 
 
 def _turn_answer(answer: str, guardrail_status: str | None) -> tuple[str, str]:
-    turn_answer = answer
+    turn_answer = chat_content_helpers.sanitize_persisted_content(answer)
     turn_answer_kind = "casual_template" if guardrail_status == "casual_template" else "chat"
-    if not answer:
+    if not turn_answer:
         return turn_answer, turn_answer_kind
 
-    answer_lower = answer.lstrip()[:500].lower()
+    answer_lower = turn_answer.lstrip()[:500].lower()
     html_markers = ("<!doctype", "<html", "<head", "<body", "<article", "<style")
     if any(answer_lower.startswith(marker) for marker in html_markers):
-        return f"[HTML报告: 已渲染为图片/HTML，{len(answer)}字符]", "artifact_summary"
-    if len(answer) > 2000:
-        return answer[:2000] + "\n...[截断]", turn_answer_kind
+        return (
+            f"[HTML报告: 已渲染为图片/HTML，{len(turn_answer)}字符]",
+            "artifact_summary",
+        )
+    if len(turn_answer) > 2000:
+        return turn_answer[:2000] + "\n...[截断]", turn_answer_kind
     return turn_answer, turn_answer_kind
 
 
@@ -129,7 +133,13 @@ def _prepare_chat_turn(
             else context_user_content
         )
 
-    turn_answer, turn_answer_kind = _turn_answer(answer, guardrail_status)
+    archive_assistant_content = chat_content_helpers.sanitize_persisted_content(
+        answer
+    )
+    turn_answer, turn_answer_kind = _turn_answer(
+        archive_assistant_content,
+        guardrail_status,
+    )
     user_meta = safe_meta(json.dumps(req.client_meta or {}, ensure_ascii=False))
     user_meta["kind"] = user_kind
     if req.event_time:
@@ -172,6 +182,7 @@ def _prepare_chat_turn(
         user_meta=user_meta,
         assistant_turn_meta=assistant_turn_meta,
         assistant_chat_meta=assistant_chat_meta,
+        archive_assistant_content=archive_assistant_content,
         turn_answer=turn_answer,
     )
 
@@ -375,7 +386,7 @@ def persist_claimed_chat_turn(
             user_id=req.user_id,
             session_id=key.session_id,
             role="assistant",
-            content=answer,
+            content=prepared.archive_assistant_content,
             sender_name="nanobot",
             session_name=req.session_name or "",
             processed=prepared.assistant_processed_val,
@@ -573,7 +584,7 @@ def persist_chat_turn(
             user_id=req.user_id,
             session_id=req.session_id,
             role="assistant",
-            content=answer,
+            content=prepared.archive_assistant_content,
             sender_name="nanobot",
             session_name=req.session_name or "",
             processed=prepared.assistant_processed_val,

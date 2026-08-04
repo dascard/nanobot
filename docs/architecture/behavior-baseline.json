@@ -89,7 +89,7 @@
       "stage": "阶段 7C"
     },
     {
-      "after_sha256": "2fac8e10d8871e3d0f514de0eedfb3e77ab7fbd8241c620244efcbecb3aeaaa4",
+      "after_sha256": "e7b1f9c8a4fc776f2e24991cbd8b50a8929114107db9babece41318690bca677",
       "before_sha256": "79a2d6dd773aeb8c314a610188eca9b88efafb1627c17eaf000dbbfe6bc9976d",
       "id": "proactive_outreach_fact_guard_prompt",
       "reason": "把主动外呼话题提取升级为带生命周期和证据的结构化合同，向正文传递完整选题依据，并新增生成后事实性与语义质量复核 Prompt。",
@@ -153,7 +153,7 @@
       "stage": "Agent Harness 阶段 4.3"
     }
   ],
-  "baseline_git_commit": "00a25a8b0b9eaa9729cd92223cead56258f2564e",
+  "baseline_git_commit": "016f30d7f9858a09c5e35b2e02a6eb485a2c8ae4",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -207,7 +207,7 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "2fac8e10d8871e3d0f514de0eedfb3e77ab7fbd8241c620244efcbecb3aeaaa4"
+      "sha256": "e7b1f9c8a4fc776f2e24991cbd8b50a8929114107db9babece41318690bca677"
     },
     {
       "classification": "preserve",

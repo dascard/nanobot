@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from core.asset_tokens import AssetTokenError, AssetTokenSigner
 from core.asset_transport import (
+    build_artifact_reply_token,
     build_asset_reply_token,
     expand_asset_download_refs_in_content,
     public_asset_download_url,
@@ -148,6 +149,30 @@ def test_asset_reply_token_expands_only_at_transport_boundary():
         signer=signer,
         base_url="https://nanobot.example",
     ).startswith(f"下载：https://nanobot.example/api/v1/assets/{ASSET_SHA256}/download?")
+
+
+def test_artifact_token_uses_stable_endpoint_and_keeps_version_binding():
+    signer = AssetTokenSigner(SECRET)
+    artifact_id = "art_" + "b" * 48
+    token = signer.issue(
+        ASSET_SHA256,
+        artifact_id=artifact_id,
+        recipient_type="session",
+        recipient_id="qq:user:10001",
+    )
+    claims = signer.verify(token)
+    url = public_asset_download_url(
+        token,
+        signer=signer,
+        base_url="https://nanobot.example/base",
+    )
+
+    assert claims.artifact_id == artifact_id
+    assert _decode_payload(token)["v"] == 2
+    assert build_artifact_reply_token(artifact_id) == f"[artifact:{artifact_id}]"
+    assert urlsplit(url).path == (
+        f"/base/api/v1/assets/artifacts/{artifact_id}/download"
+    )
 
 
 def test_asset_reply_token_hides_credential_when_transport_config_is_invalid():

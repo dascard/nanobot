@@ -35,11 +35,9 @@ from core.agent_runtime import (
 )
 from core.db.models import (
     AgentRun,
-    Asset,
     RunCheckpointRow,
     RunRecoveryOperation,
     RunSideEffectReceipt,
-    WorkspaceAsset,
 )
 from core.durable_tasks import (
     RunTaskKind,
@@ -332,22 +330,40 @@ class SqlAlchemyRunRecoveryService:
         self,
         proofs: Sequence[RunRecoveryArtifactProof],
     ) -> tuple[str, ...]:
+        from core.artifact_port import SqlAlchemyArtifactPort
+
+        port = SqlAlchemyArtifactPort.for_metadata(self._db)
         blockers: list[str] = []
         for proof in proofs:
-            asset = self._db.get(Asset, proof.sha256)
-            link = (
-                self._db.query(WorkspaceAsset)
-                .filter(
-                    WorkspaceAsset.workspace_id == proof.workspace_id,
-                    WorkspaceAsset.asset_sha256 == proof.sha256,
-                )
-                .first()
-            )
+            try:
+                if proof.artifact_id.startswith("artifact://"):
+                    artifact = port.resolve_for_workspace_sync(
+                        workspace_id=proof.workspace_id,
+                        artifact_id=proof.artifact_id.removeprefix(
+                            "artifact://"
+                        ),
+                    )
+                elif proof.artifact_id.startswith("art_"):
+                    artifact = port.resolve_for_workspace_sync(
+                        workspace_id=proof.workspace_id,
+                        artifact_id=proof.artifact_id,
+                    )
+                elif proof.artifact_id.startswith("asset://sha256/"):
+                    artifact = port.resolve_sha_for_workspace_sync(
+                        workspace_id=proof.workspace_id,
+                        sha256=proof.artifact_id.removeprefix(
+                            "asset://sha256/"
+                        ),
+                    )
+                else:
+                    raise PermissionError("Artifact proof 引用无效")
+            except (PermissionError, ValueError):
+                artifact = None
             if (
-                asset is None
-                or link is None
-                or int(asset.size_bytes) != proof.size_bytes
-                or str(asset.media_type).lower() != proof.media_type
+                artifact is None
+                or artifact.sha256 != proof.sha256
+                or artifact.size_bytes != proof.size_bytes
+                or artifact.media_type.lower() != proof.media_type
             ):
                 blockers.append(f"artifact_drift:{proof.sha256[:12]}")
         return tuple(blockers)

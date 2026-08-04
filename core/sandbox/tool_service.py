@@ -15,9 +15,8 @@ from core.sandbox.access_contracts import SandboxAccessDecision
 from core.sandbox.access_policy import SandboxAccessPolicy
 from core.sandbox.asset_service import AssetService
 from core.sandbox.backend import SandboxBackend
-from core.sandbox.client import HttpSandboxdBackend
+from core.sandbox.client import AsyncSandboxdAssetClient, HttpSandboxdBackend
 from core.sandbox.contracts import (
-    PublishedAsset,
     SandboxErrorCode,
     SandboxServiceError,
     success_result,
@@ -357,29 +356,30 @@ class SandboxToolService:
         workspace = self._workspace(access)
         source_ref = str(args.get("source_ref") or "")
         logical_name = str(args.get("logical_name") or "").strip()
-        prefix = "asset://sha256/"
-        if not source_ref.startswith(prefix):
+        if not (
+            source_ref.startswith("asset://sha256/")
+            or source_ref.startswith("artifact://")
+            or (source_ref.startswith("[artifact:") and source_ref.endswith("]"))
+        ):
             raise SandboxServiceError(
                 SandboxErrorCode.ASSET_NOT_AUTHORIZED,
                 "资产不存在或当前 Workspace 无权访问",
                 hint="附件引用需先通过受信上传接口登记",
             )
-        source_link, source_asset = self.asset_service.require_authorized_for_workspace(
-            workspace.id,
-            source_ref[len(prefix):],
-        )
         asset, link = self.asset_service.import_authorized_ref_for_workspace(
             workspace.id,
             source_ref,
-            logical_name=logical_name or source_link.logical_name,
+            logical_name=logical_name,
         )
         return success_result(
             "资产已链接到当前 Workspace",
             data={
                 "ref": f"asset://sha256/{asset.sha256}",
                 "logical_name": link.logical_name,
-                "size_bytes": int(source_asset.size_bytes),
-                "media_type": source_asset.media_type,
+                "artifact_id": link.artifact_id,
+                "version": int(link.version),
+                "size_bytes": int(asset.size_bytes),
+                "media_type": asset.media_type,
             },
             artifacts=[{
                 "type": "asset",
@@ -390,63 +390,101 @@ class SandboxToolService:
         )
 
     def asset_publish(self, args: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
-        access, _runtime = self.authorize("asset_publish", context)
-        try:
-            from core.asset_tokens import AssetTokenError, signer_from_settings
-            from core.asset_transport import build_asset_reply_token
-
-            signer = signer_from_settings(self.db)
-        except AssetTokenError as exc:
-            raise SandboxServiceError(
-                SandboxErrorCode.RUNTIME_UNAVAILABLE,
-                "资产下载凭据未安全配置",
-            ) from exc
+        access, runtime = self.authorize("asset_publish", context)
         workspace = self._workspace(access)
         path = str(args.get("path") or "")
-        response = self.backend.publish_asset({
-            "workspace_id": workspace.id,
-            "path": path,
-            "media_type": str(
+        from core.agent_runtime import (
+            RuntimeActor,
+            RuntimeActorType,
+            RuntimeArtifactPublishRequest,
+            RuntimeOwnerType,
+            RuntimePrincipal,
+            RuntimeRunIdentity,
+        )
+        from core.artifact_port import SqlAlchemyArtifactPort
+        from core.asset_transport import build_artifact_reply_token
+
+        owner = RuntimePrincipal(
+            platform=str(workspace.platform),
+            owner_type=RuntimeOwnerType(str(workspace.owner_type)),
+            owner_id=str(workspace.owner_id),
+        )
+        trace_id, traced_run_id = get_trace_context()
+        run_id = str(runtime.get("run_id") or traced_run_id or "").strip()
+        turn_id = str(runtime.get("turn_id") or "").strip()
+        correlation_id = str(
+            runtime.get("correlation_id")
+            or runtime.get("trace_id")
+            or trace_id
+            or ""
+        ).strip()
+        missing = [
+            field
+            for field, value in (
+                ("run_id", run_id),
+                ("turn_id", turn_id),
+                ("correlation_id", correlation_id),
+            )
+            if not value
+        ]
+        if missing:
+            raise SandboxServiceError(
+                SandboxErrorCode.AUTHORIZATION_FAILED,
+                "无法确认 Artifact 来源运行身份",
+                hint=f"受信请求上下文缺少 {', '.join(missing)}",
+            )
+        identity = RuntimeRunIdentity(
+            run_id=run_id,
+            turn_id=turn_id,
+            correlation_id=correlation_id,
+            actor=RuntimeActor(
+                RuntimeActorType.TOOL,
+                str(get_tool_trace_context() or "asset_publish"),
+            ),
+            owner=owner,
+        )
+        port = SqlAlchemyArtifactPort(
+            self.db,
+            backend=self.backend,
+            asset_client_factory=lambda: AsyncSandboxdAssetClient(
+                socket_path=str(_setting(self.db, "sandbox.sandboxd_socket")),
+                token_file=str(_setting(self.db, "sandbox.sandboxd_token_file")),
+                timeout_seconds=float(_setting(
+                    self.db,
+                    "sandbox.asset_transfer_timeout_seconds",
+                )),
+            ),
+            max_asset_bytes=int(_setting(self.db, "sandbox.asset_max_bytes")),
+        )
+        artifact = port.publish_sync(RuntimeArtifactPublishRequest(
+            identity=identity,
+            workspace_id=workspace.id,
+            virtual_path=path,
+            media_type=str(
                 args.get("media_type") or "application/octet-stream"
             ),
-        })
-        data = self._data(response)
-        asset, link = self.asset_service.register_published_for_workspace(
-            workspace.id,
-            PublishedAsset(
-                sha256=str(data.get("sha256") or ""),
-                size_bytes=int(data.get("size_bytes") or 0),
-                media_type=str(data.get("media_type") or "application/octet-stream"),
-                storage_key=str(data.get("storage_key") or ""),
-            ),
-            logical_name=path,
-        )
-        transport_token = signer.issue(
-            asset.sha256,
-            recipient_type="session",
-            recipient_id=str(access.identity.chat_stream_id),
-        )
-        claims = signer.verify(transport_token)
-        reply_token = build_asset_reply_token(transport_token)
+        ))
+        reply_token = build_artifact_reply_token(artifact.artifact_id)
         return success_result(
             "Workspace 文件已发布为不可变资产",
             data={
-                "ref": f"asset://sha256/{asset.sha256}",
-                "logical_name": link.logical_name,
-                "size_bytes": int(asset.size_bytes),
-                "media_type": asset.media_type,
-                "transport_token": transport_token,
+                "ref": artifact.uri,
+                "content_ref": f"asset://sha256/{artifact.sha256}",
+                "artifact_id": artifact.artifact_id,
+                "logical_name": path,
+                "version": artifact.version,
+                "source_run_id": artifact.source_run_id,
+                "size_bytes": artifact.size_bytes,
+                "media_type": artifact.media_type,
                 "reply_token": reply_token,
-                "recipient_type": claims.recipient_type,
-                "recipient_id": claims.recipient_id,
-                "expires_at": claims.expires_at,
             },
             artifacts=[{
-                "type": "asset",
-                "ref": f"asset://sha256/{asset.sha256}",
-                "logical_name": link.logical_name,
-                "size_bytes": int(asset.size_bytes),
-                "transport_token": transport_token,
+                "type": "artifact",
+                "ref": artifact.uri,
+                "artifact_id": artifact.artifact_id,
+                "logical_name": path,
+                "version": artifact.version,
+                "size_bytes": artifact.size_bytes,
                 "reply_token": reply_token,
             }],
         )

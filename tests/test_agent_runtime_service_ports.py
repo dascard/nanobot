@@ -14,6 +14,7 @@ from core.agent_runtime import (
     RuntimeActorType,
     RuntimeArtifactPublishRequest,
     RuntimeArtifactReadRequest,
+    RuntimeArtifactResolveRequest,
     RuntimeCheckpoint,
     RuntimeOwnerType,
     RuntimePermissionOutcome,
@@ -139,11 +140,16 @@ async def test_artifact_port_publishes_immutable_owner_scoped_content():
         )
     )
 
-    assert artifact.uri == f"asset://sha256/{artifact.sha256}"
+    assert artifact.uri == f"artifact://{artifact.artifact_id}"
+    assert artifact.source_run_id == identity.run_id
     assert artifact.size_bytes == len(data)
     assert first.data + second.data == data
     assert first.eof is False
     assert second.eof is True
+    assert await port.resolve(RuntimeArtifactResolveRequest(
+        artifact_id=artifact.artifact_id,
+        owner=identity.owner,
+    )) == artifact
     with pytest.raises(PermissionError, match="owner 未授权"):
         await port.read(
             RuntimeArtifactReadRequest(
