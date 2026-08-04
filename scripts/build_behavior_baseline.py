@@ -79,6 +79,9 @@ PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256 = (
 RUN_EVIDENCE_RETENTION_REGISTRY_BASELINE_SHA256 = (
     "23e82ea5390f676e7ac8ae7b478f0cfc9e2b6f5c46ee012951d9314f15b9591a"
 )
+RUN_EVIDENCE_GOVERNANCE_REGISTRY_BASELINE_SHA256 = (
+    "fea0d0ef250eae8217fb4bbb84bf55f1ffdc99d442dcfecb3aa9d57afcd9c352"
+)
 
 SNAPSHOT_CLASSIFICATIONS = {
     "agent_runtime": "preserve",
@@ -631,6 +634,7 @@ def _tool_snapshot() -> list[dict[str, Any]]:
             "availability_policy": descriptor.availability_policy,
             "execution_policy": descriptor.execution_policy,
             "trace_policy": descriptor.trace_policy,
+            "effect_policy": descriptor.effect_policy,
             "prompt_template_keys": list(descriptor.prompt_template_keys),
             "owner_module": descriptor.owner_module,
             "domain": descriptor.domain,
@@ -1385,12 +1389,28 @@ def _manifest(
                 "before_sha256": (
                     RUN_EVIDENCE_RETENTION_REGISTRY_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["runtime_registries"]
+                "after_sha256": (
+                    RUN_EVIDENCE_GOVERNANCE_REGISTRY_BASELINE_SHA256
                 ),
                 "reason": (
                     "登记成功、失败与不确定 Run 的差异化证据保留期；"
                     "默认保留顺序和跨字段约束均 fail closed。"
+                ),
+            },
+            {
+                "id": "agent_harness_checkpoint_recovery_registry",
+                "snapshot_id": "runtime_registries",
+                "stage": "Agent Harness 阶段 4.3",
+                "before_sha256": (
+                    RUN_EVIDENCE_GOVERNANCE_REGISTRY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["runtime_registries"]
+                ),
+                "reason": (
+                    "为每个工具冻结 read_only、local_write 或 external "
+                    "副作用策略，使 Native Runtime 能在调用前持久化回执，"
+                    "并在未知结果时阻断自动重放。"
                 ),
             },
         ],

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from clients.new_api_client import NewAPIClient
@@ -16,6 +17,13 @@ from core.agent_runtime import (
     AgentRuntimeSelection,
     AgentRuntimeSelectionPolicy,
     NativeAgentRuntime,
+    RequestRuntimeContext,
+    RuntimeModelRoute,
+    RuntimeOwnerType,
+    RuntimePlanKind,
+    RuntimePlanRef,
+    RuntimePrincipal,
+    runtime_model_route_sha256,
 )
 
 
@@ -108,6 +116,7 @@ def build_native_bridge_runtime(
         build_native_tool_execution_port,
     )
     from core.runtime.event_bus import emit_agent_lifecycle_event
+    from core.run_recovery import default_runtime_recovery_port
     from core.tool_registration import list_active_tool_registrations
 
     resolved_completion = completion_port or ReplyRouteChatCompletionAdapter(
@@ -125,8 +134,131 @@ def build_native_bridge_runtime(
         runtime_id=f"native:{name}",
         available_tool_names=tool_names,
         event_sinks=(emit_agent_lifecycle_event,),
+        recovery_port=default_runtime_recovery_port(),
     )
     return runtime, resolved_completion
+
+
+def set_bridge_runtime_model_route(
+    bridge: Any,
+    target_model: str,
+    route_plan: Any,
+    *,
+    unavailable_error: Callable[[str], Exception],
+) -> RuntimeModelRoute:
+    """冻结候选模型传输参数并同步到当前 Agent Runtime。"""
+
+    temperature_raw = getattr(route_plan, "temperature", None)
+    try:
+        temperature = (
+            float(temperature_raw) if temperature_raw is not None else None
+        )
+    except (TypeError, ValueError):
+        temperature = None
+    max_tokens_raw = getattr(route_plan, "max_tokens", None)
+    try:
+        max_tokens = int(max_tokens_raw) if max_tokens_raw is not None else None
+    except (TypeError, ValueError):
+        max_tokens = None
+    if max_tokens is not None and max_tokens <= 0:
+        max_tokens = None
+    thinking = getattr(route_plan, "enable_thinking", None)
+    if not isinstance(thinking, (str, bool, type(None))):
+        thinking = None
+    provider_id = str(
+        getattr(route_plan, "provider_id", "")
+        or getattr(route_plan, "registry_provider", "")
+        or "unknown"
+    )
+    if (
+        getattr(bridge, "runtime_kind", AgentRuntimeKind.KT)
+        is AgentRuntimeKind.NATIVE
+    ):
+        completion_port = bridge._native_completion_port
+        if completion_port is None:
+            raise unavailable_error("Native Chat Completion Adapter 尚未初始化")
+        completion_port.bind_route(route_plan)
+    bridge._active_route_plan = route_plan
+    runtime_route = RuntimeModelRoute(
+        route_id="reply/current",
+        model_id=target_model,
+        provider_id=provider_id,
+        profile_id=str(getattr(route_plan, "profile_id", "") or ""),
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_seconds=float(getattr(route_plan, "timeout", 120.0) or 120.0),
+        enable_thinking=thinking,
+    )
+    bridge._require_runtime().set_model_route(runtime_route)
+    return runtime_route
+
+
+def bind_native_recovery_model_plan(
+    runtime_kind: AgentRuntimeKind,
+    context: RequestRuntimeContext,
+    route: RuntimeModelRoute,
+) -> RequestRuntimeContext:
+    """把候选模型的精确冻结点绑定到 Native 单次尝试。"""
+
+    if runtime_kind is not AgentRuntimeKind.NATIVE:
+        return context
+    from core.run_recovery.proofs import replace_recovery_plan
+
+    return replace(
+        context,
+        plans=replace_recovery_plan(
+            context.plans,
+            RuntimePlanRef(
+                RuntimePlanKind.MODEL,
+                f"model-route:{route.route_id}",
+                runtime_model_route_sha256(route),
+            ),
+        ),
+    )
+
+
+def build_native_request_recovery_plans(
+    *,
+    runtime_kind: AgentRuntimeKind,
+    platform: str,
+    user_id: str,
+    group_id: str,
+    session_id: str,
+    is_group: bool,
+    runtime_id: str,
+    prompt_key: str,
+    prompt_sha256: str,
+    tool_plan: Any,
+) -> tuple[RuntimePlanRef, ...]:
+    """从实时权威配置生成 Native Checkpoint 的版本证明。"""
+
+    if runtime_kind is not AgentRuntimeKind.NATIVE:
+        return ()
+    from core import database
+    from core.run_recovery.proofs import build_live_recovery_plans
+
+    recovery_db = database.SessionLocal()
+    try:
+        return build_live_recovery_plans(
+            recovery_db,
+            principal=RuntimePrincipal(
+                platform=platform,
+                owner_type=(
+                    RuntimeOwnerType.GROUP
+                    if is_group
+                    else RuntimeOwnerType.USER
+                ),
+                owner_id=(group_id if is_group else user_id) or session_id,
+            ),
+            session_id=session_id,
+            chat_type="group" if is_group else "private",
+            runtime_id=runtime_id,
+            prompt_key=prompt_key,
+            prompt_sha256=prompt_sha256,
+            tool_plan=tool_plan,
+        )
+    finally:
+        recovery_db.close()
 
 
 def compatibility_runtime_selection_policy() -> AgentRuntimeSelectionPolicy:
@@ -214,11 +346,14 @@ async def reconcile_selected_bridge(
 
 __all__ = [
     "bind_bridge_runtime_correlation",
+    "bind_native_recovery_model_plan",
     "build_child_bridge",
     "build_native_bridge_runtime",
+    "build_native_request_recovery_plans",
     "build_native_tool_registry_runtime_info",
     "compatibility_runtime_selection_policy",
     "emit_runtime_selection",
     "reconcile_selected_bridge",
     "select_runtime_for_bridge_key",
+    "set_bridge_runtime_model_route",
 ]

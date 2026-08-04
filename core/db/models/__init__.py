@@ -73,6 +73,11 @@ from core.db.models.run_ledger import (
     RunLedgerLegalHold,
     RunLedgerStreamHead,
 )
+from core.db.models.run_recovery import (
+    RunCheckpointRow,
+    RunRecoveryOperation,
+    RunSideEffectReceipt,
+)
 from core.db.models.session_memory import (
     ConversationBlock,
     ConversationBlockEpisode,
@@ -168,6 +173,9 @@ __all__ = [
     "RunLedgerEventRow",
     "RunLedgerLegalHold",
     "RunLedgerStreamHead",
+    "RunCheckpointRow",
+    "RunRecoveryOperation",
+    "RunSideEffectReceipt",
     "SANDBOX_EXECUTION_PROFILES",
     "SANDBOX_LEASE_NONTERMINAL_STATUSES",
     "SANDBOX_LEASE_STATUSES",

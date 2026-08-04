@@ -21,6 +21,7 @@ class ToolDef:
     force_disabled_group: bool = False    # 群聊强制禁用（bash/write/edit）
     supports_background: bool = True      # 是否向模型暴露 run_in_background
     prompt_template_keys: tuple[str, ...] | None = None
+    effect_policy: str = "read_only"      # read_only/local_write/external
 
 
 ToolAvailabilityPolicy = Literal[
@@ -31,6 +32,7 @@ ToolAvailabilityPolicy = Literal[
 ]
 ToolExecutionPolicy = Literal["foreground_or_background", "foreground_only"]
 ToolTracePolicy = Literal["standard", "metadata_only"]
+ToolEffectPolicy = Literal["read_only", "local_write", "external"]
 
 
 class ToolDescriptorRegistryError(ValueError):
@@ -51,6 +53,7 @@ class ToolDescriptor:
     prompt_editable: bool
     owner_module: str
     domain: str
+    effect_policy: ToolEffectPolicy = "read_only"
     framework_owned: bool = False
 
     @property
@@ -98,6 +101,7 @@ class ToolDescriptor:
             "prompt_editable": self.prompt_editable,
             "owner_module": self.owner_module,
             "domain": self.domain,
+            "effect_policy": self.effect_policy,
             "framework_owned": self.framework_owned,
         }
 
@@ -159,6 +163,15 @@ class ToolDescriptorRegistry:
                     raise ToolDescriptorRegistryError(
                         f"tool {name} category 不支持: {definition.category}"
                     )
+                if definition.effect_policy not in {
+                    "read_only",
+                    "local_write",
+                    "external",
+                }:
+                    raise ToolDescriptorRegistryError(
+                        f"tool {name} effect_policy 不支持: "
+                        f"{definition.effect_policy}"
+                    )
                 prompt_keys = _derive_prompt_template_keys(definition)
                 expected_prefix = f"tools/{name}/"
                 invalid_prompt_keys = [
@@ -206,6 +219,7 @@ class ToolDescriptorRegistry:
                         else "core.tool_registry"
                     ),
                     domain=f"tool.{definition.category}",
+                    effect_policy=definition.effect_policy,
                     framework_owned=framework_owned,
                 )
         return cls(descriptors)
@@ -260,12 +274,14 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         private_default=True, group_default=True,
         description="生成最终用户可见回复。调用后系统把回复发送给用户。",
         force_enabled=True,
+        effect_policy="local_write",
     ),
     "no_reply": ToolDef(
         name="no_reply", label="主动不回复", category="communication", risk_level="low",
         private_default=True, group_default=True,
         description="主动决定不回复当前消息。和reply()互斥。",
         force_enabled=True,
+        effect_policy="local_write",
     ),
     "sticker_search": ToolDef(
         name="sticker_search", label="表情包搜索", category="communication", risk_level="low",
@@ -276,6 +292,7 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         name="image_generation", label="图片生成", category="communication", risk_level="medium",
         private_default=True, group_default=True,
         description="按用户明确要求生成新图片，返回可发送的 CQ 图片码。",
+        effect_policy="external",
     ),
 
     # ── 数据分析 ──
@@ -357,11 +374,13 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         name="persona_update", label="画像更新", category="system", risk_level="medium",
         private_default=True, group_default=True,
         description="仅触发当前用户的整体画像提取与刷新；无参数，不操作单条事实。",
+        effect_policy="local_write",
     ),
     "schedule_task": ToolDef(
         name="schedule_task", label="定时任务", category="system", risk_level="medium",
         private_default=True, group_default=True,
         description="创建/管理当前会话 owner 的定时推送任务；cron 使用 Asia/Shanghai。",
+        effect_policy="local_write",
     ),
     "memory_read": ToolDef(
         name="memory_read", label="记忆读取 (subagent)", category="system", risk_level="low",
@@ -384,6 +403,7 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         private_default=False, group_default=False,
         description="在当前授权 Profile 的固定镜像中执行命令，只能访问当前 Workspace 和已授权输入资产。",
         supports_background=False,
+        effect_policy="external",
     ),
     "sandbox_poll": ToolDef(
         name="sandbox_poll", label="Sandbox 进程轮询", category="file", risk_level="high",
@@ -396,12 +416,14 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         private_default=False, group_default=False,
         description="向当前会话已授权且仍在运行的 Lease 进程写入标准输入。",
         supports_background=False,
+        effect_policy="external",
     ),
     "sandbox_terminate": ToolDef(
         name="sandbox_terminate", label="Sandbox 终止", category="file", risk_level="high",
         private_default=False, group_default=False,
         description="按进程句柄回收其所属 Lease，并终止该 Lease 内全部活动进程。",
         supports_background=False,
+        effect_policy="external",
     ),
     "workspace_list": ToolDef(
         name="workspace_list", label="工作区列表", category="file", risk_level="low",
@@ -428,12 +450,14 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         private_default=False, group_default=False,
         description="向当前持久 Workspace 原子写入小文本文件。",
         supports_background=False,
+        effect_policy="local_write",
     ),
     "workspace_edit": ToolDef(
         name="workspace_edit", label="工作区编辑", category="file", risk_level="medium",
         private_default=False, group_default=False,
         description="对当前持久 Workspace 原子执行精确替换或多文件 unified diff。",
         supports_background=False,
+        effect_policy="local_write",
     ),
     "workspace_apply_patch": ToolDef(
         name="workspace_apply_patch", label="工作区补丁", category="file", risk_level="medium",
@@ -442,18 +466,21 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         supports_background=False,
         force_disabled=True,
         prompt_template_keys=(),
+        effect_policy="local_write",
     ),
     "asset_import": ToolDef(
         name="asset_import", label="资产导入", category="file", risk_level="medium",
         private_default=False, group_default=False,
         description="把当前附件引用或已经授权的不可变资产链接到当前 Workspace。",
         supports_background=False,
+        effect_policy="local_write",
     ),
     "asset_publish": ToolDef(
         name="asset_publish", label="资产发布", category="file", risk_level="medium",
         private_default=False, group_default=False,
         description="把当前 Workspace 中的普通文件发布为不可变资产并返回短引用。",
         supports_background=False,
+        effect_policy="local_write",
     ),
 
     # ── 文件操作 ──

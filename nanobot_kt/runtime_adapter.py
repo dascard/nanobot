@@ -210,7 +210,11 @@ class KtRuntimeAdapter:
     def runtime_capabilities(self) -> RuntimeCapabilities:
         return RuntimeCapabilities(
             runtime_id=self.runtime_id,
-            supported=frozenset(RuntimeCapability),
+            supported=frozenset(
+                capability
+                for capability in RuntimeCapability
+                if capability is not RuntimeCapability.CHECKPOINT_RECOVERY
+            ),
         )
 
     async def start(self) -> None:

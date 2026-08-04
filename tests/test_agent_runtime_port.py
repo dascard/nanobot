@@ -773,6 +773,9 @@ def test_native_and_kt_runtimes_share_minimal_port_contract():
             RuntimeCapability.TOOL_INSPECTION,
             RuntimeCapability.INTERRUPT,
         )
+        assert runtime.runtime_capabilities.supports(
+            RuntimeCapability.CHECKPOINT_RECOVERY
+        ) is False
         assert runtime.install_tool_policy().ready is True
 
         await runtime.start()

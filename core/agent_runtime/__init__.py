@@ -42,11 +42,25 @@ from core.agent_runtime.contracts import (
     validate_run_status_transition,
 )
 from core.agent_runtime.errors import (
+    AgentRuntimeAmbiguousError,
     AgentRuntimeAdapterError,
     AgentRuntimeCapabilityError,
     AgentRuntimeError,
     AgentRuntimeExecutionError,
+    AgentRuntimeRecoveryError,
     AgentRuntimeStateError,
+)
+from core.agent_runtime.recovery import (
+    RuntimeCheckpointBoundary,
+    RuntimeCheckpointCapture,
+    RuntimeCheckpointReference,
+    RuntimeRecoveryOperationKind,
+    RuntimeRecoveryPort,
+    RuntimeSideEffectGuard,
+    RuntimeSideEffectReceiptReference,
+    RuntimeSideEffectState,
+    RuntimeToolEffectClass,
+    runtime_model_route_sha256,
 )
 from core.agent_runtime.fake import FakeAgentRuntime
 from core.agent_runtime.event_sink import InMemoryRunEventSink
@@ -54,6 +68,7 @@ from core.agent_runtime.native import (
     NativeAgentRuntime,
     NativeAgentRuntimeConfig,
     NativeToolBindingResolver,
+    NativeToolEffectResolver,
     NativeToolPlan,
     NativeToolPlanResolver,
 )
@@ -109,6 +124,7 @@ from core.agent_runtime.tool_execution import RegisteredToolExecutionPort
 
 
 __all__ = [
+    "AgentRuntimeAmbiguousError",
     "AgentRuntimeAdapterError",
     "AgentRuntimeCapabilityError",
     "AgentRuntimeError",
@@ -116,6 +132,7 @@ __all__ = [
     "AgentRuntimeSelection",
     "AgentRuntimeSelectionPolicy",
     "AgentRuntimeExecutionError",
+    "AgentRuntimeRecoveryError",
     "AgentRuntimePort",
     "AgentRuntimeStateError",
     "AgentMessageGatewayPort",
@@ -135,6 +152,7 @@ __all__ = [
     "NativeAgentRuntime",
     "NativeAgentRuntimeConfig",
     "NativeToolBindingResolver",
+    "NativeToolEffectResolver",
     "NativeToolPlan",
     "NativeToolPlanResolver",
     "PermissionPort",
@@ -151,6 +169,9 @@ __all__ = [
     "RuntimeAttribute",
     "RuntimeChatType",
     "RuntimeCheckpoint",
+    "RuntimeCheckpointBoundary",
+    "RuntimeCheckpointCapture",
+    "RuntimeCheckpointReference",
     "RuntimeCapabilities",
     "RuntimeCapability",
     "RuntimeFeature",
@@ -166,6 +187,8 @@ __all__ = [
     "RuntimePlanKind",
     "RuntimePlanRef",
     "RuntimePrincipal",
+    "RuntimeRecoveryOperationKind",
+    "RuntimeRecoveryPort",
     "RuntimePermissionDecision",
     "RuntimePermissionOutcome",
     "RuntimePermissionRequest",
@@ -176,6 +199,9 @@ __all__ = [
     "RuntimeRunEventKind",
     "RuntimeRunIdentity",
     "RuntimeRunStatus",
+    "RuntimeSideEffectGuard",
+    "RuntimeSideEffectReceiptReference",
+    "RuntimeSideEffectState",
     "RuntimeSkillContent",
     "RuntimeSkillDescriptor",
     "RuntimeSkillScope",
@@ -186,6 +212,7 @@ __all__ = [
     "RuntimeToolExecutionResult",
     "RuntimeTurnKind",
     "RuntimeToolPolicyStatus",
+    "RuntimeToolEffectClass",
     "RuntimeUsage",
     "StaticPermissionPort",
     "SkillProviderPort",
@@ -199,4 +226,5 @@ __all__ = [
     "get_agent_gateway",
     "parse_runtime_scope_ids",
     "validate_run_status_transition",
+    "runtime_model_route_sha256",
 ]

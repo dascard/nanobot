@@ -35,6 +35,7 @@ def build_request_runtime_context(
     prompt_key: str,
     prompt_sha256: str,
     tool_plan: Any,
+    recovery_plans: tuple[RuntimePlanRef, ...] = (),
 ) -> RequestRuntimeContext:
     owner_id = group_id if is_group else user_id
     if not owner_id:
@@ -58,6 +59,12 @@ def build_request_runtime_context(
                 tool_digest,
             )
         )
+    for reference in recovery_plans:
+        if not isinstance(reference, RuntimePlanRef):
+            raise TypeError("recovery_plans 必须只包含 RuntimePlanRef")
+        if reference.kind in {item.kind for item in plans}:
+            raise ValueError(f"重复 RuntimePlan：{reference.kind.value}")
+        plans.append(reference)
     return RequestRuntimeContext(
         request_id=request_id or run_id,
         principal=RuntimePrincipal(

@@ -38,10 +38,14 @@ class RuntimeChatType(str, Enum):
 
 
 class RuntimePlanKind(str, Enum):
+    MANIFEST = "manifest"
     PROMPT = "prompt"
     TOOL = "tool"
     MODEL = "model"
     MEMORY = "memory"
+    WORKSPACE = "workspace"
+    ARTIFACT = "artifact"
+    SECURITY = "security"
     BUDGET = "budget"
 
 
@@ -79,6 +83,7 @@ class RuntimeCapability(str, Enum):
     TOOL_POLICY = "tool_policy"
     TOOL_INSPECTION = "tool_inspection"
     INTERRUPT = "interrupt"
+    CHECKPOINT_RECOVERY = "checkpoint_recovery"
 
 
 class RuntimeActorType(str, Enum):

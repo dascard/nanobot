@@ -25,6 +25,9 @@ from core.db.models import (
     RunLedgerEventRow,
     RunLedgerLegalHold,
     RunLedgerStreamHead,
+    RunCheckpointRow,
+    RunRecoveryOperation,
+    RunSideEffectReceipt,
     RuntimeTelemetryEvent,
     ToolCall,
 )
@@ -78,6 +81,9 @@ _LEGACY_EVIDENCE_MODELS = (
     ("llm_api_request_logs", LLMApiRequestLog),
     ("reply_contract_check_logs", ReplyContractCheckLog),
     ("runtime_telemetry_events", RuntimeTelemetryEvent),
+    ("run_checkpoints", RunCheckpointRow),
+    ("run_side_effect_receipts", RunSideEffectReceipt),
+    ("run_recovery_operations", RunRecoveryOperation),
 )
 
 

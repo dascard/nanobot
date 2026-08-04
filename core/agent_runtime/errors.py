@@ -35,3 +35,15 @@ class AgentRuntimeExecutionError(AgentRuntimeAdapterError):
     """单轮 Agent 执行失败。"""
 
     code = "agent_runtime_execution_failed"
+
+
+class AgentRuntimeAmbiguousError(AgentRuntimeExecutionError):
+    """外部副作用或部分输出已经发生，结果不能安全确认或重放。"""
+
+    code = "agent_runtime_ambiguous"
+
+
+class AgentRuntimeRecoveryError(AgentRuntimeError):
+    """Checkpoint 恢复前检或 lineage 操作失败。"""
+
+    code = "agent_runtime_recovery_failed"

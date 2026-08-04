@@ -38,8 +38,18 @@ from core.agent_runtime.contracts import (
     ToolExecutionPort,
 )
 from core.agent_runtime.errors import (
+    AgentRuntimeAmbiguousError,
     AgentRuntimeCapabilityError,
     AgentRuntimeExecutionError,
+)
+from core.agent_runtime.recovery import (
+    RuntimeCheckpointBoundary,
+    RuntimeCheckpointCapture,
+    RuntimeCheckpointReference,
+    RuntimeRecoveryPort,
+    RuntimeSideEffectGuard,
+    RuntimeSideEffectState,
+    RuntimeToolEffectClass,
 )
 from core.agent_runtime.event_stream import (
     RuntimeRunEventEmitter,
@@ -69,6 +79,7 @@ class NativeToolPlan(Protocol):
 
 NativeToolPlanResolver = Callable[[], NativeToolPlan | None]
 NativeToolBindingResolver = Callable[[str], str]
+NativeToolEffectResolver = Callable[[str], RuntimeToolEffectClass]
 NativeTextDeltaHandler = Callable[[str], Awaitable[None]]
 NativeToolActivityHandler = Callable[[RuntimeToolCall], Awaitable[None]]
 
@@ -139,11 +150,18 @@ class _NativeRunOutcome:
     usage: RuntimeUsage | None
 
 
+@dataclass(frozen=True, slots=True)
+class _NativeToolOutcome:
+    result: RuntimeToolExecutionResult
+    receipt_id: str = ""
+    effect_class: RuntimeToolEffectClass = RuntimeToolEffectClass.READ_ONLY
+
+
 class _NativeModelResponseError(AgentRuntimeExecutionError):
     pass
 
 
-class _NativeAmbiguousExecutionError(AgentRuntimeExecutionError):
+class _NativeAmbiguousExecutionError(AgentRuntimeAmbiguousError):
     pass
 
 
@@ -159,6 +177,24 @@ def _default_tool_binding_resolver(tool_name: str) -> str:
     registration = get_tool_registration(tool_name)
     binding = registration.execution_binding if registration is not None else None
     return str(binding.port_id if binding is not None else "").strip()
+
+
+def _default_tool_effect_resolver(tool_name: str) -> RuntimeToolEffectClass:
+    from core.tool_registration import get_tool_registration
+
+    registration = get_tool_registration(tool_name)
+    policy = (
+        registration.descriptor.effect_policy
+        if registration is not None
+        else RuntimeToolEffectClass.EXTERNAL.value
+    )
+    try:
+        return RuntimeToolEffectClass(policy)
+    except ValueError as exc:
+        raise AgentRuntimeCapabilityError(
+            f"工具副作用策略无效：{tool_name}",
+            runtime_id="native:tool-effect-policy",
+        ) from exc
 
 
 def _default_available_tool_names() -> tuple[str, ...]:
@@ -533,6 +569,8 @@ class NativeAgentRuntime:
         config: NativeAgentRuntimeConfig | None = None,
         tool_plan_resolver: NativeToolPlanResolver | None = None,
         tool_binding_resolver: NativeToolBindingResolver | None = None,
+        tool_effect_resolver: NativeToolEffectResolver | None = None,
+        recovery_port: RuntimeRecoveryPort | None = None,
         available_tool_names: tuple[str, ...] | None = None,
         event_sinks: tuple[RuntimeLifecycleEventSink, ...] = (),
         now: Callable[[], datetime] | None = None,
@@ -554,6 +592,15 @@ class NativeAgentRuntime:
         self._tool_binding_resolver = (
             tool_binding_resolver or _default_tool_binding_resolver
         )
+        self._tool_effect_resolver = (
+            tool_effect_resolver or _default_tool_effect_resolver
+        )
+        if recovery_port is not None and not isinstance(
+            recovery_port,
+            RuntimeRecoveryPort,
+        ):
+            raise TypeError("recovery_port 未实现 RuntimeRecoveryPort")
+        self._recovery_port = recovery_port
         self._available_tool_names = tuple(
             sorted(
                 set(
@@ -584,9 +631,12 @@ class NativeAgentRuntime:
 
     @property
     def runtime_capabilities(self) -> RuntimeCapabilities:
+        supported = set(RuntimeCapability)
+        if self._recovery_port is None:
+            supported.discard(RuntimeCapability.CHECKPOINT_RECOVERY)
         return RuntimeCapabilities(
             runtime_id=self.runtime_id,
-            supported=frozenset(RuntimeCapability),
+            supported=frozenset(supported),
         )
 
     async def start(self) -> None:
@@ -826,11 +876,121 @@ class NativeAgentRuntime:
             model_step=model_step,
         )
 
+    async def _save_checkpoint(
+        self,
+        request: AgentTurnRequest,
+        *,
+        boundary: RuntimeCheckpointBoundary,
+        model_step: int,
+        tool_round: int,
+        pending_tool: RuntimeToolCall | None = None,
+        last_tool_result: RuntimeToolExecutionResult | None = None,
+        receipt_ids: Sequence[str] = (),
+        resumable: bool = True,
+    ) -> RuntimeCheckpointReference | None:
+        recovery = self._recovery_port
+        if recovery is None:
+            return None
+        return await recovery.save_checkpoint(RuntimeCheckpointCapture(
+            identity=request.context.execution_identity(),
+            boundary=boundary,
+            runtime_id=self.runtime_id,
+            runtime_protocol_version=self.runtime_capabilities.protocol_version,
+            messages=self._messages,
+            plans=request.context.plans,
+            model_route=self._route,
+            model_step=model_step,
+            tool_round=tool_round,
+            pending_tool=pending_tool,
+            last_tool_result=last_tool_result,
+            side_effect_receipt_ids=tuple(receipt_ids),
+            resumable=resumable,
+        ))
+
+    @staticmethod
+    def _ambiguous_tool_result(
+        call: RuntimeToolCall,
+        *,
+        code: str,
+        message: str,
+    ) -> RuntimeToolExecutionResult:
+        return RuntimeToolExecutionResult(
+            tool_call=RuntimeToolCall(
+                call_id=call.call_id,
+                name=call.name,
+                arguments=call.arguments,
+                status=RuntimeToolCallStatus.AMBIGUOUS,
+            ),
+            error=RuntimeRunError(
+                code=code,
+                message=message,
+                retryable=False,
+            ),
+        )
+
+    def _tool_ambiguous_error(
+        self,
+        result: RuntimeToolExecutionResult,
+        *,
+        receipt_id: str = "",
+    ) -> AgentRuntimeAmbiguousError:
+        message = (
+            result.error.message
+            if result.error is not None
+            else "副作用工具结果未知，禁止自动重放"
+        )
+        error = AgentRuntimeAmbiguousError(
+            str(message),
+            runtime_id=self.runtime_id,
+        )
+        error.tool_result = result
+        error.receipt_id = str(receipt_id or "")
+        return error
+
+    async def _settle_tool_effect_or_raise(
+        self,
+        guard: RuntimeSideEffectGuard,
+        *,
+        state: RuntimeSideEffectState,
+        result: RuntimeToolExecutionResult,
+        error_code: str = "",
+    ) -> None:
+        recovery = self._recovery_port
+        if recovery is None:
+            raise AgentRuntimeCapabilityError(
+                "副作用工具缺少权威恢复协调器",
+                runtime_id=self.runtime_id,
+            )
+        try:
+            await recovery.settle_tool_effect(
+                guard,
+                state=state,
+                result=result,
+                error_code=error_code,
+            )
+        except (asyncio.CancelledError, Exception) as exc:
+            uncertain = self._ambiguous_tool_result(
+                result.tool_call,
+                code="side_effect_receipt_unconfirmed",
+                message=(
+                    f"副作用工具已经调用，但终态回执无法确认："
+                    f"{result.tool_call.name}"
+                ),
+            )
+            raise self._tool_ambiguous_error(
+                uncertain,
+                receipt_id=guard.receipt_id,
+            ) from exc
+
     async def _execute_tool(
         self,
         request: AgentTurnRequest,
         call: RuntimeToolCall,
-    ) -> RuntimeToolExecutionResult:
+        *,
+        model_step: int,
+        tool_round: int,
+        receipt_ids: Sequence[str],
+    ) -> _NativeToolOutcome:
         arguments = dict(call.arguments) if isinstance(call.arguments, Mapping) else {}
         for guard in self._tool_guards:
             pre_tool_execute = getattr(guard, "pre_tool_execute", None)
@@ -873,14 +1033,91 @@ class NativeAgentRuntime:
             timeout_seconds=self._config.tool_timeout_seconds,
             attributes=request.event_attributes,
         )
+        effect_class = self._tool_effect_resolver(call.name)
+        checkpoint = await self._save_checkpoint(
+            request,
+            boundary=RuntimeCheckpointBoundary.TOOL_READY,
+            model_step=model_step,
+            tool_round=tool_round,
+            pending_tool=call,
+            receipt_ids=receipt_ids,
+            # pre-tool 状态只用于审计和回执锚定，不能直接跳过待执行调用恢复。
+            resumable=False,
+        )
+        side_effect_guard = None
+        if effect_class.requires_receipt and self._recovery_port is not None:
+            if checkpoint is None:
+                raise AgentRuntimeCapabilityError(
+                    f"副作用工具缺少权威恢复协调器：{call.name}",
+                    runtime_id=self.runtime_id,
+                )
+            try:
+                side_effect_guard = await self._recovery_port.prepare_tool_effect(
+                    identity=request.context.execution_identity(),
+                    tool_call=call,
+                    execution_port_id=binding_id,
+                    idempotency_key=execution_request.idempotency_key,
+                    effect_class=effect_class,
+                    checkpoint=checkpoint,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                from core.run_ledger.contracts import (
+                    find_run_ledger_authority_error,
+                )
+
+                authority_failure = find_run_ledger_authority_error(exc)
+                if authority_failure is not None:
+                    raise authority_failure
+                blocked = self._ambiguous_tool_result(
+                    call,
+                    code="side_effect_replay_blocked",
+                    message=(
+                        f"副作用工具回执前检拒绝，禁止自动重放：{call.name}"
+                    ),
+                )
+                raise self._tool_ambiguous_error(blocked) from exc
         try:
             result = await self._tool_execution_port.execute(execution_request)
-        except asyncio.CancelledError:
-            raise
+        except asyncio.CancelledError as exc:
+            if side_effect_guard is None:
+                raise
+            ambiguous = self._ambiguous_tool_result(
+                call,
+                code="tool_cancelled_ambiguous",
+                message=f"副作用工具取消后结果未知：{call.name}",
+            )
+            await self._settle_tool_effect_or_raise(
+                side_effect_guard,
+                state=RuntimeSideEffectState.AMBIGUOUS,
+                result=ambiguous,
+                error_code="tool_cancelled_ambiguous",
+            )
+            raise self._tool_ambiguous_error(
+                ambiguous,
+                receipt_id=side_effect_guard.receipt_id,
+            ) from exc
         except AgentRuntimeCapabilityError:
+            if side_effect_guard is not None:
+                ambiguous = self._ambiguous_tool_result(
+                    call,
+                    code="tool_capability_ambiguous",
+                    message=f"副作用工具调用边界异常，结果未知：{call.name}",
+                )
+                await self._settle_tool_effect_or_raise(
+                    side_effect_guard,
+                    state=RuntimeSideEffectState.AMBIGUOUS,
+                    result=ambiguous,
+                    error_code="tool_capability_ambiguous",
+                )
+                raise self._tool_ambiguous_error(
+                    ambiguous,
+                    receipt_id=side_effect_guard.receipt_id,
+                )
             raise
-        except TimeoutError:
-            return RuntimeToolExecutionResult(
+        except TimeoutError as exc:
+            timed_out = RuntimeToolExecutionResult(
                 tool_call=RuntimeToolCall(
                     call_id=call.call_id,
                     name=call.name,
@@ -893,15 +1130,35 @@ class NativeAgentRuntime:
                     retryable=True,
                 ),
             )
+            if side_effect_guard is None:
+                return _NativeToolOutcome(
+                    result=timed_out,
+                    effect_class=effect_class,
+                )
+            ambiguous = self._ambiguous_tool_result(
+                call,
+                code="tool_timeout_ambiguous",
+                message=f"副作用工具超时后结果未知：{call.name}",
+            )
+            await self._settle_tool_effect_or_raise(
+                side_effect_guard,
+                state=RuntimeSideEffectState.AMBIGUOUS,
+                result=ambiguous,
+                error_code="tool_timeout_ambiguous",
+            )
+            raise self._tool_ambiguous_error(
+                ambiguous,
+                receipt_id=side_effect_guard.receipt_id,
+            ) from exc
         except Exception as exc:
             from core.run_ledger.contracts import (
                 find_run_ledger_authority_error,
             )
 
             authority_failure = find_run_ledger_authority_error(exc)
-            if authority_failure is not None:
+            if authority_failure is not None and side_effect_guard is None:
                 raise authority_failure
-            return RuntimeToolExecutionResult(
+            failed = RuntimeToolExecutionResult(
                 tool_call=RuntimeToolCall(
                     call_id=call.call_id,
                     name=call.name,
@@ -914,7 +1171,49 @@ class NativeAgentRuntime:
                     retryable=False,
                 ),
             )
+            if side_effect_guard is None:
+                return _NativeToolOutcome(
+                    result=failed,
+                    effect_class=effect_class,
+                )
+            ambiguous = self._ambiguous_tool_result(
+                call,
+                code="tool_execution_ambiguous",
+                message=f"副作用工具异常后结果未知：{call.name}",
+            )
+            await self._settle_tool_effect_or_raise(
+                side_effect_guard,
+                state=RuntimeSideEffectState.AMBIGUOUS,
+                result=ambiguous,
+                error_code=(
+                    authority_failure.code
+                    if authority_failure is not None
+                    else "tool_execution_ambiguous"
+                ),
+            )
+            raise self._tool_ambiguous_error(
+                ambiguous,
+                receipt_id=side_effect_guard.receipt_id,
+            ) from exc
         if not isinstance(result, RuntimeToolExecutionResult):
+            if side_effect_guard is not None:
+                ambiguous = self._ambiguous_tool_result(
+                    call,
+                    code="tool_result_contract_ambiguous",
+                    message=(
+                        f"副作用工具已返回，但结果合同无法确认：{call.name}"
+                    ),
+                )
+                await self._settle_tool_effect_or_raise(
+                    side_effect_guard,
+                    state=RuntimeSideEffectState.AMBIGUOUS,
+                    result=ambiguous,
+                    error_code="tool_result_contract_ambiguous",
+                )
+                raise self._tool_ambiguous_error(
+                    ambiguous,
+                    receipt_id=side_effect_guard.receipt_id,
+                )
             raise AgentRuntimeExecutionError(
                 f"工具执行 Port 返回了无效结果：{call.name}",
                 runtime_id=self.runtime_id,
@@ -923,11 +1222,47 @@ class NativeAgentRuntime:
             result.tool_call.call_id != call.call_id
             or result.tool_call.name != call.name
         ):
+            if side_effect_guard is not None:
+                ambiguous = self._ambiguous_tool_result(
+                    call,
+                    code="tool_result_identity_ambiguous",
+                    message=(
+                        f"副作用工具已返回，但结果身份无法确认：{call.name}"
+                    ),
+                )
+                await self._settle_tool_effect_or_raise(
+                    side_effect_guard,
+                    state=RuntimeSideEffectState.AMBIGUOUS,
+                    result=ambiguous,
+                    error_code="tool_result_identity_ambiguous",
+                )
+                raise self._tool_ambiguous_error(
+                    ambiguous,
+                    receipt_id=side_effect_guard.receipt_id,
+                )
             raise AgentRuntimeExecutionError(
                 f"工具执行结果与请求不匹配：{call.name}",
                 runtime_id=self.runtime_id,
             )
-        return result
+        receipt_id = ""
+        if side_effect_guard is not None:
+            settlement_state = (
+                RuntimeSideEffectState.COMPLETED
+                if result.success
+                else RuntimeSideEffectState.FAILED
+            )
+            await self._settle_tool_effect_or_raise(
+                side_effect_guard,
+                state=settlement_state,
+                result=result,
+                error_code=(result.error.code if result.error is not None else ""),
+            )
+            receipt_id = side_effect_guard.receipt_id
+        return _NativeToolOutcome(
+            result=result,
+            receipt_id=receipt_id,
+            effect_class=effect_class,
+        )
 
     async def _run_loop(
         self,
@@ -945,6 +1280,22 @@ class NativeAgentRuntime:
         turn_tool_calls: list[RuntimeToolCall] = []
         turn_usage: RuntimeUsage | None = None
         tool_rounds = 0
+        receipt_ids: list[str] = []
+        recovery_resumable = True
+        await self._save_checkpoint(
+            request,
+            boundary=RuntimeCheckpointBoundary.TURN_STARTED,
+            model_step=0,
+            tool_round=0,
+            receipt_ids=receipt_ids,
+        )
+        await self._save_checkpoint(
+            request,
+            boundary=RuntimeCheckpointBoundary.PLAN_RESOLVED,
+            model_step=0,
+            tool_round=0,
+            receipt_ids=receipt_ids,
+        )
         for model_step in range(1, self._config.max_model_steps + 1):
             completion = await self._invoke_model(
                 request,
@@ -963,6 +1314,14 @@ class NativeAgentRuntime:
 
             if not completion.tool_calls:
                 self._tool_calls = tuple(turn_tool_calls)
+                await self._save_checkpoint(
+                    request,
+                    boundary=RuntimeCheckpointBoundary.TURN_COMPLETED,
+                    model_step=model_step,
+                    tool_round=tool_rounds,
+                    receipt_ids=receipt_ids,
+                    resumable=recovery_resumable,
+                )
                 return _NativeRunOutcome(
                     result=AgentTurnResult(
                         raw_result=dict(completion.raw_response),
@@ -1004,7 +1363,56 @@ class NativeAgentRuntime:
                         f"模型请求了 ToolPlan 未授权工具：{call.name}",
                         runtime_id=self.runtime_id,
                     ) from exc
-                result = await self._execute_tool(request, call)
+                try:
+                    tool_outcome = await self._execute_tool(
+                        request,
+                        call,
+                        model_step=model_step,
+                        tool_round=tool_rounds,
+                        receipt_ids=receipt_ids,
+                    )
+                except AgentRuntimeAmbiguousError as exc:
+                    ambiguous_result = getattr(exc, "tool_result", None)
+                    ambiguous_receipt = str(
+                        getattr(exc, "receipt_id", "") or ""
+                    )
+                    if isinstance(
+                        ambiguous_result,
+                        RuntimeToolExecutionResult,
+                    ):
+                        turn_tool_calls.append(ambiguous_result.tool_call)
+                        messages.append(RuntimeMessage(
+                            "tool",
+                            _tool_output_text(ambiguous_result),
+                            name=call.name,
+                            tool_call_id=call.call_id,
+                        ))
+                        self._messages = tuple(messages)
+                        if on_tool_activity is not None:
+                            await on_tool_activity(ambiguous_result.tool_call)
+                    if ambiguous_receipt:
+                        receipt_ids.append(ambiguous_receipt)
+                    await self._save_checkpoint(
+                        request,
+                        boundary=RuntimeCheckpointBoundary.TOOL_AMBIGUOUS,
+                        model_step=model_step,
+                        tool_round=tool_rounds,
+                        last_tool_result=(
+                            ambiguous_result
+                            if isinstance(
+                                ambiguous_result,
+                                RuntimeToolExecutionResult,
+                            )
+                            else None
+                        ),
+                        receipt_ids=receipt_ids,
+                        resumable=False,
+                    )
+                    self._tool_calls = tuple(turn_tool_calls)
+                    raise
+                result = tool_outcome.result
+                if tool_outcome.receipt_id:
+                    receipt_ids.append(tool_outcome.receipt_id)
                 turn_tool_calls.append(result.tool_call)
                 messages.append(
                     RuntimeMessage(
@@ -1017,6 +1425,19 @@ class NativeAgentRuntime:
                 self._messages = tuple(messages)
                 if on_tool_activity is not None:
                     await on_tool_activity(result.tool_call)
+                if tool_outcome.effect_class is RuntimeToolEffectClass.EXTERNAL:
+                    # 通用外部工具不能证明其全部环境状态；已知结果仍保留事实，
+                    # 但后续 Checkpoint 不冒充可安全恢复点。
+                    recovery_resumable = False
+                await self._save_checkpoint(
+                    request,
+                    boundary=RuntimeCheckpointBoundary.TOOL_COMPLETED,
+                    model_step=model_step,
+                    tool_round=tool_rounds,
+                    last_tool_result=result,
+                    receipt_ids=receipt_ids,
+                    resumable=recovery_resumable,
+                )
                 if call.name in self._config.terminal_tool_names and not result.success:
                     self._tool_calls = tuple(turn_tool_calls)
                     raise AgentRuntimeExecutionError(
@@ -1033,6 +1454,14 @@ class NativeAgentRuntime:
 
             self._tool_calls = tuple(turn_tool_calls)
             if terminal:
+                await self._save_checkpoint(
+                    request,
+                    boundary=RuntimeCheckpointBoundary.TURN_COMPLETED,
+                    model_step=model_step,
+                    tool_round=tool_rounds,
+                    receipt_ids=receipt_ids,
+                    resumable=recovery_resumable,
+                )
                 return _NativeRunOutcome(
                     result=AgentTurnResult(
                         raw_result=dict(completion.raw_response),
@@ -1129,10 +1558,14 @@ class NativeAgentRuntime:
             )
             await emitter.end(RuntimeRunStatus.TIMED_OUT)
             raise
-        except _NativeAmbiguousExecutionError as exc:
+        except AgentRuntimeAmbiguousError as exc:
             await emitter.error(
                 RuntimeRunError(
-                    code="native_stream_ambiguous",
+                    code=(
+                        "native_stream_ambiguous"
+                        if isinstance(exc, _NativeAmbiguousExecutionError)
+                        else getattr(exc, "code", "agent_runtime_ambiguous")
+                    ),
                     message=str(exc),
                     retryable=False,
                 )
@@ -1244,6 +1677,7 @@ __all__ = [
     "NativeAgentRuntime",
     "NativeAgentRuntimeConfig",
     "NativeToolBindingResolver",
+    "NativeToolEffectResolver",
     "NativeToolPlan",
     "NativeToolPlanResolver",
 ]

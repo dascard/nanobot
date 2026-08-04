@@ -66,8 +66,23 @@ class BridgeRequestScope:
                 self.finish("cancelled", error=str(exc or "request cancelled"))
             else:
                 failure = cleanup_failure or exc
+                ambiguous = False
+                if failure is not None:
+                    from core.agent_runtime import AgentRuntimeAmbiguousError
+                    from core.run_ledger.contracts import (
+                        find_run_ledger_authority_error,
+                    )
+
+                    authority = find_run_ledger_authority_error(failure)
+                    ambiguous = isinstance(
+                        failure,
+                        AgentRuntimeAmbiguousError,
+                    ) or (
+                        authority is not None
+                        and authority.code == "side_effect_receipt_unconfirmed"
+                    )
                 self.finish(
-                    "error",
+                    "ambiguous" if ambiguous else "error",
                     error=str(
                         failure
                         or (exc_type.__name__ if exc_type is not None else "")

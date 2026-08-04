@@ -143,9 +143,17 @@
       "reason": "登记成功、失败与不确定 Run 的差异化证据保留期；默认保留顺序和跨字段约束均 fail closed。",
       "snapshot_id": "runtime_registries",
       "stage": "Agent Harness 阶段 4.2"
+    },
+    {
+      "after_sha256": "ad1bb404996f61b0691eda339d77fb824d93c00ed02c013c5d32368a18553fef",
+      "before_sha256": "fea0d0ef250eae8217fb4bbb84bf55f1ffdc99d442dcfecb3aa9d57afcd9c352",
+      "id": "agent_harness_checkpoint_recovery_registry",
+      "reason": "为每个工具冻结 read_only、local_write 或 external 副作用策略，使 Native Runtime 能在调用前持久化回执，并在未知结果时阻断自动重放。",
+      "snapshot_id": "runtime_registries",
+      "stage": "Agent Harness 阶段 4.3"
     }
   ],
-  "baseline_git_commit": "b1e483c2a8d544d699fd280aa31a1d0d23803ccf",
+  "baseline_git_commit": "00a25a8b0b9eaa9729cd92223cead56258f2564e",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -206,7 +214,7 @@
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "fea0d0ef250eae8217fb4bbb84bf55f1ffdc99d442dcfecb3aa9d57afcd9c352"
+      "sha256": "ad1bb404996f61b0691eda339d77fb824d93c00ed02c013c5d32368a18553fef"
     },
     {
       "classification": "security_invariant",

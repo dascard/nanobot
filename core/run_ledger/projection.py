@@ -41,6 +41,18 @@ class RunLedgerProjection:
     prompt_resolution_sha256: str
     model_ids: tuple[str, ...]
     tool_names: tuple[str, ...]
+    checkpoint_count: int
+    latest_checkpoint_id: str
+    latest_checkpoint_boundary: str
+    latest_checkpoint_resumable: bool
+    checkpoint_version_proofs_sha256: str
+    side_effect_prepared_count: int
+    side_effect_completed_count: int
+    side_effect_failed_count: int
+    side_effect_ambiguous_count: int
+    lineage_operation_kind: str
+    parent_run_sha256: str
+    root_run_sha256: str
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -72,6 +84,30 @@ class RunLedgerProjection:
             "artifact_ids": list(self.artifact_ids),
             "error_codes": list(self.error_codes),
             "correction_count": self.correction_count,
+            "recovery": {
+                "checkpoint_count": self.checkpoint_count,
+                "latest_checkpoint_id": self.latest_checkpoint_id,
+                "latest_checkpoint_boundary": (
+                    self.latest_checkpoint_boundary
+                ),
+                "latest_checkpoint_resumable": (
+                    self.latest_checkpoint_resumable
+                ),
+                "version_proofs_sha256": (
+                    self.checkpoint_version_proofs_sha256
+                ),
+                "side_effect_receipts": {
+                    "prepared": self.side_effect_prepared_count,
+                    "completed": self.side_effect_completed_count,
+                    "failed": self.side_effect_failed_count,
+                    "ambiguous": self.side_effect_ambiguous_count,
+                },
+                "lineage": {
+                    "operation_kind": self.lineage_operation_kind,
+                    "parent_run_sha256": self.parent_run_sha256,
+                    "root_run_sha256": self.root_run_sha256,
+                },
+            },
             "context_manifest": {
                 "prompt_mode": self.prompt_mode,
                 "prompt_key": self.prompt_key,
@@ -172,6 +208,20 @@ def project_run_ledger(
     prompt_resolution_sha256 = ""
     model_ids: list[str] = []
     tool_names: list[str] = []
+    checkpoint_count = 0
+    latest_checkpoint_id = ""
+    latest_checkpoint_boundary = ""
+    latest_checkpoint_resumable = False
+    checkpoint_version_proofs_sha256 = ""
+    side_effect_counts = {
+        "prepared": 0,
+        "completed": 0,
+        "failed": 0,
+        "ambiguous": 0,
+    }
+    lineage_operation_kind = ""
+    parent_run_sha256 = ""
+    root_run_sha256 = ""
 
     for record in records:
         event = record.event
@@ -229,6 +279,39 @@ def project_run_ledger(
             artifact_id = event.payload.get("artifact_id")
             if isinstance(artifact_id, str) and artifact_id:
                 artifact_ids.append(artifact_id)
+        elif event.event_type in {
+            "run.checkpoint_saved",
+            "run.checkpoint_restored",
+        }:
+            checkpoint_count += 1
+            latest_checkpoint_id = str(
+                event.payload.get("checkpoint_id") or ""
+            )
+            latest_checkpoint_boundary = str(
+                event.payload.get("boundary") or ""
+            )
+            latest_checkpoint_resumable = bool(
+                event.payload.get("resumable") is True
+            )
+            checkpoint_version_proofs_sha256 = str(
+                event.payload.get("version_proofs_sha256") or ""
+            )
+        elif event.event_type.startswith("tool.side_effect_"):
+            effect_state = event.event_type.removeprefix(
+                "tool.side_effect_"
+            )
+            if effect_state in side_effect_counts:
+                side_effect_counts[effect_state] += 1
+        elif event.event_type == "run.lineage_declared":
+            lineage_operation_kind = str(
+                event.payload.get("operation_kind") or ""
+            )
+            parent_run_sha256 = str(
+                event.payload.get("parent_run_sha256") or ""
+            )
+            root_run_sha256 = str(
+                event.payload.get("root_run_sha256") or ""
+            )
 
         model_id = event.payload.get("model")
         if isinstance(model_id, str) and model_id:
@@ -271,6 +354,20 @@ def project_run_ledger(
         prompt_resolution_sha256=prompt_resolution_sha256,
         model_ids=tuple(dict.fromkeys(model_ids)),
         tool_names=tuple(dict.fromkeys(tool_names)),
+        checkpoint_count=checkpoint_count,
+        latest_checkpoint_id=latest_checkpoint_id,
+        latest_checkpoint_boundary=latest_checkpoint_boundary,
+        latest_checkpoint_resumable=latest_checkpoint_resumable,
+        checkpoint_version_proofs_sha256=(
+            checkpoint_version_proofs_sha256
+        ),
+        side_effect_prepared_count=side_effect_counts["prepared"],
+        side_effect_completed_count=side_effect_counts["completed"],
+        side_effect_failed_count=side_effect_counts["failed"],
+        side_effect_ambiguous_count=side_effect_counts["ambiguous"],
+        lineage_operation_kind=lineage_operation_kind,
+        parent_run_sha256=parent_run_sha256,
+        root_run_sha256=root_run_sha256,
     )
 
 

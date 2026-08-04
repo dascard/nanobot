@@ -14,6 +14,9 @@ from core.database import (
     LLMApiRequestLog,
     PromptRenderLog,
     ReplyContractCheckLog,
+    RunCheckpointRow,
+    RunRecoveryOperation,
+    RunSideEffectReceipt,
     RunLedgerErasureAuthorization,
     RunLedgerErasureReceipt,
     RunLedgerEventRow,
@@ -203,6 +206,87 @@ def _service(db) -> RunEvidenceGovernanceService:
     return RunEvidenceGovernanceService(db, policy=POLICY, now=NOW)
 
 
+def _seed_recovery_evidence(db, run_id: str = "run-governed") -> None:
+    checkpoint_id = f"checkpoint-{run_id}"
+    db.add_all([
+        RunCheckpointRow(
+            checkpoint_id=checkpoint_id,
+            run_id=run_id,
+            sequence=1,
+            schema_version=1,
+            boundary="turn_completed",
+            turn_id=f"turn-{run_id}",
+            correlation_id=f"trace-{run_id}",
+            actor_type="user",
+            actor_id="user-1",
+            owner_platform="qq",
+            owner_type="user",
+            owner_id="user-1",
+            runtime_id="native:test",
+            runtime_protocol_version="1.0",
+            resumable=True,
+            manifest_sha256="1" * 64,
+            prompt_sha256="2" * 64,
+            model_route_sha256="3" * 64,
+            tool_plan_sha256="4" * 64,
+            workspace_sha256="5" * 64,
+            artifact_set_sha256="6" * 64,
+            security_sha256="7" * 64,
+            version_proofs_sha256="8" * 64,
+            file_proofs_sha256="9" * 64,
+            artifact_proofs_sha256="a" * 64,
+            payload_encoding="json+gzip",
+            payload_blob=b"x",
+            payload_size_bytes=1,
+            payload_sha256="b" * 64,
+            state_sha256="c" * 64,
+            ledger_sequence=1,
+            ledger_event_sha256="d" * 64,
+            created_at=TERMINAL_AT,
+        ),
+        RunSideEffectReceipt(
+            receipt_id=f"effect-{run_id}",
+            run_id=run_id,
+            tool_call_id=f"call-{run_id}",
+            tool_name="schedule_task",
+            execution_port_id="tool.schedule_task.execute",
+            effect_class="local_write",
+            state="completed",
+            idempotency_key_sha256="e" * 64,
+            request_sha256="f" * 64,
+            result_sha256="0" * 64,
+            result_size_bytes=1,
+            checkpoint_before_id=checkpoint_id,
+            checkpoint_after_id=checkpoint_id,
+            prepared_ledger_sequence=1,
+            terminal_ledger_sequence=2,
+            prepared_at=TERMINAL_AT,
+            settled_at=TERMINAL_AT,
+        ),
+        RunRecoveryOperation(
+            operation_id=f"recovery-{run_id}",
+            request_id_sha256="1" * 64,
+            request_fingerprint_sha256="2" * 64,
+            operation_kind="fork",
+            run_id=run_id,
+            restored_checkpoint_id=checkpoint_id,
+            source_run_id_sha256="3" * 64,
+            source_checkpoint_id_sha256="4" * 64,
+            source_checkpoint_sha256="5" * 64,
+            source_head_sequence=2,
+            source_head_sha256="6" * 64,
+            owner_platform="qq",
+            owner_type="user",
+            owner_id="user-1",
+            status="succeeded",
+            prepared_at=TERMINAL_AT,
+            updated_at=TERMINAL_AT,
+            finished_at=TERMINAL_AT,
+        ),
+    ])
+    db.commit()
+
+
 def test_run_evidence_acl_is_exact_and_ownerless_legacy_is_admin_only(db_session):
     _seed_run(db_session)
     service = _service(db_session)
@@ -275,6 +359,9 @@ def test_export_manifest_is_stable_verifiable_and_contains_no_raw_bodies(db_sess
         "llm_api_request_logs": 1,
         "prompt_render_logs": 1,
         "reply_contract_check_logs": 1,
+        "run_checkpoints": 0,
+        "run_recovery_operations": 0,
+        "run_side_effect_receipts": 0,
         "runtime_telemetry_events": 1,
         "tool_calls": 1,
     }
@@ -343,6 +430,7 @@ def test_retention_policy_and_legal_hold_fail_closed(db_session):
 
 def test_erasure_removes_ledger_and_legacy_evidence_and_replays_receipt(db_session):
     _seed_run(db_session)
+    _seed_recovery_evidence(db_session)
     service = _service(db_session)
     preview = service.erasure_preview(
         run_id="run-governed",
@@ -370,6 +458,12 @@ def test_erasure_removes_ledger_and_legacy_evidence_and_replays_receipt(db_sessi
     assert db_session.query(LLMApiRequestLog).count() == 0
     assert db_session.query(ReplyContractCheckLog).count() == 0
     assert db_session.query(RuntimeTelemetryEvent).count() == 0
+    assert db_session.query(RunCheckpointRow).count() == 0
+    assert db_session.query(RunSideEffectReceipt).count() == 0
+    assert db_session.query(RunRecoveryOperation).count() == 0
+    assert result.legacy_counts["run_checkpoints"] == 1
+    assert result.legacy_counts["run_side_effect_receipts"] == 1
+    assert result.legacy_counts["run_recovery_operations"] == 1
 
     receipt = db_session.query(RunLedgerErasureReceipt).one()
     assert not hasattr(receipt, "request_id")

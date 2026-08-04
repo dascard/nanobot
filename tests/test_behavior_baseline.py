@@ -242,7 +242,14 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
         evidence_registry_change["before_sha256"]
     )
     assert evidence_registry_change["snapshot_id"] == "runtime_registries"
-    assert evidence_registry_change["after_sha256"] == _sha256(
+    recovery_registry_change = approved[
+        "agent_harness_checkpoint_recovery_registry"
+    ]
+    assert evidence_registry_change["after_sha256"] == (
+        recovery_registry_change["before_sha256"]
+    )
+    assert recovery_registry_change["snapshot_id"] == "runtime_registries"
+    assert recovery_registry_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "runtime_registries.json"
     )
     prompt_snapshot = json.loads(

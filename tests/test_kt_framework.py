@@ -408,6 +408,52 @@ class TestNanobotBridge:
         tracker.record_failure.assert_not_awaited()
         tracker.record_success.assert_not_awaited()
 
+    def test_model_loop_does_not_fallback_or_mutate_health_when_ambiguous(self):
+        from core.agent_runtime import AgentRuntimeAmbiguousError
+        from core.run_ledger.contracts import RunLedgerAuthorityError
+        from nanobot_kt.bridge import NanobotBridge
+
+        bridge = NanobotBridge()
+        bridge._agent = SimpleNamespace(controller=SimpleNamespace())
+        runtime = MagicMock()
+        runtime.read_conversation.return_value = ()
+        authority = RunLedgerAuthorityError(
+            "side effect receipt uncertain",
+            run_id="run-ambiguous",
+            event_type="tool.side_effect_completed",
+            code="side_effect_receipt_unconfirmed",
+        )
+        ambiguous = AgentRuntimeAmbiguousError(
+            "副作用结果未知",
+            runtime_id="native:test",
+        )
+        ambiguous.__cause__ = authority
+        runtime.run_event = AsyncMock(side_effect=ambiguous)
+        bridge._runtime = runtime
+        tracker = MagicMock(
+            record_failure=AsyncMock(),
+            record_success=AsyncMock(),
+        )
+
+        with pytest.raises(AgentRuntimeAmbiguousError, match="副作用结果未知"):
+            run_async(bridge._run_model_loop(
+                candidate_models=[{"id": "model-a"}, {"id": "model-b"}],
+                route_plan=SimpleNamespace(),
+                event_content="你好",
+                query="你好",
+                session_id="session-ambiguous",
+                meta={"stream": False},
+                tracker=tracker,
+                trace_id="trace-ambiguous",
+                run_id="run-ambiguous",
+                reply_llm_source="replyer.private_chat",
+                runtime_context=_runtime_context("session-ambiguous"),
+            ))
+
+        assert runtime.run_event.await_count == 1
+        tracker.record_failure.assert_not_awaited()
+        tracker.record_success.assert_not_awaited()
+
     @pytest.mark.parametrize(
         "terminal_kind",
         ["reply", "html", "no_reply"],
@@ -1050,6 +1096,102 @@ class TestNanobotBridge:
             MockAgent.assert_not_called()
         finally:
             run_async(bridge.stop())
+
+    def test_native_handle_message_persists_recovery_evidence(
+        self,
+        db_session,
+        _stub_healthy_reply_route,
+    ):
+        """Native 生产组合根必须在真实请求主链路写入恢复证据。"""
+        import json
+
+        from core.agent_runtime import AgentRuntimeKind
+        from core.db.models import RunCheckpointRow, RunSideEffectReceipt
+        from nanobot_kt.bridge import NanobotBridge
+
+        class ScriptedCompletionPort:
+            def __init__(self):
+                self.bound_routes = []
+                self.requests = []
+
+            @property
+            def adapter_id(self):
+                return "completion:bridge-recovery-test"
+
+            def bind_route(self, route):
+                self.bound_routes.append(route)
+
+            async def complete_chat(self, request):
+                self.requests.append(request)
+                return {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [{
+                                "id": "call-native-recovery",
+                                "type": "function",
+                                "function": {
+                                    "name": "reply",
+                                    "arguments": json.dumps(
+                                        {"content": "Native 恢复主链路"},
+                                        ensure_ascii=False,
+                                    ),
+                                },
+                            }],
+                        },
+                    }],
+                }
+
+            async def stream_chat(self, request):
+                del request
+                if False:
+                    yield {}
+
+        async def _run():
+            completion = ScriptedCompletionPort()
+            bridge = NanobotBridge(runtime_kind=AgentRuntimeKind.NATIVE)
+            bridge._native_completion_port = completion
+            await bridge.start()
+            try:
+                response = await bridge.handle_message(
+                    "验证 Native 恢复链路",
+                    user_id="native-recovery-user",
+                    session_id="private_native_recovery_user",
+                    metadata={
+                        "message_id": "native-recovery-message",
+                        "platform": "qq",
+                    },
+                )
+                return response, completion
+            finally:
+                await bridge.stop()
+
+        response, completion = run_async(_run())
+        assert response == "Native 恢复主链路"
+        assert len(completion.bound_routes) == 1
+        assert len(completion.requests) == 1
+
+        db_session.expire_all()
+        checkpoints = (
+            db_session.query(RunCheckpointRow)
+            .order_by(RunCheckpointRow.sequence.asc())
+            .all()
+        )
+        assert [row.boundary for row in checkpoints] == [
+            "turn_started",
+            "plan_resolved",
+            "tool_ready",
+            "tool_completed",
+            "turn_completed",
+        ]
+        assert len({row.run_id for row in checkpoints}) == 1
+        receipts = db_session.query(RunSideEffectReceipt).all()
+        assert [(row.tool_name, row.state) for row in receipts] == [
+            ("reply", "completed"),
+        ]
+        assert receipts[0].checkpoint_before_id == checkpoints[2].checkpoint_id
+        assert receipts[0].checkpoint_after_id == checkpoints[3].checkpoint_id
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")

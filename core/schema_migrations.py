@@ -100,6 +100,7 @@ _LLM_CACHE_DIAGNOSTICS_V2_VERSION = (
 )
 _RUN_LEDGER_V1_VERSION = "20260804_run_event_ledger_v1"
 _RUN_EVIDENCE_GOVERNANCE_V1_VERSION = "20260804_run_evidence_governance_v1"
+_RUN_RECOVERY_V1_VERSION = "20260804_run_checkpoint_recovery_v1"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3628,6 +3629,49 @@ def _run_evidence_governance_v1(
     ))
 
 
+def _run_checkpoint_recovery_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建生产 Checkpoint、恢复 lineage 与副作用回执表。"""
+
+    from core.db.models.run_recovery import (
+        RunCheckpointRow,
+        RunRecoveryOperation,
+        RunSideEffectReceipt,
+    )
+
+    for model in (
+        RunCheckpointRow,
+        RunSideEffectReceipt,
+        RunRecoveryOperation,
+    ):
+        model.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS trg_run_checkpoints_no_update "
+        "BEFORE UPDATE ON run_checkpoints BEGIN "
+        "SELECT RAISE(ABORT, 'run_checkpoints_immutable'); END"
+    ))
+    for table_name in (
+        "run_checkpoints",
+        "run_side_effect_receipts",
+        "run_recovery_operations",
+    ):
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_erasure_guard "
+            f"BEFORE DELETE ON {table_name} "
+            "WHEN NOT EXISTS ("
+            "SELECT 1 FROM run_ledger_erasure_authorizations AS authorization "
+            f"WHERE authorization.run_id = OLD.run_id "
+            "AND datetime(authorization.expires_at) > CURRENT_TIMESTAMP"
+            ") BEGIN "
+            "SELECT RAISE(ABORT, 'run_recovery_erasure_guard'); END"
+        ))
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -4585,6 +4629,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _RUN_EVIDENCE_GOVERNANCE_V1_VERSION,
         "run evidence retention access export and erasure governance",
         _run_evidence_governance_v1,
+    ),
+    (
+        _RUN_RECOVERY_V1_VERSION,
+        "run checkpoint recovery lineage and side effect receipts",
+        _run_checkpoint_recovery_v1,
     ),
 ]
 

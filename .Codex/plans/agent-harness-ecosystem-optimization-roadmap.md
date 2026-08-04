@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 4.2，运行证据保留、访问、导出与删除治理已完成）
+> 状态：执行中（阶段 4.3，Checkpoint、Resume、Fork 和 Rewind 已完成）
 >
 > 建立日期：2026-08-03
 >
@@ -608,11 +608,49 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 4.3 Checkpoint、Resume、Fork 和 Rewind
 
-- [ ] 在 Turn、计划和安全工具边界保存 checkpoint。
-- [ ] 保存 workspace、Manifest、Prompt、模型、工具和 Artifact 的版本证明。
-- [ ] 恢复前验证权限、版本、文件状态和 side-effect receipt。
-- [ ] 外部副作用结果未知时进入 ambiguous 状态，不自动重放。
-- [ ] Fork 保留原运行事实，并产生新的 run lineage。
+- [x] 在 Turn、计划和安全工具边界保存 checkpoint。
+- [x] 保存 workspace、Manifest、Prompt、模型、工具和 Artifact 的版本证明。
+- [x] 恢复前验证权限、版本、文件状态和 side-effect receipt。
+- [x] 外部副作用结果未知时进入 ambiguous 状态，不自动重放。
+- [x] Fork 保留原运行事实，并产生新的 run lineage。
+
+实现与验证证据：
+
+- 新增框架无关 `RuntimeRecoveryPort`、版本化 Checkpoint 合同与 SQLAlchemy 权威 Adapter；Native Runtime
+  在 Turn 开始、计划解析、工具执行前后、ambiguous 和 Turn 完成边界保存不可变状态。Checkpoint 与对应
+  Ledger 事实在同一短事务中提交，按 Run 使用严格递增 sequence 和父 Checkpoint 链；SQLite trigger
+  拒绝普通 UPDATE／DELETE，治理删除继续复用阶段 4.2 的短时授权与永久回执。
+- Checkpoint 使用有界 canonical JSON 与确定性 gzip，保存模型可见 conversation、冻结模型路由、工具轮次和
+  side-effect frontier；常见凭据字段与内联 token 在编码前直接替换为脱敏标记，不保留秘密派生摘要。
+  Manifest、Prompt、精确候选模型路由、ToolPlan、Workspace Policy、Artifact Policy 与 Security Policy
+  均携带 identity 和 SHA-256 固定点；实际读写文件和已发布 Artifact 另以逐项 proof 固定，避免无关资产新增
+  错误阻断恢复。
+- 有副作用工具统一由 Tool Descriptor 声明 `read_only`、`local_write` 或 `external`。本地写入和外部调用在
+  dispatch 前先提交 prepared receipt，terminal receipt 与 prepared Ledger 事实复用 owner／correlation，
+  并固定执行结果、文件和 Artifact proof。结果未知、返回合同失配、结算失败或重复 dispatch 请求均进入
+  `AgentRuntimeAmbiguousError`；Bridge 不再切换候选模型重放，也不污染 Provider 健康度。
+- 恢复 preflight 重新验证 owner ACL、Run／Checkpoint 摘要链、Runtime protocol 与恢复能力、全部版本固定点、
+  Sandbox 工作区文件、Artifact ACL／hash 以及 receipt 与 Ledger 的双向锚点；进入真实 Runtime 前再次执行
+  文件和 Artifact TOCTOU 校验。任何 prepared／ambiguous receipt 或外部结果未知都会 fail closed。
+- Resume 选择最新可恢复 Checkpoint，Rewind 可选择更早边界，Fork 显式建立分支；三者均创建独立 child Run
+  和 lineage Ledger 事实，源 Run／源 Checkpoint 保持不变。`execute_prepared()` 会把已验证状态恢复到声明
+  `CHECKPOINT_RECOVERY` 的目标 Runtime，并真实执行 `RuntimeTurnKind.CONTINUE`，不是只记录 shadow 结果。
+  并发 owner fencing 留在紧随其后的 4.4 Durable Task／Lease 中完成，因此 4.3 不暴露缺少租约保护的并发
+  HTTP 执行入口。
+- 生产组合根已为 Native Runtime 注入真实 Recovery Port；端到端 `NanobotBridge.handle_message()` 测试通过
+  实际 reply 工具验证 `turn_started → plan_resolved → tool_ready → tool_completed → turn_completed` 五个
+  Checkpoint 与 completed receipt 均落入权威数据库。KT Adapter 和不注入 Recovery Port 的直接 Native
+  测试实例不会虚报恢复能力，未安装 KT 的生产 Native 组合仍声明并实际提供该能力。
+- 专项恢复测试 12 passed；Runtime／Bridge／Ledger／Migration／Tool Registry／行为 Golden 广覆盖回归
+  251 passed；Prompt Runtime 请求、模板和元数据审计 58 passed。Release Impact 精确识别 runtime、数据库、
+  KT compatibility 与 Prompt Runtime 影响且无未归属生产路径；对应 Migration、KT compatibility 和
+  canonical Prompt Runtime 形式门禁分别为 38、100、135 passed。架构边界、OpenAPI、行为基线、
+  Release／Verification Golden、Ruff、Python 编译与 `git diff --check` 均通过；最终完整
+  `python -m pytest tests/ -v` 为 6521 passed、12 skipped、0 failed。
+- 已逐项检查 `prompts.v2.default/chat/*`、`prompts.v2.default/tasks/*`、工具 usage 模板、
+  `core/prompt_v2/variables.py`、`core/prompt_v2/template_registry.py` 与 `data/prompts_v2/` 运行时副本。
+  本阶段没有改变 `enriched_query`、历史注入、conversation 排列、模型可见工具输出或模板变量合同，
+  因此默认及运行时模板无需修改；上述 Prompt Runtime 门禁证明现有模板解析与输出仍一致。
 
 #### 4.4 Durable Task 和租约恢复
 

@@ -17,8 +17,11 @@ from zoneinfo import ZoneInfo
 from nanobot_kt.output import BufferedOutput
 from nanobot_kt.bridge_runtime_support import (
     bind_bridge_runtime_correlation,
+    bind_native_recovery_model_plan,
     build_child_bridge,
+    build_native_request_recovery_plans,
     compatibility_runtime_selection_policy,
+    set_bridge_runtime_model_route,
 )
 from nanobot_kt.request_scope import BridgeRequestScope
 from nanobot_kt.image_pipeline import prepare_image_parts
@@ -54,6 +57,7 @@ from clients.new_api_client import NewAPIClient
 from clients.model_registry import model_supports_capabilities, registry
 from core.agent_runtime import (
     AgentRuntimeKind,
+    AgentRuntimeAmbiguousError,
     AgentRuntimePort,
     AgentRuntimeSelection,
     AgentRuntimeSelectionPolicy,
@@ -972,53 +976,16 @@ class NanobotBridge(MessageContractBridgeMixin):
             required_capabilities=required_capabilities,
         )
 
-    def _set_runtime_model_route(self, target_model: str, route_plan: Any) -> None:
-        temperature_raw = getattr(route_plan, "temperature", None)
-        try:
-            temperature = (
-                float(temperature_raw) if temperature_raw is not None else None
-            )
-        except (TypeError, ValueError):
-            temperature = None
-        max_tokens_raw = getattr(route_plan, "max_tokens", None)
-        try:
-            max_tokens = int(max_tokens_raw) if max_tokens_raw is not None else None
-        except (TypeError, ValueError):
-            max_tokens = None
-        if max_tokens is not None and max_tokens <= 0:
-            max_tokens = None
-        thinking = getattr(route_plan, "enable_thinking", None)
-        if not isinstance(thinking, (str, bool, type(None))):
-            thinking = None
-        provider_id = str(
-            getattr(route_plan, "provider_id", "")
-            or getattr(route_plan, "registry_provider", "")
-            or "unknown"
-        )
-        if (
-            getattr(self, "runtime_kind", AgentRuntimeKind.KT)
-            is AgentRuntimeKind.NATIVE
-        ):
-            completion_port = getattr(self, "_native_completion_port", None)
-            if completion_port is None:
-                raise BridgeUnavailableError(
-                    "Native Chat Completion Adapter 尚未初始化"
-                )
-            # 先验证并冻结传输计划，再更新 Runtime 模型元数据。失败发生在
-            # 模型或工具调用之前，不允许偷偷回落到 KT 重放本轮请求。
-            completion_port.bind_route(route_plan)
-        self._active_route_plan = route_plan
-        self._require_runtime().set_model_route(
-            RuntimeModelRoute(
-                route_id="reply/current",
-                model_id=target_model,
-                provider_id=provider_id,
-                profile_id=str(getattr(route_plan, "profile_id", "") or ""),
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout_seconds=float(getattr(route_plan, "timeout", 120.0) or 120.0),
-                enable_thinking=thinking,
-            )
+    def _set_runtime_model_route(
+        self,
+        target_model: str,
+        route_plan: Any,
+    ) -> RuntimeModelRoute:
+        return set_bridge_runtime_model_route(
+            self,
+            target_model,
+            route_plan,
+            unavailable_error=BridgeUnavailableError,
         )
 
     async def _run_model_loop(
@@ -1074,7 +1041,15 @@ class NanobotBridge(MessageContractBridgeMixin):
             health_status = "pending"
 
             candidate_route_plan = candidate.get("_route_plan") or route_plan
-            self._set_runtime_model_route(target_model, candidate_route_plan)
+            runtime_route = self._set_runtime_model_route(
+                target_model,
+                candidate_route_plan,
+            )
+            attempt_context = bind_native_recovery_model_plan(
+                getattr(self, "runtime_kind", AgentRuntimeKind.KT),
+                runtime_context,
+                runtime_route,
+            )
             logger.info(
                 f"[Model Router] Attempt {attempt + 1}: {target_model} "
                 f"(intel={candidate.get('intelligence')}, "
@@ -1103,7 +1078,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     cache_context=cache_context,
                 ):
                     turn_request = AgentTurnRequest(
-                        context=runtime_context,
+                        context=attempt_context,
                         content=(
                             event_content
                             if turn_kind is RuntimeTurnKind.USER_INPUT
@@ -1128,6 +1103,10 @@ class NanobotBridge(MessageContractBridgeMixin):
                     find_run_ledger_authority_error,
                 )
 
+                if isinstance(e, AgentRuntimeAmbiguousError):
+                    # 部分输出或副作用结果未知时，禁止切换候选模型重放本轮；
+                    # 即使因果链内含 Ledger 错误，也必须保留 ambiguous 终态。
+                    raise
                 authority_failure = find_run_ledger_authority_error(e)
                 if authority_failure is not None:
                     raise authority_failure
@@ -1936,6 +1915,22 @@ class NanobotBridge(MessageContractBridgeMixin):
             image_parts = event_payload.image_parts
             event_content = event_payload.event_content
             required_capabilities = event_payload.required_capabilities
+            recovery_plans = build_native_request_recovery_plans(
+                runtime_kind=getattr(
+                    self,
+                    "runtime_kind",
+                    AgentRuntimeKind.KT,
+                ),
+                platform=platform,
+                user_id=user_id,
+                group_id=group_id,
+                session_id=session_id,
+                is_group=is_group,
+                runtime_id=self._require_runtime().runtime_id,
+                prompt_key=prompt_build.prompt_key,
+                prompt_sha256=prompt_build.prompt_sha256,
+                tool_plan=tool_plan,
+            )
             runtime_context = build_request_runtime_context(
                 request_id=str(meta.get("message_id") or run_handle.run_id),
                 platform=platform,
@@ -1959,6 +1954,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 prompt_key=prompt_build.prompt_key,
                 prompt_sha256=prompt_build.prompt_sha256,
                 tool_plan=tool_plan,
+                recovery_plans=recovery_plans,
             )
             runtime_attributes = (
                 RuntimeAttribute("runtime_chat_type", runtime_chat_type),

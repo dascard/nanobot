@@ -93,6 +93,7 @@ def test_native_runtime_and_server_import_without_kt() -> None:
             RuntimeActor,
             RuntimeActorType,
             RuntimeChatType,
+            RuntimeCapability,
             RuntimeOwnerType,
             RuntimePrincipal,
             RuntimeToolCall,
@@ -141,6 +142,9 @@ def test_native_runtime_and_server_import_without_kt() -> None:
             await bridge.start()
             assert bridge.agent is None
             assert bridge._runtime.runtime_id == "native:nanobot"
+            assert bridge._runtime.runtime_capabilities.supports(
+                RuntimeCapability.CHECKPOINT_RECOVERY
+            )
             assert "reply" in bridge._runtime.list_tool_names()
 
             port = build_native_tool_execution_port()
