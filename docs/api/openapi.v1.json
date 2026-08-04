@@ -1529,6 +1529,18 @@
             ],
             "title": "Files"
           },
+          "goal_id": {
+            "anyOf": [
+              {
+                "pattern": "^goal_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Id"
+          },
           "merged_messages": {
             "anyOf": [
               {
@@ -7980,6 +7992,278 @@
           "reason"
         ],
         "title": "SemanticIndexJobRetryRequest",
+        "type": "object"
+      },
+      "SessionGoalBudgetInput": {
+        "properties": {
+          "max_cost_microunits": {
+            "default": 50000000,
+            "maximum": 10000000000000.0,
+            "minimum": 1.0,
+            "title": "Max Cost Microunits",
+            "type": "integer"
+          },
+          "max_elapsed_seconds": {
+            "default": 86400,
+            "maximum": 31536000.0,
+            "minimum": 1.0,
+            "title": "Max Elapsed Seconds",
+            "type": "integer"
+          },
+          "max_input_tokens": {
+            "default": 1000000,
+            "maximum": 1000000000.0,
+            "minimum": 1.0,
+            "title": "Max Input Tokens",
+            "type": "integer"
+          },
+          "max_model_steps": {
+            "default": 64,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Max Model Steps",
+            "type": "integer"
+          },
+          "max_output_tokens": {
+            "default": 200000,
+            "maximum": 1000000000.0,
+            "minimum": 1.0,
+            "title": "Max Output Tokens",
+            "type": "integer"
+          },
+          "max_tool_calls": {
+            "default": 128,
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Max Tool Calls",
+            "type": "integer"
+          }
+        },
+        "title": "SessionGoalBudgetInput",
+        "type": "object"
+      },
+      "SessionGoalCreateRequest": {
+        "properties": {
+          "actor_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/SessionGoalBudgetInput"
+          },
+          "completion_criteria": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Completion Criteria",
+            "type": "array"
+          },
+          "objective": {
+            "maxLength": 1500,
+            "minLength": 1,
+            "title": "Objective",
+            "type": "string"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
+          }
+        },
+        "required": [
+          "principal",
+          "objective",
+          "completion_criteria",
+          "actor_id"
+        ],
+        "title": "SessionGoalCreateRequest",
+        "type": "object"
+      },
+      "SessionGoalFinishRequest": {
+        "properties": {
+          "actor_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
+          },
+          "reason": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "cancelled",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal",
+          "expected_version",
+          "actor_id",
+          "status",
+          "reason"
+        ],
+        "title": "SessionGoalFinishRequest",
+        "type": "object"
+      },
+      "SessionGoalMutationRequest": {
+        "properties": {
+          "actor_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
+          }
+        },
+        "required": [
+          "principal",
+          "expected_version",
+          "actor_id"
+        ],
+        "title": "SessionGoalMutationRequest",
+        "type": "object"
+      },
+      "SessionGoalPrincipalInput": {
+        "properties": {
+          "owner_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "owner_type": {
+            "enum": [
+              "user",
+              "group",
+              "project"
+            ],
+            "title": "Owner Type",
+            "type": "string"
+          },
+          "platform": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Platform",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform",
+          "owner_type",
+          "owner_id",
+          "session_id"
+        ],
+        "title": "SessionGoalPrincipalInput",
+        "type": "object"
+      },
+      "SessionPlanApproveRequest": {
+        "properties": {
+          "actor_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "expected_plan_revision": {
+            "minimum": 1.0,
+            "title": "Expected Plan Revision",
+            "type": "integer"
+          },
+          "expected_plan_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "title": "Expected Plan Sha256",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
+          }
+        },
+        "required": [
+          "principal",
+          "expected_version",
+          "actor_id",
+          "expected_plan_revision",
+          "expected_plan_sha256"
+        ],
+        "title": "SessionPlanApproveRequest",
+        "type": "object"
+      },
+      "SessionPlanWriteRequest": {
+        "properties": {
+          "actor_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "content": {
+            "maxLength": 262144,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
+          },
+          "source_run_id": {
+            "default": "",
+            "maxLength": 160,
+            "title": "Source Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal",
+          "expected_version",
+          "actor_id",
+          "content"
+        ],
+        "title": "SessionPlanWriteRequest",
         "type": "object"
       },
       "SetCanonicalBody": {
@@ -31700,6 +31984,672 @@
         ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "limit"
+      }
+    },
+    "/api/v1/session-goals": {
+      "post": {
+        "operationId": "post_api_v1_session_goals",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionGoalCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Create Session Goal",
+        "tags": [
+          "session-goals"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/session-goals/{goal_id}": {
+      "get": {
+        "operationId": "get_api_v1_session_goals_goal_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "maxLength": 32,
+              "minLength": 1,
+              "title": "Platform",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "user",
+                "group",
+                "project"
+              ],
+              "title": "Owner Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_id",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Owner Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Session Goal",
+        "tags": [
+          "session-goals"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/session-goals/{goal_id}/approve": {
+      "post": {
+        "operationId": "post_api_v1_session_goals_goal_id_approve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionPlanApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Approve Session Plan",
+        "tags": [
+          "session-goals"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/session-goals/{goal_id}/finish": {
+      "post": {
+        "operationId": "post_api_v1_session_goals_goal_id_finish",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionGoalFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Finish Session Goal",
+        "tags": [
+          "session-goals"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/session-goals/{goal_id}/plan": {
+      "get": {
+        "operationId": "get_api_v1_session_goals_goal_id_plan",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "maxLength": 32,
+              "minLength": 1,
+              "title": "Platform",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "user",
+                "group",
+                "project"
+              ],
+              "title": "Owner Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_id",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Owner Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Session Plan",
+        "tags": [
+          "session-goals"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      },
+      "put": {
+        "operationId": "put_api_v1_session_goals_goal_id_plan",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionPlanWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Write Session Plan",
+        "tags": [
+          "session-goals"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/session-goals/{goal_id}/request-approval": {
+      "post": {
+        "operationId": "post_api_v1_session_goals_goal_id_request_approval",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionGoalMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Request Session Plan Approval",
+        "tags": [
+          "session-goals"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/session-goals/{goal_id}/start-execution": {
+      "post": {
+        "operationId": "post_api_v1_session_goals_goal_id_start_execution",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionGoalMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Start Session Goal Execution",
+        "tags": [
+          "session-goals"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
       }
     },
     "/api/v1/stickers/register": {

@@ -382,6 +382,17 @@ TOOL_METADATA: Mapping[str, ToolDef] = MappingProxyType({
         description="创建/管理当前会话 owner 的定时推送任务；cron 使用 Asia/Shanghai。",
         effect_policy="local_write",
     ),
+    "session_plan_read": ToolDef(
+        name="session_plan_read", label="会话计划读取", category="system", risk_level="low",
+        private_default=False, group_default=False,
+        description="读取服务端绑定 Session Goal 的不可变计划版本；不能读取其他 owner 的目标。",
+    ),
+    "session_plan_write": ToolDef(
+        name="session_plan_write", label="会话计划写入", category="system", risk_level="medium",
+        private_default=False, group_default=False,
+        description="仅在服务端 Plan Mode 中为当前 Session Goal 写入新的不可变计划版本。",
+        effect_policy="local_write",
+    ),
     "memory_read": ToolDef(
         name="memory_read", label="记忆读取 (subagent)", category="system", risk_level="low",
         private_default=False, group_default=False,

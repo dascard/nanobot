@@ -100,6 +100,14 @@ _KT_EXECUTION_BINDINGS = MappingProxyType({
         "nanobot_kt.tools.reply",
         "NoReplyTool",
     ),
+    "tool.session_plan_read.execute": KtExecutionBinding(
+        "nanobot_kt.tools.session_plan",
+        "SessionPlanReadTool",
+    ),
+    "tool.session_plan_write.execute": KtExecutionBinding(
+        "nanobot_kt.tools.session_plan",
+        "SessionPlanWriteTool",
+    ),
     "tool.sandbox_exec.execute": KtExecutionBinding(
         "nanobot_kt.tools.sandbox",
         "SandboxExecTool",

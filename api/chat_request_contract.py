@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException
-from pydantic import BaseModel, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr
 
 from core.chat_stream_identity import (
     ChatStreamIdentityError,
@@ -44,6 +44,10 @@ class ChatProxyRequest(BaseModel):
     message_id: str | None = None
     source_message_ids: list[str] | None = None
     client_meta: dict | None = None
+    goal_id: str | None = Field(
+        default=None,
+        pattern=r"^goal_[0-9a-f]{32}$",
+    )
     _message_contract: InboundMessageContract | None = PrivateAttr(
         default=None
     )

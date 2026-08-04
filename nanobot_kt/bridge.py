@@ -1696,10 +1696,10 @@ class NanobotBridge(MessageContractBridgeMixin):
             ).strip()
 
             from core.final_tools import set_current_final_tools
-            from core.tool_plan import build_tool_plan, set_current_tool_plan
+            from core.tool_plan import set_current_tool_plan
             from core.runtime_tool_service import record_runtime_tool_decision
+            from nanobot_kt.session_goal_runtime import build_session_goal_bridge_binding
             from core.uow import UnitOfWork
-
             with UnitOfWork() as uow:
                 guidance = resolve_session_guidance(
                     uow.db,
@@ -1708,22 +1708,21 @@ class NanobotBridge(MessageContractBridgeMixin):
                     session_id=session_id,
                 )
                 run_meta.update(guidance.debug)
-                # 来源上下文声明的硬禁用(只减不增),如定时任务会话防递归
-                source_disabled = {
-                    str(name).strip(): "来源上下文禁用(防递归)"
-                    for name in (meta.get("disabled_tool_names") or ())
-                    if str(name or "").strip()
-                }
-                tool_plan = build_tool_plan(
-                    chat_type=runtime_chat_type,
+                goal_binding = build_session_goal_bridge_binding(
+                    db=uow.db,
+                    metadata=meta,
+                    platform=platform,
+                    runtime_chat_type=runtime_chat_type,
+                    is_group=is_group,
                     group_id=group_id,
                     user_id=user_id,
-                    platform=platform,
                     session_id=session_id,
                     runtime_preset=runtime_preset,
-                    db=uow.db,
-                    extra_disabled=source_disabled or None,
+                    disabled_tool_names=meta.get("disabled_tool_names"),
                 )
+                tool_plan = goal_binding.tool_plan
+                meta["project_context"] = goal_binding.project_context
+                run_meta.update(goal_binding.run_meta_update)
                 decision_recorded = record_runtime_tool_decision(
                     session_id=session_id,
                     message_id=meta.get("message_id", ""),
@@ -1958,13 +1957,16 @@ class NanobotBridge(MessageContractBridgeMixin):
                 prompt_sha256=prompt_build.prompt_sha256,
                 tool_plan=tool_plan,
                 recovery_plans=recovery_plans,
+                session_goal_plan=goal_binding.plan_ref,
             )
-            runtime_attributes = (
+            runtime_attributes_list = [
                 RuntimeAttribute("runtime_chat_type", runtime_chat_type),
                 RuntimeAttribute("actor_user_id", user_id),
                 RuntimeAttribute("group_id", group_id),
                 RuntimeAttribute("sender_name", sender_name),
-            )
+            ]
+            runtime_attributes_list.extend(goal_binding.runtime_attributes)
+            runtime_attributes = tuple(runtime_attributes_list)
 
             # --- Dynamic Model Routing (new priority-ordered system) ---
             route_client = None

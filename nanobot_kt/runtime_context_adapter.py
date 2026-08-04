@@ -36,6 +36,7 @@ def build_request_runtime_context(
     prompt_sha256: str,
     tool_plan: Any,
     recovery_plans: tuple[RuntimePlanRef, ...] = (),
+    session_goal_plan: RuntimePlanRef | None = None,
 ) -> RequestRuntimeContext:
     owner_id = group_id if is_group else user_id
     if not owner_id:
@@ -65,6 +66,14 @@ def build_request_runtime_context(
         if reference.kind in {item.kind for item in plans}:
             raise ValueError(f"重复 RuntimePlan：{reference.kind.value}")
         plans.append(reference)
+    if session_goal_plan is not None:
+        if not isinstance(session_goal_plan, RuntimePlanRef):
+            raise TypeError("session_goal_plan 必须是 RuntimePlanRef")
+        if session_goal_plan.kind in {item.kind for item in plans}:
+            raise ValueError(
+                f"重复 RuntimePlan：{session_goal_plan.kind.value}"
+            )
+        plans.append(session_goal_plan)
     return RequestRuntimeContext(
         request_id=request_id or run_id,
         principal=RuntimePrincipal(

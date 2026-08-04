@@ -163,6 +163,21 @@ def test_build_chat_runtime_payload_defaults_group_without_private_decision_to_f
     assert payload.bridge_meta["runtime_preset"] == "full"
 
 
+def test_build_chat_runtime_payload_only_adds_nonempty_session_goal_id():
+    from api.chat_runtime_facade import build_chat_runtime_payload
+
+    goal_id = "goal_0123456789abcdef0123456789abcdef"
+    payload = build_chat_runtime_payload(
+        _runtime_input(goal_id=goal_id),
+        build_multimodal_user_input_text=_build_text,
+        max_query_chars=100,
+        estimate_tokens=_tokens,
+        get_effort_constraint=_effort,
+    )
+
+    assert payload.bridge_meta["session_goal_id"] == goal_id
+
+
 def test_build_chat_runtime_payload_defaults_private_without_decision_to_web_configuration():
     from api.chat_runtime_facade import build_chat_runtime_payload
 

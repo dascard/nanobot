@@ -152,6 +152,9 @@ def test_schema_migrations_records_applied_versions():
         "workspace_runtime_quota_bindings",
         "workspace_maintenance_states",
         "admin_idempotency_records",
+        "session_goals",
+        "session_plan_assets",
+        "session_goal_events",
     } <= set(inspector.get_table_names())
     rss_columns = [col["name"] for col in inspector.get_columns("rolling_session_summaries")]
     assert "covered_until_turn_id" in rss_columns
@@ -340,6 +343,33 @@ def test_schema_migrations_records_applied_versions():
 
     assert [row[0] for row in rows] == sorted(version for version, _, _ in MIGRATIONS)
     assert project_sequence == 10000
+
+
+def test_session_goal_plan_mode_migration_installs_immutable_plan_evidence():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    run_schema_migrations(engine)
+    tables = set(inspect(engine).get_table_names())
+    assert {
+        "session_goals",
+        "session_plan_assets",
+        "session_goal_events",
+    } <= tables
+    with engine.begin() as conn:
+        triggers = {
+            str(row[0])
+            for row in conn.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                "AND name LIKE 'trg_session_%'"
+            )).fetchall()
+        }
+    assert {
+        "trg_session_plan_assets_no_update",
+        "trg_session_plan_assets_no_delete",
+        "trg_session_goal_events_no_update",
+        "trg_session_goal_events_no_delete",
+    } <= triggers
 
 
 def test_artifact_lifecycle_migration_backfills_owner_acl_and_version():

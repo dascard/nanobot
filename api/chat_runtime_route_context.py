@@ -165,6 +165,7 @@ def build_chat_runtime_route_context(
             summary_context=runtime_input.summary_context,
             memory_recall_context=runtime_input.memory_recall_context,
             project_context=runtime_input.project_context,
+            goal_id=str(getattr(runtime_input.req, "goal_id", "") or ""),
         ),
         build_multimodal_user_input_text=services.build_multimodal_user_input_text,
         max_query_chars=services.max_query_chars,

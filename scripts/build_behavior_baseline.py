@@ -82,6 +82,9 @@ PROACTIVE_OUTREACH_FACT_GUARD_PROMPT_BASELINE_SHA256 = (
 AGENT_HARNESS_CONTEXT_LAYER_PROMPT_BASELINE_SHA256 = (
     "f957810b056508f6e5b2cd8e01821d9cc5207f5c3193252c02106d088bcc5acd"
 )
+AGENT_HARNESS_CONTEXT_COMPACTION_PROMPT_BASELINE_SHA256 = (
+    "51d70f01b31df8300551a1f77a0888656ecae54ba8e535203a2119e9cc61af4d"
+)
 PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256 = (
     "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552"
 )
@@ -93,6 +96,9 @@ RUN_EVIDENCE_GOVERNANCE_REGISTRY_BASELINE_SHA256 = (
 )
 AGENT_HARNESS_CHECKPOINT_REGISTRY_BASELINE_SHA256 = (
     "ad1bb404996f61b0691eda339d77fb824d93c00ed02c013c5d32368a18553fef"
+)
+AGENT_HARNESS_CONTEXT_COMPACTION_REGISTRY_BASELINE_SHA256 = (
+    "9f0f29bdd28ea3669dcfe42e639b52abe7498b89c77b2b8162eb3c0be4a79ebb"
 )
 
 SNAPSHOT_CLASSIFICATIONS = {
@@ -1361,12 +1367,27 @@ def _manifest(
                 "before_sha256": (
                     AGENT_HARNESS_CONTEXT_LAYER_PROMPT_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["prompt_runtime"]
+                "after_sha256": (
+                    AGENT_HARNESS_CONTEXT_COMPACTION_PROMPT_BASELINE_SHA256
                 ),
                 "reason": (
                     "同步 canonical/runtime 工具结果 envelope、Unicode 边界、"
                     "不可信数据和 owner-scoped Artifact 引用语义。"
+                ),
+            },
+            {
+                "id": "agent_harness_session_goal_plan_mode_prompt",
+                "snapshot_id": "prompt_runtime",
+                "stage": "Agent Harness 阶段 5.4",
+                "before_sha256": (
+                    AGENT_HARNESS_CONTEXT_COMPACTION_PROMPT_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["prompt_runtime"]
+                ),
+                "reason": (
+                    "同步 Session Goal 不可信目标上下文、服务端 Plan Mode "
+                    "权限边界，以及专用计划资产读写工具说明。"
                 ),
             },
             {
@@ -1478,12 +1499,27 @@ def _manifest(
                 "before_sha256": (
                     AGENT_HARNESS_CHECKPOINT_REGISTRY_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["runtime_registries"]
+                "after_sha256": (
+                    AGENT_HARNESS_CONTEXT_COMPACTION_REGISTRY_BASELINE_SHA256
                 ),
                 "reason": (
                     "登记 notice、snip/prune、summary、hard limit 和工具结果"
                     "摘录水位；设置由服务端校验并在重启时原子回滚。"
+                ),
+            },
+            {
+                "id": "agent_harness_session_goal_plan_mode_registry",
+                "snapshot_id": "runtime_registries",
+                "stage": "Agent Harness 阶段 5.4",
+                "before_sha256": (
+                    AGENT_HARNESS_CONTEXT_COMPACTION_REGISTRY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["runtime_registries"]
+                ),
+                "reason": (
+                    "登记默认关闭的 Session Plan 读写工具；只有服务端绑定"
+                    "目标状态后才按请求启用，写权限不会由 Prompt 或模型开启。"
                 ),
             },
         ],

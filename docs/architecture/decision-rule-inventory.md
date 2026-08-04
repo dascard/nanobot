@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`a9ba942d94bfaf2547c2774428b071ba3f99a8b3`
-- 规则总数：7848
+- 源提交：`8ef7affc4d4b1bf61e39df20a952e991f511aad2`
+- 规则总数：7873
 - 扫描错误：0
 - 人工复核队列：719
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,18 +12,18 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 136 |
-| `configurable_policy` | 1439 |
+| `configurable_policy` | 1449 |
 | `data_consistency` | 464 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4185 |
+| `protocol_syntax` | 4200 |
 | `security_invariant` | 1588 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `core/schema_migrations.py` | 238 |
+| `core/schema_migrations.py` | 239 |
 | `scripts/manage-sandbox-production.sh` | 179 |
 | `core/scheduled_workflow.py` | 133 |
 | `webui/src/App.jsx` | 128 |
@@ -226,6 +226,7 @@
 | `core/proactive/grounding.py` | 12 |
 | `core/prompt_v2/flow.py` | 12 |
 | `core/semantic/scoring.py` | 12 |
+| `core/session_goal.py` | 12 |
 | `core/sticker_rag.py` | 12 |
 | `core/task_runtime/resilience.py` | 12 |
 | `core/tool_registration.py` | 12 |
@@ -285,6 +286,7 @@
 | `webui/src/features/triggers/TriggersPage.jsx` | 9 |
 | `api/admin/group_memory_routes.py` | 8 |
 | `api/chat_content_helpers.py` | 8 |
+| `api/session_goal_routes.py` | 8 |
 | `app/group_ingress/service.py` | 8 |
 | `core/jobs/policies.py` | 8 |
 | `core/prompt_v2/template_loader.py` | 8 |
@@ -380,6 +382,7 @@
 | `core/task_runtime/contracts.py` | 5 |
 | `core/telemetry/job_observer.py` | 5 |
 | `core/telemetry/persistence.py` | 5 |
+| `core/tool_plan.py` | 5 |
 | `core/tool_registry.py` | 5 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/digest.py` | 5 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/diversify.py` | 5 |
@@ -464,7 +467,6 @@
 | `core/runtime/extensions.py` | 3 |
 | `core/runtime_health.py` | 3 |
 | `core/telemetry/runtime.py` | 3 |
-| `core/tool_plan.py` | 3 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/dedup.py` | 3 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/rss.py` | 3 |
 | `foundation/llm/model_options.py` | 3 |
@@ -542,6 +544,7 @@
 | `app/memory_digest/quality.py` | 1 |
 | `app/memory_digest/renderer.py` | 1 |
 | `app/persona/injection_service.py` | 1 |
+| `app/tool_services/session_plan.py` | 1 |
 | `app/tool_services/sql_analysis.py` | 1 |
 | `app/tool_services/web_search.py` | 1 |
 | `bootstrap/job_adapters.py` | 1 |
@@ -584,6 +587,7 @@
 | `nanobot_kt/optional_message_api.py` | 1 |
 | `nanobot_kt/optional_output_api.py` | 1 |
 | `nanobot_kt/request_scope.py` | 1 |
+| `nanobot_kt/session_goal_runtime.py` | 1 |
 | `nanobot_kt/tool_execution_adapter.py` | 1 |
 | `scripts/run_proactive_outreach_simulation.py` | 1 |
 | `webui/src/api/client.js` | 1 |
@@ -1945,13 +1949,13 @@
 | `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:924` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:713` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:716` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:713` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:716` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2452` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2455` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
@@ -2536,52 +2540,52 @@
 | `decision.d742c571ef6ef1b0a850` | `scripts/benchmark_classifier.py:320` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
 |  | 摘要：parsed["type"] in ("否", "否≈") |  |  |  |  |  |
 |  | 原因：人工复核：基准脚本解析旧分类器自由文本输出 |  |  |  |  |  |
-| `decision.098668cf86d4007e5ea6` | `scripts/build_behavior_baseline.py:98` | `python.literal_mapping` | `data_consistency` | `policy` | 阶段 5 | `reviewed` |
+| `decision.098668cf86d4007e5ea6` | `scripts/build_behavior_baseline.py:104` | `python.literal_mapping` | `data_consistency` | `policy` | 阶段 5 | `reviewed` |
 |  | 摘要：SNAPSHOT_CLASSIFICATIONS = { "agent_runtime": "preserve", "group_analysis": "known_bad", "news_heuristics": "preserve", "private_timing": "preserve", "prompt_runtime": "preserve", "runtime_registries": "preserve", "security_invariants": "s… |  |  |  |  |  |
 |  | 原因：人工复核：行为快照分类和结构数量属于 Golden 数据一致性合同 |  |  |  |  |  |
-| `decision.e090d7390ad4316ff731` | `scripts/build_behavior_baseline.py:180` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.e090d7390ad4316ff731` | `scripts/build_behavior_baseline.py:186` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：payload.get("schema_version") != 1 |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.81e1e57e2a58fa938286` | `scripts/build_behavior_baseline.py:211` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.81e1e57e2a58fa938286` | `scripts/build_behavior_baseline.py:217` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：payload.get("schema_version") != 1 |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.8f2046cada7c2fdc7bbf` | `scripts/build_behavior_baseline.py:261` | `python.literal_mapping` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.8f2046cada7c2fdc7bbf` | `scripts/build_behavior_baseline.py:267` | `python.literal_mapping` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：model_defaults = { "action": "reply_now", "effort": "short", "intent": "general_question", "response_mode": "agent", "confidence": 0.92, "parse_quality": "schema_valid", "error_type": None, "conflicting_signals": [], "material_state": "non… |  |  |  |  |  |
 |  | 原因：人工复核：行为快照分类和结构数量属于 Golden 数据一致性合同 |  |  |  |  |  |
-| `decision.a9564ac3a044b9cc74eb` | `scripts/build_behavior_baseline.py:297` | `python.literal_collection` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.a9564ac3a044b9cc74eb` | `scripts/build_behavior_baseline.py:303` | `python.literal_collection` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：allowed_arguments = { "is_group", "is_private", "is_at_bot", "is_reply_to_bot", "bot_name_mentioned", "direct_call", "is_directed_to_other", "has_other_recipient", "is_other_bot", "has_files", "linger_score", "force_direct_score", "min_int… |  |  |  |  |  |
 |  | 原因：人工复核：行为快照分类和结构数量属于 Golden 数据一致性合同 |  |  |  |  |  |
-| `decision.e2f4bef788d7aaeaab5a` | `scripts/build_behavior_baseline.py:465` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.e2f4bef788d7aaeaab5a` | `scripts/build_behavior_baseline.py:471` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：request_schema.get("additionalProperties") is False |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.e1f8e8e1eba712aa081c` | `scripts/build_behavior_baseline.py:575` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.e1f8e8e1eba712aa081c` | `scripts/build_behavior_baseline.py:581` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：path.suffix in {".md", ".json"} |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.7977e9a871a9ff25ba2b` | `scripts/build_behavior_baseline.py:1114` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.7977e9a871a9ff25ba2b` | `scripts/build_behavior_baseline.py:1120` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：len(revision) != 40 |  |  |  |  |  |
 |  | 原因：人工复核：行为快照分类和结构数量属于 Golden 数据一致性合同 |  |  |  |  |  |
-| `decision.f12fe030561f6532f104` | `scripts/build_behavior_baseline.py:1560` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.f12fe030561f6532f104` | `scripts/build_behavior_baseline.py:1596` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：manifest.get("schema_version") != SCHEMA_VERSION |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.005abcd2d8c0d229c9d8` | `scripts/build_behavior_baseline.py:1563` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.005abcd2d8c0d229c9d8` | `scripts/build_behavior_baseline.py:1599` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：fixture_record.get("sha256") != _sha256_file(fixture_path) |  |  |  |  |  |
 |  | 原因：人工复核：Golden 禁止符号链接和宿主路径泄露的检查属于安全边界 |  |  |  |  |  |
-| `decision.17f8179df4ce3988794d` | `scripts/build_behavior_baseline.py:1566` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.17f8179df4ce3988794d` | `scripts/build_behavior_baseline.py:1602` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：runtime_fixture_record.get("path") != ( RUNTIME_FIXTURE_RELATIVE_PATH.as_posix() ) |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.3babdf923857902b7d1e` | `scripts/build_behavior_baseline.py:1570` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.3babdf923857902b7d1e` | `scripts/build_behavior_baseline.py:1606` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：runtime_fixture_record.get("sha256") != _sha256_file( runtime_fixture_path ) |  |  |  |  |  |
 |  | 原因：人工复核：Golden 禁止符号链接和宿主路径泄露的检查属于安全边界 |  |  |  |  |  |
-| `decision.1e4c9e6b436f09a9fced` | `scripts/build_behavior_baseline.py:1574` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.1e4c9e6b436f09a9fced` | `scripts/build_behavior_baseline.py:1610` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：runtime_fixture_record.get("framework_dependency") != "none" |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.1874863f7711e8b2c7db` | `scripts/build_behavior_baseline.py:1586` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.1874863f7711e8b2c7db` | `scripts/build_behavior_baseline.py:1622` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：record.get("classification") != classification |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.45f61540e7c872834245` | `scripts/build_behavior_baseline.py:1588` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.45f61540e7c872834245` | `scripts/build_behavior_baseline.py:1624` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：record.get("sha256") != _sha256_file(path) |  |  |  |  |  |
 |  | 原因：人工复核：Golden 禁止符号链接和宿主路径泄露的检查属于安全边界 |  |  |  |  |  |
-| `decision.1de126df46f2f30cd742` | `scripts/build_behavior_baseline.py:1628` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.1de126df46f2f30cd742` | `scripts/build_behavior_baseline.py:1664` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：__name__ == "__main__" |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
 | `decision.2cdec36c001b54d55808` | `scripts/build_task_slo_manifest.py:48` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |

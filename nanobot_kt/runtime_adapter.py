@@ -271,7 +271,7 @@ class KtRuntimeAdapter:
         user_id = actor_user_id or (
             principal.owner_id if not is_group else ""
         )
-        return {
+        runtime_context: dict[str, object] = {
             "chat_type": context.chat_type.value,
             "runtime_chat_type": str(
                 attributes.get("runtime_chat_type", context.chat_type.value) or ""
@@ -296,6 +296,31 @@ class KtRuntimeAdapter:
             "owner_id": principal.owner_id,
             "message_id": context.message_id,
         }
+        session_goal_id = str(attributes.get("session_goal_id", "") or "")
+        if session_goal_id:
+            runtime_context.update(
+                {
+                    "session_goal_id": session_goal_id,
+                    "session_goal_status": str(
+                        attributes.get("session_goal_status", "") or ""
+                    ),
+                    "session_goal_mode": str(
+                        attributes.get("session_goal_mode", "") or ""
+                    ),
+                    "session_goal_version": attributes.get(
+                        "session_goal_version",
+                        0,
+                    ),
+                    "session_plan_revision": attributes.get(
+                        "session_plan_revision",
+                        0,
+                    ),
+                    "session_plan_sha256": str(
+                        attributes.get("session_plan_sha256", "") or ""
+                    ),
+                }
+            )
+        return runtime_context
 
     async def stop(self) -> None:
         if self.state is RuntimeLifecycleState.STOPPED:

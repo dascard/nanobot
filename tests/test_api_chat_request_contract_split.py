@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from api import routes
 from api.routes import ChatProxyRequest
@@ -38,6 +39,15 @@ def test_chat_proxy_request_defaults_stay_compatible():
     assert req.message_id is None
     assert req.source_message_ids is None
     assert req.client_meta is None
+    assert req.goal_id is None
+
+
+def test_chat_proxy_request_only_accepts_canonical_session_goal_id():
+    goal_id = "goal_0123456789abcdef0123456789abcdef"
+
+    assert ChatProxyRequest(goal_id=goal_id).goal_id == goal_id
+    with pytest.raises(ValidationError):
+        ChatProxyRequest(goal_id="goal_not-canonical")
 
 
 def test_parent_request_contract_wrappers_keep_api_routes_module():
@@ -65,6 +75,7 @@ def test_clone_chat_request_preserves_all_request_contract_fields():
         message_id="m1",
         source_message_ids=["m0"],
         client_meta={"platform": "qq", "chat_type": "private"},
+        goal_id="goal_0123456789abcdef0123456789abcdef",
     )
 
     cloned = routes._clone_chat_request(req, query="合并后", files=["img://b"])
@@ -83,6 +94,7 @@ def test_clone_chat_request_preserves_all_request_contract_fields():
     assert cloned.message_id == "m1"
     assert cloned.source_message_ids == ["m0"]
     assert cloned.client_meta == {"platform": "qq", "chat_type": "private"}
+    assert cloned.goal_id == "goal_0123456789abcdef0123456789abcdef"
 
 
 @pytest.mark.parametrize(

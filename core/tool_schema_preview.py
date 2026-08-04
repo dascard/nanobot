@@ -497,6 +497,45 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "required": [],
         },
     },
+    "session_plan_read": {
+        "description": "读取当前请求绑定 Session Goal 的不可变计划版本。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "revision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": (
+                        "0 表示当前模式对应的最新/已批准版本；批准前可指定"
+                        "历史版本，批准后只接受已批准版本。"
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    "session_plan_write": {
+        "description": "仅在服务端 Plan Mode 中写入当前 Session Goal 的新计划版本。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 262144,
+                    "description": "完整 Markdown 计划正文；每次写入创建不可变新版本。",
+                },
+                "expected_version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "运行时 Session Goal 版本，防止覆盖并发或已批准计划。",
+                },
+            },
+            "required": ["content", "expected_version"],
+        },
+    },
     "workspace_read": {
         "description": "按行有界读取当前持久 Workspace 中的 UTF-8 文本并返回稳定行号。",
         "parameters": {

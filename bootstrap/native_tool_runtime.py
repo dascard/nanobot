@@ -135,6 +135,10 @@ def _service_bindings() -> dict[str, ServiceCallable]:
     from app.tool_services.knowledge_query import execute_knowledge_query
     from app.tool_services.sandbox import execute_sandbox_tool
     from app.tool_services.sticker_search import execute_sticker_search
+    from app.tool_services.session_plan import (
+        execute_session_plan_read,
+        execute_session_plan_write,
+    )
 
     bindings: dict[str, ServiceCallable] = {
         "tool.ai_daily.execute": _execute_ai_daily,
@@ -147,6 +151,8 @@ def _service_bindings() -> dict[str, ServiceCallable]:
         "tool.persona_update.execute": _execute_persona_update,
         "tool.reply.execute": _execute_reply,
         "tool.schedule_task.execute": _execute_schedule_task,
+        "tool.session_plan_read.execute": execute_session_plan_read,
+        "tool.session_plan_write.execute": execute_session_plan_write,
         "tool.sql_analysis.execute": _execute_sql_analysis,
         "tool.sticker_search.execute": execute_sticker_search,
         "tool.web_search.execute": _execute_web_search,

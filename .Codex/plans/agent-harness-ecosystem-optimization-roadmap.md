@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 5.1，Context 分层已完成，准备阶段 5.2）
+> 状态：执行中（阶段 5.4 已完成，准备阶段 6.1）
 >
 > 建立日期：2026-08-03
 >
@@ -819,10 +819,31 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 5.4 Session Goal 和 Plan Mode
 
-- [ ] 为长任务定义目标、完成条件、预算和状态。
-- [ ] Plan Mode 只允许读取和写入计划资产。
-- [ ] 退出 Plan Mode 并获批准后才允许实施工具。
-- [ ] 工具可见性和写权限由服务端策略控制，不靠 Prompt 自律。
+- [x] 为长任务定义目标、完成条件、预算和状态。
+- [x] Plan Mode 只允许读取和写入计划资产。
+- [x] 退出 Plan Mode 并获批准后才允许实施工具。
+- [x] 工具可见性和写权限由服务端策略控制，不靠 Prompt 自律。
+
+实施记录（2026-08-04）：
+
+- 新增持久化 `SessionGoal`、不可变 `SessionPlanAsset` 和追加式控制事件，完整保存 owner、session、目标、
+  完成条件、token／成本／时长／工具调用预算、状态、模式、版本与批准证明。SQLite trigger 禁止普通
+  UPDATE／DELETE 计划资产和控制事件；目标投影使用乐观版本控制，并校验计划正文、摘要和批准证明一致性。
+- 状态机强制执行 `planning → awaiting_approval → approved → executing → terminal`。批准后仍停留在
+  Plan Mode，只有经过独立的显式 start 操作才进入执行模式；actor、owner、期望版本和批准计划摘要均在
+  变更事务前验证，过期草稿、跨 owner、重复批准及未批准启动均被拒绝。
+- 新增受令牌保护的 Session Goal 控制 API，以及专用 `session_plan_read`／`session_plan_write` 工具。
+  模型工具参数不接收 goal、owner 或 session 标识，全部从受信 Request Runtime Context 解析；模型侧没有
+  approve 或 start 工具，因此不能自行批准计划或切换执行模式。
+- 生产 Bridge 在请求开始时冻结目标策略、计划版本和证明，并由服务端重建最终 ToolPlan。Plan Mode 只保留
+  reply、no_reply、计划读取及允许时的计划写入；来源禁用项继续硬禁用。批准后禁止写计划，显式启动后才恢复
+  实施工具。无 Session Goal 的请求不增加空运行时字段，保持既有 SDK 请求和 KT Adapter 合同不变。
+- canonical Prompt Runtime 与受版本管理运行时模板已同步 Plan Mode 的不可信数据边界和服务端授权语义；
+  模型上下文仅注入有界目标、条件、预算和计划摘录，完整计划通过专用读取工具按 owner ACL 获取。
+- Session Goal 状态机、ACL、版本竞争、计划完整性、输入预算、工具身份、API 生命周期和生产 Bridge 联合
+  定向回归 6 passed（兼容性回归复验）；最终完整 `python -m pytest tests/ -v` 为 6590 passed、
+  12 skipped、0 failed。OpenAPI、行为基线、Release／Verification Golden、决策规则、Task SLO、架构边界、
+  Ruff 致命规则、Python 编译和 `git diff --check` 均作为本模块提交前门禁执行。
 
 验收条件：相同稳定输入产生可预测的 Prompt 前缀；缓存收益可量化；压缩后关键事实、工具配对和安全说明不丢失。
 

@@ -10089,6 +10089,40 @@
       "trace_policy": "standard"
     },
     {
+      "availability_policy": "configurable",
+      "category": "system",
+      "domain": "tool.system",
+      "effect_policy": "read_only",
+      "execution_policy": "foreground_or_background",
+      "framework_owned": false,
+      "group_default": false,
+      "name": "session_plan_read",
+      "owner_module": "core.tool_registry",
+      "private_default": false,
+      "prompt_template_keys": [
+        "tools/session_plan_read/usage"
+      ],
+      "risk_level": "low",
+      "trace_policy": "standard"
+    },
+    {
+      "availability_policy": "configurable",
+      "category": "system",
+      "domain": "tool.system",
+      "effect_policy": "local_write",
+      "execution_policy": "foreground_or_background",
+      "framework_owned": false,
+      "group_default": false,
+      "name": "session_plan_write",
+      "owner_module": "core.tool_registry",
+      "private_default": false,
+      "prompt_template_keys": [
+        "tools/session_plan_write/usage"
+      ],
+      "risk_level": "medium",
+      "trace_policy": "standard"
+    },
+    {
       "availability_policy": "framework_only",
       "category": "system",
       "domain": "tool.system",

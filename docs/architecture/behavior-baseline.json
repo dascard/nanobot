@@ -121,6 +121,14 @@
       "stage": "Agent Harness 阶段 5.3"
     },
     {
+      "after_sha256": "693f7364403276a6b4c99371842648211aa0a30c627db811f5f5fc075b54d699",
+      "before_sha256": "51d70f01b31df8300551a1f77a0888656ecae54ba8e535203a2119e9cc61af4d",
+      "id": "agent_harness_session_goal_plan_mode_prompt",
+      "reason": "同步 Session Goal 不可信目标上下文、服务端 Plan Mode 权限边界，以及专用计划资产读写工具说明。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "Agent Harness 阶段 5.4"
+    },
+    {
       "after_sha256": "59ca2e9a073385589f81b7374a91030605c583122f2c3af2b74b27b1b1e40d9c",
       "before_sha256": "89ab0c4a6e53be676d39cc717f74948d79a1008ad37802b53827656b49c96661",
       "id": "stage6_news_registry",
@@ -183,9 +191,17 @@
       "reason": "登记 notice、snip/prune、summary、hard limit 和工具结果摘录水位；设置由服务端校验并在重启时原子回滚。",
       "snapshot_id": "runtime_registries",
       "stage": "Agent Harness 阶段 5.3"
+    },
+    {
+      "after_sha256": "ce3a26119eb761eb9f4635fb017f668aab162096a298d7da27fc277350dc2cc9",
+      "before_sha256": "9f0f29bdd28ea3669dcfe42e639b52abe7498b89c77b2b8162eb3c0be4a79ebb",
+      "id": "agent_harness_session_goal_plan_mode_registry",
+      "reason": "登记默认关闭的 Session Plan 读写工具；只有服务端绑定目标状态后才按请求启用，写权限不会由 Prompt 或模型开启。",
+      "snapshot_id": "runtime_registries",
+      "stage": "Agent Harness 阶段 5.4"
     }
   ],
-  "baseline_git_commit": "a9ba942d94bfaf2547c2774428b071ba3f99a8b3",
+  "baseline_git_commit": "8ef7affc4d4b1bf61e39df20a952e991f511aad2",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -239,14 +255,14 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "51d70f01b31df8300551a1f77a0888656ecae54ba8e535203a2119e9cc61af4d"
+      "sha256": "693f7364403276a6b4c99371842648211aa0a30c627db811f5f5fc075b54d699"
     },
     {
       "classification": "preserve",
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "9f0f29bdd28ea3669dcfe42e639b52abe7498b89c77b2b8162eb3c0be4a79ebb"
+      "sha256": "ce3a26119eb761eb9f4635fb017f668aab162096a298d7da27fc277350dc2cc9"
     },
     {
       "classification": "security_invariant",

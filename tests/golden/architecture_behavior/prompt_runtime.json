@@ -17,8 +17,8 @@
     },
     {
       "path": "data/prompts_v2/chat/main.md",
-      "sha256": "482ed6ef8e21e9316d6aebfe308b840812ba5305fde1b80a3cf3fecdbd721211",
-      "size_bytes": 5404
+      "sha256": "3b5a6df3a18027c4c091066e2e98cbdd92c0acb3508e7ed0e9dcac8f1c259469",
+      "size_bytes": 5945
     },
     {
       "path": "data/prompts_v2/chat/platform/qq/common.md",
@@ -142,8 +142,8 @@
     },
     {
       "path": "prompts.v2.default/chat/main.md",
-      "sha256": "482ed6ef8e21e9316d6aebfe308b840812ba5305fde1b80a3cf3fecdbd721211",
-      "size_bytes": 5404
+      "sha256": "3b5a6df3a18027c4c091066e2e98cbdd92c0acb3508e7ed0e9dcac8f1c259469",
+      "size_bytes": 5945
     },
     {
       "path": "prompts.v2.default/chat/platform/qq/common.md",
@@ -414,6 +414,16 @@
       "path": "prompts.v2.default/tools/schedule_task/usage.md",
       "sha256": "234efea2ddc8d22ab34b5314e11b7670ab4a0cc2f5763e88675647d0430d450c",
       "size_bytes": 3910
+    },
+    {
+      "path": "prompts.v2.default/tools/session_plan_read/usage.md",
+      "sha256": "6b5c8bcc8483c538012480c551102b577429e8e0ab5304ed359e8c753ff4b24d",
+      "size_bytes": 602
+    },
+    {
+      "path": "prompts.v2.default/tools/session_plan_write/usage.md",
+      "sha256": "3313d7c22ce549d2622790de216f9c10af4bfdabfaf5bc7996d9be75f86e8495",
+      "size_bytes": 625
     },
     {
       "path": "prompts.v2.default/tools/sql_analysis/usage.md",

@@ -87,6 +87,11 @@ from core.db.models.session_memory import (
     RollingSessionSummary,
     SessionSummaryJob,
 )
+from core.db.models.session_goal import (
+    SessionGoalEventRow,
+    SessionGoalRow,
+    SessionPlanAssetRow,
+)
 from core.db.models.scheduling import (
     ScheduledTask,
     ScheduledTaskExecution,
@@ -187,6 +192,9 @@ __all__ = [
     "SensitiveData",
     "RollingSessionSummary",
     "SessionSummaryJob",
+    "SessionGoalEventRow",
+    "SessionGoalRow",
+    "SessionPlanAssetRow",
     "ScheduledTask",
     "ScheduledTaskExecution",
     "ScheduledTaskOwnerLease",

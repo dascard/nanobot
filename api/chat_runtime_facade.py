@@ -30,6 +30,7 @@ class ChatRuntimeInput:
     summary_context: str = ""
     memory_recall_context: str = ""
     project_context: str = ""
+    goal_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,9 @@ def build_chat_runtime_payload(
         "effort_constraint": effort_constraint,
         "runtime_preset": runtime_preset,
     }
+    session_goal_id = str(runtime_input.goal_id or "").strip()
+    if session_goal_id:
+        bridge_meta["session_goal_id"] = session_goal_id
     prompt_budget = {
         "safe_user_input_chars": len(safe_user_input),
         "safe_user_input_tokens": estimate_tokens(safe_user_input),

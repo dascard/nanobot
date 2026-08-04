@@ -106,6 +106,9 @@ _ARTIFACT_LIFECYCLE_V1_VERSION = "20260804_artifact_lifecycle_v1"
 _LLM_PROVIDER_CACHE_PERFORMANCE_VERSION = (
     "20260804_llm_provider_cache_performance"
 )
+_SESSION_GOAL_PLAN_MODE_V1_VERSION = (
+    "20260804_session_goal_plan_mode_v1"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3793,6 +3796,40 @@ def _run_durable_task_v1(
     RunTaskControl.__table__.create(bind=conn, checkfirst=True)
 
 
+def _session_goal_plan_mode_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建 Session Goal 投影、不可变计划版本和 append-only 控制事件。"""
+
+    from core.db.models.session_goal import (
+        SessionGoalEventRow,
+        SessionGoalRow,
+        SessionPlanAssetRow,
+    )
+
+    for model in (
+        SessionGoalRow,
+        SessionPlanAssetRow,
+        SessionGoalEventRow,
+    ):
+        model.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    for table_name in ("session_plan_assets", "session_goal_events"):
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_update "
+            f"BEFORE UPDATE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_append_only'); END"
+        ))
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_delete "
+            f"BEFORE DELETE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_append_only'); END"
+        ))
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -5040,6 +5077,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _LLM_PROVIDER_CACHE_PERFORMANCE_VERSION,
         "llm provider cache token latency and cost metrics",
         _llm_provider_cache_performance,
+    ),
+    (
+        _SESSION_GOAL_PLAN_MODE_V1_VERSION,
+        "session goal plan mode and immutable plan assets",
+        _session_goal_plan_mode_v1,
     ),
 ]
 

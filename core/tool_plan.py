@@ -320,6 +320,8 @@ def build_tool_plan(
     runtime_preset: str = "full",
     db: Any = None,
     extra_disabled: Mapping[str, str] | None = None,
+    session_goal_mode: str = "",
+    session_plan_writable: bool = False,
 ) -> ToolPlan:
     enabled, disabled = resolve_effective_tools(
         chat_type=chat_type,
@@ -338,6 +340,18 @@ def build_tool_plan(
             continue
         enabled[name] = False
         disabled[name] = str(raw_reason or "来源上下文禁用").strip()
+    goal_mode = str(session_goal_mode or "").strip().lower()
+    if goal_mode not in {"", "plan", "execute"}:
+        raise ValueError("session_goal_mode 必须是 plan/execute 或空")
+    if goal_mode:
+        enabled["session_plan_read"] = True
+        disabled.pop("session_plan_read", None)
+        if goal_mode == "plan" and session_plan_writable:
+            enabled["session_plan_write"] = True
+            disabled.pop("session_plan_write", None)
+        else:
+            enabled["session_plan_write"] = False
+            disabled["session_plan_write"] = "当前 Session Goal 状态禁止修改计划"
     plan = ToolPlan.from_effective_tools(
         enabled=enabled,
         disabled=disabled,

@@ -58,6 +58,14 @@ tools:
     type: package
     module: nanobot_kt.tools.schedule_task
     class: ScheduleTaskTool
+  - name: session_plan_read
+    type: package
+    module: nanobot_kt.tools.session_plan
+    class: SessionPlanReadTool
+  - name: session_plan_write
+    type: package
+    module: nanobot_kt.tools.session_plan
+    class: SessionPlanWriteTool
   - name: group_analysis
     type: package
     module: nanobot_kt.tools.group_analysis

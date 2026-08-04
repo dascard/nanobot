@@ -581,7 +581,7 @@ def _runtime_context_payload(request: AgentTurnRequest) -> dict[str, object]:
     is_group = context.chat_type.value == "group"
     owner_id = context.principal.owner_id
     actor_id = actor.actor_id if actor is not None else owner_id
-    return {
+    payload: dict[str, object] = {
         "chat_type": context.chat_type.value,
         "runtime_chat_type": str(
             attributes.get("runtime_chat_type", context.chat_type.value) or ""
@@ -604,6 +604,31 @@ def _runtime_context_payload(request: AgentTurnRequest) -> dict[str, object]:
         "owner_id": owner_id,
         "message_id": context.message_id,
     }
+    session_goal_id = str(attributes.get("session_goal_id", "") or "")
+    if session_goal_id:
+        payload.update(
+            {
+                "session_goal_id": session_goal_id,
+                "session_goal_status": str(
+                    attributes.get("session_goal_status", "") or ""
+                ),
+                "session_goal_mode": str(
+                    attributes.get("session_goal_mode", "") or ""
+                ),
+                "session_goal_version": attributes.get(
+                    "session_goal_version",
+                    0,
+                ),
+                "session_plan_revision": attributes.get(
+                    "session_plan_revision",
+                    0,
+                ),
+                "session_plan_sha256": str(
+                    attributes.get("session_plan_sha256", "") or ""
+                ),
+            }
+        )
+    return payload
 
 
 class NativeAgentRuntime:

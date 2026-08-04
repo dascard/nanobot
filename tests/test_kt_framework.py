@@ -1193,6 +1193,191 @@ class TestNanobotBridge:
         assert receipts[0].checkpoint_before_id == checkpoints[2].checkpoint_id
         assert receipts[0].checkpoint_after_id == checkpoints[3].checkpoint_id
 
+    def test_native_bridge_enforces_session_goal_plan_mode_on_wire(
+        self,
+        db_session,
+        _stub_healthy_reply_route,
+    ):
+        """生产 Bridge 必须按服务端状态收窄 wire tools，批准后仍需显式开始。"""
+        import json
+
+        from core.agent_runtime import AgentRuntimeKind
+        from core.session_goal import (
+            SessionGoalBudget,
+            SessionGoalPrincipal,
+            SessionGoalService,
+        )
+        from nanobot_kt.bridge import NanobotBridge
+
+        principal = SessionGoalPrincipal(
+            "qq",
+            "user",
+            "native-plan-user",
+            "private_native_plan_user",
+        )
+        service = SessionGoalService(db_session)
+        goal = service.create_goal(
+            principal=principal,
+            objective="先形成计划，再执行外部调研",
+            completion_criteria=["计划获批", "调研结果已验证"],
+            budget=SessionGoalBudget(max_model_steps=16, max_tool_calls=32),
+            actor_id="native-plan-user",
+        )
+        db_session.commit()
+
+        class ScriptedCompletionPort:
+            def __init__(self):
+                self.requests = []
+
+            @property
+            def adapter_id(self):
+                return "completion:bridge-session-goal-test"
+
+            def bind_route(self, route):
+                del route
+
+            async def complete_chat(self, request):
+                self.requests.append(request)
+                index = len(self.requests)
+                return {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [{
+                                "id": f"call-session-goal-{index}",
+                                "type": "function",
+                                "function": {
+                                    "name": "reply",
+                                    "arguments": json.dumps(
+                                        {"content": f"会话目标阶段 {index}"},
+                                        ensure_ascii=False,
+                                    ),
+                                },
+                            }],
+                        },
+                    }],
+                }
+
+            async def stream_chat(self, request):
+                del request
+                if False:
+                    yield {}
+
+        completion = ScriptedCompletionPort()
+
+        def _project_context(request):
+            for message in request.messages:
+                content = str(message.get("content") or "")
+                if not content.startswith("<context_data_json>\n"):
+                    continue
+                payload_text = content.removeprefix(
+                    "<context_data_json>\n"
+                ).removesuffix("\n</context_data_json>")
+                payload = json.loads(payload_text)
+                if payload.get("section") == "project_context":
+                    return str(payload.get("content") or "")
+            raise AssertionError("模型请求缺少 project_context")
+
+        async def _plan_turn():
+            bridge = NanobotBridge(runtime_kind=AgentRuntimeKind.NATIVE)
+            bridge._native_completion_port = completion
+            await bridge.start()
+            try:
+                return await bridge.handle_message(
+                    "请先规划调研步骤",
+                    user_id=principal.owner_id,
+                    session_id=principal.session_id,
+                    metadata={
+                        "message_id": "native-plan-message-1",
+                        "platform": principal.platform,
+                        "session_goal_id": goal.goal_id,
+                    },
+                )
+            finally:
+                await bridge.stop()
+
+        assert run_async(_plan_turn()) == "会话目标阶段 1"
+        plan_request = completion.requests[0]
+        plan_tools = {
+            str(tool["function"]["name"])
+            for tool in (plan_request.tools or ())
+        }
+        assert plan_tools == {
+            "no_reply",
+            "reply",
+            "session_plan_read",
+            "session_plan_write",
+        }
+        plan_prompt = _project_context(plan_request)
+        assert '<session_goal_context trust="untrusted_data"' in plan_prompt
+        assert '"mode":"plan"' in plan_prompt
+        assert "先形成计划，再执行外部调研" in plan_prompt
+
+        goal = service.write_plan(
+            goal_id=goal.goal_id,
+            principal=principal,
+            content="# 调研实施计划\n\n1. 收集来源\n2. 交叉验证",
+            expected_version=goal.version,
+            actor_id=principal.owner_id,
+        )
+        goal = service.request_approval(
+            goal_id=goal.goal_id,
+            principal=principal,
+            expected_version=goal.version,
+            actor_id=principal.owner_id,
+        )
+        goal = service.approve(
+            goal_id=goal.goal_id,
+            principal=principal,
+            expected_version=goal.version,
+            expected_plan_revision=goal.latest_plan_revision,
+            expected_plan_sha256=goal.latest_plan_sha256,
+            approver_id="human-reviewer",
+        )
+        assert service.runtime_policy(
+            goal_id=goal.goal_id,
+            principal=principal,
+        ).mode.value == "plan"
+        goal = service.start_execution(
+            goal_id=goal.goal_id,
+            principal=principal,
+            expected_version=goal.version,
+            actor_id="human-reviewer",
+        )
+        db_session.commit()
+
+        async def _execute_turn():
+            bridge = NanobotBridge(runtime_kind=AgentRuntimeKind.NATIVE)
+            bridge._native_completion_port = completion
+            await bridge.start()
+            try:
+                return await bridge.handle_message(
+                    "按已批准计划执行",
+                    user_id=principal.owner_id,
+                    session_id=principal.session_id,
+                    metadata={
+                        "message_id": "native-plan-message-2",
+                        "platform": principal.platform,
+                        "session_goal_id": goal.goal_id,
+                    },
+                )
+            finally:
+                await bridge.stop()
+
+        assert run_async(_execute_turn()) == "会话目标阶段 2"
+        execute_request = completion.requests[1]
+        execute_tools = {
+            str(tool["function"]["name"])
+            for tool in (execute_request.tools or ())
+        }
+        assert "web_search" in execute_tools
+        assert "session_plan_read" in execute_tools
+        assert "session_plan_write" not in execute_tools
+        execute_prompt = _project_context(execute_request)
+        assert '"mode":"execute"' in execute_prompt
+        assert "# 调研实施计划" in execute_prompt
+
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_returns_output(
