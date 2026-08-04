@@ -9,16 +9,24 @@ import copy
 import json
 import logging
 from collections.abc import AsyncIterator
+from contextvars import ContextVar, Token
+from dataclasses import dataclass, field
 from typing import Any
 
 from kohakuterrarium.llm.base import ToolSchema
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError
 
-from core.tool_plan import ToolPlanExecutionError, get_current_tool_plan
+from core.agent_runtime import (
+    AgentTurnRequest,
+    PermissionPort,
+    RuntimeBudgetAccount,
+    RuntimeBudgetReservation,
+)
 from core.tool_execution_policy import (
     FINAL_ACTION_TOOLS,
     get_current_tool_execution_state,
 )
+from core.tool_plan import ToolPlanExecutionError, get_current_tool_plan
 
 logger = logging.getLogger("nanobot.kt.tool_runtime")
 
@@ -225,6 +233,275 @@ class ToolLoopControlPlugin(BasePlugin):
         return None
 
 
+@dataclass(slots=True)
+class _PermissionTurnState:
+    failure: BaseException | None = None
+
+
+class PermissionGuardPlugin(BasePlugin):
+    """把 KT 工具执行映射到同一个持久 PermissionPort。"""
+
+    name = "nanobot_permission_guard"
+    # ToolPlan(0) 与重复调用控制(1) 先收窄请求，再做动态权限决定。
+    priority = 5
+
+    def __init__(
+        self,
+        permission_port: PermissionPort,
+        request_provider: Any,
+    ) -> None:
+        super().__init__()
+        if not isinstance(permission_port, PermissionPort):
+            raise TypeError("permission_port 必须实现 PermissionPort")
+        if not callable(request_provider):
+            raise TypeError("request_provider 必须可调用")
+        self._permission_port = permission_port
+        self._request_provider = request_provider
+        self._turn_state: ContextVar[_PermissionTurnState | None] = ContextVar(
+            f"nanobot_kt_permission_failure_{id(self)}",
+            default=None,
+        )
+
+    def begin_turn(self) -> Token[_PermissionTurnState | None]:
+        return self._turn_state.set(_PermissionTurnState())
+
+    def end_turn(self, token: Token[_PermissionTurnState | None]) -> None:
+        self._turn_state.reset(token)
+
+    def raise_deferred_failure(self) -> None:
+        state = self._turn_state.get()
+        if state is not None and state.failure is not None:
+            raise state.failure
+
+    def _defer(self, exc: BaseException) -> None:
+        state = self._turn_state.get()
+        if state is None:
+            state = _PermissionTurnState()
+            self._turn_state.set(state)
+        if state.failure is None:
+            state.failure = exc
+
+    async def pre_tool_execute(
+        self,
+        args: dict,
+        **kwargs: Any,
+    ) -> dict | None:
+        del args
+        request = self._request_provider()
+        if not isinstance(request, AgentTurnRequest):
+            raise PluginBlockError("runtime_permission_context_missing")
+        from core.permissions import authorize_tool_execution
+
+        try:
+            await authorize_tool_execution(
+                self._permission_port,
+                context=request.context,
+                tool_name=str(kwargs.get("tool_name", "") or ""),
+                tool_call_id=str(kwargs.get("job_id", "") or "kt-tool-call"),
+            )
+        except Exception as exc:
+            self._defer(exc)
+            raise PluginBlockError("runtime_permission_denied") from exc
+        return None
+
+
+@dataclass(slots=True)
+class _BudgetTurnState:
+    failure: BaseException | None = None
+    reservations: dict[str, RuntimeBudgetReservation] = field(
+        default_factory=dict
+    )
+
+
+class RuntimeBudgetGuardPlugin(BasePlugin):
+    """在 KT 公开 Plugin 边界执行模型、工具和 Subagent 硬预算。"""
+
+    name = "nanobot_runtime_budget_guard"
+    # 放在受管 Hook 之后，确保预算批准是原始调用前的最后一道门禁。
+    priority = 20_000
+
+    def __init__(self, budget_provider: Any, request_provider: Any) -> None:
+        super().__init__()
+        if not callable(budget_provider):
+            raise TypeError("budget_provider 必须可调用")
+        if not callable(request_provider):
+            raise TypeError("request_provider 必须可调用")
+        self._budget_provider = budget_provider
+        self._request_provider = request_provider
+        self._turn_state: ContextVar[_BudgetTurnState | None] = ContextVar(
+            f"nanobot_kt_budget_failure_{id(self)}",
+            default=None,
+        )
+
+    def begin_turn(self) -> Token[_BudgetTurnState | None]:
+        return self._turn_state.set(_BudgetTurnState())
+
+    def end_turn(self, token: Token[_BudgetTurnState | None]) -> None:
+        state = self._turn_state.get()
+        if state is not None:
+            budget = self._budget_provider()
+            if isinstance(budget, RuntimeBudgetAccount):
+                for reservation in tuple(state.reservations.values()):
+                    try:
+                        budget.release(reservation)
+                    except Exception:
+                        pass
+            state.reservations.clear()
+        self._turn_state.reset(token)
+
+    def raise_deferred_failure(self) -> None:
+        state = self._turn_state.get()
+        if state is not None and state.failure is not None:
+            raise state.failure
+
+    def _state(self) -> _BudgetTurnState:
+        state = self._turn_state.get()
+        if state is None:
+            raise PluginBlockError("runtime_budget_turn_state_missing")
+        return state
+
+    def _defer(self, exc: BaseException) -> None:
+        state = self._turn_state.get()
+        if state is None:
+            state = _BudgetTurnState()
+            self._turn_state.set(state)
+        if state.failure is None:
+            state.failure = exc
+
+    def _budget(self) -> RuntimeBudgetAccount:
+        budget = self._budget_provider()
+        if not isinstance(budget, RuntimeBudgetAccount):
+            raise PluginBlockError("runtime_budget_context_missing")
+        return budget
+
+    def _model_id(self, raw_model: object) -> str:
+        model_id = str(raw_model or "").strip()
+        if model_id:
+            return model_id
+        request = self._request_provider()
+        if isinstance(request, AgentTurnRequest):
+            allowed = request.context.governance.budgets.turn.allowed_model_ids
+            if len(allowed) == 1:
+                return allowed[0]
+        return "host-bound"
+
+    @staticmethod
+    def _usage(raw: object) -> Any:
+        if not isinstance(raw, dict):
+            return None
+        from core.agent_runtime import RuntimeUsage
+
+        def nonnegative(*names: str) -> int:
+            for name in names:
+                try:
+                    value = int(raw.get(name, 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    return value
+            return 0
+
+        input_tokens = nonnegative("prompt_tokens", "input_tokens")
+        output_tokens = nonnegative("completion_tokens", "output_tokens")
+        if input_tokens == 0 and output_tokens == 0:
+            input_tokens = nonnegative("total_tokens")
+        usage = RuntimeUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=nonnegative(
+                "cached_tokens",
+                "cached_input_tokens",
+            ),
+            reasoning_tokens=nonnegative("reasoning_tokens"),
+            cost_microunits=nonnegative("cost_microunits"),
+        )
+        if not usage.total_tokens and not usage.cost_microunits:
+            return None
+        return usage
+
+    async def pre_llm_call(
+        self,
+        messages: list[dict],
+        **kwargs: Any,
+    ) -> list[dict] | None:
+        del messages
+        try:
+            self._budget().reserve_model(self._model_id(kwargs.get("model")))
+        except Exception as exc:
+            self._defer(exc)
+            raise PluginBlockError("runtime_model_budget_denied") from exc
+        return None
+
+    async def post_llm_call(
+        self,
+        messages: list[dict],
+        response: str,
+        usage: dict,
+        **kwargs: Any,
+    ) -> str | None:
+        del messages, response, kwargs
+        normalized = self._usage(usage)
+        if normalized is not None:
+            try:
+                self._budget().record_usage(normalized)
+            except Exception as exc:
+                # KT 会隔离 post hook 异常；Adapter 在 inject_event 返回后
+                # 重新抛出这个失败，避免预算超限退化成观测日志。
+                self._defer(exc)
+        return None
+
+    async def pre_tool_execute(
+        self,
+        args: dict,
+        **kwargs: Any,
+    ) -> dict | None:
+        del args
+        try:
+            state = self._state()
+            tool_name = str(kwargs.get("tool_name", "") or "")
+            job_id = str(kwargs.get("job_id", "") or "").strip()
+            reservation_key = job_id or f"tool:{tool_name}:{id(state)}"
+            if reservation_key in state.reservations:
+                raise RuntimeError("KT 工具 budget reservation 重复")
+            reservation = self._budget().reserve_tool(
+                tool_name
+            )
+            state.reservations[reservation_key] = reservation
+        except Exception as exc:
+            self._defer(exc)
+            raise PluginBlockError("runtime_tool_budget_denied") from exc
+        return None
+
+    async def post_tool_execute(
+        self,
+        result: Any,
+        **kwargs: Any,
+    ) -> Any | None:
+        del result
+        state = self._state()
+        tool_name = str(kwargs.get("tool_name", "") or "")
+        job_id = str(kwargs.get("job_id", "") or "").strip()
+        reservation_key = job_id or f"tool:{tool_name}:{id(state)}"
+        reservation = state.reservations.pop(reservation_key, None)
+        if reservation is not None:
+            try:
+                self._budget().release(reservation)
+            except Exception as exc:
+                self._defer(exc)
+        return None
+
+    async def pre_subagent_run(self, task: str, **kwargs: Any) -> str | None:
+        del task
+        try:
+            self._budget().reserve_subagent(
+                str(kwargs.get("name", "") or "subagent")
+            )
+        except Exception as exc:
+            self._defer(exc)
+            raise PluginBlockError("runtime_subagent_budget_denied") from exc
+        return None
+
+
 def tool_plan_runtime_status(agent: Any) -> dict[str, Any]:
     """检查 ToolPlan 执行守卫与原生 schema 过滤器的最终安装状态。"""
 
@@ -295,6 +572,42 @@ def install_tool_loop_control(agent: Any) -> bool:
         return False
     manager.register(ToolLoopControlPlugin())
     agent._nanobot_tool_loop_control_installed = True
+    return True
+
+
+def install_permission_guard(
+    agent: Any,
+    permission_port: PermissionPort,
+    request_provider: Any,
+) -> bool:
+    """安装统一权限守卫；同一 KT Agent 只允许一个权威实例。"""
+
+    manager = getattr(agent, "plugins", None)
+    if manager is None or not hasattr(manager, "register"):
+        return False
+    if _get_registered_plugin(manager, PermissionGuardPlugin.name) is not None:
+        agent._nanobot_permission_guard_installed = True
+        return False
+    manager.register(PermissionGuardPlugin(permission_port, request_provider))
+    agent._nanobot_permission_guard_installed = True
+    return True
+
+
+def install_runtime_budget_guard(
+    agent: Any,
+    budget_provider: Any,
+    request_provider: Any,
+) -> bool:
+    """安装 KT 统一预算门禁；同一 Agent 只注册一次。"""
+
+    manager = getattr(agent, "plugins", None)
+    if manager is None or not hasattr(manager, "register"):
+        return False
+    if _get_registered_plugin(manager, RuntimeBudgetGuardPlugin.name) is not None:
+        agent._nanobot_runtime_budget_guard_installed = True
+        return False
+    manager.register(RuntimeBudgetGuardPlugin(budget_provider, request_provider))
+    agent._nanobot_runtime_budget_guard_installed = True
     return True
 
 

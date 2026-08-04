@@ -13,6 +13,8 @@ import math
 from types import MappingProxyType
 from typing import AsyncIterator, Awaitable, Mapping, Protocol, runtime_checkable
 
+from core.agent_runtime.governance_contracts import RuntimeGovernanceEnvelope
+
 
 class RuntimeLifecycleState(str, Enum):
     NEW = "new"
@@ -382,6 +384,9 @@ class RequestRuntimeContext:
     features: tuple[RuntimeFeature, ...] = ()
     plans: tuple[RuntimePlanRef, ...] = ()
     deadline_at: datetime | None = None
+    governance: RuntimeGovernanceEnvelope = field(
+        default_factory=RuntimeGovernanceEnvelope
+    )
 
     def __post_init__(self) -> None:
         chat_type = self.chat_type
@@ -399,6 +404,8 @@ class RequestRuntimeContext:
         object.__setattr__(self, "capabilities", normalized_capabilities)
         object.__setattr__(self, "features", tuple(self.features))
         object.__setattr__(self, "plans", tuple(self.plans))
+        if not isinstance(self.governance, RuntimeGovernanceEnvelope):
+            raise ValueError("governance 必须是 RuntimeGovernanceEnvelope")
         if self.actor is not None and not isinstance(self.actor, RuntimeActor):
             raise ValueError("actor 必须是 RuntimeActor")
 

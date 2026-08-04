@@ -696,6 +696,7 @@ def permission_decision_event(
         source="permission.port",
         correlation=TelemetryCorrelation(
             request_id=request.request_id,
+            session_id=request.session_id,
             turn_id=identity.turn_id,
             trace_id=identity.correlation_id,
             run_id=identity.run_id,
@@ -717,6 +718,152 @@ def permission_decision_event(
             "outcome": decision.outcome.value,
             "reason_type": reason_type,
             "grant_id": decision.grant_id,
+            "grant_expires_at": (
+                decision.grant_expires_at.isoformat()
+                if decision.grant_expires_at is not None
+                else ""
+            ),
+            "resource_bytes": resource_bytes,
+            "resource_chars": resource_chars,
+            "resource_sha256": resource_sha256,
+        },
+    )
+
+
+def permission_grant_issued_event(
+    request: Any,
+    decision: Any,
+) -> RunLedgerEventDraft:
+    """session grant 签发事实；资源正文仍只保存摘要。"""
+
+    identity = request.identity
+    _, _, resource_sha256 = _text_fingerprint(request.resource)
+    return RunLedgerEventDraft(
+        event_id=_bounded_event_id("permission-grant", decision.grant_id),
+        run_id=identity.run_id,
+        event_type="permission.grant_issued",
+        occurred_at=decision.decided_at,
+        source="permission.port",
+        correlation=TelemetryCorrelation(
+            request_id=request.request_id,
+            session_id=request.session_id,
+            turn_id=identity.turn_id,
+            trace_id=identity.correlation_id,
+            run_id=identity.run_id,
+        ),
+        identity=RunLedgerIdentity(
+            actor_type=identity.actor.actor_type.value,
+            actor_id=identity.actor.actor_id,
+            parent_actor_id=identity.actor.parent_actor_id,
+            owner_platform=identity.owner.platform,
+            owner_type=identity.owner.owner_type.value,
+            owner_id=identity.owner.owner_id,
+        ),
+        status="active",
+        payload={
+            "grant_id": decision.grant_id,
+            "decision_id": decision.decision_id,
+            "action": request.action,
+            "risk": request.risk.value,
+            "resource_sha256": resource_sha256,
+            "expires_at": decision.grant_expires_at.isoformat(),
+        },
+    )
+
+
+def permission_grant_revoked_event(revocation: Any) -> RunLedgerEventDraft:
+    """session grant 撤销事实；必须绑定新的已接纳控制 Run。"""
+
+    identity = revocation.identity
+    reason_bytes, reason_chars, reason_sha256 = _text_fingerprint(
+        revocation.reason
+    )
+    return RunLedgerEventDraft(
+        event_id=_bounded_event_id(
+            "permission-revocation",
+            revocation.revocation_id,
+        ),
+        run_id=identity.run_id,
+        event_type="permission.grant_revoked",
+        occurred_at=revocation.revoked_at,
+        source="permission.port",
+        correlation=TelemetryCorrelation(
+            request_id=revocation.revocation_id,
+            session_id=revocation.session_id,
+            turn_id=identity.turn_id,
+            trace_id=identity.correlation_id,
+            run_id=identity.run_id,
+        ),
+        identity=RunLedgerIdentity(
+            actor_type=identity.actor.actor_type.value,
+            actor_id=identity.actor.actor_id,
+            parent_actor_id=identity.actor.parent_actor_id,
+            owner_platform=identity.owner.platform,
+            owner_type=identity.owner.owner_type.value,
+            owner_id=identity.owner.owner_id,
+        ),
+        status="revoked",
+        payload={
+            "grant_id": revocation.grant_id,
+            "reason_bytes": reason_bytes,
+            "reason_chars": reason_chars,
+            "reason_sha256": reason_sha256,
+            "revoked_by": revocation.revoked_by,
+        },
+    )
+
+
+def budget_decision_event(decision: Any) -> RunLedgerEventDraft:
+    """统一预算控制器使用；资源标识只保存摘要。"""
+
+    identity = decision.identity
+    resource_bytes, resource_chars, resource_sha256 = _text_fingerprint(
+        decision.resource
+    )
+    limit = decision.limits
+    return RunLedgerEventDraft(
+        event_id=_bounded_event_id("budget", decision.decision_id),
+        run_id=identity.run_id,
+        event_type=(
+            "budget.declared"
+            if decision.operation == "declared"
+            else "budget.decision_recorded"
+        ),
+        occurred_at=decision.occurred_at,
+        source="runtime.budget",
+        correlation=TelemetryCorrelation(
+            request_id=identity.turn_id,
+            turn_id=identity.turn_id,
+            trace_id=identity.correlation_id,
+            run_id=identity.run_id,
+        ),
+        identity=RunLedgerIdentity(
+            actor_type=identity.actor.actor_type.value,
+            actor_id=identity.actor.actor_id,
+            parent_actor_id=identity.actor.parent_actor_id,
+            owner_platform=identity.owner.platform,
+            owner_type=identity.owner.owner_type.value,
+            owner_id=identity.owner.owner_id,
+        ),
+        status=decision.outcome.value,
+        payload={
+            "budget_decision_id": decision.decision_id,
+            "scope": decision.scope.value,
+            "operation": decision.operation,
+            "outcome": decision.outcome.value,
+            "reason_code": decision.reason,
+            "governance_sha256": decision.governance_sha256,
+            "model_calls": decision.model_calls,
+            "consumed_tokens": decision.tokens,
+            "cost_microunits": decision.cost_microunits,
+            "steps": decision.steps,
+            "concurrency": decision.concurrency,
+            "model_call_limit": limit.model_call_limit,
+            "limit_tokens": limit.token_limit,
+            "cost_limit_microunits": limit.cost_limit_microunits,
+            "step_limit": limit.step_limit,
+            "time_limit_ms": limit.time_limit_ms,
+            "concurrency_limit": limit.concurrency_limit,
             "resource_bytes": resource_bytes,
             "resource_chars": resource_chars,
             "resource_sha256": resource_sha256,
@@ -726,7 +873,10 @@ def permission_decision_event(
 
 __all__ = [
     "artifact_published_event",
+    "budget_decision_event",
     "permission_decision_event",
+    "permission_grant_issued_event",
+    "permission_grant_revoked_event",
     "run_accepted_event",
     "run_prompt_resolved_event",
     "run_status_changed_event",

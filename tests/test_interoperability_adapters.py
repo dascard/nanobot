@@ -457,7 +457,7 @@ async def test_acp_cancel_interrupts_real_runtime_and_returns_cancelled_stop_rea
 
 
 @pytest.mark.asyncio
-async def test_acp_pending_permission_only_offers_allow_once_and_deny():
+async def test_acp_pending_permission_offers_bounded_session_grant():
     wire_requests: list[dict[str, object]] = []
 
     async def client_request(request):
@@ -493,12 +493,65 @@ async def test_acp_pending_permission_only_offers_allow_once_and_deny():
     assert decision.grant_id == "acp-once:permission-1"
     options = wire_requests[0]["params"]["options"]
     assert {item["kind"] for item in options} == {
+        "allow_always",
         "allow_once",
         "reject_once",
     }
     serialized = json.dumps(wire_requests, ensure_ascii=False)
-    assert "allow_always" not in serialized
+    assert "allow_always" in serialized
     assert "owner_id" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_acp_session_grant_is_scoped_and_has_bounded_expiry():
+    async def client_request(request):
+        return {
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": {
+                "outcome": {
+                    "outcome": "selected",
+                    "optionId": "nanobot.allow_session",
+                }
+            },
+        }
+
+    port = AcpPermissionPort(
+        enablement=_enablement(ACP_FEATURE_ID),
+        session_id="acp-session",
+        policy=StaticPermissionPort({
+            "workspace.write": RuntimePermissionOutcome.ASK,
+        }),
+        client_request=client_request,
+        session_grant_ttl_seconds=120,
+    )
+    requested_at = datetime.now(timezone.utc)
+    decision = await port.evaluate(RuntimePermissionRequest(
+        request_id="permission-session",
+        identity=_identity(),
+        action="workspace.write",
+        resource="/workspace/result.md",
+        risk=RuntimePermissionRisk.MEDIUM,
+        requested_at=requested_at,
+        session_id="acp-session",
+    ))
+
+    assert decision.outcome is RuntimePermissionOutcome.SESSION_GRANT
+    assert decision.grant_id.startswith("acp-session:")
+    assert decision.grant_expires_at is not None
+    assert 0 < (
+        decision.grant_expires_at - decision.decided_at
+    ).total_seconds() <= 120
+    with pytest.raises(ValueError, match="不属于当前 ACP session"):
+        await port.evaluate(RuntimePermissionRequest(
+            request_id="permission-other-session",
+            identity=_identity(),
+            action="workspace.write",
+            resource="/workspace/result.md",
+            risk=RuntimePermissionRisk.MEDIUM,
+            requested_at=requested_at,
+            session_id="other-session",
+        ))
 
 
 @pytest.mark.asyncio

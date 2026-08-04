@@ -39,10 +39,15 @@ from core.agent_runtime.contracts import (
     RuntimeUsage,
     ToolExecutionPort,
 )
+from core.agent_runtime.service_ports import PermissionPort
 from core.agent_runtime.errors import (
     AgentRuntimeAmbiguousError,
     AgentRuntimeCapabilityError,
     AgentRuntimeExecutionError,
+)
+from core.agent_runtime.governance import (
+    RuntimeBudgetAccount,
+    RuntimeBudgetManager,
 )
 from core.agent_runtime.recovery import (
     RuntimeCheckpointBoundary,
@@ -691,6 +696,8 @@ class NativeAgentRuntime:
         available_tool_names: tuple[str, ...] | None = None,
         event_sinks: tuple[RuntimeLifecycleEventSink, ...] = (),
         plugin_manager: RuntimePluginManager | None = None,
+        budget_manager: RuntimeBudgetManager | None = None,
+        permission_port: PermissionPort | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         if not isinstance(completion_port, ChatCompletionPort):
@@ -752,6 +759,18 @@ class NativeAgentRuntime:
         )
         if self._plugin_manager.runtime_id != runtime_id:
             raise ValueError("Plugin Manager runtime_id 与 Native Runtime 不一致")
+        if budget_manager is not None and not isinstance(
+            budget_manager,
+            RuntimeBudgetManager,
+        ):
+            raise TypeError("budget_manager 必须是 RuntimeBudgetManager")
+        self._budget_manager = budget_manager or RuntimeBudgetManager(now=self._now)
+        if permission_port is not None and not isinstance(
+            permission_port,
+            PermissionPort,
+        ):
+            raise TypeError("permission_port 必须实现 PermissionPort")
+        self._permission_port = permission_port
         self._active_request: AgentTurnRequest | None = None
 
     @property
@@ -883,9 +902,11 @@ class NativeAgentRuntime:
         completion_request: ChatCompletionRequest,
         *,
         model_step: int,
+        budget: RuntimeBudgetAccount,
     ) -> _CompletionTurn:
         last_error: BaseException | None = None
         for attempt in range(self._config.max_model_attempts):
+            budget.reserve_model(completion_request.manual_model)
             try:
                 response = await self._completion_port.complete_chat(completion_request)
                 return _completion_from_response(response, model_step=model_step)
@@ -926,9 +947,11 @@ class NativeAgentRuntime:
         *,
         model_step: int,
         on_text_delta: NativeTextDeltaHandler | None,
+        budget: RuntimeBudgetAccount,
     ) -> _CompletionTurn:
         last_error: BaseException | None = None
         for attempt in range(self._config.max_model_attempts):
+            budget.reserve_model(completion_request.manual_model)
             content_parts: list[str] = []
             raw_tool_calls: dict[int, dict[str, Any]] = {}
             usage: RuntimeUsage | None = None
@@ -1032,6 +1055,7 @@ class NativeAgentRuntime:
         model_step: int,
         on_text_delta: NativeTextDeltaHandler | None,
         on_context_decision: NativeContextDecisionHandler | None,
+        budget: RuntimeBudgetAccount,
     ) -> _CompletionTurn:
         completion_request, context_decision = self._completion_request(
             request,
@@ -1062,11 +1086,13 @@ class NativeAgentRuntime:
                 completion_request,
                 model_step=model_step,
                 on_text_delta=on_text_delta,
+                budget=budget,
             )
         else:
             completion = await self._complete_non_streaming(
                 completion_request,
                 model_step=model_step,
+                budget=budget,
             )
         if self._plugin_manager.has_hooks(RuntimeHookPoint.POST_MODEL):
             await self._plugin_manager.dispatch(
@@ -1199,7 +1225,17 @@ class NativeAgentRuntime:
         model_step: int,
         tool_round: int,
         receipt_ids: Sequence[str],
+        timeout_seconds: float,
     ) -> _NativeToolOutcome:
+        if self._permission_port is not None:
+            from core.permissions import authorize_tool_execution
+
+            await authorize_tool_execution(
+                self._permission_port,
+                context=request.context,
+                tool_name=call.name,
+                tool_call_id=call.call_id,
+            )
         arguments = dict(call.arguments) if isinstance(call.arguments, Mapping) else {}
         for guard in self._tool_guards:
             pre_tool_execute = getattr(guard, "pre_tool_execute", None)
@@ -1281,7 +1317,10 @@ class NativeAgentRuntime:
             tool_call=call,
             execution_port_id=binding_id,
             idempotency_key=(f"{request.context.request_id}:{call.call_id}"),
-            timeout_seconds=self._config.tool_timeout_seconds,
+            timeout_seconds=min(
+                self._config.tool_timeout_seconds,
+                timeout_seconds,
+            ),
             attributes=request.event_attributes,
         )
         effect_class = self._tool_effect_resolver(call.name)
@@ -1595,6 +1634,7 @@ class NativeAgentRuntime:
         self,
         request: AgentTurnRequest,
         *,
+        budget: RuntimeBudgetAccount,
         on_text_delta: NativeTextDeltaHandler | None,
         on_tool_activity: NativeToolActivityHandler | None,
         on_artifact: NativeArtifactHandler | None,
@@ -1632,7 +1672,9 @@ class NativeAgentRuntime:
                 model_step=model_step,
                 on_text_delta=on_text_delta,
                 on_context_decision=on_context_decision,
+                budget=budget,
             )
+            budget.record_usage(completion.usage)
             turn_usage = _merge_usage(turn_usage, completion.usage)
             assistant = RuntimeMessage(
                 "assistant",
@@ -1694,14 +1736,19 @@ class NativeAgentRuntime:
                         runtime_id=self.runtime_id,
                     ) from exc
                 try:
-                    tool_outcome = await self._execute_tool(
-                        request,
-                        call,
-                        plan,
-                        model_step=model_step,
-                        tool_round=tool_rounds,
-                        receipt_ids=receipt_ids,
-                    )
+                    reservation = budget.reserve_tool(call.name)
+                    try:
+                        tool_outcome = await self._execute_tool(
+                            request,
+                            call,
+                            plan,
+                            model_step=model_step,
+                            tool_round=tool_rounds,
+                            receipt_ids=receipt_ids,
+                            timeout_seconds=budget.tool_timeout_seconds(),
+                        )
+                    finally:
+                        budget.release(reservation)
                 except AgentRuntimeAmbiguousError as exc:
                     ambiguous_result = getattr(exc, "tool_result", None)
                     ambiguous_receipt = str(
@@ -1834,7 +1881,14 @@ class NativeAgentRuntime:
             self._active_task = task
             self._active_request = request
             try:
-                timeout = self._request_timeout(request)
+                budget = self._budget_manager.bind(
+                    request.context.execution_identity(),
+                    request.context.governance,
+                )
+                timeout = min(
+                    self._request_timeout(request),
+                    budget.remaining_time_seconds(),
+                )
                 with runtime_context_scope(_runtime_context_payload(request)):
                     async with asyncio.timeout(timeout):
                         await dispatch_runtime_input_event(
@@ -1843,6 +1897,7 @@ class NativeAgentRuntime:
                         )
                         outcome = await self._run_loop(
                             request,
+                            budget=budget,
                             on_text_delta=on_text_delta,
                             on_tool_activity=on_tool_activity,
                             on_artifact=on_artifact,

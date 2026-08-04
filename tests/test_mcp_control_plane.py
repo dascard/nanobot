@@ -626,7 +626,9 @@ def test_mcp_schema_migration_creates_control_tables_and_append_only_diagnostics
         "mcp_secrets",
         "mcp_diagnostics",
     } <= set(inspect(engine).get_table_names())
-    assert MIGRATIONS[-1][0] == _MCP_CONTROL_PLANE_V1_VERSION
+    assert _MCP_CONTROL_PLANE_V1_VERSION in {
+        version for version, _name, _migration in MIGRATIONS
+    }
     with pytest.raises(IntegrityError, match="mcp_diagnostics_append_only"):
         with engine.begin() as connection:
             connection.execute(text(

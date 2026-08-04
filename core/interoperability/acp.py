@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 import inspect
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -712,8 +712,8 @@ class _AcpTurnProjection:
 class AcpPermissionPort:
     """把内部 ``ask`` 决策映射为有界 ACP pending interaction。
 
-    应由宿主放在权威 ``LedgeredPermissionPort`` 内层；本 Adapter 不自行持久化
-    决策，也不提供 ``allow_always``，避免在阶段 7.1 前制造隐式 session grant。
+    应由宿主放在 ``SqlAlchemySessionPermissionPort`` 内层；本 Adapter 只生成
+    一次性或有界 session grant 决策，持久化、复用和撤销仍由宿主权限服务负责。
     """
 
     def __init__(
@@ -725,6 +725,7 @@ class AcpPermissionPort:
         client_request: AcpClientRequest,
         timeout_seconds: float = 60.0,
         max_pending: int = 8,
+        session_grant_ttl_seconds: int = 3600,
     ) -> None:
         require_interoperability_enabled(
             enablement,
@@ -743,10 +744,16 @@ class AcpPermissionPort:
             raise ValueError("timeout_seconds 必须是正数")
         if type(max_pending) is not int or max_pending <= 0:
             raise ValueError("max_pending 必须是正整数")
+        if (
+            type(session_grant_ttl_seconds) is not int
+            or not 1 <= session_grant_ttl_seconds <= 86_400
+        ):
+            raise ValueError("session_grant_ttl_seconds 必须在 1..86400")
         self._policy = policy
         self._client_request = client_request
         self._timeout_seconds = float(timeout_seconds)
         self._max_pending = max_pending
+        self._session_grant_ttl_seconds = session_grant_ttl_seconds
         self._requests: dict[str, RuntimePermissionRequest] = {}
         self._decisions: dict[str, RuntimePermissionDecision] = {}
         self._pending: dict[
@@ -762,6 +769,10 @@ class AcpPermissionPort:
     ) -> RuntimePermissionDecision:
         if not isinstance(request, RuntimePermissionRequest):
             raise TypeError("request 必须是 RuntimePermissionRequest")
+        if request.session_id and request.session_id != self._session_id:
+            raise ValueError("permission request 不属于当前 ACP session")
+        if not request.session_id:
+            request = replace(request, session_id=self._session_id)
         policy_decision = await self._policy.evaluate(request)
         if policy_decision.outcome is not RuntimePermissionOutcome.ASK:
             return policy_decision
@@ -833,6 +844,11 @@ class AcpPermissionPort:
                         "kind": "allow_once",
                     },
                     {
+                        "optionId": "nanobot.allow_session",
+                        "name": "本会话内允许",
+                        "kind": "allow_always",
+                    },
+                    {
                         "optionId": "nanobot.reject_once",
                         "name": "拒绝本次",
                         "kind": "reject_once",
@@ -901,6 +917,20 @@ class AcpPermissionPort:
                     reason="acp_client_allow_once",
                     decided_at=datetime.now(timezone.utc),
                     grant_id=f"acp-once:{request.request_id}",
+                )
+            if option_id == "nanobot.allow_session":
+                decided_at = datetime.now(timezone.utc)
+                return RuntimePermissionDecision(
+                    decision_id=f"acp:{rpc_id}",
+                    request_id=request.request_id,
+                    outcome=RuntimePermissionOutcome.SESSION_GRANT,
+                    reason="acp_client_allow_session",
+                    decided_at=decided_at,
+                    grant_id=f"acp-session:{uuid.uuid4().hex}",
+                    grant_expires_at=(
+                        decided_at
+                        + timedelta(seconds=self._session_grant_ttl_seconds)
+                    ),
                 )
             if option_id == "nanobot.reject_once":
                 return self._deny(request, "acp_client_reject_once")

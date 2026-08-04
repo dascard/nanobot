@@ -6,15 +6,184 @@ from typing import Any
 
 from core.agent_runtime import (
     RequestRuntimeContext,
+    RuntimeAccessEnvelope,
+    RuntimeAccessGrant,
+    RuntimeAccessKind,
     RuntimeActor,
     RuntimeActorType,
     RuntimeChatType,
     RuntimeFeature,
+    RuntimeGovernanceEnvelope,
     RuntimeOwnerType,
     RuntimePlanKind,
     RuntimePlanRef,
     RuntimePrincipal,
 )
+
+
+_FILE_TOOL_OPERATIONS = {
+    "workspace_read": ("read",),
+    "workspace_search": ("search",),
+    "workspace_write": ("write",),
+    "workspace_edit": ("edit",),
+    "sandbox_exec": ("execute",),
+    "sandbox_poll": ("read_process",),
+    "sandbox_write_stdin": ("write_process",),
+    "sandbox_terminate": ("terminate_process",),
+}
+_ASSET_TOOL_OPERATIONS = {
+    "asset_import": ("import",),
+    "asset_publish": ("publish",),
+}
+_MEMORY_TOOL_SCOPES = {
+    "memory_query": ("memory:session", "read"),
+    "knowledge_query": ("knowledge:authorized", "read"),
+    "sql_analysis": ("memory:archive", "read"),
+    "persona_update": ("memory:persona", "write"),
+}
+_CONTROLLED_NETWORK_TOOLS = {
+    "ai_daily",
+    "group_analysis",
+    "image_generation",
+    "image_summary",
+    "sticker_search",
+    "web_search",
+}
+
+
+def _merge_access_grant(
+    grants: dict[tuple[RuntimeAccessKind, str], tuple[set[str], str]],
+    *,
+    kind: RuntimeAccessKind,
+    resource: str,
+    operations: tuple[str, ...],
+    authorization: str,
+) -> None:
+    key = (kind, resource)
+    existing = grants.get(key)
+    if existing is None:
+        grants[key] = (set(operations), authorization)
+        return
+    existing[0].update(operations)
+    if existing[1] != authorization:
+        raise ValueError(f"资源 {resource} 存在冲突的授权来源")
+
+
+def build_request_runtime_governance(
+    *,
+    tool_plan: Any,
+    skill_plan: RuntimePlanRef | None,
+) -> RuntimeGovernanceEnvelope:
+    """从本轮已冻结计划生成精确访问范围，不读取模型参数。"""
+
+    from core.tool_registration import get_tool_registration
+    from core.tool_registry import SANDBOX_TOOL_NAMES
+
+    grants: dict[
+        tuple[RuntimeAccessKind, str],
+        tuple[set[str], str],
+    ] = {}
+    tool_names = tuple(
+        sorted(
+            str(name)
+            for name in getattr(tool_plan, "executable_tool_names", ())
+        )
+    )
+    try:
+        from core.mcp import get_current_mcp_runtime
+
+        mcp_runtime = get_current_mcp_runtime()
+    except Exception:
+        mcp_runtime = None
+    mcp_tools = {
+        descriptor.wire_name: descriptor
+        for descriptor in (
+            mcp_runtime.snapshot.tools if mcp_runtime is not None else ()
+        )
+    }
+    for tool_name in tool_names:
+        if tool_name in mcp_tools:
+            authorization = "mcp_snapshot"
+        elif tool_name in SANDBOX_TOOL_NAMES:
+            authorization = "sandbox_session_grant"
+        else:
+            authorization = "tool_plan"
+        _merge_access_grant(
+            grants,
+            kind=RuntimeAccessKind.TOOL,
+            resource=f"tool:{tool_name}",
+            operations=("execute",),
+            authorization=authorization,
+        )
+        file_operations = _FILE_TOOL_OPERATIONS.get(tool_name)
+        if file_operations:
+            _merge_access_grant(
+                grants,
+                kind=RuntimeAccessKind.FILE,
+                resource="workspace:current",
+                operations=file_operations,
+                authorization="sandbox_session_grant",
+            )
+        asset_operations = _ASSET_TOOL_OPERATIONS.get(tool_name)
+        if asset_operations:
+            _merge_access_grant(
+                grants,
+                kind=RuntimeAccessKind.FILE,
+                resource="assets:authorized",
+                operations=asset_operations,
+                authorization="sandbox_session_grant",
+            )
+        memory_scope = _MEMORY_TOOL_SCOPES.get(tool_name)
+        if memory_scope:
+            _merge_access_grant(
+                grants,
+                kind=RuntimeAccessKind.MEMORY,
+                resource=memory_scope[0],
+                operations=(memory_scope[1],),
+                authorization="memory_policy",
+            )
+        registration = get_tool_registration(tool_name)
+        if registration is not None and tool_name in _CONTROLLED_NETWORK_TOOLS:
+            _merge_access_grant(
+                grants,
+                kind=RuntimeAccessKind.NETWORK,
+                resource=f"controlled-provider:{tool_name}",
+                operations=("request",),
+                authorization="service_policy",
+            )
+    if skill_plan is not None:
+        _merge_access_grant(
+            grants,
+            kind=RuntimeAccessKind.SKILL,
+            resource=skill_plan.identity,
+            operations=("load",),
+            authorization="skill_lock",
+        )
+    enabled_mcp_descriptors = tuple(
+        mcp_tools[tool_name]
+        for tool_name in tool_names
+        if tool_name in mcp_tools
+    )
+    for descriptor in enabled_mcp_descriptors:
+        _merge_access_grant(
+            grants,
+            kind=RuntimeAccessKind.MCP,
+            resource=f"mcp-server:{descriptor.server_id}",
+            operations=("call",),
+            authorization="mcp_snapshot",
+        )
+    return RuntimeGovernanceEnvelope(
+        policy_id="runtime-governance-v1",
+        access=RuntimeAccessEnvelope(tuple(
+            RuntimeAccessGrant(
+                kind=kind,
+                resource=resource,
+                operations=tuple(sorted(operations)),
+                authorization=authorization,
+            )
+            for (kind, resource), (operations, authorization) in grants.items()
+        )),
+    )
 
 
 def build_request_runtime_context(
@@ -108,6 +277,10 @@ def build_request_runtime_context(
             ),
         ),
         plans=tuple(plans),
+        governance=build_request_runtime_governance(
+            tool_plan=tool_plan,
+            skill_plan=skill_plan,
+        ),
     )
 
 
@@ -136,4 +309,5 @@ def build_fallback_request_runtime_context(
 __all__ = [
     "build_fallback_request_runtime_context",
     "build_request_runtime_context",
+    "build_request_runtime_governance",
 ]

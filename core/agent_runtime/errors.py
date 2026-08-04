@@ -47,3 +47,15 @@ class AgentRuntimeRecoveryError(AgentRuntimeError):
     """Checkpoint 恢复前检或 lineage 操作失败。"""
 
     code = "agent_runtime_recovery_failed"
+
+
+class AgentRuntimeBudgetExceededError(AgentRuntimeExecutionError):
+    """统一预算已经耗尽或本次操作超出声明范围。"""
+
+    code = "agent_runtime_budget_exceeded"
+
+
+class AgentRuntimePermissionError(AgentRuntimeExecutionError):
+    """统一 PermissionPort 拒绝或仍要求审批。"""
+
+    code = "agent_runtime_permission_denied"

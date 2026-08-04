@@ -359,7 +359,10 @@ def test_prepare_output_for_request_disables_stream_when_not_streaming(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch):
+async def test_bridge_handle_message_streams_controller_text_deltas(
+    monkeypatch,
+    db_session,
+):
     from kohakuterrarium.core.agent_handlers import AgentHandlersMixin
     from kohakuterrarium.core.controller import Controller, ControllerConfig
     from kohakuterrarium.modules.output.router import OutputRouter
@@ -583,6 +586,28 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
     bridge._agent = StreamingHarness(fake_llm, output)
     bridge._session_locks = {}
     bridge._last_prompt_render_meta = {}
+
+    from core import database
+    from core.run_ledger.adapters import run_accepted_event
+    from core.run_ledger.persistence import SqlAlchemyRunEventLedgerWriter
+
+    SqlAlchemyRunEventLedgerWriter(lambda: database.SessionLocal()).append(
+        run_accepted_event(
+            run_id="run-stream",
+            trace_id="trace-stream",
+            session_id="private_u1",
+            user_id="u1",
+            chat_type="private",
+            group_id="",
+            run_type="chat",
+            prompt_mode="prompt",
+            prompt_key="chat_private",
+            prompt_sha256="a" * 64,
+            model="unit-model",
+            input_value="你好",
+            platform="qq",
+        )
+    )
 
     queue = asyncio.Queue()
     result = await bridge.handle_message(

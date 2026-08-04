@@ -52,6 +52,7 @@ async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
     executable_names = []
     tool_plan = SimpleNamespace(
         sha256="a" * 64,
+        executable_tool_names=frozenset({"memory_query"}),
         ensure_executable=executable_names.append,
     )
     finish_runs = []
@@ -85,6 +86,29 @@ async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
     monkeypatch.setattr(
         "core.durable_tasks.RunTaskOwner",
         FakeRunTaskOwner,
+    )
+    from core.agent_runtime import (
+        RuntimePermissionOutcome,
+        StaticPermissionPort,
+    )
+
+    monkeypatch.setattr(
+        "core.permissions.default_session_permission_port",
+        lambda: StaticPermissionPort({
+            "tool.execute": RuntimePermissionOutcome.ALLOW,
+        }),
+    )
+
+    class FakeBudgetSink:
+        def __init__(self, _factory):
+            pass
+
+        def emit(self, decision):
+            captured.setdefault("budget_decisions", []).append(decision)
+
+    monkeypatch.setattr(
+        "core.run_ledger.sinks.SqlAlchemyRuntimeBudgetDecisionSink",
+        FakeBudgetSink,
     )
     monkeypatch.setattr(
         "core.tracing_context.set_trace_context",
@@ -166,5 +190,9 @@ async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
     assert finish_runs[0][1]["task_lease"] is task_lease
     assert captured["task_owner_started"] is True
     assert captured["task_owner_stopped"] is True
+    assert any(
+        decision.operation == "tool_reservation"
+        for decision in captured["budget_decisions"]
+    )
     assert captured["trace_reset"] == "trace-token"
     assert captured["correlation_reset"] == "correlation-token"

@@ -23,6 +23,9 @@ from core.agent_runtime import (
     RuntimeLifecycleEvent,
     RuntimeLifecycleEventSink,
     RuntimeLifecycleState,
+    PermissionPort,
+    RuntimeBudgetAccount,
+    RuntimeBudgetManager,
     RuntimeCapabilities,
     RuntimeCapability,
     RuntimeMessage,
@@ -185,6 +188,8 @@ class KtRuntimeAdapter:
         initially_started: bool | None = None,
         output_sink: object | None = None,
         plugin_manager: RuntimePluginManager | None = None,
+        budget_manager: RuntimeBudgetManager | None = None,
+        permission_port: PermissionPort | None = None,
     ) -> None:
         self._agent = agent
         self._output_sink = output_sink
@@ -218,9 +223,25 @@ class KtRuntimeAdapter:
         )
         if self._plugin_manager.runtime_id != runtime_id:
             raise ValueError("Plugin Manager runtime_id 与 KT Runtime 不一致")
+        if budget_manager is not None and not isinstance(
+            budget_manager,
+            RuntimeBudgetManager,
+        ):
+            raise TypeError("budget_manager 必须是 RuntimeBudgetManager")
+        self._budget_manager = budget_manager or RuntimeBudgetManager()
+        if permission_port is not None and not isinstance(
+            permission_port,
+            PermissionPort,
+        ):
+            raise TypeError("permission_port 必须实现 PermissionPort")
+        self._permission_port = permission_port
         self._plugin_start_lock = asyncio.Lock()
+        self._run_lock = asyncio.Lock()
         self._managed_kt_plugin: object | None = None
+        self._permission_guard_plugin: object | None = None
+        self._budget_guard_plugin: object | None = None
         self._active_request: AgentTurnRequest | None = None
+        self._active_budget: RuntimeBudgetAccount | None = None
 
     @property
     def runtime_id(self) -> str:
@@ -477,66 +498,94 @@ class KtRuntimeAdapter:
             event = TriggerEvent(type="user_input", content=request.content)
         else:
             event = create_user_input_event(request.content, **event_context)
-        managed_plugin = self._managed_kt_plugin
-        begin_turn = getattr(managed_plugin, "begin_turn", None)
-        end_turn = getattr(managed_plugin, "end_turn", None)
-        turn_tokens = begin_turn() if callable(begin_turn) else None
-        self._active_request = request
-        try:
-            with runtime_context_scope(runtime_context):
-                await dispatch_runtime_input_event(
-                    self._plugin_manager,
-                    request,
-                )
-                inject_event = _required_callable(
-                    self._agent,
-                    "inject_event",
-                    runtime_id=self.runtime_id,
-                )
-                raw_result = inject_event(event)
-                if inspect.isawaitable(raw_result):
-                    raw_result = await raw_result
-                raise_deferred = getattr(
-                    managed_plugin,
-                    "raise_deferred_failure",
-                    None,
-                )
-                if callable(raise_deferred):
-                    raise_deferred()
-                result = AgentTurnResult(
-                    raw_result=raw_result,
-                    messages=self.read_conversation(),
-                    tool_calls=self.inspect_tool_calls(),
-                )
-                await dispatch_runtime_completion(
-                    self._plugin_manager,
-                    request,
-                    result,
-                )
-                return result
-        except asyncio.CancelledError:
-            raise
-        except TimeoutError:
-            raise
-        except RuntimePluginExecutionError:
-            raise
-        except Exception as exc:
-            from core.run_ledger.contracts import (
-                find_run_ledger_authority_error,
+        async with self._run_lock:
+            managed_plugin = self._managed_kt_plugin
+            permission_plugin = self._permission_guard_plugin
+            budget_plugin = self._budget_guard_plugin
+            begin_turn = getattr(managed_plugin, "begin_turn", None)
+            end_turn = getattr(managed_plugin, "end_turn", None)
+            budget_begin = getattr(budget_plugin, "begin_turn", None)
+            budget_end = getattr(budget_plugin, "end_turn", None)
+            permission_begin = getattr(permission_plugin, "begin_turn", None)
+            permission_end = getattr(permission_plugin, "end_turn", None)
+            turn_tokens = begin_turn() if callable(begin_turn) else None
+            budget_token = budget_begin() if callable(budget_begin) else None
+            permission_token = (
+                permission_begin() if callable(permission_begin) else None
             )
+            self._active_request = request
+            try:
+                self._active_budget = self._budget_manager.bind(
+                    request.context.execution_identity(),
+                    request.context.governance,
+                )
+                with runtime_context_scope(runtime_context):
+                    async with asyncio.timeout(
+                        self._active_budget.remaining_time_seconds()
+                    ):
+                        await dispatch_runtime_input_event(
+                            self._plugin_manager,
+                            request,
+                        )
+                        inject_event = _required_callable(
+                            self._agent,
+                            "inject_event",
+                            runtime_id=self.runtime_id,
+                        )
+                        raw_result = inject_event(event)
+                        if inspect.isawaitable(raw_result):
+                            raw_result = await raw_result
+                        for plugin in (
+                            managed_plugin,
+                            permission_plugin,
+                            budget_plugin,
+                        ):
+                            raise_deferred = getattr(
+                                plugin,
+                                "raise_deferred_failure",
+                                None,
+                            )
+                            if callable(raise_deferred):
+                                raise_deferred()
+                        result = AgentTurnResult(
+                            raw_result=raw_result,
+                            messages=self.read_conversation(),
+                            tool_calls=self.inspect_tool_calls(),
+                        )
+                        await dispatch_runtime_completion(
+                            self._plugin_manager,
+                            request,
+                            result,
+                        )
+                        return result
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                raise
+            except RuntimePluginExecutionError:
+                raise
+            except Exception as exc:
+                from core.run_ledger.contracts import (
+                    find_run_ledger_authority_error,
+                )
 
-            authority_failure = find_run_ledger_authority_error(exc)
-            if authority_failure is not None:
-                raise authority_failure
-            raise AgentRuntimeExecutionError(
-                "KT Agent 单轮执行失败",
-                runtime_id=self.runtime_id,
-            ) from exc
-        finally:
-            if turn_tokens is not None and callable(end_turn):
-                end_turn(turn_tokens)
-            if self._active_request is request:
-                self._active_request = None
+                authority_failure = find_run_ledger_authority_error(exc)
+                if authority_failure is not None:
+                    raise authority_failure
+                raise AgentRuntimeExecutionError(
+                    "KT Agent 单轮执行失败",
+                    runtime_id=self.runtime_id,
+                ) from exc
+            finally:
+                if permission_token is not None and callable(permission_end):
+                    permission_end(permission_token)
+                if budget_token is not None and callable(budget_end):
+                    budget_end(budget_token)
+                if turn_tokens is not None and callable(end_turn):
+                    end_turn(turn_tokens)
+                if self._active_request is request:
+                    self._active_request = None
+                    self._active_budget = None
 
     def run_stream(
         self,
@@ -730,7 +779,11 @@ class KtRuntimeAdapter:
             RuntimeLifecycleState.RUNNING,
         )
         from nanobot_kt.tool_runtime import (
+            PermissionGuardPlugin,
+            RuntimeBudgetGuardPlugin,
             install_tool_loop_control,
+            install_permission_guard,
+            install_runtime_budget_guard,
             install_tool_plan_guard,
             install_tool_plan_native_schema_filter,
             tool_plan_runtime_status,
@@ -738,6 +791,26 @@ class KtRuntimeAdapter:
 
         install_tool_plan_guard(self._agent)
         install_tool_loop_control(self._agent)
+        if self._permission_port is not None:
+            install_permission_guard(
+                self._agent,
+                self._permission_port,
+                lambda: self._active_request,
+            )
+        install_runtime_budget_guard(
+            self._agent,
+            lambda: self._active_budget,
+            lambda: self._active_request,
+        )
+        manager = getattr(self._agent, "plugins", None)
+        getter = getattr(manager, "get_plugin", None)
+        if callable(getter):
+            permission_candidate = getter(PermissionGuardPlugin.name)
+            if isinstance(permission_candidate, PermissionGuardPlugin):
+                self._permission_guard_plugin = permission_candidate
+            candidate = getter(RuntimeBudgetGuardPlugin.name)
+            if isinstance(candidate, RuntimeBudgetGuardPlugin):
+                self._budget_guard_plugin = candidate
         install_tool_plan_native_schema_filter(self._agent)
         raw_status = tool_plan_runtime_status(self._agent)
         status = RuntimeToolPolicyStatus(
@@ -845,6 +918,8 @@ def build_kt_runtime(
     initially_started: bool | None = None,
     output_sink: object | None = None,
     plugin_manager: RuntimePluginManager | None = None,
+    budget_manager: RuntimeBudgetManager | None = None,
+    permission_port: PermissionPort | None = None,
 ) -> AgentRuntimePort:
     """显式 composition factory；不读取或写入模块级单例。"""
 
@@ -861,6 +936,8 @@ def build_kt_runtime(
         initially_started=initially_started,
         output_sink=output_sink,
         plugin_manager=plugin_manager,
+        budget_manager=budget_manager,
+        permission_port=permission_port,
     )
 
 

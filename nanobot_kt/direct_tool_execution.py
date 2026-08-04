@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -42,6 +42,7 @@ def _build_tool_execution_request(
     idempotency_key: str,
     tool_plan_sha256: str,
     timeout_seconds: float,
+    governance: Any,
 ):
     from core.agent_runtime import (
         RequestRuntimeContext,
@@ -101,6 +102,7 @@ def _build_tool_execution_request(
                 datetime.now(timezone.utc)
                 + timedelta(seconds=float(timeout_seconds))
             ),
+            governance=governance,
         ),
         tool_call=RuntimeToolCall(
             call_id=f"tool-{uuid4().hex}",
@@ -290,6 +292,16 @@ async def execute_registered_tool(
         )
 
         execution_port = KtRegisteredToolExecutionAdapter(agent)
+    from core.permissions import default_session_permission_port
+    from nanobot_kt.runtime_context_adapter import (
+        build_request_runtime_governance,
+    )
+
+    governance = build_request_runtime_governance(
+        tool_plan=tool_plan,
+        skill_plan=None,
+    )
+    permission_port = default_session_permission_port()
     result: Any = None
     finish_status = "error"
     finish_error = ""
@@ -309,13 +321,45 @@ async def execute_registered_tool(
             idempotency_key=idempotency_key,
             tool_plan_sha256=tool_plan.sha256,
             timeout_seconds=timeout_seconds,
+            governance=governance,
         )
-        with (
-            runtime_context_scope(runtime_context),
-            tool_plan_scope(tool_plan),
-            tool_execution_scope(request_id),
-        ):
-            result = await execution_port.execute(tool_request)
+        from core.permissions import authorize_tool_execution
+        from core import database
+        from core.agent_runtime import RuntimeBudgetManager
+        from core.run_ledger.sinks import SqlAlchemyRuntimeBudgetDecisionSink
+
+        budget = RuntimeBudgetManager(
+            sink=SqlAlchemyRuntimeBudgetDecisionSink(
+                lambda: database.SessionLocal()
+            )
+        ).bind(
+            tool_request.context.execution_identity(),
+            tool_request.context.governance,
+        )
+
+        await authorize_tool_execution(
+            permission_port,
+            context=tool_request.context,
+            tool_name=name,
+            tool_call_id=tool_request.tool_call.call_id,
+        )
+        reservation = budget.reserve_tool(name)
+        try:
+            tool_request = replace(
+                tool_request,
+                timeout_seconds=min(
+                    tool_request.timeout_seconds,
+                    budget.tool_timeout_seconds(),
+                ),
+            )
+            with (
+                runtime_context_scope(runtime_context),
+                tool_plan_scope(tool_plan),
+                tool_execution_scope(request_id),
+            ):
+                result = await execution_port.execute(tool_request)
+        finally:
+            budget.release(reservation)
         finish_error = (
             result.error.message if result.error is not None else ""
         )

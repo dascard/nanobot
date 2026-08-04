@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 6.5 已完成，准备阶段 7.1）
+> 状态：执行中（阶段 7.1 已完成，准备阶段 7.2）
 >
 > 建立日期：2026-08-03
 >
@@ -1022,10 +1022,35 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 7.1 统一权限和预算
 
-- [ ] 为 Run、Turn、Tool 和 Subagent 声明模型、token、费用、步数、时间和并发预算。
-- [ ] 声明文件、网络、工具、Skill、MCP 和记忆访问范围。
-- [ ] `PermissionPort` 支持 `allow`、`deny`、`ask`、`allow-once` 和 session grant。
-- [ ] 所有决定进入 Event Ledger，并支持撤销临时授权。
+- [x] 为 Run、Turn、Tool 和 Subagent 声明模型、token、费用、步数、时间和并发预算。
+- [x] 声明文件、网络、工具、Skill、MCP 和记忆访问范围。
+- [x] `PermissionPort` 支持 `allow`、`deny`、`ask`、`allow-once` 和 session grant。
+- [x] 所有决定进入 Event Ledger，并支持撤销临时授权。
+
+实施记录（2026-08-04）：
+
+- 新增不可变 `RuntimeGovernanceEnvelope`，同时冻结 Run、Turn、Tool、Subagent 四级预算与文件、网络、
+  工具、Skill、MCP、记忆六类精确访问范围。子级预算不能扩张 Run 上限；访问授权不支持通配符，Runtime
+  在同一 Run 的重试过程中拒绝更换权限集合、策略或提升工具／子 Agent 预算，仅允许在预先声明的模型集合
+  内切换路由。
+- `RuntimeBudgetManager` 在真实物理模型请求、工具调用和子 Agent 入口执行模型次数、token、费用微单位、
+  步数、时限和并发检查。Run／Turn 计数跨候选模型重试共享；Native、KT 公开 Plugin、Bridge 组合根和
+  确定性直接工具执行均接入同一治理合同。KT 并发工具从 pre-tool 持有 reservation 到 post-tool，子任务中
+  的 fail-closed 决定会回传请求主任务，不会因 `ContextVar` 任务隔离而丢失。
+- 请求上下文从冻结 ToolPlan、当前模型路由、workspace／asset／sandbox、Skill lock、MCP snapshot 和记忆
+  owner 生成精确授权。受控联网只授予真实 provider-backed 工具；Sandbox 与 MCP 分别保留独立授权来源，
+  普通工具不能借用它们的权限。子 Agent 默认预算为零，阶段 8 显式建立编排合同前无法启动。
+- `PermissionPort` 扩展为 allow、deny、ask、allow-once 与有界 session grant；高风险普通工具默认进入 ask，
+  Sandbox 只接受既有 Sandbox session grant，MCP 写操作也不能自动放行。session grant 绑定 owner、session、
+  action 和资源摘要，支持 TTL、跨进程账本重放和显式撤销；过期、冲突、缺少 session 或数据库失败均关闭式
+  拒绝。ACP 的 `allow_always` 只映射为同一套有界 session grant，不创建旁路授权。
+- 四级预算声明、每次允许／拒绝、Permission 决定、grant 发放、过期与撤销均同步写入权威 Event Ledger；
+  账本只保留资源和原因摘要，不保存工具参数、用户正文或真实资源标识。生产 sink 要求业务 Run 已先接纳，
+  测试也按同一权威顺序建立接纳事实，不以测试开关绕过治理。
+- 预算边界、精确授权、模型重试、KT 并发、Native／KT／直接工具生产链路、ACP session grant、持久化重放、
+  migration 和敏感字段专项回归均已通过；最终完整 `python -m pytest tests/ -v` 为 6677 passed、
+  12 skipped、0 failed。架构、OpenAPI、Release／Verification／Behavior Golden、决策规则、Task SLO、
+  Ruff 致命规则、Python 编译、Prompt 关键合同同步和 `git diff --check` 均通过。
 
 #### 7.2 Sandbox 和工具安全
 

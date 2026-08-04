@@ -218,3 +218,50 @@ async def test_permission_port_defaults_to_deny_and_keeps_allow_once_receipt():
     )
     with pytest.raises(ValueError, match="已绑定不同请求"):
         await port.evaluate(conflicting_request)
+
+
+@pytest.mark.asyncio
+async def test_permission_port_supports_ask_and_bounded_session_grant():
+    port = StaticPermissionPort(
+        {
+            "workspace.ask": RuntimePermissionOutcome.ASK,
+            "workspace.session": RuntimePermissionOutcome.SESSION_GRANT,
+        },
+        session_grant_ttl_seconds=120,
+    )
+    requested_at = datetime.now(timezone.utc)
+    asked = await port.evaluate(RuntimePermissionRequest(
+        request_id="permission-ask",
+        identity=_identity(),
+        action="workspace.ask",
+        resource="workspace-1:/ask.txt",
+        risk=RuntimePermissionRisk.HIGH,
+        requested_at=requested_at,
+        session_id="session-1",
+    ))
+    granted = await port.evaluate(RuntimePermissionRequest(
+        request_id="permission-session",
+        identity=_identity(),
+        action="workspace.session",
+        resource="workspace-1:/result.txt",
+        risk=RuntimePermissionRisk.HIGH,
+        requested_at=requested_at,
+        session_id="session-1",
+    ))
+    missing_session = await port.evaluate(RuntimePermissionRequest(
+        request_id="permission-session-missing-scope",
+        identity=_identity(),
+        action="workspace.session",
+        resource="workspace-1:/result.txt",
+        risk=RuntimePermissionRisk.HIGH,
+        requested_at=requested_at,
+    ))
+
+    assert asked.outcome is RuntimePermissionOutcome.ASK
+    assert granted.outcome is RuntimePermissionOutcome.SESSION_GRANT
+    assert granted.grant_id == "grant:permission-session"
+    assert granted.grant_expires_at is not None
+    assert 0 < (
+        granted.grant_expires_at - granted.decided_at
+    ).total_seconds() <= 120
+    assert missing_session.outcome is RuntimePermissionOutcome.DENY

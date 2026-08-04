@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`a4a4bc0b50aeb97f74cdc3e8179933ed82370b62`
-- 规则总数：8145
+- 源提交：`f38a0d352cc6559b7f9dc73588aeff4f6cde86ef`
+- 规则总数：8175
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1526 |
+| `configurable_policy` | 1538 |
 | `data_consistency` | 476 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4351 |
-| `security_invariant` | 1618 |
+| `protocol_syntax` | 4358 |
+| `security_invariant` | 1629 |
 
 ## 文件汇总
 
@@ -134,6 +134,7 @@
 | `app/tool_services/sandbox.py` | 20 |
 | `core/admin/table_views.py` | 20 |
 | `core/agent_runtime/contracts.py` | 20 |
+| `core/interoperability/acp.py` | 20 |
 | `core/model_provider/provider_config.py` | 20 |
 | `core/proactive/orchestrator.py` | 20 |
 | `core/semantic/jobs.py` | 20 |
@@ -150,7 +151,6 @@
 | `webui/src/features/prompt/PromptPages.jsx` | 19 |
 | `api/admin/prompt_v2_routes.py` | 18 |
 | `app/persona/retrieval_service.py` | 18 |
-| `core/interoperability/acp.py` | 18 |
 | `core/outbound/control_transitions.py` | 18 |
 | `core/sandbox/lease_service.py` | 18 |
 | `core/sql_readonly.py` | 18 |
@@ -227,11 +227,13 @@
 | `webui/src/features/reply-eval/ReplyEvalPage.jsx` | 13 |
 | `app/group_analysis/repository.py` | 12 |
 | `app/memory_digest/retrieval_service.py` | 12 |
+| `core/agent_runtime/service_ports.py` | 12 |
 | `core/db/group_learning_adapter.py` | 12 |
 | `core/group_learning/prompt_injection.py` | 12 |
 | `core/news/source_registry.py` | 12 |
 | `core/proactive/grounding.py` | 12 |
 | `core/prompt_v2/flow.py` | 12 |
+| `core/run_ledger/adapters.py` | 12 |
 | `core/semantic/scoring.py` | 12 |
 | `core/session_goal.py` | 12 |
 | `core/sticker_rag.py` | 12 |
@@ -241,14 +243,12 @@
 | `sandboxd/container_security.py` | 12 |
 | `api/admin/persona_routes.py` | 11 |
 | `api/agent_link_routes.py` | 11 |
-| `core/agent_runtime/service_ports.py` | 11 |
 | `core/asset_transport.py` | 11 |
 | `core/generated_images.py` | 11 |
 | `core/proactive/serialization.py` | 11 |
 | `core/prompt_v2/prefix_cache.py` | 11 |
 | `core/prompt_v2/task_templates.py` | 11 |
 | `core/reply_postprocess.py` | 11 |
-| `core/run_ledger/adapters.py` | 11 |
 | `core/schedule_spec.py` | 11 |
 | `core/settings_service.py` | 11 |
 | `core/skills/governance.py` | 11 |
@@ -301,6 +301,7 @@
 | `api/chat_content_helpers.py` | 8 |
 | `api/session_goal_routes.py` | 8 |
 | `app/group_ingress/service.py` | 8 |
+| `core/agent_runtime/governance_contracts.py` | 8 |
 | `core/jobs/policies.py` | 8 |
 | `core/prompt_v2/template_loader.py` | 8 |
 | `core/sandbox/repositories.py` | 8 |
@@ -330,6 +331,7 @@
 | `core/model_route_health.py` | 7 |
 | `core/modules/contracts.py` | 7 |
 | `core/news/signals.py` | 7 |
+| `core/permissions/service.py` | 7 |
 | `core/proactive/delivery.py` | 7 |
 | `core/proactive/repository.py` | 7 |
 | `core/prompt_v2/template_store.py` | 7 |
@@ -374,6 +376,7 @@
 | `core/web_search/search_runtime.py` | 6 |
 | `foundation/message_contract/contracts.py` | 6 |
 | `foundation/message_contract/parsing.py` | 6 |
+| `nanobot_kt/tool_runtime.py` | 6 |
 | `scripts/build_release_manifest.py` | 6 |
 | `webui/src/features/models/ModelsPage.jsx` | 6 |
 | `webui/src/features/proactive-outreach/ProactiveOutreachPage.jsx` | 6 |
@@ -385,6 +388,7 @@
 | `app/tool_services/image_summary.py` | 5 |
 | `clients/provider_adapter.py` | 5 |
 | `clients/task_runtime_adapter.py` | 5 |
+| `core/agent_runtime/governance.py` | 5 |
 | `core/agent_runtime/selection.py` | 5 |
 | `core/compaction.py` | 5 |
 | `core/durable_tasks/contracts.py` | 5 |
@@ -442,6 +446,7 @@
 | `foundation/llm/cache_usage.py` | 4 |
 | `nanobot_kt/model_provider_adapter.py` | 4 |
 | `nanobot_kt/runtime_adapter.py` | 4 |
+| `nanobot_kt/runtime_context_adapter.py` | 4 |
 | `sandboxd/auth.py` | 4 |
 | `sandboxd/concurrency.py` | 4 |
 | `scripts/build_verification_plan.py` | 4 |
@@ -535,9 +540,7 @@
 | `nanobot_kt/memory_runtime.py` | 2 |
 | `nanobot_kt/message_adapter.py` | 2 |
 | `nanobot_kt/model_attempts.py` | 2 |
-| `nanobot_kt/runtime_context_adapter.py` | 2 |
 | `nanobot_kt/tool_registration_adapter.py` | 2 |
-| `nanobot_kt/tool_runtime.py` | 2 |
 | `scripts/build_release_impact.py` | 2 |
 | `scripts/deploy-production.sh` | 2 |
 | `scripts/rag_write_test_report.py` | 2 |
@@ -1972,13 +1975,13 @@
 | `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:924` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:723` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:726` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:723` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:726` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2462` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2465` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |

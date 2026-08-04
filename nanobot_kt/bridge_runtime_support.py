@@ -174,6 +174,10 @@ def build_bridge_agent_runtime(
     name = str(getattr(config, "name", "") or "agent")
     runtime_id = f"kt:{name}"
     from nanobot_kt.runtime_adapter import build_kt_runtime
+    from core import database
+    from core.agent_runtime import RuntimeBudgetManager
+    from core.permissions import default_session_permission_port
+    from core.run_ledger.sinks import SqlAlchemyRuntimeBudgetDecisionSink
 
     return build_kt_runtime(
         agent,
@@ -183,6 +187,12 @@ def build_bridge_agent_runtime(
         initially_started=initially_started,
         output_sink=bridge._output,
         plugin_manager=manager_factory(runtime_id),
+        budget_manager=RuntimeBudgetManager(
+            sink=SqlAlchemyRuntimeBudgetDecisionSink(
+                lambda: database.SessionLocal()
+            )
+        ),
+        permission_port=default_session_permission_port(),
     )
 
 
@@ -199,6 +209,10 @@ def build_native_bridge_runtime(
     )
     from core.runtime.event_bus import emit_agent_lifecycle_event
     from core.run_recovery import default_runtime_recovery_port
+    from core.agent_runtime import RuntimeBudgetManager
+    from core.run_ledger.sinks import SqlAlchemyRuntimeBudgetDecisionSink
+    from core import database
+    from core.permissions import default_session_permission_port
     from core.context_compaction import (
         context_compaction_policy_from_settings,
     )
@@ -230,6 +244,12 @@ def build_native_bridge_runtime(
             SqlAlchemyToolResultArtifactPublisher()
         ),
         plugin_manager=plugin_manager,
+        budget_manager=RuntimeBudgetManager(
+            sink=SqlAlchemyRuntimeBudgetDecisionSink(
+                lambda: database.SessionLocal()
+            )
+        ),
+        permission_port=default_session_permission_port(),
     )
     return runtime, resolved_completion
 
@@ -293,10 +313,11 @@ def bind_native_recovery_model_plan(
     context: RequestRuntimeContext,
     route: RuntimeModelRoute,
 ) -> RequestRuntimeContext:
-    """把候选模型的精确冻结点绑定到 Native 单次尝试。"""
+    """把候选模型预算绑定到单次尝试；Native 另附恢复证明。"""
 
+    governance = context.governance.bind_model(route.model_id)
     if runtime_kind is not AgentRuntimeKind.NATIVE:
-        return context
+        return replace(context, governance=governance)
     from core.run_recovery.proofs import replace_recovery_plan
 
     return replace(
@@ -309,6 +330,7 @@ def bind_native_recovery_model_plan(
                 runtime_model_route_sha256(route),
             ),
         ),
+        governance=governance,
     )
 
 

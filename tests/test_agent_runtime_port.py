@@ -24,6 +24,7 @@ from core.agent_runtime import (
     RuntimeActorType,
     RuntimeArtifactRef,
     RuntimeAttribute,
+    RuntimeBudgetManager,
     RuntimeChatType,
     RuntimeCapabilities,
     RuntimeCapability,
@@ -44,6 +45,7 @@ from core.agent_runtime import (
     RuntimeToolExecutionRequest,
     RuntimeToolExecutionResult,
     RuntimeUsage,
+    StaticPermissionPort,
     ToolExecutionPort,
     validate_run_status_transition,
 )
@@ -1185,6 +1187,25 @@ def test_kt_runtime_adapter_uses_public_tools_without_touching_pending_state():
         list_tools=lambda: ["reply", {"name": "memory_query"}],
     )
     assert runtime.list_tool_names() == ("memory_query", "reply")
+
+
+def test_kt_runtime_installs_real_permission_and_budget_guards():
+    from nanobot_kt.runtime_adapter import build_kt_runtime
+    from nanobot_kt.tool_runtime import (
+        PermissionGuardPlugin,
+        RuntimeBudgetGuardPlugin,
+    )
+
+    agent = _KtAgent()
+    runtime = build_kt_runtime(
+        agent,
+        budget_manager=RuntimeBudgetManager(),
+        permission_port=StaticPermissionPort(),
+    )
+
+    assert runtime.install_tool_policy().ready is True
+    assert agent.plugins.get_plugin(PermissionGuardPlugin.name) is not None
+    assert agent.plugins.get_plugin(RuntimeBudgetGuardPlugin.name) is not None
 
 
 def test_kt_composition_factory_accepts_explicit_provider_route_applier():

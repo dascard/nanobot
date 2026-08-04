@@ -11,7 +11,9 @@ import pytest
 
 from core.agent_runtime import (
     AgentRuntimeCapabilityError,
+    AgentRuntimeBudgetExceededError,
     AgentRuntimeExecutionError,
+    AgentRuntimePermissionError,
     AgentRuntimePort,
     AgentTurnRequest,
     InMemoryRunEventSink,
@@ -21,11 +23,19 @@ from core.agent_runtime import (
     RequestRuntimeContext,
     RuntimeActor,
     RuntimeActorType,
+    RuntimeAccessEnvelope,
+    RuntimeAccessGrant,
+    RuntimeAccessKind,
+    RuntimeBudgetEnvelope,
+    RuntimeBudgetLimit,
+    RuntimeBudgetManager,
+    RuntimeBudgetScope,
     RuntimeArtifactRef,
     RuntimeChatType,
     RuntimeLifecycleState,
     RuntimeMessage,
     RuntimeModelRoute,
+    RuntimeGovernanceEnvelope,
     RuntimeOwnerType,
     RuntimePlanKind,
     RuntimePlanRef,
@@ -37,6 +47,7 @@ from core.agent_runtime import (
     RuntimeToolExecutionRequest,
     RuntimeToolExecutionResult,
     RuntimeTurnKind,
+    StaticPermissionPort,
 )
 from core.context_compaction import (
     ContextCompactionPolicy,
@@ -74,6 +85,7 @@ def _context(
     *,
     plan_sha256: str = "",
     deadline_at: datetime | None = None,
+    governance: RuntimeGovernanceEnvelope | None = None,
 ) -> RequestRuntimeContext:
     digest = plan_sha256 or (plan.sha256 if plan is not None else "")
     plans = (
@@ -103,6 +115,7 @@ def _context(
         actor=RuntimeActor(RuntimeActorType.USER, "10001"),
         plans=plans,
         deadline_at=deadline_at,
+        governance=governance or RuntimeGovernanceEnvelope(),
     )
 
 
@@ -259,6 +272,8 @@ def _runtime(
     config: NativeAgentRuntimeConfig | None = None,
     artifact_publisher: Any = None,
     plugin_manager: Any = None,
+    budget_manager: RuntimeBudgetManager | None = None,
+    permission_port: Any = None,
 ) -> NativeAgentRuntime:
     bindings = dict(handlers or {})
     tool_port = RegisteredToolExecutionPort(bindings)
@@ -272,6 +287,70 @@ def _runtime(
         tool_result_artifact_publisher=artifact_publisher,
         available_tool_names=tuple(sorted(plan.executable_tool_names)) if plan else (),
         plugin_manager=plugin_manager,
+        budget_manager=budget_manager,
+        permission_port=permission_port,
+    )
+
+
+def _governance_with_limits(
+    *,
+    model_calls: int,
+    tokens: int = 100,
+    tool_steps: int = 4,
+    tool_name: str = "",
+) -> RuntimeGovernanceEnvelope:
+    access = (
+        RuntimeAccessEnvelope((
+            RuntimeAccessGrant(
+                RuntimeAccessKind.TOOL,
+                f"tool:{tool_name}",
+                ("execute",),
+                "tool_plan",
+            ),
+        ))
+        if tool_name
+        else RuntimeAccessEnvelope(())
+    )
+    return RuntimeGovernanceEnvelope(
+        budgets=RuntimeBudgetEnvelope(
+            run=RuntimeBudgetLimit(
+                RuntimeBudgetScope.RUN,
+                model_calls,
+                tokens,
+                1_000_000,
+                model_calls + tool_steps,
+                30_000,
+                1,
+            ),
+            turn=RuntimeBudgetLimit(
+                RuntimeBudgetScope.TURN,
+                model_calls,
+                tokens,
+                1_000_000,
+                model_calls + tool_steps,
+                30_000,
+                1,
+            ),
+            tool=RuntimeBudgetLimit(
+                RuntimeBudgetScope.TOOL,
+                0,
+                0,
+                0,
+                tool_steps,
+                10_000,
+                1,
+            ),
+            subagent=RuntimeBudgetLimit(
+                RuntimeBudgetScope.SUBAGENT,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+        ),
+        access=access,
     )
 
 
@@ -290,6 +369,62 @@ class _ToolResultArtifactPublisher:
             size_bytes=len(payload),
             source_run_id="run-native-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_counts_every_physical_model_attempt_against_budget():
+    completion = _ScriptedCompletionPort(responses=(
+        RuntimeError("首个物理请求失败"),
+        _assistant_response("不应执行第二个物理请求"),
+    ))
+    runtime = _runtime(completion)
+    await runtime.start()
+
+    with pytest.raises(AgentRuntimeBudgetExceededError, match="model_call_limit"):
+        await runtime.run(AgentTurnRequest(
+            _context(governance=_governance_with_limits(model_calls=1)),
+            "执行",
+        ))
+
+    assert len(completion.complete_requests) == 1
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_denies_tool_before_real_handler_when_permission_denies():
+    plan = _tool_plan("memory_query")
+    completion = _ScriptedCompletionPort(responses=(
+        _tool_call_response("memory_query", {"query": "秘密"}),
+    ))
+    handler_called = False
+
+    async def handler(request):
+        nonlocal handler_called
+        handler_called = True
+        return _completed_tool_result(request, {"items": []})
+
+    runtime = _runtime(
+        completion,
+        plan=plan,
+        handlers={"tool.memory_query.execute": handler},
+        permission_port=StaticPermissionPort(),
+    )
+    await runtime.start()
+
+    with pytest.raises(AgentRuntimePermissionError, match="被拒绝"):
+        await runtime.run(AgentTurnRequest(
+            _context(
+                plan,
+                governance=_governance_with_limits(
+                    model_calls=1,
+                    tool_name="memory_query",
+                ),
+            ),
+            "查询",
+        ))
+
+    assert handler_called is False
+    await runtime.stop()
 
 
 @pytest.mark.asyncio

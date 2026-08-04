@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import hashlib
 from pathlib import PurePosixPath
@@ -407,6 +407,7 @@ class RuntimePermissionOutcome(str, Enum):
     DENY = "deny"
     ASK = "ask"
     ALLOW_ONCE = "allow_once"
+    SESSION_GRANT = "session_grant"
 
 
 class RuntimePermissionRisk(str, Enum):
@@ -424,6 +425,7 @@ class RuntimePermissionRequest:
     resource: str
     risk: RuntimePermissionRisk
     requested_at: datetime
+    session_id: str = ""
     attributes: tuple[RuntimeAttribute, ...] = ()
 
     def __post_init__(self) -> None:
@@ -443,6 +445,11 @@ class RuntimePermissionRequest:
         object.__setattr__(self, "risk", risk)
         if self.requested_at.tzinfo is None or self.requested_at.utcoffset() is None:
             raise ValueError("permission.requested_at 必须包含时区")
+        object.__setattr__(
+            self,
+            "session_id",
+            str(self.session_id or "").strip(),
+        )
         object.__setattr__(self, "attributes", tuple(self.attributes))
         keys = [attribute.key for attribute in self.attributes]
         if len(keys) != len(set(keys)):
@@ -457,6 +464,7 @@ class RuntimePermissionDecision:
     reason: str
     decided_at: datetime
     grant_id: str = ""
+    grant_expires_at: datetime | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -474,8 +482,21 @@ class RuntimePermissionDecision:
         if self.decided_at.tzinfo is None or self.decided_at.utcoffset() is None:
             raise ValueError("permission.decided_at 必须包含时区")
         object.__setattr__(self, "grant_id", str(self.grant_id or "").strip())
-        if outcome is RuntimePermissionOutcome.ALLOW_ONCE and not self.grant_id:
-            raise ValueError("allow_once 决策必须携带 grant_id")
+        if outcome in {
+            RuntimePermissionOutcome.ALLOW_ONCE,
+            RuntimePermissionOutcome.SESSION_GRANT,
+        } and not self.grant_id:
+            raise ValueError(f"{outcome.value} 决策必须携带 grant_id")
+        expires_at = self.grant_expires_at
+        if expires_at is not None:
+            if not self.grant_id:
+                raise ValueError("grant_expires_at 必须关联 grant_id")
+            if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+                raise ValueError("grant_expires_at 必须包含时区")
+            if expires_at <= self.decided_at:
+                raise ValueError("grant_expires_at 必须晚于 decided_at")
+        if outcome is RuntimePermissionOutcome.SESSION_GRANT and expires_at is None:
+            raise ValueError("session_grant 决策必须携带 grant_expires_at")
 
 
 @runtime_checkable
@@ -492,6 +513,8 @@ class StaticPermissionPort:
     def __init__(
         self,
         policies: Mapping[str, RuntimePermissionOutcome] = MappingProxyType({}),
+        *,
+        session_grant_ttl_seconds: int = 3600,
     ) -> None:
         self._policies = MappingProxyType(
             {
@@ -504,6 +527,12 @@ class StaticPermissionPort:
         self._requests: dict[str, RuntimePermissionRequest] = {}
         self._decisions: dict[str, RuntimePermissionDecision] = {}
         self._lock = asyncio.Lock()
+        if (
+            type(session_grant_ttl_seconds) is not int
+            or not 1 <= session_grant_ttl_seconds <= 86_400
+        ):
+            raise ValueError("session_grant_ttl_seconds 必须在 1..86400")
+        self._session_grant_ttl_seconds = session_grant_ttl_seconds
 
     async def evaluate(
         self,
@@ -523,16 +552,32 @@ class StaticPermissionPort:
                 request.action,
                 RuntimePermissionOutcome.DENY,
             )
+            decided_at = datetime.now(timezone.utc)
+            if (
+                outcome is RuntimePermissionOutcome.SESSION_GRANT
+                and not request.session_id
+            ):
+                outcome = RuntimePermissionOutcome.DENY
             decision = RuntimePermissionDecision(
                 decision_id=f"permission:{request.request_id}",
                 request_id=request.request_id,
                 outcome=outcome,
                 reason=f"static_policy:{outcome.value}",
-                decided_at=datetime.now(timezone.utc),
+                decided_at=decided_at,
                 grant_id=(
                     f"grant:{request.request_id}"
-                    if outcome is RuntimePermissionOutcome.ALLOW_ONCE
+                    if outcome
+                    in {
+                        RuntimePermissionOutcome.ALLOW_ONCE,
+                        RuntimePermissionOutcome.SESSION_GRANT,
+                    }
                     else ""
+                ),
+                grant_expires_at=(
+                    decided_at
+                    + timedelta(seconds=self._session_grant_ttl_seconds)
+                    if outcome is RuntimePermissionOutcome.SESSION_GRANT
+                    else None
                 ),
             )
             self._requests[request.request_id] = request

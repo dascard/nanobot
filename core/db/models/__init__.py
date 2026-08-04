@@ -72,6 +72,7 @@ from core.db.models.persona import (
     PersonaFact,
     SystemPrompt,
 )
+from core.db.models.permission import PermissionSessionGrantRow
 from core.db.models.proactive import ProactiveOutreachLease, ProactiveOutreachLog
 from core.db.models.run_ledger import (
     RunLedgerErasureAuthorization,
@@ -181,6 +182,7 @@ __all__ = [
     "Persona",
     "PersonaBehavior",
     "PersonaFact",
+    "PermissionSessionGrantRow",
     "PromptFileVersion",
     "PromptRenderLog",
     "ProactiveOutreachLease",

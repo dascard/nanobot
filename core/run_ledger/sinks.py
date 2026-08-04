@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from core.agent_runtime.contracts import RuntimeRunEvent
 from core.run_ledger.adapters import (
+    budget_decision_event,
     permission_decision_event,
     runtime_event_admission_events,
     runtime_event_terminal_event,
@@ -120,6 +121,33 @@ class LedgeredPermissionPort:
         return decision
 
 
+class SqlAlchemyRuntimeBudgetDecisionSink:
+    """预算允许与拒绝在返回执行循环前同步写入权威 Ledger。"""
+
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
+        self._writer = SqlAlchemyRunEventLedgerWriter(session_factory)
+
+    def emit(self, decision: Any) -> None:
+        event = budget_decision_event(decision)
+        try:
+            if self._writer.head(event.run_id) is None:
+                raise RunLedgerAuthorityError(
+                    "预算决定对应的业务 Run 尚未接纳",
+                    run_id=event.run_id,
+                    event_type=event.event_type,
+                    code="run_not_admitted",
+                )
+            self._writer.append(event)
+        except RunLedgerAuthorityError:
+            raise
+        except Exception as exc:
+            raise RunLedgerAuthorityError(
+                "预算决定权威入账失败",
+                run_id=event.run_id,
+                event_type=event.event_type,
+            ) from exc
+
+
 def _allows_implicit_admission(event: RuntimeEvent) -> bool:
     """只有服务端生成且一次一 ID 的领域 Attempt 可以自动接纳。"""
 
@@ -137,6 +165,7 @@ def default_runtime_run_event_sink() -> SqlAlchemyRuntimeRunEventSink:
 
 __all__ = [
     "LedgeredPermissionPort",
+    "SqlAlchemyRuntimeBudgetDecisionSink",
     "SqlAlchemyRuntimeEventLedgerSink",
     "SqlAlchemyRuntimeRunEventSink",
     "default_runtime_run_event_sink",

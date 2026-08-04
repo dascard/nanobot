@@ -116,6 +116,9 @@ _AGENT_SKILLS_GOVERNANCE_V2_VERSION = (
     "20260804_agent_skills_governance_v2"
 )
 _MCP_CONTROL_PLANE_V1_VERSION = "20260804_mcp_control_plane_v1"
+_RUNTIME_PERMISSION_GOVERNANCE_V1_VERSION = (
+    "20260804_runtime_permission_governance_v1"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3938,6 +3941,18 @@ def _mcp_control_plane_v1(
     ))
 
 
+def _runtime_permission_governance_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建 owner/session 精确绑定且可撤销的统一权限 grant。"""
+
+    from core.db.models.permission import PermissionSessionGrantRow
+
+    PermissionSessionGrantRow.__table__.create(bind=conn, checkfirst=True)
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -5205,6 +5220,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _MCP_CONTROL_PLANE_V1_VERSION,
         "mcp atomic configuration encrypted secrets transports and diagnostics",
         _mcp_control_plane_v1,
+    ),
+    (
+        _RUNTIME_PERMISSION_GOVERNANCE_V1_VERSION,
+        "runtime permission session grants and revocation",
+        _runtime_permission_governance_v1,
     ),
 ]
 
