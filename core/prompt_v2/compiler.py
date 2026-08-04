@@ -6,6 +6,11 @@ from types import MappingProxyType
 from typing import Any
 
 from core.context_builder import build_conversation_context_header
+from core.context_engine import (
+    ContextProvenance,
+    build_prompt_context_manifest,
+    hashed_context_ref,
+)
 from core.prompt_v2.audit import PromptAuditError, audit_prompt_plan
 from core.prompt_v2.contribution_registry import (
     PROMPT_CONTRIBUTION_REGISTRY,
@@ -67,6 +72,133 @@ def _extract_marked_sections(text: str, start: str, end: str) -> tuple[list[str]
         sections.append(rest[start_idx:section_end].strip())
         rest = (rest[:start_idx] + rest[section_end:]).strip()
     return sections, rest
+
+
+def _extract_tagged_sections(text: str, tag: str) -> tuple[list[str], str]:
+    """提取允许带属性的受控 XML 风格 section。"""
+
+    sections: list[str] = []
+    rest = str(text or "")
+    opening = f"<{tag}"
+    closing = f"</{tag}>"
+    search_from = 0
+    while True:
+        start_idx = rest.find(opening, search_from)
+        if start_idx < 0:
+            break
+        boundary_index = start_idx + len(opening)
+        if boundary_index >= len(rest) or rest[boundary_index] not in {" ", ">"}:
+            search_from = boundary_index
+            continue
+        end_idx = rest.find(closing, boundary_index)
+        if end_idx < 0:
+            break
+        section_end = end_idx + len(closing)
+        sections.append(rest[start_idx:section_end].strip())
+        rest = (rest[:start_idx] + rest[section_end:]).strip()
+        search_from = 0
+    return sections, rest
+
+
+def _context_provenance(
+    request: PromptCompileRequest,
+    context_debug: dict[str, Any],
+) -> dict[str, ContextProvenance]:
+    """从数据库行号和哈希引用生成不含正文的来源提示。"""
+
+    def numeric_refs(prefix: str, *values: Any) -> tuple[str, ...]:
+        refs: list[str] = []
+        for raw in values:
+            items = raw if isinstance(raw, (list, tuple)) else [raw]
+            for item in items:
+                try:
+                    number = int(item or 0)
+                except (TypeError, ValueError):
+                    continue
+                if number > 0:
+                    refs.append(f"{prefix}:{number}")
+        return tuple(dict.fromkeys(refs))
+
+    guidance_ref = hashed_context_ref(
+        "chat_stream",
+        request.session_guidance_chat_stream_id,
+    )
+    runtime_ref = hashed_context_ref("session", request.session_id)
+    user_ref = hashed_context_ref("user", request.user_id)
+    group_ref = hashed_context_ref("group", request.group_id)
+    message_ref = hashed_context_ref(
+        "message",
+        request.current_message_id or request.session_id,
+    )
+    summary_refs = numeric_refs(
+        "summary",
+        context_debug.get("rolling_summary_id"),
+    ) + numeric_refs(
+        "conversation_block",
+        context_debug.get("block_memory_prev_block_id"),
+    )
+    recent_refs = numeric_refs(
+        "conversation_turn",
+        context_debug.get("rolling_summary_recent_raw_turn_ids"),
+    ) + numeric_refs(
+        "chat_log",
+        context_debug.get("group_recent_source_ids"),
+        context_debug.get("rolling_summary_recent_raw_source_ids"),
+    )
+    memory_refs = numeric_refs(
+        "group_memory",
+        context_debug.get("group_memory_ids"),
+        context_debug.get("profile_memory_ids"),
+    )
+    persona_refs = numeric_refs(
+        "persona_fact",
+        context_debug.get("persona_fact_ids"),
+    )
+    project_refs = tuple(
+        ref
+        for ref in (
+            hashed_context_ref(
+                "project",
+                context_debug.get("project_id")
+                or context_debug.get("project_context_id"),
+            ),
+        )
+        if ref
+    )
+    return {
+        "session_guidance": ContextProvenance(
+            "session_guidance",
+            tuple(ref for ref in (guidance_ref,) if ref),
+        ),
+        "runtime_context": ContextProvenance(
+            "request_runtime",
+            tuple(ref for ref in (runtime_ref,) if ref),
+        ),
+        "persona_reference": ContextProvenance(
+            "persona_fact",
+            persona_refs or tuple(ref for ref in (user_ref,) if ref),
+        ),
+        "group_context": ContextProvenance(
+            "group_memory",
+            memory_refs or tuple(ref for ref in (group_ref,) if ref),
+        ),
+        "project_context": ContextProvenance(
+            "project_context",
+            project_refs,
+        ),
+        "summary_context": ContextProvenance(
+            "rolling_summary",
+            summary_refs,
+        ),
+        "history_messages": ContextProvenance(
+            "chat_log" if request.normalized_chat_type == "group" else "conversation_turn",
+            recent_refs,
+        ),
+        "current_user_event": ContextProvenance(
+            "inbound_message",
+            tuple(ref for ref in (message_ref,) if ref),
+        ),
+    }
 
 
 class _TemplateContributionRenderer:
@@ -209,6 +341,20 @@ async def _compile_prompt_plan_locked(
     session_guidance = build_session_guidance(normalized_session_guidance)
     persona_reference = build_persona_reference(request.user_id, request.persona_text)
     history_header = str(request.history_header or "").strip()
+    summary_context = str(request.summary_context or "").strip()
+    memory_recall_context = str(request.memory_recall_context or "").strip()
+    project_context = str(request.project_context or "").strip()
+    legacy_summary_sections: list[str] = []
+    for tag in ("previous_block_summary", "rolling_session_summary"):
+        extracted, history_header = _extract_tagged_sections(
+            history_header,
+            tag,
+        )
+        legacy_summary_sections.extend(extracted)
+    summary_context = combine_group_context_sections(
+        "\n\n".join(legacy_summary_sections),
+        summary_context,
+    )
     group_profile_sections: list[str] = []
     if chat_type == "group":
         legacy_sections, history_header = _extract_marked_sections(
@@ -227,6 +373,7 @@ async def _compile_prompt_plan_locked(
     if chat_type == "group":
         group_context = combine_group_context_sections(
             "\n\n".join(group_profile_sections),
+            memory_recall_context,
             request.group_profile_context,
         )
     current_user = build_current_user_event(request)
@@ -267,6 +414,8 @@ async def _compile_prompt_plan_locked(
         ),
         "history_messages": history_messages,
         "group_context": group_context,
+        "project_context": project_context,
+        "summary_context": summary_context,
         "current_user_event": current_user,
     }
 
@@ -279,6 +428,8 @@ async def _compile_prompt_plan_locked(
     singleton_runtime_keys = {
         "session_guidance",
         "persona_reference",
+        "project_context",
+        "summary_context",
         "current_user_event",
     }
     current_user_flow_section: PromptFlowSection | None = None
@@ -576,6 +727,19 @@ async def _compile_prompt_plan_locked(
         messages=messages,
         tools=list(request.tool_schemas or []),
     )
+    context_debug = dict(
+        (request.debug or {}).get("context_debug") or {}
+    )
+    context_manifest = build_prompt_context_manifest(
+        messages=messages,
+        tool_schemas=list(request.tool_schemas or []),
+        flow_sections=flow_sections,
+        section_hashes=section_hashes,
+        request_prompt_sha256=metrics.prompt_sha256,
+        chat_type=chat_type,
+        provenance=_context_provenance(request, context_debug),
+    )
+    context_manifest_dict = context_manifest.to_dict()
     session_guidance_configured = bool(normalized_session_guidance)
     session_guidance_status = "emitted" if session_guidance_configured else "empty"
     debug = {
@@ -606,6 +770,9 @@ async def _compile_prompt_plan_locked(
             ],
         },
         "request_prompt_sha256": metrics.prompt_sha256,
+        "context_manifest_sha256": context_manifest.sha256,
+        "context_manifest_entry_count": len(context_manifest.entries),
+        "context_manifest_token_estimate": context_manifest.total_tokens,
         "session_guidance_chat_stream_id": str(
             request.session_guidance_chat_stream_id or ""
         ).strip(),
@@ -632,6 +799,7 @@ async def _compile_prompt_plan_locked(
         token_estimate=metrics.token_estimate,
         warnings=warnings,
         debug=jsonable(debug),
+        context_manifest=context_manifest_dict,
         platform=platform,
         policy_profile=policy_profile,
         flow_sections=flow_sections,
@@ -654,6 +822,7 @@ async def _compile_prompt_plan_locked(
         token_estimate=plan.token_estimate,
         warnings=list(plan.warnings) + audit.issues,
         debug=plan.debug,
+        context_manifest=plan.context_manifest,
         platform=plan.platform,
         policy_profile=plan.policy_profile,
         flow_sections=plan.flow_sections,

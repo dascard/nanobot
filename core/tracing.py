@@ -914,6 +914,7 @@ class RunTracer:
         prompt_default_path: str = "",
         prompt_sha256: str = "",
         prompt_template_resolutions: dict[str, Any] | None = None,
+        context_manifest: dict[str, Any] | None = None,
     ) -> None:
         if not run_id:
             return
@@ -931,6 +932,21 @@ class RunTracer:
                 if isinstance(resolution_manifest, dict)
                 else 0
             )
+            context_manifest_sha256 = ""
+            context_manifest_entry_count = 0
+            context_manifest_token_estimate = 0
+            context_manifest_policy_id = ""
+            if context_manifest:
+                from core.context_engine import context_manifest_fingerprint
+
+                (
+                    context_manifest_sha256,
+                    context_manifest_entry_count,
+                    context_manifest_token_estimate,
+                ) = context_manifest_fingerprint(context_manifest)
+                context_manifest_policy_id = str(
+                    context_manifest.get("policy_id") or ""
+                )
 
             db = _session()
             try:
@@ -973,6 +989,18 @@ class RunTracer:
                                 resolution_manifest_json
                             ),
                             resolution_count=resolution_count,
+                            context_manifest_sha256=(
+                                context_manifest_sha256
+                            ),
+                            context_manifest_entry_count=(
+                                context_manifest_entry_count
+                            ),
+                            context_manifest_token_estimate=(
+                                context_manifest_token_estimate
+                            ),
+                            context_manifest_policy_id=(
+                                context_manifest_policy_id
+                            ),
                         )
                     )
                     row.prompt_source = str(prompt_source or "")[:96]
@@ -1205,9 +1233,28 @@ class PromptTracer:
         prompt_default_path: str = "",
         prompt_sha256: str = "",
         prompt_template_resolutions: dict[str, Any] | None = None,
+        context_manifest: dict[str, Any] | None = None,
     ) -> None:
         try:
             from core.database import PromptRenderLog
+
+            trace_variables = variables
+            if context_manifest:
+                from core.context_engine import context_manifest_fingerprint
+
+                manifest_sha256, entry_count, total_tokens = (
+                    context_manifest_fingerprint(context_manifest)
+                )
+                if isinstance(variables, Mapping):
+                    trace_variables = dict(variables)
+                    trace_variables["context_manifest"] = {
+                        "sha256": manifest_sha256,
+                        "entry_count": entry_count,
+                        "total_tokens": total_tokens,
+                        "policy_id": str(
+                            context_manifest.get("policy_id") or ""
+                        ),
+                    }
 
             db = _session()
             try:
@@ -1226,7 +1273,10 @@ class PromptTracer:
                                 prompt_template_resolutions
                             )
                         ),
-                        variables_json=_json_dumps(variables or {}, max_chars=6000),
+                        variables_json=_json_dumps(
+                            trace_variables or {},
+                            max_chars=6000,
+                        ),
                         rendered_preview=_prompt_preview(rendered_content, max_chars=1000),
                         token_estimate=int(token_estimate or 0),
                         warnings_json=_json_dumps(warnings or [], max_chars=2000),

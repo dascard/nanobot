@@ -1003,7 +1003,7 @@ class GroupIngressService:
                 message_id=req.message_id or "",
             )
             source_message_ids = [req.message_id] if req.message_id else []
-        memory_header, history_messages, ctx_debug = h.build_chat_context(
+        structured_context = h.build_structured_chat_context(
             db,
             group_user_id,
             user_id=group_user_id,
@@ -1012,6 +1012,8 @@ class GroupIngressService:
             exclude_message_ids=source_message_ids,
             current_user_input=chat_query,
         )
+        history_messages = list(structured_context.recent_messages)
+        ctx_debug = dict(structured_context.debug)
         sender_id = str(
             getattr(req, "sender_id", "") or getattr(req, "user_id", "") or ""
         )
@@ -1033,8 +1035,13 @@ class GroupIngressService:
             "sender_id": sender_id,
             "is_group": True,
             "is_superuser": is_super_user,
-            "history_header": memory_header,
+            "history_header": structured_context.conversation_context_header,
             "history_messages": history_messages,
+            "summary_context": structured_context.summary_context,
+            "memory_recall_context": (
+                structured_context.memory_recall_context
+            ),
+            "project_context": structured_context.project_context,
             "group_id": req.group_id,
             "session_name": req.session_name or "",
             "trigger_reason": reason,

@@ -226,6 +226,8 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             "persona_reference",
             "runtime_context",
             "group_context",
+            "project_context",
+            "summary_context",
             "conversation_context_header",
             "history_messages",
             "current_user_event",

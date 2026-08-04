@@ -339,6 +339,10 @@ def test_prompt_resolution_projection_and_legacy_readiness_are_body_free(
             '{"base":{"runtime_path":"/private/prompt.md"}}'
         ),
         resolution_count=1,
+        context_manifest_sha256="c" * 64,
+        context_manifest_entry_count=7,
+        context_manifest_token_estimate=321,
+        context_manifest_policy_id="prompt-context-v1-private",
         occurred_at=datetime(2026, 8, 4, 12, 1, tzinfo=timezone.utc),
     )
     ledger.append(prompt_event)
@@ -362,6 +366,10 @@ def test_prompt_resolution_projection_and_legacy_readiness_are_body_free(
     assert projection.to_dict()["context_manifest"]["prompt_sha256"] == (
         "b" * 64
     )
+    assert projection.context_manifest_sha256 == "c" * 64
+    assert projection.context_manifest_entry_count == 7
+    assert projection.context_manifest_token_estimate == 321
+    assert projection.context_manifest_policy_id == "prompt-context-v1-private"
 
     records = ledger.read("run-1")
     ready = assess_run_ledger_readiness(

@@ -229,6 +229,26 @@ _CANONICAL_DESCRIPTORS = MappingProxyType({
         editable=False,
         failure_policy="skip_optional",
     ),
+    "project_context": _descriptor(
+        "project_context",
+        owner_module="core.prompt_v2.compiler",
+        domain="project_context",
+        phase="context",
+        authority="data",
+        trust="untrusted_data",
+        editable=False,
+        failure_policy="skip_optional",
+    ),
+    "summary_context": _descriptor(
+        "summary_context",
+        owner_module="app.session_memory",
+        domain="conversation_summary",
+        phase="context",
+        authority="data",
+        trust="untrusted_data",
+        editable=False,
+        failure_policy="skip_optional",
+    ),
     "current_user_event": _descriptor(
         "current_user_event",
         owner_module="core.prompt_v2.compiler",
@@ -257,6 +277,8 @@ _CANONICAL_BY_RUNTIME_KEY = MappingProxyType({
         "conversation_context_header",
         "history_messages",
         "group_context",
+        "project_context",
+        "summary_context",
         "current_user_event",
     )
 })

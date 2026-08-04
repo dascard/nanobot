@@ -61,6 +61,7 @@ class PromptPlan:
     token_estimate: int
     warnings: list[str]
     debug: dict[str, Any]
+    context_manifest: dict[str, Any] = field(default_factory=dict)
     platform: str = "qq"
     policy_profile: str = "qq"
     flow_sections: list[PromptFlowSection] = field(default_factory=list)
@@ -73,6 +74,11 @@ class PromptPlan:
             self,
             "tool_schemas",
             copy.deepcopy(list(self.tool_schemas or [])),
+        )
+        object.__setattr__(
+            self,
+            "context_manifest",
+            copy.deepcopy(dict(self.context_manifest or {})),
         )
 
     @property
@@ -140,6 +146,9 @@ class PromptCompileRequest:
     session_guidance_chat_stream_id: str = ""
     history_header: str = ""
     history_messages: list[dict[str, Any]] = field(default_factory=list)
+    summary_context: str = ""
+    memory_recall_context: str = ""
+    project_context: str = ""
     group_profile_context: str = ""
     runtime_tool_prompt: str = ""
     effort_constraint: str = ""

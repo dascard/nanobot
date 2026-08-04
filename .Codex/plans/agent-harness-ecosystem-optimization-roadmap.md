@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 4.5，Artifact 生命周期已完成，准备阶段 5.1）
+> 状态：执行中（阶段 5.1，Context 分层已完成，准备阶段 5.2）
 >
 > 建立日期：2026-08-03
 >
@@ -726,11 +726,38 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 5.1 Context 分层
 
-- [ ] 固定 system、安全、工具合同和稳定策略段。
-- [ ] 分离 session、user、group、project 动态上下文。
-- [ ] 分离近期对话、记忆召回、工具结果和摘要。
-- [ ] 为各层设置独立 token 预算和溯源。
-- [ ] 保持 `ChatLog`、`ConversationTurn` 和模型上下文三者分离。
+- [x] 固定 system、安全、工具合同和稳定策略段。
+- [x] 分离 session、user、group、project 动态上下文。
+- [x] 分离近期对话、记忆召回、工具结果和摘要。
+- [x] 为各层设置独立 token 预算和溯源。
+- [x] 保持 `ChatLog`、`ConversationTurn` 和模型上下文三者分离。
+
+实现与验证证据：
+
+- 新增框架无关 `core/context_engine.py`，定义稳定 system、安全策略、稳定策略、工具合同、
+  动态上下文、记忆召回、摘要、近期对话、工具结果和当前请求十个 Context Layer，以及
+  global／session／user／group／project／turn 六种作用域。每层使用服务端固定预算和
+  `reject` 门禁；私聊与群聊近期上下文分别按 8k／24k token 限制，请求不能提高上限。
+- canonical Prompt Runtime 现在从最终 messages、冻结 tool schemas 和 flow section 生成带
+  schema version、逐项内容摘要、消息位置、作用域、稳定性、信任级别、来源引用、逐层预算和
+  总摘要的 Context Manifest。Manifest 不保存正文，外部 user／group／session／message 标识只以
+  SHA-256 引用出现；审计会验证签名、枚举、摘要、计量和 Prompt SHA，一旦超限或篡改即在模型调用前
+  fail closed。
+- `StructuredChatContext` 将 conversation contract、rolling／block summary、memory recall、
+  project context 和 recent messages 分开返回。私聊继续只从 `ConversationTurn` 构建工作窗口，
+  群聊继续只从 `ChatLog` 及其后台摘要构建上下文；兼容三元组仅保留给旧调用方。生产 `/chat`、
+  群消息、群定时入口和管理端 effective preview 均已切换到结构化入口，不再把摘要和群体记忆
+  拼进 `history_header`。
+- Prompt Contribution／Flow 新增独立 `project_context` 与 `summary_context` 节点，并同步
+  `prompts.v2.default/chat/*` 和 `data/prompts_v2/chat/*`。旧 header 中的受控摘要标签只在编译边界
+  做迁移提取，以保持历史调用方兼容；模型可见顺序仍由 canonical Flow 唯一决定。
+- Prompt Trace 只保存 Context Manifest 的 hash、entry 数、token 数和 policy ID；Run Ledger 的
+  `run.prompt_resolved` 事件及管理投影保存同样的无正文证明。Prompt 有效预览返回完整无正文
+  Manifest，支持逐层定位预算和来源，不把原始 Prompt、摘要、记忆或宿主路径写入 Ledger。
+- Context／Prompt／账本定向回归 585 passed，聊天与群入口回归 286 passed，群服务与 API 回归
+  141 passed；最终完整 `python -m pytest tests/ -v` 为 6548 passed、12 skipped、0 failed。
+  架构边界、OpenAPI、行为 Golden、Release／Verification、决策规则、Task SLO、Ruff、Python
+  编译和 `git diff --check` 均通过。
 
 #### 5.2 前缀缓存稳定
 

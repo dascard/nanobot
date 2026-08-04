@@ -97,6 +97,9 @@ class PromptRuntimeInput:
     platform: str = "qq"
     policy_profile: str = ""
     event_time: str = ""
+    summary_context: str = ""
+    memory_recall_context: str = ""
+    project_context: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,10 +113,24 @@ class PromptRuntimeResult:
     pre_event_messages: list[dict[str, Any]]
     event_content: Any
     prompt_template_resolutions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    context_manifest: dict[str, Any] = field(default_factory=dict)
     meta_update: dict[str, Any] = field(default_factory=dict)
     message_token_estimate: int = 0
     tool_schema_token_estimate: int = 0
     token_estimate: int = 0
+
+    @property
+    def trace_fields(self) -> dict[str, Any]:
+        fields: dict[str, Any] = {
+            "prompt_source": self.prompt_source,
+            "prompt_runtime_path": self.prompt_runtime_path,
+            "prompt_default_path": self.prompt_default_path,
+            "prompt_sha256": self.prompt_sha256,
+            "prompt_template_resolutions": self.prompt_template_resolutions,
+        }
+        if self.context_manifest:
+            fields["context_manifest"] = self.context_manifest
+        return fields
 
 
 class PromptRuntimeAuditFailure(RuntimeError):
@@ -128,6 +145,7 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         raise ValueError(f"unsupported prompt engine for live runtime: {input.prompt_engine}")
 
     from core.prompt_v2.audit import PromptAuditError
+    from core.context_engine import ContextManifestError
     from core.prompt_v2.compiler import compile_prompt_plan
     from core.prompt_v2.flow import PromptFlowError
     from core.prompt_v2.schema import PromptCompileRequest
@@ -168,6 +186,9 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         session_guidance_chat_stream_id=input.session_guidance_chat_stream_id,
         history_header=input.history_header,
         history_messages=input.history_messages,
+        summary_context=input.summary_context,
+        memory_recall_context=input.memory_recall_context,
+        project_context=input.project_context,
         group_profile_context=input.group_profile_context,
         runtime_tool_prompt=input.runtime_tool_prompt,
         effort_constraint=input.effort_constraint,
@@ -178,6 +199,7 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         prompt_plan = await compile_prompt_plan(prompt_request, strict_audit=True)
     except (
         PromptAuditError,
+        ContextManifestError,
         PromptFlowError,
         TemplateBaselineError,
         json.JSONDecodeError,
@@ -219,6 +241,7 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
     trace_variables = dict(prompt_plan.debug)
     trace_variables.pop("template_resolutions", None)
     trace_variables.pop("template_paths", None)
+    trace_variables.pop("context_manifest", None)
     PromptTracer.record_render(
         trace_id=input.trace_id,
         run_id=input.run_id,
@@ -234,11 +257,21 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         **template_trace_fields,
         prompt_sha256=prompt_plan.prompt_sha256,
         prompt_template_resolutions=template_resolutions,
+        context_manifest=prompt_plan.context_manifest,
     )
     context_debug = dict(prompt_plan.debug.get("context_debug", {}) or {})
     meta_update = {
         "prompt_engine": "prompt",
         "group_memory": context_debug,
+        "context_manifest_sha256": str(
+            prompt_plan.context_manifest.get("sha256") or ""
+        ),
+        "context_manifest_entry_count": len(
+            list(prompt_plan.context_manifest.get("entries") or [])
+        ),
+        "context_manifest_token_estimate": int(
+            prompt_plan.context_manifest.get("total_tokens") or 0
+        ),
     }
     if context_debug.get("group_memory_injected") and context_debug.get("group_memory_ids"):
         try:

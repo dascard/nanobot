@@ -12,13 +12,13 @@
     },
     {
       "path": "data/prompts_v2/chat/flow.json",
-      "sha256": "63d190065b51d425c2ed4253ea61655d65b53d29a17949cebe27f74f132b7e42",
-      "size_bytes": 3336
+      "sha256": "70b54970aa1cbf30162e0b18ce08f9ea4a0cba491e1f4c1740491b6dff00f71c",
+      "size_bytes": 3693
     },
     {
       "path": "data/prompts_v2/chat/main.md",
-      "sha256": "e1a17a8523dfa5ec63c1f9c53f4fcb3979c99818e133380ad3703e1968fa6fa6",
-      "size_bytes": 4800
+      "sha256": "ba66ae50009014f93aa3aee684f62770c1183c03ec0afab40b2d98f38c396c55",
+      "size_bytes": 5082
     },
     {
       "path": "data/prompts_v2/chat/platform/qq/common.md",
@@ -132,8 +132,8 @@
     },
     {
       "path": "prompts.v2.default/chat/flow.json",
-      "sha256": "63d190065b51d425c2ed4253ea61655d65b53d29a17949cebe27f74f132b7e42",
-      "size_bytes": 3336
+      "sha256": "70b54970aa1cbf30162e0b18ce08f9ea4a0cba491e1f4c1740491b6dff00f71c",
+      "size_bytes": 3693
     },
     {
       "path": "prompts.v2.default/chat/identity_context.md",
@@ -142,8 +142,8 @@
     },
     {
       "path": "prompts.v2.default/chat/main.md",
-      "sha256": "e1a17a8523dfa5ec63c1f9c53f4fcb3979c99818e133380ad3703e1968fa6fa6",
-      "size_bytes": 4800
+      "sha256": "ba66ae50009014f93aa3aee684f62770c1183c03ec0afab40b2d98f38c396c55",
+      "size_bytes": 5082
     },
     {
       "path": "prompts.v2.default/chat/platform/qq/common.md",
@@ -594,6 +594,20 @@
       "trust": "trusted_instruction"
     },
     {
+      "authority": "data",
+      "dependencies": [],
+      "domain": "project_context",
+      "editable": false,
+      "failure_policy": "skip_optional",
+      "owner_module": "core.prompt_v2.compiler",
+      "phase": "context",
+      "section_id": "project_context",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "untrusted_data"
+    },
+    {
       "authority": "operator_policy",
       "dependencies": [],
       "domain": "platform_policy",
@@ -650,6 +664,20 @@
         "request"
       ],
       "trust": "trusted_instruction"
+    },
+    {
+      "authority": "data",
+      "dependencies": [],
+      "domain": "conversation_summary",
+      "editable": false,
+      "failure_policy": "skip_optional",
+      "owner_module": "app.session_memory",
+      "phase": "context",
+      "section_id": "summary_context",
+      "source_precedence": [
+        "request"
+      ],
+      "trust": "untrusted_data"
     }
   ]
 }

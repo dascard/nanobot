@@ -482,6 +482,10 @@ def run_prompt_resolved_event(
     prompt_sha256: str,
     resolution_manifest_json: str,
     resolution_count: int,
+    context_manifest_sha256: str = "",
+    context_manifest_entry_count: int = 0,
+    context_manifest_token_estimate: int = 0,
+    context_manifest_policy_id: str = "",
     occurred_at: datetime | None = None,
 ) -> RunLedgerEventDraft:
     """记录 Prompt 版本证明，不保存模板、路径或解析清单正文。"""
@@ -505,6 +509,7 @@ def run_prompt_resolved_event(
             str(prompt_sha256 or ""),
             source_sha256,
             manifest_sha256,
+            str(context_manifest_sha256 or ""),
         )).encode("utf-8")
     ).hexdigest()
     return RunLedgerEventDraft(
@@ -535,6 +540,18 @@ def run_prompt_resolved_event(
             "prompt_resolution_bytes": manifest_bytes,
             "prompt_resolution_chars": manifest_chars,
             "prompt_resolution_sha256": manifest_sha256,
+            "context_manifest_sha256": str(context_manifest_sha256 or ""),
+            "context_manifest_entry_count": max(
+                0,
+                int(context_manifest_entry_count or 0),
+            ),
+            "context_manifest_tokens": max(
+                0,
+                int(context_manifest_token_estimate or 0),
+            ),
+            "context_manifest_policy_id": str(
+                context_manifest_policy_id or ""
+            ),
         },
     )
 

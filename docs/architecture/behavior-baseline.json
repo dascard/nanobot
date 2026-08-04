@@ -97,6 +97,14 @@
       "stage": "主动外呼事实性治理"
     },
     {
+      "after_sha256": "f957810b056508f6e5b2cd8e01821d9cc5207f5c3193252c02106d088bcc5acd",
+      "before_sha256": "e7b1f9c8a4fc776f2e24991cbd8b50a8929114107db9babece41318690bca677",
+      "id": "agent_harness_context_layers",
+      "reason": "将累计摘要、项目上下文与最近对话拆为独立 Prompt Contribution，并为模型请求生成分层 Context Manifest。",
+      "snapshot_id": "prompt_runtime",
+      "stage": "Agent Harness 阶段 5.1"
+    },
+    {
       "after_sha256": "59ca2e9a073385589f81b7374a91030605c583122f2c3af2b74b27b1b1e40d9c",
       "before_sha256": "89ab0c4a6e53be676d39cc717f74948d79a1008ad37802b53827656b49c96661",
       "id": "stage6_news_registry",
@@ -153,7 +161,7 @@
       "stage": "Agent Harness 阶段 4.3"
     }
   ],
-  "baseline_git_commit": "016f30d7f9858a09c5e35b2e02a6eb485a2c8ae4",
+  "baseline_git_commit": "3d05a6d3f683db25189731d7e6a02ede485fb1d2",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -207,7 +215,7 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "e7b1f9c8a4fc776f2e24991cbd8b50a8929114107db9babece41318690bca677"
+      "sha256": "f957810b056508f6e5b2cd8e01821d9cc5207f5c3193252c02106d088bcc5acd"
     },
     {
       "classification": "preserve",

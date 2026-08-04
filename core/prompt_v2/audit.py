@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+from core.context_engine import ContextManifestError, validate_context_manifest
 from core.prompt_v2.flow_contract import (
     RUNTIME_NODE_KEYS,
     forbidden_conditional_contracts,
@@ -737,6 +738,24 @@ def _parse_context_data_envelope(
     return payload
 
 
+def _audit_context_manifest(plan, issues: list[str]) -> None:
+    if not hasattr(plan, "context_manifest"):
+        return
+    manifest = getattr(plan, "context_manifest", None)
+    if not isinstance(manifest, dict):
+        issues.append("context manifest must be an object")
+        return
+    try:
+        validate_context_manifest(manifest)
+    except ContextManifestError as exc:
+        issues.append(f"context manifest is invalid: {exc}")
+        return
+    if str(manifest.get("request_prompt_sha256") or "") != str(
+        getattr(plan, "prompt_sha256", "") or ""
+    ):
+        issues.append("context manifest prompt sha256 does not match plan")
+
+
 def audit_prompt_plan(plan, *, audit_messages: bool = True) -> PromptAuditResult:
     issues: list[str] = []
     sections: list[dict] = []
@@ -754,6 +773,7 @@ def audit_prompt_plan(plan, *, audit_messages: bool = True) -> PromptAuditResult
         audit_messages=audit_messages,
         issues=issues,
     )
+    _audit_context_manifest(plan, issues)
 
     if audit_messages:
         _audit_all_message_indexes(plan, sections, issues)

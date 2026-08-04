@@ -34,6 +34,9 @@ class ChatRuntimeRouteInput:
     private_decision: Any | None
     guardrail_status: str | None
     classifier_ran: bool
+    summary_context: str = ""
+    memory_recall_context: str = ""
+    project_context: str = ""
 
 
 @dataclass(frozen=True)
@@ -148,17 +151,20 @@ def build_chat_runtime_route_context(
             private_decision=runtime_input.private_decision,
             guardrail_status=runtime_input.guardrail_status,
             classifier_ran=runtime_input.classifier_ran,
-                event_time=str(
-                    (
-                        getattr(runtime_input.req, "client_meta", None)
-                        if isinstance(
-                            getattr(runtime_input.req, "client_meta", None),
-                            dict,
-                        )
-                        else {}
-                    ).get("event_time")
-                    or ""
+            event_time=str(
+                (
+                    getattr(runtime_input.req, "client_meta", None)
+                    if isinstance(
+                        getattr(runtime_input.req, "client_meta", None),
+                        dict,
+                    )
+                    else {}
+                ).get("event_time")
+                or ""
             ),
+            summary_context=runtime_input.summary_context,
+            memory_recall_context=runtime_input.memory_recall_context,
+            project_context=runtime_input.project_context,
         ),
         build_multimodal_user_input_text=services.build_multimodal_user_input_text,
         max_query_chars=services.max_query_chars,

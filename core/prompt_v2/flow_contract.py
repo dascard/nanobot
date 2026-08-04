@@ -38,6 +38,8 @@ RUNTIME_NODE_KEYS = frozenset(
         "conversation_context_header",
         "history_messages",
         "group_context",
+        "project_context",
+        "summary_context",
         "current_user_event",
     }
 )
@@ -108,6 +110,20 @@ RESERVED_SECTION_CONTRACTS: tuple[ReservedSectionContract, ...] = (
         node_id="session_guidance",
         node_type="runtime",
         runtime_key="session_guidance",
+        allow_empty=True,
+    ),
+    ReservedSectionContract(
+        node_id="project_context",
+        node_type="runtime",
+        runtime_key="project_context",
+        expected_role="user",
+        allow_empty=True,
+    ),
+    ReservedSectionContract(
+        node_id="summary_context",
+        node_type="runtime",
+        runtime_key="summary_context",
+        expected_role="user",
         allow_empty=True,
     ),
     ReservedSectionContract(

@@ -192,7 +192,14 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     assert outreach_prompt_change["before_sha256"] == (
         group_analysis_prompt_change["after_sha256"]
     )
-    assert outreach_prompt_change["after_sha256"] == _sha256(
+    context_layer_prompt_change = approved[
+        "agent_harness_context_layers"
+    ]
+    assert context_layer_prompt_change["snapshot_id"] == "prompt_runtime"
+    assert context_layer_prompt_change["before_sha256"] == (
+        outreach_prompt_change["after_sha256"]
+    )
+    assert context_layer_prompt_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "prompt_runtime.json"
     )
     news_registry_change = approved["stage6_news_registry"]

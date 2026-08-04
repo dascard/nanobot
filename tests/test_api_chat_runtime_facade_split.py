@@ -62,6 +62,9 @@ def _runtime_input(**updates):
         "guardrail_status": "safe",
         "classifier_ran": True,
         "event_time": "2026-07-31 03:00:00 CST",
+        "summary_context": "会话摘要",
+        "memory_recall_context": "记忆召回",
+        "project_context": "项目事实",
     }
     data.update(updates)
     return ChatRuntimeInput(**data)
@@ -108,6 +111,9 @@ def test_build_chat_runtime_payload_preserves_private_metadata_contract():
         "raw_query": "用户原始问题 files=1",
         "history_header": "历史摘要",
         "history_messages": [{"role": "user", "content": "上一轮"}],
+        "summary_context": "会话摘要",
+        "memory_recall_context": "记忆召回",
+        "project_context": "项目事实",
         "is_group": False,
         "is_superuser": False,
         "stream": False,
@@ -132,6 +138,9 @@ def test_build_chat_runtime_payload_preserves_private_metadata_contract():
     assert payload.prompt_budget["safe_user_input_chars"] == len("用户原始问题 files=1")
     assert payload.prompt_budget["enriched_query_chars"] == len(payload.enriched_query)
     assert payload.prompt_budget["history_messages"] == 1
+    assert payload.prompt_budget["summary_tokens"] == len("会话摘要")
+    assert payload.prompt_budget["memory_recall_tokens"] == len("记忆召回")
+    assert payload.prompt_budget["project_context_tokens"] == len("项目事实")
 
 
 def test_build_chat_runtime_payload_defaults_group_without_private_decision_to_full():

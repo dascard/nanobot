@@ -13,6 +13,8 @@ _ALWAYS_REQUIRED = {
     "runtime_context",
     "identity_context",
     "session_guidance",
+    "project_context",
+    "summary_context",
     "persona_reference",
     "current_user_event",
 }
@@ -94,7 +96,15 @@ async def test_core_flow_contract_matches_all_live_branches(
         matching = [section for section in sections if section["node_id"] == node_id]
         assert len(matching) == 1
         assert matching[0]["origin"] == "flow"
-        expected_status = "empty" if node_id == "session_guidance" else "emitted"
+        expected_status = (
+            "empty"
+            if node_id in {
+                "session_guidance",
+                "project_context",
+                "summary_context",
+            }
+            else "emitted"
+        )
         assert matching[0]["status"] == expected_status
     assert not ({section["node_id"] for section in sections} & forbidden)
     assert "[RuntimeTool]" not in "\n".join(

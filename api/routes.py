@@ -28,7 +28,8 @@ from core.database import (
 from core.context_builder import (
     sanitize_prompt_text as _sanitize_prompt_text,  # noqa: F401 - 旧 api.routes 导入路径兼容
     estimate_tokens as _estimate_tokens,
-    build_chat_context as _build_chat_context,
+    build_chat_context as _build_chat_context,  # noqa: F401 - 旧 api.routes 导入路径兼容
+    build_structured_chat_context as _build_structured_chat_context,
     build_session_memory as _build_session_memory,  # noqa: F401 - 旧 api.routes 导入路径兼容
 )
 from core.evolution import evolution_task
@@ -878,6 +879,9 @@ class _ChatDatabasePreparation:
     memory_header: str
     history_messages: list[dict[str, str]]
     context_debug: dict[str, Any]
+    summary_context: str = ""
+    memory_recall_context: str = ""
+    project_context: str = ""
 
 
 def _prepare_chat_database_phase(
@@ -971,7 +975,7 @@ def _prepare_chat_database_phase(
             context_debug={},
         )
 
-    memory_header, history_messages, context_debug = _build_chat_context(
+    structured_context = _build_structured_chat_context(
         db,
         req.session_id,
         user_id=req.user_id,
@@ -983,9 +987,12 @@ def _prepare_chat_database_phase(
     )
     return _ChatDatabasePreparation(
         blocked_completion=None,
-        memory_header=memory_header,
-        history_messages=history_messages,
-        context_debug=context_debug,
+        memory_header=structured_context.conversation_context_header,
+        history_messages=list(structured_context.recent_messages),
+        context_debug=dict(structured_context.debug),
+        summary_context=structured_context.summary_context,
+        memory_recall_context=structured_context.memory_recall_context,
+        project_context=structured_context.project_context,
     )
 
 
@@ -1190,6 +1197,11 @@ async def proxy_chat(
                 private_decision=_private_decision,
                 guardrail_status=guardrail_status,
                 classifier_ran=_classifier_ran,
+                summary_context=db_preparation.summary_context,
+                memory_recall_context=(
+                    db_preparation.memory_recall_context
+                ),
+                project_context=db_preparation.project_context,
             )
         runtime_route_context = await run_session_phase_async(
             lambda phase_db: _build_chat_runtime_route_context(

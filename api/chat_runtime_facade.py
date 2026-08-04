@@ -27,6 +27,9 @@ class ChatRuntimeInput:
     guardrail_status: str | None
     classifier_ran: bool
     event_time: str = ""
+    summary_context: str = ""
+    memory_recall_context: str = ""
+    project_context: str = ""
 
 
 @dataclass(frozen=True)
@@ -121,6 +124,9 @@ def build_chat_runtime_payload(
         "raw_query": safe_user_input,
         "history_header": runtime_input.memory_header,
         "history_messages": runtime_input.history_messages,
+        "summary_context": runtime_input.summary_context,
+        "memory_recall_context": runtime_input.memory_recall_context,
+        "project_context": runtime_input.project_context,
         "is_group": runtime_input.is_group,
         "is_superuser": runtime_input.is_superuser,
         "stream": runtime_input.stream,
@@ -140,6 +146,11 @@ def build_chat_runtime_payload(
             for message in runtime_input.history_messages
             if isinstance(message.get("content"), str)
         ),
+        "summary_tokens": estimate_tokens(runtime_input.summary_context),
+        "memory_recall_tokens": estimate_tokens(
+            runtime_input.memory_recall_context
+        ),
+        "project_context_tokens": estimate_tokens(runtime_input.project_context),
         "enriched_query_chars": len(enriched_query),
         "enriched_query_tokens": estimate_tokens(enriched_query),
     }

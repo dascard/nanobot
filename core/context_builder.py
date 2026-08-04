@@ -3,9 +3,11 @@
 从 api/routes.py 提取，独立于路由层。
 """
 
+import copy
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from app.session_memory import config
@@ -45,6 +47,36 @@ GROUP_PROFILE_CONTEXT_DEPRECATED_REASON = (
     "build_group_profile_context 仅保留旧测试兼容；真实运行时群体记忆注入必须使用 "
     "app.group_memory.injection_service.GroupMemoryInjectionService。"
 )
+
+
+@dataclass(frozen=True)
+class StructuredChatContext:
+    """真实回复链路的结构化上下文，不复制底层记忆事实。"""
+
+    conversation_context_header: str
+    summary_context: str
+    memory_recall_context: str
+    recent_messages: tuple[dict, ...]
+    debug: dict
+    project_context: str = ""
+
+    @property
+    def legacy_header(self) -> str:
+        """只供旧调用方读取的兼容拼接，不再作为生产编译输入。"""
+
+        return _join_context_headers(
+            self.memory_recall_context,
+            self.project_context,
+            self.summary_context,
+            self.conversation_context_header,
+        )
+
+    def legacy_tuple(self) -> tuple[str, list[dict], dict]:
+        return (
+            self.legacy_header,
+            copy.deepcopy(list(self.recent_messages)),
+            copy.deepcopy(self.debug),
+        )
 
 
 def _prefix_epoch_debug(
@@ -125,6 +157,12 @@ def sanitize_prompt_text(text: str, max_chars: int = 0) -> str:
         "</history_context>": "(/HISTORY_CONTEXT_TAG)",
         "<conversation_context>": "(CONVERSATION_CONTEXT_TAG)",
         "</conversation_context>": "(/CONVERSATION_CONTEXT_TAG)",
+        "<summary_context>": "(SUMMARY_CONTEXT_TAG)",
+        "</summary_context>": "(/SUMMARY_CONTEXT_TAG)",
+        "<project_context>": "(PROJECT_CONTEXT_TAG)",
+        "</project_context>": "(/PROJECT_CONTEXT_TAG)",
+        "<tool_result_context>": "(TOOL_RESULT_CONTEXT_TAG)",
+        "</tool_result_context>": "(/TOOL_RESULT_CONTEXT_TAG)",
         "<rolling_session_summary": "(ROLLING_SESSION_SUMMARY_TAG",
         "</rolling_session_summary>": "(/ROLLING_SESSION_SUMMARY_TAG)",
         "<previous_block_summary": "(PREVIOUS_BLOCK_SUMMARY_TAG",
@@ -261,13 +299,13 @@ def _commit_rollup_unit_of_work(db, rollup_result) -> bool:
     return True
 
 
-def build_session_memory(
+def _build_structured_session_memory(
     db, session_id: str, user_id: str = "",
     max_per_msg: int = 300, max_total: int = 4000,
     is_group: bool = False, group_id: str = "",
     current_user_input: str = "",
     read_only: bool = False,
-) -> tuple[str, list[dict], dict]:
+) -> StructuredChatContext:
     """从 ConversationTurn 构建 rolling summary + recent raw window。"""
     from app.session_memory.renderer import render_rolling_summary_context
     from app.session_memory.rolling_summary import (
@@ -521,15 +559,17 @@ def build_session_memory(
     skipped_no_context = len(debug["rolling_summary_eligible_skipped"])
     if not recent_window:
         debug["skipped_no_context"] = skipped_no_context
-        return (
-            _join_context_headers(
-                profile_header,
+        return StructuredChatContext(
+            conversation_context_header=build_conversation_context_header(
+                is_group=is_group
+            ),
+            summary_context=_join_context_headers(
                 prev_block_header,
                 summary_header,
-                build_conversation_context_header(is_group=is_group),
             ),
-            [],
-            debug,
+            memory_recall_context=profile_header,
+            recent_messages=(),
+            debug=debug,
         )
 
     gap_breaks = 0
@@ -571,15 +611,17 @@ def build_session_memory(
     if not history_messages:
         debug["skipped_no_context"] = skipped_no_context
         debug["gap_breaks"] = gap_breaks
-        return (
-            _join_context_headers(
-                profile_header,
+        return StructuredChatContext(
+            conversation_context_header=build_conversation_context_header(
+                is_group=is_group
+            ),
+            summary_context=_join_context_headers(
                 prev_block_header,
                 summary_header,
-                build_conversation_context_header(is_group=is_group),
             ),
-            [],
-            debug,
+            memory_recall_context=profile_header,
+            recent_messages=(),
+            debug=debug,
         )
 
     debug["history_turns"] = len(history_messages)
@@ -596,11 +638,44 @@ def build_session_memory(
         raw_debug.get("raw_window_tokens", 0),
     )
 
-    history_header = build_conversation_context_header(is_group=is_group)
-    header = _join_context_headers(
-        profile_header, prev_block_header, summary_header, history_header
+    return StructuredChatContext(
+        conversation_context_header=build_conversation_context_header(
+            is_group=is_group
+        ),
+        summary_context=_join_context_headers(
+            prev_block_header,
+            summary_header,
+        ),
+        memory_recall_context=profile_header,
+        recent_messages=tuple(history_messages),
+        debug=debug,
     )
-    return header, history_messages, debug
+
+
+def build_session_memory(
+    db,
+    session_id: str,
+    user_id: str = "",
+    max_per_msg: int = 300,
+    max_total: int = 4000,
+    is_group: bool = False,
+    group_id: str = "",
+    current_user_input: str = "",
+    read_only: bool = False,
+) -> tuple[str, list[dict], dict]:
+    """旧三元组入口；生产聊天链路使用结构化上下文。"""
+
+    return _build_structured_session_memory(
+        db,
+        session_id,
+        user_id=user_id,
+        max_per_msg=max_per_msg,
+        max_total=max_total,
+        is_group=is_group,
+        group_id=group_id,
+        current_user_input=current_user_input,
+        read_only=read_only,
+    ).legacy_tuple()
 
 
 def _build_profile_section(
@@ -1030,7 +1105,7 @@ def build_group_recent_messages(
     return messages, debug
 
 
-def build_chat_context(
+def build_structured_chat_context(
     db,
     session_id: str,
     user_id: str = "",
@@ -1042,14 +1117,14 @@ def build_chat_context(
     exclude_message_ids: list[str] | None = None,
     current_user_input: str = "",
     read_only: bool = False,
-) -> tuple[str, list[dict], dict]:
+) -> StructuredChatContext:
     """构建真实回复链路使用的统一上下文。
 
     私聊继续使用 ConversationTurn；群聊只消费后台生成的 ChatLog Rolling
     Summary，并注入其游标之后的连续群聊原文。回复链路本身不生成摘要。
     """
     if not is_group:
-        header, messages, debug = build_session_memory(
+        result = _build_structured_session_memory(
             db,
             session_id,
             user_id=user_id,
@@ -1059,8 +1134,16 @@ def build_chat_context(
             current_user_input=current_user_input,
             read_only=read_only,
         )
+        debug = copy.deepcopy(result.debug)
         debug["context_source"] = "conversation_turn"
-        return header, messages, debug
+        return StructuredChatContext(
+            conversation_context_header=result.conversation_context_header,
+            summary_context=result.summary_context,
+            memory_recall_context=result.memory_recall_context,
+            recent_messages=result.recent_messages,
+            debug=debug,
+            project_context=result.project_context,
+        )
 
     from app.session_memory import config as session_memory_config
     from app.session_memory.renderer import render_rolling_summary_context
@@ -1192,17 +1275,44 @@ def build_chat_context(
             allow_model_calls=not read_only,
         )
     debug.update(profile_debug)
-    header = "\n".join(
-        x for x in [
-            profile_header,
-            summary_header,
-            build_conversation_context_header(is_group=True),
-        ]
-        if x
+    return StructuredChatContext(
+        conversation_context_header=build_conversation_context_header(
+            is_group=True
+        ),
+        summary_context=summary_header,
+        memory_recall_context=profile_header,
+        recent_messages=tuple(messages),
+        debug=debug,
     )
-    if not messages:
-        return header, [], debug
-    return header, messages, debug
+
+
+def build_chat_context(
+    db,
+    session_id: str,
+    user_id: str = "",
+    *,
+    max_per_msg: int = 300,
+    max_total: int = 4000,
+    is_group: bool = False,
+    group_id: str = "",
+    exclude_message_ids: list[str] | None = None,
+    current_user_input: str = "",
+    read_only: bool = False,
+) -> tuple[str, list[dict], dict]:
+    """旧三元组入口；真实聊天与预览应使用结构化入口。"""
+
+    return build_structured_chat_context(
+        db,
+        session_id,
+        user_id=user_id,
+        max_per_msg=max_per_msg,
+        max_total=max_total,
+        is_group=is_group,
+        group_id=group_id,
+        exclude_message_ids=exclude_message_ids,
+        current_user_input=current_user_input,
+        read_only=read_only,
+    ).legacy_tuple()
 
 
 def build_group_recent_context(

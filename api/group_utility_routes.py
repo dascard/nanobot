@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from api.common_auth import verify_token
 from app.group_ingress import helpers as group_ingress_helpers
 from core.context_builder import (
-    build_chat_context,
+    build_structured_chat_context,
     build_timing_recent_context,
     sanitize_prompt_text,
 )
@@ -183,7 +183,7 @@ async def group_timing_timer(
                     str(x) for x in (result.get("source_message_ids") or [])
                     if str(x).strip()
                 ]
-                memory_header, history_messages, _ctx_debug = build_chat_context(
+                structured_context = build_structured_chat_context(
                     db,
                     group_user_id,
                     user_id=group_user_id,
@@ -191,6 +191,8 @@ async def group_timing_timer(
                     group_id=req.group_id,
                     exclude_message_ids=source_message_ids,
                 )
+                history_messages = list(structured_context.recent_messages)
+                _ctx_debug = dict(structured_context.debug)
                 # 从 runtime state 取回调时保留的 bot identity。
                 timer_state = runtime._states.get(_normalize_group_session_id(req.group_id))
                 timer_bot_id = (timer_state.bot_id if timer_state else "") or ""
@@ -212,8 +214,15 @@ async def group_timing_timer(
                     "session_id": group_user_id,
                     "is_group": True,
                     "is_superuser": False,
-                    "history_header": memory_header,
+                    "history_header": (
+                        structured_context.conversation_context_header
+                    ),
                     "history_messages": history_messages,
+                    "summary_context": structured_context.summary_context,
+                    "memory_recall_context": (
+                        structured_context.memory_recall_context
+                    ),
+                    "project_context": structured_context.project_context,
                     "group_id": req.group_id,
                     "sender_id": timer_sender_id,
                     "trigger_reason": req.trigger_reason or "timer",

@@ -674,6 +674,9 @@ class NanobotBridge(MessageContractBridgeMixin):
             ),
             history_header=context.history_header,
             history_messages=context.history_messages,
+            summary_context=str(meta.get("summary_context") or ""),
+            memory_recall_context=str(meta.get("memory_recall_context") or ""),
+            project_context=str(meta.get("project_context") or ""),
             runtime_tool_prompt=context.runtime_tool_prompt,
             effort_constraint=context.effort_constraint,
             trace_id=context.trace_id,
@@ -1873,13 +1876,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 trace_finalizer.finish("error", error=str(e))
                 return ""
             run_meta.update(prompt_build.meta_update)
-            self._last_prompt_render_meta = {
-                "prompt_source": prompt_build.prompt_source,
-                "prompt_runtime_path": prompt_build.prompt_runtime_path,
-                "prompt_default_path": prompt_build.prompt_default_path,
-                "prompt_sha256": prompt_build.prompt_sha256,
-                "prompt_template_resolutions": prompt_build.prompt_template_resolutions,
-            }
+            self._last_prompt_render_meta = prompt_build.trace_fields
             RunTracer.update_prompt_source(
                 run_handle.run_id,
                 **self._last_prompt_render_meta,

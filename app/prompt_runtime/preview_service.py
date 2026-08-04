@@ -49,7 +49,8 @@ def _recent_prompt_preview_logs(db: Session, body: Any) -> tuple[str, list[dict]
 
 async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     """构建 canonical Prompt Runtime 有效预览。"""
-    from core.context_builder import build_chat_context
+    from core.context_builder import build_structured_chat_context
+    from core.context_engine import ContextManifestError
     from core.chat_stream_identity import (
         ChatStreamIdentityError,
         resolve_chat_stream_identity,
@@ -141,7 +142,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
             persona_text = persona.persona_json
 
     user_input = str(getattr(body, "user_input", "") or "")
-    history_header, history_messages, history_debug = build_chat_context(
+    structured_context = build_structured_chat_context(
         db,
         session_id,
         user_id=user_id,
@@ -150,6 +151,9 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         current_user_input=user_input,
         read_only=True,
     )
+    history_header = structured_context.conversation_context_header
+    history_messages = list(structured_context.recent_messages)
+    history_debug = dict(structured_context.debug)
     persona_debug: dict[str, Any] = {}
     if user_id:
         try:
@@ -201,6 +205,11 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
                 persona_text=persona_text or "无已存储画像",
                 history_header=history_header,
                 history_messages=history_messages,
+                summary_context=structured_context.summary_context,
+                memory_recall_context=(
+                    structured_context.memory_recall_context
+                ),
+                project_context=structured_context.project_context,
                 session_guidance=session_guidance.text,
                 session_guidance_chat_stream_id=session_guidance.chat_stream_id,
                 runtime_tool_prompt=runtime_tool_prompt,
@@ -213,7 +222,12 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
             ),
             strict_audit=True,
         )
-    except (PromptAuditError, PromptFlowError, TemplateBaselineError) as exc:
+    except (
+        ContextManifestError,
+        PromptAuditError,
+        PromptFlowError,
+        TemplateBaselineError,
+    ) as exc:
         raise HTTPException(
             status_code=400,
             detail=_redact_guidance_from_error(str(exc), session_guidance.text),
@@ -255,6 +269,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         "message_token_estimate": plan.message_token_estimate,
         "tool_schema_token_estimate": plan.tool_schema_token_estimate,
         "token_estimate": plan.token_estimate,
+        "context_manifest": plan.context_manifest,
         "preview_exact": not preview_degraded_reasons,
         "preview_degraded_reasons": preview_degraded_reasons,
         "section_hashes": plan.section_hashes,

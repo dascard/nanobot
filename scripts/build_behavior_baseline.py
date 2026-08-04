@@ -73,6 +73,12 @@ STAGE6_PROMPT_INVENTORY_BASELINE_SHA256 = (
 PROACTIVE_OUTREACH_PROMPT_BASELINE_SHA256 = (
     "79a2d6dd773aeb8c314a610188eca9b88efafb1627c17eaf000dbbfe6bc9976d"
 )
+PROACTIVE_OUTREACH_FACT_GUARD_PROMPT_BASELINE_SHA256 = (
+    "e7b1f9c8a4fc776f2e24991cbd8b50a8929114107db9babece41318690bca677"
+)
+AGENT_HARNESS_CONTEXT_LAYER_PROMPT_BASELINE_SHA256 = (
+    "f957810b056508f6e5b2cd8e01821d9cc5207f5c3193252c02106d088bcc5acd"
+)
 PROACTIVE_OUTREACH_RUNTIME_REGISTRY_BASELINE_SHA256 = (
     "1a3a4a5eef507c9c669a45e0281168bd534a3bf76b75d4e0b931f7eaad666552"
 )
@@ -1302,13 +1308,28 @@ def _manifest(
                 "before_sha256": (
                     PROACTIVE_OUTREACH_PROMPT_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["prompt_runtime"]
+                "after_sha256": (
+                    PROACTIVE_OUTREACH_FACT_GUARD_PROMPT_BASELINE_SHA256
                 ),
                 "reason": (
                     "把主动外呼话题提取升级为带生命周期和证据的结构化"
                     "合同，向正文传递完整选题依据，并新增生成后事实性与"
                     "语义质量复核 Prompt。"
+                ),
+            },
+            {
+                "id": "agent_harness_context_layers",
+                "snapshot_id": "prompt_runtime",
+                "stage": "Agent Harness 阶段 5.1",
+                "before_sha256": (
+                    PROACTIVE_OUTREACH_FACT_GUARD_PROMPT_BASELINE_SHA256
+                ),
+                "after_sha256": (
+                    AGENT_HARNESS_CONTEXT_LAYER_PROMPT_BASELINE_SHA256
+                ),
+                "reason": (
+                    "将累计摘要、项目上下文与最近对话拆为独立 Prompt "
+                    "Contribution，并为模型请求生成分层 Context Manifest。"
                 ),
             },
             {

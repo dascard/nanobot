@@ -534,13 +534,19 @@ def test_admin_group_effective_preview_does_not_roll_summary_synchronously(
         event.remove(bind, "before_cursor_execute", capture_writes)
 
     assert response.status_code == 200, response.text
-    assert "<rolling_session_summary" not in json.dumps(
-        response.json()["messages"],
-        ensure_ascii=False,
+    payload = response.json()
+    rendered_messages = json.dumps(payload["messages"], ensure_ascii=False)
+    assert stale_summary.summary_text not in rendered_messages
+    summary_section = next(
+        section
+        for section in payload["prompt_plan"]["flow_sections"]
+        if section["node_id"] == "summary_context"
     )
-    assert response.json()["history_debug"]["rolling_summary_source"] == "chat_log"
+    assert summary_section["status"] == "empty"
+    assert summary_section["message_indexes"] == []
+    assert payload["history_debug"]["rolling_summary_source"] == "chat_log"
     assert (
-        response.json()["history_debug"]["rolling_summary_skipped_reason"]
+        payload["history_debug"]["rolling_summary_skipped_reason"]
         == "background_worker_only"
     )
     assert writes == []

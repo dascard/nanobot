@@ -682,10 +682,16 @@ _CANONICAL_ORDERING = MappingProxyType({
     ),
     "session_guidance": (100, (), ("identity_context",)),
     "group_context": (200, (), ("session_guidance",)),
+    "project_context": (
+        250,
+        (),
+        ("session_guidance", "group_context"),
+    ),
+    "summary_context": (275, (), ("project_context",)),
     "conversation_context_header": (
         300,
         (),
-        ("session_guidance", "group_context"),
+        ("summary_context",),
     ),
     "history_messages": (400, (), ("conversation_context_header",)),
     "persona_reference": (500, (), ("history_messages",)),
@@ -719,7 +725,12 @@ _CANONICAL_REQUIRED_VARIABLES = MappingProxyType({
     "persona_reference": frozenset({"persona_text", "user_id"}),
     "conversation_context_header": frozenset({"history_header"}),
     "history_messages": frozenset({"history_messages"}),
-    "group_context": frozenset({"group_profile_context"}),
+    "group_context": frozenset({
+        "group_profile_context",
+        "memory_recall_context",
+    }),
+    "project_context": frozenset({"project_context"}),
+    "summary_context": frozenset({"summary_context"}),
     "current_user_event": frozenset({"user_input"}),
 })
 _CANONICAL_TEMPLATE_IDS = frozenset({

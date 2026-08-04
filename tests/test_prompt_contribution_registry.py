@@ -258,6 +258,7 @@ def test_group_memory_uses_untrusted_data_contribution_contract():
     assert descriptor.chat_types == frozenset({"group"})
     assert descriptor.required_variables == frozenset({
         "group_profile_context",
+        "memory_recall_context",
     })
     assert descriptor.sensitive_trace_policy == "hash_and_size"
 

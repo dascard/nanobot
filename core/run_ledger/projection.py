@@ -39,6 +39,10 @@ class RunLedgerProjection:
     prompt_key: str
     prompt_sha256: str
     prompt_resolution_sha256: str
+    context_manifest_sha256: str
+    context_manifest_entry_count: int
+    context_manifest_token_estimate: int
+    context_manifest_policy_id: str
     model_ids: tuple[str, ...]
     tool_names: tuple[str, ...]
     checkpoint_count: int
@@ -115,6 +119,12 @@ class RunLedgerProjection:
                 "prompt_resolution_sha256": (
                     self.prompt_resolution_sha256
                 ),
+                "manifest_sha256": self.context_manifest_sha256,
+                "manifest_entry_count": self.context_manifest_entry_count,
+                "manifest_token_estimate": (
+                    self.context_manifest_token_estimate
+                ),
+                "manifest_policy_id": self.context_manifest_policy_id,
                 "model_ids": list(self.model_ids),
                 "tool_names": list(self.tool_names),
                 "artifact_ids": list(self.artifact_ids),
@@ -206,6 +216,10 @@ def project_run_ledger(
     prompt_key = ""
     prompt_sha256 = ""
     prompt_resolution_sha256 = ""
+    context_manifest_sha256 = ""
+    context_manifest_entry_count = 0
+    context_manifest_token_estimate = 0
+    context_manifest_policy_id = ""
     model_ids: list[str] = []
     tool_names: list[str] = []
     checkpoint_count = 0
@@ -240,6 +254,22 @@ def project_run_ledger(
             prompt_resolution_sha256 = str(
                 event.payload.get("prompt_resolution_sha256")
                 or prompt_resolution_sha256
+            )
+            context_manifest_sha256 = str(
+                event.payload.get("context_manifest_sha256")
+                or context_manifest_sha256
+            )
+            entry_count = event.payload.get("context_manifest_entry_count")
+            if type(entry_count) is int and entry_count >= 0:
+                context_manifest_entry_count = entry_count
+            token_estimate = event.payload.get(
+                "context_manifest_tokens"
+            )
+            if type(token_estimate) is int and token_estimate >= 0:
+                context_manifest_token_estimate = token_estimate
+            context_manifest_policy_id = str(
+                event.payload.get("context_manifest_policy_id")
+                or context_manifest_policy_id
             )
         elif event.event_type == "run.status_changed":
             status = event.status
@@ -352,6 +382,10 @@ def project_run_ledger(
         prompt_key=prompt_key,
         prompt_sha256=prompt_sha256,
         prompt_resolution_sha256=prompt_resolution_sha256,
+        context_manifest_sha256=context_manifest_sha256,
+        context_manifest_entry_count=context_manifest_entry_count,
+        context_manifest_token_estimate=context_manifest_token_estimate,
+        context_manifest_policy_id=context_manifest_policy_id,
         model_ids=tuple(dict.fromkeys(model_ids)),
         tool_names=tuple(dict.fromkeys(tool_names)),
         checkpoint_count=checkpoint_count,

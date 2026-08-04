@@ -182,6 +182,9 @@ def test_build_chat_runtime_route_context_injects_private_persona_with_safe_mult
         private_decision=_Decision(),
         guardrail_status="safe",
         classifier_ran=True,
+        summary_context="独立摘要",
+        memory_recall_context="独立召回",
+        project_context="独立项目上下文",
     )
 
     context = build_chat_runtime_route_context(
@@ -200,6 +203,10 @@ def test_build_chat_runtime_route_context_injects_private_persona_with_safe_mult
     assert context.bridge_meta["persona_text"] == "动态画像"
     assert context.bridge_meta["raw_query"] == "私聊问题 files=1"
     assert context.bridge_meta["effort_constraint"] == "constraint:high"
+    assert context.bridge_meta["history_header"] == "历史摘要"
+    assert context.bridge_meta["summary_context"] == "独立摘要"
+    assert context.bridge_meta["memory_recall_context"] == "独立召回"
+    assert context.bridge_meta["project_context"] == "独立项目上下文"
 
 
 def test_build_chat_runtime_route_context_recovers_private_persona_injection_failure():

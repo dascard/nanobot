@@ -11,6 +11,7 @@ from typing import Any
 from app.group_ingress.recovery import attach_group_completion_recovery
 from core.context_builder import (
     build_chat_context as build_chat_context,
+    build_structured_chat_context as build_structured_chat_context,
     format_group_planner_message as format_group_planner_message,
     sanitize_prompt_text,
 )

@@ -481,18 +481,20 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
             return None
 
     async def fake_build_prompt_runtime(prompt_input):
-        return SimpleNamespace(
+        from nanobot_kt.prompt_runtime import PromptRuntimeResult
+
+        return PromptRuntimeResult(
             pre_event_messages=[{"role": "system", "content": "unit system"}],
             event_content=prompt_input.user_input,
             meta_update={},
             prompt_key=prompt_input.prompt_key,
             prompt_mode=prompt_input.prompt_mode,
             prompt_source="unit",
-                prompt_runtime_path="",
-                prompt_default_path="",
-                prompt_sha256="a" * 64,
-                prompt_template_resolutions={},
-            )
+            prompt_runtime_path="",
+            prompt_default_path="",
+            prompt_sha256="a" * 64,
+            prompt_template_resolutions={},
+        )
 
     monkeypatch.setattr("core.tracing.new_trace_id", lambda: "trace-stream")
     task_lease = object()
