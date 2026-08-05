@@ -90,6 +90,31 @@ def test_operation_scripts_contain_no_global_prune_or_sudo_execution():
             assert re.search(pattern, content) is None, (script_name, pattern)
 
 
+def test_runtime_dependencies_do_not_add_external_sandbox_platforms():
+    requirement_files = (
+        *REPO_ROOT.glob("requirements*.in"),
+        *REPO_ROOT.glob("requirements*.lock"),
+    )
+    forbidden = ("opensandbox", "openshell", "e2b")
+    for path in requirement_files:
+        content = path.read_text(encoding="utf-8").casefold()
+        for package in forbidden:
+            assert re.search(
+                rf"^\s*{package}(?:\[|\s|==|[<>=~!@])",
+                content,
+                re.MULTILINE,
+            ) is None, (path.name, package)
+
+    for path in REPO_ROOT.glob("docker-compose*.yml"):
+        content = path.read_text(encoding="utf-8").casefold()
+        for package in forbidden:
+            assert re.search(
+                rf"^\s*image:\s*[^\n]*\b{package}\b",
+                content,
+                re.MULTILINE,
+            ) is None, (path.name, package)
+
+
 def test_production_smoke_uses_only_hashed_minimal_dependencies():
     manager = (
         REPO_ROOT / "scripts" / "manage-sandbox-production.sh"
@@ -193,6 +218,16 @@ def test_runtime_cleanup_service_requires_one_time_maintenance_approval():
     assert "ConditionPathExists=/run/nanobot-sandboxd/runtime-cleanup-approved" in service
     assert "--quiesced --apply" in service
     assert "ExecStartPre=/usr/bin/rm -f" in service
+    assert "Requires=nanobot-sandboxd.service" in service
+    assert "NANOBOT_SANDBOXD_PYTHON=/opt/nanobot-sandboxd/venv/bin/python" in service
+    assert "InaccessiblePaths=-/var/run/docker.sock -/run/docker.sock" in service
+    assert "Requires=docker.service" not in service
+
+    cleanup = (
+        REPO_ROOT / "scripts" / "cleanup-sandbox-runtime.sh"
+    ).read_text(encoding="utf-8")
+    assert "sandboxd.maintenance_probe" in cleanup
+    assert "docker ps" not in cleanup
 
 
 def test_storage_templates_require_project_quota_mount_options():

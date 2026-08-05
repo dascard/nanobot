@@ -863,6 +863,23 @@ def test_kill_switch_generates_required_idempotency_key():
     assert "'{request_id:$request_id,reason:$reason}'" in body
 
 
+def test_runtime_cleanup_uses_sandboxd_fact_instead_of_docker_socket():
+    source = SCRIPT.read_text(encoding="utf-8")
+    helper = source.split("sandboxd_assert_quiesced() {", 1)[1].split(
+        "\nsandboxd_admin_terminate_all() {",
+        1,
+    )[0]
+    body = source.split("runtime_cleanup_command() {", 1)[1].split(
+        "\nenable_runtime_timer_command() {",
+        1,
+    )[0]
+
+    assert "sandboxd.maintenance_probe" in helper
+    assert "/v1/admin/execution-state" not in helper
+    assert "sandboxd_assert_quiesced" in body
+    assert "docker ps" not in body
+
+
 def test_production_smoke_stage_requires_complete_structured_matrix():
     source = SCRIPT.read_text(encoding="utf-8")
     validation_body = source.split("validate_smoke_evidence() {", 1)[1].split(

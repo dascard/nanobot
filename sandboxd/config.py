@@ -17,6 +17,7 @@ from core.sandbox.profile_catalog import (
 
 _IMAGE_ID_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _DOCKER_NAME_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}")
+_DOCKER_SOCKET = "unix:///var/run/docker.sock"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -201,6 +202,10 @@ class SandboxdConfig:
             raise ValueError("sandboxd 普通凭据与管理凭据路径必须分离")
         if not self.profile_manifest_path.is_absolute():
             raise ValueError("Sandbox Profile manifest 必须是绝对路径")
+        if self.docker_socket != _DOCKER_SOCKET:
+            raise ValueError(
+                "sandboxd 只能使用固定的本机 Docker Unix Socket"
+            )
         if _DOCKER_NAME_RE.fullmatch(self.egress_uplink_network_name) is None:
             raise ValueError("Sandbox 出口网络名称无效")
         if not 1280 <= self.egress_network_mtu <= 9000:

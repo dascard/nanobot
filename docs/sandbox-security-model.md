@@ -42,7 +42,7 @@
 | Developer Sandbox | Restricted 可见内容、当前 Lease loopback、受控代理地址 | Docker Socket、宿主网关、共享出口网络、其他 Lease | 无控制面事实 |
 | 出口代理 | 当前 Lease 内部网络、专用 uplink | Docker Socket、宿主挂载、凭据、其他 Lease 内部网络 | allowlist、目标端口与拒绝 CIDR 的执行点 |
 
-只有 sandboxd 可以调用 Docker Engine。把 `/var/run/docker.sock` 挂入 Server、Worker 或 Sandbox 等价于授予宿主 root 权限，属于禁止配置。
+只有 sandboxd 可以调用 Docker Engine。把 `/var/run/docker.sock` 挂入 Server、Worker、定时维护服务或 Sandbox 等价于授予宿主 root 权限，属于禁止配置。runtime TTL 清理只能通过带管理 Token 的 sandboxd Unix Socket 读取执行静默事实，不能自行执行 `docker ps`。
 
 Server 与 sandboxd 之间没有 sandboxd 主动写数据库的反向通道。sandboxd 返回权威运行事实；Server 的 leader-fenced 周期 reconciler 主动拉取 controller、Lease 和 Process 状态，再收敛 `sandbox_leases` 与 `sandbox_runs`。sandboxd 不直接写 Server 终态。
 

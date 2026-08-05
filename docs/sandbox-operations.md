@@ -392,12 +392,14 @@ runtime 只保存可重建缓存，不进入备份。默认先预览：
 sudo scripts/manage-sandbox-production.sh runtime-cleanup
 ~~~
 
-实际执行要求 kill switch 已关闭执行入口、没有活动 Sandbox 容器，并显式批准：
+实际执行要求 kill switch 已关闭执行入口、sandboxd 已通过受认证管理 UDS
+证明不存在执行容器和运行保留，并显式批准：
 
 ~~~bash
 sudo scripts/manage-sandbox-production.sh runtime-cleanup --apply
 ~~~
 
+定时清理服务不访问 Docker Socket；Docker 容器事实只能由 sandboxd 读取。
 清理不得删除 Workspace 或 Asset，不得执行 Docker 全局 prune。
 
 ## 10. 真实隔离 Smoke

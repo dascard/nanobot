@@ -414,6 +414,46 @@ class LocalDockerBackend:
             "disk_free_bytes": disk.free_bytes,
         }
 
+    def execution_state(self) -> dict[str, Any]:
+        """返回 Docker 中全部 Sandbox 执行容器的静默事实。
+
+        宿主维护任务不能自行访问 Docker Socket。它们只能通过 sandboxd 的
+        管理 UDS 读取本方法返回的事实，并在任何容器、归属歧义或内存中的
+        一次性运行仍存在时失败关闭。
+        """
+
+        try:
+            candidates = list(self.client.containers.list(
+                all=True,
+                filters={
+                    "label": [
+                        f"{MANAGED_LABEL}=true",
+                        f"{MANAGED_BY_LABEL}=sandboxd",
+                    ],
+                },
+            ))
+        except Exception as exc:
+            raise SandboxServiceError(
+                SandboxErrorCode.RUNTIME_UNAVAILABLE,
+                "Docker 无法读取 Sandbox 执行状态",
+                retryable=True,
+                stop=False,
+            ) from exc
+
+        verified_count = sum(
+            1 for container in candidates if managed_container(container)
+        )
+        ambiguous_count = len(candidates) - verified_count
+        with self._active_guard:
+            active_run_reservation_count = len(self._active)
+        return {
+            "quiesced": not candidates and active_run_reservation_count == 0,
+            "active_container_count": len(candidates),
+            "verified_managed_container_count": verified_count,
+            "ambiguous_container_count": ambiguous_count,
+            "active_run_reservation_count": active_run_reservation_count,
+        }
+
     def _container_kwargs(
         self,
         *,

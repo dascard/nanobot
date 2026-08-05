@@ -850,6 +850,13 @@ def create_app(runtime: SandboxRuntime | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/v1/admin/execution-state")
+    def execution_state(current: AdminRuntimeDependency):
+        return success_result(
+            "Sandbox 执行静默状态读取完成",
+            data=current.docker_backend.execution_state(),
+        )
+
     @app.get("/v1/admin/leases")
     def list_leases(current: AdminRuntimeDependency):
         if current.lease_backend is None:

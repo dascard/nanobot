@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`f38a0d352cc6559b7f9dc73588aeff4f6cde86ef`
-- 规则总数：8175
+- 源提交：`bad3249f4af55e4aa626f40e50d473a9cb4aa723`
+- 规则总数：8186
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -16,8 +16,8 @@
 | `data_consistency` | 476 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4358 |
-| `security_invariant` | 1629 |
+| `protocol_syntax` | 4359 |
+| `security_invariant` | 1639 |
 
 ## 文件汇总
 
@@ -33,7 +33,7 @@
 | `sandboxd/filesystem.py` | 77 |
 | `api/admin/sandbox_routes.py` | 75 |
 | `api/admin/model_routes.py` | 73 |
-| `sandboxd/app.py` | 71 |
+| `sandboxd/app.py` | 72 |
 | `core/skills/contracts.py` | 69 |
 | `core/semantic/backfill.py` | 68 |
 | `core/outbound/delivery_claims.py` | 65 |
@@ -88,10 +88,10 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/adapters.py` | 32 |
 | `core/outbound/generation.py` | 31 |
 | `core/sticker_memory.py` | 31 |
+| `sandboxd/docker_backend.py` | 31 |
 | `api/admin/group_learning_routes.py` | 30 |
 | `core/context_compaction.py` | 30 |
 | `core/legacy_adapter.py` | 30 |
-| `sandboxd/docker_backend.py` | 30 |
 | `core/interoperability/a2a.py` | 29 |
 | `core/mcp/contracts.py` | 29 |
 | `api/admin/rag_benchmark_routes.py` | 28 |
@@ -291,6 +291,7 @@
 | `foundation/identity/normalization.py` | 9 |
 | `foundation/llm/cache_shape.py` | 9 |
 | `nanobot_kt/model_runtime.py` | 9 |
+| `sandboxd/maintenance_probe.py` | 9 |
 | `scripts/build-sandbox-image.sh` | 9 |
 | `scripts/deploy_release.py` | 9 |
 | `webui/src/features/manifest.jsx` | 9 |

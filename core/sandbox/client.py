@@ -399,6 +399,9 @@ class HttpSandboxdBackend:
     def controller_state(self) -> dict[str, Any]:
         return self._request("GET", "/v1/admin/controller-state")
 
+    def execution_state(self) -> dict[str, Any]:
+        return self._request("GET", "/v1/admin/execution-state")
+
     def list_leases(self) -> dict[str, Any]:
         return self._request("GET", "/v1/admin/leases")
 

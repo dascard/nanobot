@@ -77,17 +77,32 @@ class _FakeDockerBackend:
     def get(self, run_id):
         return {"run_id": run_id, "status": "completed", "data": {}}
 
+    def execution_state(self):
+        return {
+            "quiesced": True,
+            "active_container_count": 0,
+            "verified_managed_container_count": 0,
+            "ambiguous_container_count": 0,
+            "active_run_reservation_count": 0,
+        }
+
 
 def _runtime(tmp_path):
     token = "t" * 64
+    admin_token = "a" * 64
     token_file = tmp_path / "sandboxd.token"
+    admin_token_file = tmp_path / "sandboxd-admin.token"
     token_file.write_text(token)
+    admin_token_file.write_text(admin_token)
     token_file.chmod(0o600)
+    admin_token_file.chmod(0o600)
     config = SandboxdConfig(
         data_root=tmp_path / "data",
         socket_path=tmp_path / "run" / "sandboxd.sock",
         token_file=token_file,
         client_token_path=tmp_path / "run" / "client.token",
+        admin_token_file=admin_token_file,
+        admin_client_token_path=tmp_path / "run" / "admin-client.token",
         image_reference="nanobot-sandbox-python:test",
         image_allowlist=(IMAGE_ID,),
         workspace_uid=os.getuid(),
@@ -103,6 +118,10 @@ def _runtime(tmp_path):
         workspace_files=workspace_files,
         asset_files=asset_files,
         docker_backend=docker_backend,
+        admin_authenticator=TokenAuthenticator(
+            admin_token_file,
+            config.admin_client_token_path,
+        ),
     )
 
 
@@ -263,6 +282,31 @@ def test_sandboxd_requires_bearer_and_supports_safe_file_round_trip(tmp_path):
         )
         assert stale.status_code == 400
         assert stale.json()["error"]["code"] == "edit_conflict"
+
+
+def test_execution_state_requires_admin_token_and_returns_bounded_facts(tmp_path):
+    token, runtime = _runtime(tmp_path)
+    admin_token = runtime.admin_authenticator.read_token()
+
+    with TestClient(create_app(runtime)) as client:
+        ordinary = client.get(
+            "/v1/admin/execution-state",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response = client.get(
+            "/v1/admin/execution-state",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+    assert ordinary.status_code == 403
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "quiesced": True,
+        "active_container_count": 0,
+        "verified_managed_container_count": 0,
+        "ambiguous_container_count": 0,
+        "active_run_reservation_count": 0,
+    }
 
 
 def test_workspace_write_uses_exact_overwrite_delta_and_shared_mutation_lock(tmp_path):

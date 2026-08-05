@@ -2376,6 +2376,15 @@ for path in ("/v1/healthz", "/v1/readyz"):
 PY
 }
 
+sandboxd_assert_quiesced() {
+  PYTHONPATH="${SERVER_RELEASE_LINK}" \
+    "${SANDBOXD_VENV}/bin/python" \
+    -m sandboxd.maintenance_probe \
+    --socket /run/nanobot-sandboxd/sandboxd.sock \
+    --token-file /etc/nanobot/sandboxd-admin.token \
+    --timeout-seconds 5
+}
+
 sandboxd_admin_terminate_all() {
   local reason="$1"
   "${SANDBOXD_VENV}/bin/python" - "${reason}" <<'PY'
@@ -2771,12 +2780,8 @@ runtime_cleanup_command() {
   fi
 
   kill_switch_command kill-switch "Sandbox runtime TTL 维护窗口" >/dev/null
-  if docker ps \
-    --filter 'label=com.nanobot.sandbox=true' \
-    --filter 'label=com.nanobot.managed-by=sandboxd' \
-    --format '{{.Names}}' | grep -q .; then
-    die "仍有活动 Sandbox 容器，拒绝 runtime 清理"
-  fi
+  sandboxd_assert_quiesced \
+    || die "sandboxd 未能证明执行静默，拒绝 runtime 清理"
   install -m 0600 /dev/null \
     /run/nanobot-sandboxd/runtime-cleanup-approved
   systemctl start nanobot-sandbox-runtime-cleanup.service

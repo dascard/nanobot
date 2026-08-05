@@ -40,6 +40,10 @@ def test_sandboxd_config_requires_digest_allowlist_and_non_latest_image(tmp_path
             tmp_path,
             admin_client_token_path=tmp_path / "run" / "client.token",
         ).validated()
+    with pytest.raises(ValueError, match="固定的本机 Docker Unix Socket"):
+        _config(tmp_path, docker_socket="tcp://127.0.0.1:2375").validated()
+    with pytest.raises(ValueError, match="固定的本机 Docker Unix Socket"):
+        _config(tmp_path, docker_socket="unix:///tmp/docker.sock").validated()
 
 
 def test_systemd_unit_limits_surface_and_does_not_start_tcp_listener():

@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 7.1 已完成，准备阶段 7.2）
+> 状态：执行中（阶段 7.2 已完成，准备阶段 7.3）
 >
 > 建立日期：2026-08-03
 >
@@ -1054,11 +1054,41 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 7.2 Sandbox 和工具安全
 
-- [ ] `sandboxd` 继续独占 Docker Socket。
-- [ ] 服务端决定镜像、挂载、网络、capability 和资源上限。
-- [ ] 验证非 root、只读根、默认断网、无 Docker Socket 和超时终止。
-- [ ] 验证 workspace 持久化和 owner 之间不可互读。
-- [ ] 不引入 OpenSandbox、OpenShell、E2B 运行时依赖。
+- [x] `sandboxd` 继续独占 Docker Socket。
+- [x] 服务端决定镜像、挂载、网络、capability 和资源上限。
+- [x] 验证非 root、只读根、默认断网、无 Docker Socket 和超时终止。
+- [x] 验证 workspace 持久化和 owner 之间不可互读。
+- [x] 不引入 OpenSandbox、OpenShell、E2B 运行时依赖。
+
+实施记录（2026-08-05）：
+
+- 审计既有生产链路时发现 `nanobot-sandbox-runtime-cleanup.service` 仍直接执行 `docker ps`，使“只有
+  sandboxd 接触 Docker Socket”在定时维护路径上不成立。新增仅管理 Token 可访问的
+  `/v1/admin/execution-state`：由 sandboxd 通过 Docker SDK 读取所有带双重所有权标签的运行中或残留
+  容器，并合并一次性 Run 的内存 reservation；归属歧义、Docker 读取失败、容器残留或 reservation 未释放
+  都按非静默处理。
+- 新增标准库 UDS 维护探针。探针固定请求上述管理端点，对 Socket 符号链接、Token 文件权限、响应大小、
+  HTTP 状态、JSON 类型、容器计数和 `quiesced` 交叉一致性执行失败关闭；Token 只进入进程内 HTTP header，
+  不出现在命令参数和日志。runtime TTL 清理和生产管理入口均改用该探针，不再自行调用 Docker CLI。
+- 定时清理 unit 改为依赖 `nanobot-sandboxd.service`，并通过 `InaccessiblePaths` 同时屏蔽
+  `/var/run/docker.sock` 与 `/run/docker.sock`。sandboxd 配置也只接受固定本机
+  `unix:///var/run/docker.sock`，拒绝 TCP Docker API 或任意替代 Unix Socket；Server、Worker 和 Sandbox
+  仍只看到只读管理 UDS 或完全看不到控制面。
+- 既有 canonical Profile、`build_container_kwargs()`、专用固定摘要镜像、AppArmor、seccomp、非 root、
+  只读根、`cap-drop=ALL`、默认 `network=none`、固定 mount、CPU／内存／PID／tmpfs／超时／输出／quota
+  约束保持不变。真实 Docker 六组矩阵继续覆盖容器 inspect、进程树超时终止、Lease 重建、Workspace／
+  Runtime 持久化和 A／B Workspace 隔离；生产 `smoke` 仍要求每组至少一项测试且零 skipped 才能进入
+  control-plane 安装。
+- Sandbox 全量单元和合同回归为 374 passed、6 skipped、0 failed；6 个 skip 均为必须显式开启的真实 Docker
+  测试。当前 WSL 开发宿主的生产 `--preflight-only` 真实返回 exit 2／`blocked`（非 root，且 Docker
+  SecurityOptions 未提供 AppArmor），没有把跳过或阻塞伪装为 passed。阶段 11.3 仍必须在满足 AppArmor、
+  project quota 和独立数据盘条件的真实部署宿主运行完整六组矩阵后才能最终交付。
+- 依赖门禁确认所有 requirements 与 Compose 均未引入 OpenSandbox、OpenShell 或 E2B。最终完整
+  `python -m pytest tests/ -v` 为 6684 passed、12 skipped、0 failed；架构边界、OpenAPI／客户端、
+  Release／Verification／Behavior Golden、决策规则、Task SLO、Bash 语法、Ruff、Python 编译和
+  `git diff --check` 均通过。`systemd-analyze verify` 已接受新增 unit 指令，但当前 WSL `/mnt/d` 源码挂载
+  的文件模式及尚未安装的 `/opt/nanobot-server` 使其返回 exit 1；这不作为生产验收通过，仍由阶段 11.3
+  在真实部署宿主复验。
 
 #### 7.3 Agent Identity、Workspace 和 ACL
 

@@ -35,8 +35,10 @@ class _Images:
 class _Containers:
     def __init__(self, values=None):
         self.values = list(values or [])
+        self.list_calls = []
 
-    def list(self, **_kwargs):
+    def list(self, **kwargs):
+        self.list_calls.append(kwargs)
         return self.values
 
 
@@ -192,6 +194,50 @@ def test_reconciler_requires_name_and_both_labels():
     assert managed.removed is True
     assert wrong_name.removed is False
     assert missing_label.removed is False
+
+
+def test_execution_state_is_authoritative_and_fails_closed_on_ambiguous_owner(
+    tmp_path,
+):
+    managed = _Container(
+        "nanobot-sbx-sbxrun_running",
+        {MANAGED_LABEL: "true", MANAGED_BY_LABEL: "sandboxd"},
+    )
+    ambiguous = _Container(
+        "unexpected-name",
+        {MANAGED_LABEL: "true", MANAGED_BY_LABEL: "sandboxd"},
+    )
+    containers = _Containers([managed, ambiguous])
+    backend = LocalDockerBackend(
+        _config(tmp_path),
+        docker_client=_DockerClient(containers),
+    )
+
+    state = backend.execution_state()
+
+    assert state == {
+        "quiesced": False,
+        "active_container_count": 2,
+        "verified_managed_container_count": 1,
+        "ambiguous_container_count": 1,
+        "active_run_reservation_count": 0,
+    }
+    assert containers.list_calls == [{
+        "all": True,
+        "filters": {
+            "label": [
+                "com.nanobot.sandbox=true",
+                "com.nanobot.managed-by=sandboxd",
+            ],
+        },
+    }]
+
+    containers.values.clear()
+    backend._active["sbxrun_reserved"] = (managed, threading.Event())
+    reserved = backend.execution_state()
+    assert reserved["quiesced"] is False
+    assert reserved["active_container_count"] == 0
+    assert reserved["active_run_reservation_count"] == 1
 
 
 def test_output_limiter_tracks_full_counts_but_returns_bounded_text():

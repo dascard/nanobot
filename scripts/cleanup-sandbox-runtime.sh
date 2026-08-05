@@ -6,7 +6,7 @@ usage() {
 用法：scripts/cleanup-sandbox-runtime.sh [选项]
 
 清理 /runtime 中超过 TTL 的可重建缓存。默认只预览；实际删除必须同时传入
---quiesced 和 --apply，并且不能存在活动的 Nanobot Sandbox 容器。
+--quiesced 和 --apply，并且 sandboxd 必须证明当前没有执行容器或运行保留。
 
 选项：
   --data-root <目录>    默认 /srv/nanobot
@@ -81,17 +81,21 @@ resolved_runtime="$(realpath -e -- "${runtime_root}")"
 [[ "${resolved_runtime}" == "$(realpath -e -- "${data_root}")/runtime" ]] \
   || die "runtime 根目录越出预期布局"
 
-command -v docker >/dev/null 2>&1 || die "无法检查活动 Sandbox 容器"
-while IFS= read -r container_name; do
-  if [[ "${container_name}" == nanobot-sbx-* ]]; then
-    die "仍有活动 Sandbox 容器 ${container_name}，本轮不清理"
-  fi
-done < <(
-  docker ps \
-    --filter 'label=com.nanobot.sandbox=true' \
-    --filter 'label=com.nanobot.managed-by=sandboxd' \
-    --format '{{.Names}}'
-)
+sandboxd_python="${NANOBOT_SANDBOXD_PYTHON:-python3}"
+sandboxd_socket="${NANOBOT_SANDBOXD_SOCKET:-/run/nanobot-sandboxd/sandboxd.sock}"
+sandboxd_admin_token="${NANOBOT_SANDBOXD_ADMIN_TOKEN_FILE:-/etc/nanobot/sandboxd-admin.token}"
+if [[ "${sandboxd_python}" == */* ]]; then
+  [[ -x "${sandboxd_python}" ]] || die "sandboxd Python 不可执行"
+else
+  command -v "${sandboxd_python}" >/dev/null 2>&1 \
+    || die "sandboxd Python 不可用"
+fi
+PYTHONPATH="${script_dir}/.." "${sandboxd_python}" \
+  -m sandboxd.maintenance_probe \
+  --socket "${sandboxd_socket}" \
+  --token-file "${sandboxd_admin_token}" \
+  --timeout-seconds 5 \
+  || die "sandboxd 未能证明执行静默，本轮不清理"
 
 ttl_minutes=$(( ttl_hours * 60 ))
 echo "超过 ${ttl_hours} 小时的 runtime 清理候选："

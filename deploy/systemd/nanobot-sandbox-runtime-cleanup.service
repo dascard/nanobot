@@ -1,8 +1,8 @@
 [Unit]
 Description=Nanobot Sandbox runtime TTL 清理
 Documentation=file:/opt/nanobot-server/docs/sandbox-operations.md
-After=docker.service local-fs.target
-Requires=docker.service
+After=nanobot-sandboxd.service local-fs.target
+Requires=nanobot-sandboxd.service
 ConditionPathExists=/run/nanobot-sandboxd/runtime-cleanup-approved
 ConditionPathIsMountPoint=/srv/nanobot
 
@@ -14,6 +14,7 @@ WorkingDirectory=/opt/nanobot-server
 Environment=NANOBOT_SANDBOX_DATA_ROOT=/srv/nanobot
 Environment=NANOBOT_SANDBOX_RUNTIME_TTL_HOURS=168
 Environment=NANOBOT_SANDBOX_RUNTIME_MAX_BYTES=10737418240
+Environment=NANOBOT_SANDBOXD_PYTHON=/opt/nanobot-sandboxd/venv/bin/python
 EnvironmentFile=-/etc/nanobot/sandboxd.env
 
 # 先消费一次性维护批准；失败时不会在下一次定时触发中擅自重试。
@@ -22,7 +23,8 @@ ExecStart=/opt/nanobot-server/scripts/cleanup-sandbox-runtime.sh --data-root ${N
 
 UMask=0077
 ReadWritePaths=/srv/nanobot/runtime /run/lock /run/nanobot-sandboxd
-ReadOnlyPaths=/opt/nanobot-server /var/run/docker.sock
+ReadOnlyPaths=/opt/nanobot-server /etc/nanobot/sandboxd-admin.token
+InaccessiblePaths=-/var/run/docker.sock -/run/docker.sock
 ProtectSystem=strict
 ProtectHome=true
 ProtectHostname=true
