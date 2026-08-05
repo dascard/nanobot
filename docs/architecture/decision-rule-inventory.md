@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`9509371b25c66c590678162de08df8ba7965bd17`
-- 规则总数：8259
+- 源提交：`bc666c1c7857f0bd000f06a548b42cb5040705e2`
+- 规则总数：8301
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1576 |
+| `configurable_policy` | 1586 |
 | `data_consistency` | 478 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4376 |
-| `security_invariant` | 1655 |
+| `protocol_syntax` | 4395 |
+| `security_invariant` | 1668 |
 
 ## 文件汇总
 
@@ -74,6 +74,7 @@
 | `app/group_analysis/preprocess.py` | 36 |
 | `core/release/deployment.py` | 36 |
 | `core/sticker_preview.py` | 36 |
+| `core/agent_orchestration/contracts.py` | 35 |
 | `core/db/group_learning_governance_adapter.py` | 35 |
 | `core/release/production_preflight.py` | 35 |
 | `sandboxd/unified_patch.py` | 35 |
@@ -109,7 +110,7 @@
 | `sandboxd/environment_manager.py` | 26 |
 | `webui/src/api/generated/adminClient.ts` | 26 |
 | `api/admin/runtime_routes.py` | 25 |
-| `core/agent_orchestration/contracts.py` | 25 |
+| `core/agent_orchestration/runtime_executor.py` | 25 |
 | `core/prompts/manager.py` | 25 |
 | `core/run_ledger/projection.py` | 25 |
 | `core/timing_score.py` | 25 |
@@ -128,6 +129,7 @@
 | `core/sandbox/tool_service.py` | 22 |
 | `api/admin/proactive_outreach_routes.py` | 21 |
 | `app/persona/retrieval_service.py` | 21 |
+| `core/agent_runtime/contracts.py` | 21 |
 | `core/db/group_learning_command_adapter.py` | 21 |
 | `core/prompt_v2/task_contracts.py` | 21 |
 | `core/semantic/indexer.py` | 21 |
@@ -135,7 +137,6 @@
 | `app/session_memory/rolling_summary.py` | 20 |
 | `app/tool_services/sandbox.py` | 20 |
 | `core/admin/table_views.py` | 20 |
-| `core/agent_runtime/contracts.py` | 20 |
 | `core/interoperability/acp.py` | 20 |
 | `core/model_provider/provider_config.py` | 20 |
 | `core/proactive/orchestrator.py` | 20 |
@@ -246,6 +247,7 @@
 | `sandboxd/container_security.py` | 12 |
 | `api/admin/persona_routes.py` | 11 |
 | `api/agent_link_routes.py` | 11 |
+| `core/agent_runtime/native.py` | 11 |
 | `core/asset_transport.py` | 11 |
 | `core/generated_images.py` | 11 |
 | `core/proactive/serialization.py` | 11 |
@@ -278,7 +280,6 @@
 | `api/asset_routes.py` | 9 |
 | `api/routes.py` | 9 |
 | `app/group_learning/candidate_service.py` | 9 |
-| `core/agent_runtime/native.py` | 9 |
 | `core/db/session.py` | 9 |
 | `core/group_learning/evidence.py` | 9 |
 | `core/jobs/contracts.py` | 9 |
@@ -305,6 +306,7 @@
 | `api/chat_content_helpers.py` | 8 |
 | `api/session_goal_routes.py` | 8 |
 | `app/group_ingress/service.py` | 8 |
+| `core/agent_runtime/governance.py` | 8 |
 | `core/agent_runtime/governance_contracts.py` | 8 |
 | `core/jobs/policies.py` | 8 |
 | `core/prompt_v2/template_loader.py` | 8 |
@@ -325,7 +327,6 @@
 | `api/admin/web_search_routes.py` | 7 |
 | `api/memory_routes.py` | 7 |
 | `core/agent_link/protocol.py` | 7 |
-| `core/agent_runtime/governance.py` | 7 |
 | `core/artifact_port.py` | 7 |
 | `core/client_meta.py` | 7 |
 | `core/evolution.py` | 7 |
@@ -367,6 +368,7 @@
 | `app/session_memory/group_rollup.py` | 6 |
 | `app/tool_services/skill.py` | 6 |
 | `core/admin/idempotency.py` | 6 |
+| `core/agent_orchestration/scheduler.py` | 6 |
 | `core/chat_delivery_service.py` | 6 |
 | `core/content_rules/adapters.py` | 6 |
 | `core/eval_sampling/db_sampler.py` | 6 |
@@ -381,6 +383,7 @@
 | `core/qq_outbound_renderer.py` | 6 |
 | `core/web_search/search_runtime.py` | 6 |
 | `foundation/message_contract/parsing.py` | 6 |
+| `nanobot_kt/runtime_adapter.py` | 6 |
 | `nanobot_kt/tool_runtime.py` | 6 |
 | `scripts/build_release_manifest.py` | 6 |
 | `webui/src/features/models/ModelsPage.jsx` | 6 |
@@ -393,7 +396,6 @@
 | `app/tool_services/image_summary.py` | 5 |
 | `clients/provider_adapter.py` | 5 |
 | `clients/task_runtime_adapter.py` | 5 |
-| `core/agent_orchestration/scheduler.py` | 5 |
 | `core/agent_runtime/selection.py` | 5 |
 | `core/compaction.py` | 5 |
 | `core/durable_tasks/contracts.py` | 5 |
@@ -451,7 +453,6 @@
 | `foundation/identity/contracts.py` | 4 |
 | `foundation/llm/cache_usage.py` | 4 |
 | `nanobot_kt/model_provider_adapter.py` | 4 |
-| `nanobot_kt/runtime_adapter.py` | 4 |
 | `nanobot_kt/runtime_context_adapter.py` | 4 |
 | `sandboxd/auth.py` | 4 |
 | `sandboxd/concurrency.py` | 4 |
@@ -1946,8 +1947,8 @@
 | `decision.a877f363d9b2b80010e8` | `core/prompt_v2/template_resolution.py:130` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 8 | `reviewed` |
 |  | 摘要：baseline_report.drift_status != "untracked_legacy" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.8c15d5f61f464fc0f5b3` | `core/prompt_v2/variables.py:108` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 6 | `reviewed` |
-|  | 摘要：normalized in { "tasks/classifier_legacy", "tasks/private_decision", "tasks/news_daily_quality", "tasks/news_relevance_review", "tasks/group_analysis_topics", "tasks/group_analysis_titles", "tasks/group_analysis_quotes", "tasks/group_analy… |  |  |  |  |  |
+| `decision.96369b6f45154bb81ca1` | `core/prompt_v2/variables.py:108` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 6 | `reviewed` |
+|  | 摘要：normalized in { "tasks/classifier_legacy", "tasks/agent_subtask", "tasks/private_decision", "tasks/news_daily_quality", "tasks/news_relevance_review", "tasks/group_analysis_topics", "tasks/group_analysis_titles", "tasks/group_analysis_quot… |  |  |  |  |  |
 |  | 原因：人工复核：共享 message 变量适用的 Task key 集合属于 Prompt Runtime 类型化协议 |  |  |  |  |  |
 | `decision.308707ec7b6bc1b6ff38` | `core/qq_outbound_renderer.py:103` | `python.regex_call` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：_UNTRUSTED_CQ_FILE_RE.sub( "（文件消息已拒绝，请使用资产下载链接）", expanded, ) |  |  |  |  |  |

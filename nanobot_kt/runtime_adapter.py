@@ -26,6 +26,7 @@ from core.agent_runtime import (
     PermissionPort,
     RuntimeBudgetAccount,
     RuntimeBudgetManager,
+    RuntimeBudgetScope,
     RuntimeCapabilities,
     RuntimeCapability,
     RuntimeMessage,
@@ -520,6 +521,9 @@ class KtRuntimeAdapter:
                     request.context.execution_identity(),
                     request.context.governance,
                 )
+                consumption_before = self._active_budget.consumption(
+                    RuntimeBudgetScope.TURN
+                )
                 with runtime_context_scope(runtime_context):
                     async with asyncio.timeout(
                         self._active_budget.remaining_time_seconds()
@@ -548,10 +552,48 @@ class KtRuntimeAdapter:
                             )
                             if callable(raise_deferred):
                                 raise_deferred()
+                        consumption = self._active_budget.consumption(
+                            RuntimeBudgetScope.TURN
+                        )
+                        model_calls = (
+                            consumption.model_calls
+                            - consumption_before.model_calls
+                        )
+                        tokens = consumption.tokens - consumption_before.tokens
+                        cost_microunits = (
+                            consumption.cost_microunits
+                            - consumption_before.cost_microunits
+                        )
+                        if min(model_calls, tokens, cost_microunits) < 0:
+                            raise AgentRuntimeExecutionError(
+                                "KT Turn 预算累计量发生回退",
+                                runtime_id=self.runtime_id,
+                            )
+                        detailed_usage = self._read_runtime_usage()
+                        if (
+                            detailed_usage is not None
+                            and (
+                                model_calls == 0
+                                or (
+                                    detailed_usage.total_tokens
+                                    == tokens
+                                    and detailed_usage.cost_microunits
+                                    == cost_microunits
+                                )
+                            )
+                        ):
+                            reported_usage = detailed_usage
+                        else:
+                            reported_usage = RuntimeUsage(
+                                input_tokens=tokens,
+                                cost_microunits=cost_microunits,
+                            )
                         result = AgentTurnResult(
                             raw_result=raw_result,
                             messages=self.read_conversation(),
                             tool_calls=self.inspect_tool_calls(),
+                            usage=reported_usage,
+                            model_calls=model_calls,
                         )
                         await dispatch_runtime_completion(
                             self._plugin_manager,
@@ -700,9 +742,12 @@ class KtRuntimeAdapter:
 
         for tool_call in result.tool_calls:
             await emitter.tool_activity(tool_call)
-        usage = self._read_runtime_usage()
-        if usage is not None:
-            await emitter.usage(usage)
+        if (
+            result.usage.total_tokens
+            or result.usage.reasoning_tokens
+            or result.usage.cost_microunits
+        ):
+            await emitter.usage(result.usage)
         await emitter.end(RuntimeRunStatus.SUCCEEDED)
         return result
 

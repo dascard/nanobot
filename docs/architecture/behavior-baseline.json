@@ -1,7 +1,7 @@
 {
   "approved_changes": [
     {
-      "after_sha256": "e6a1a7b0e07f14e1919a4bbb93d039e2ec44a2c33aa8e339a32aa428e49751b5",
+      "after_sha256": "edd4cdddc6b9ed8d8196ae3bab852e387bea29a702e1302d3717c441bdbbb171",
       "before_sha256": null,
       "id": "agent_harness_stage1_runtime_baseline",
       "reason": "新增不导入 KT 的 Runtime 重放 fixture，冻结普通、流式、多轮工具消息、中断信号、模型路由、conversation 和生命周期；本项只记录升级前行为，不改变生产 Runtime。",
@@ -145,7 +145,7 @@
       "stage": "Agent Harness 阶段 6.2"
     },
     {
-      "after_sha256": "13a06f3e5c160cb14e05e09eb712f22f7c3608d39e6e9ce839a1e0aa2af9bb2b",
+      "after_sha256": "8ffab3ad2eba3dd2bc07d4b615dde50252ba23c8d80ba497eecea19cea256436",
       "before_sha256": "2bea17f21d71f93bf88174c1f0fdd56f624ca49f3227b02febd14a5cefed68e1",
       "id": "agent_harness_mcp_control_plane_prompt",
       "reason": "登记带 server namespace 的请求级 MCP 工具、冻结 schema、不可信结果信封和服务端秘密引用边界。",
@@ -225,7 +225,7 @@
       "stage": "Agent Harness 阶段 5.4"
     },
     {
-      "after_sha256": "3c8e355c9a34613f773a29b73f7da97fb246623946c251d31726ec2835d2f86b",
+      "after_sha256": "b22fd30e2070859fc65835513498d7818f6e3cb018ab8b8c6430072ded2d124b",
       "before_sha256": "ce3a26119eb761eb9f4635fb017f668aab162096a298d7da27fc277350dc2cc9",
       "id": "agent_harness_managed_skills_registry",
       "reason": "把 skill 从 KT 隐藏框架入口迁移为 Nanobot active 工具；只有服务端冻结可见版本锁后才动态启用。",
@@ -233,7 +233,7 @@
       "stage": "Agent Harness 阶段 6.1"
     }
   ],
-  "baseline_git_commit": "5b5389380bf2b6e8b15907f517aa314779259948",
+  "baseline_git_commit": "bc666c1c7857f0bd000f06a548b42cb5040705e2",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -259,7 +259,7 @@
       "id": "agent_runtime",
       "note": "使用框架无关 FakeAgentRuntime 重放普通、流式、工具链和中断信号，冻结 KT 升级前的 Port 输入、结果、conversation、route 与生命周期。",
       "path": "tests/golden/architecture_behavior/agent_runtime.json",
-      "sha256": "e6a1a7b0e07f14e1919a4bbb93d039e2ec44a2c33aa8e339a32aa428e49751b5"
+      "sha256": "edd4cdddc6b9ed8d8196ae3bab852e387bea29a702e1302d3717c441bdbbb171"
     },
     {
       "classification": "known_bad",
@@ -287,14 +287,14 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "13a06f3e5c160cb14e05e09eb712f22f7c3608d39e6e9ce839a1e0aa2af9bb2b"
+      "sha256": "8ffab3ad2eba3dd2bc07d4b615dde50252ba23c8d80ba497eecea19cea256436"
     },
     {
       "classification": "preserve",
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "3c8e355c9a34613f773a29b73f7da97fb246623946c251d31726ec2835d2f86b"
+      "sha256": "b22fd30e2070859fc65835513498d7818f6e3cb018ab8b8c6430072ded2d124b"
     },
     {
       "classification": "security_invariant",

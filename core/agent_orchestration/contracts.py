@@ -17,10 +17,11 @@ from core.agent_runtime.contracts import (
     RuntimeRunIdentity,
     RuntimeUsage,
 )
+from core.agent_runtime.governance_contracts import RuntimeAccessKind
 
 
 MULTI_AGENT_FEATURE_ID = "multi_agent_orchestration_v1"
-ORCHESTRATION_SCHEMA_VERSION = 1
+ORCHESTRATION_SCHEMA_VERSION = 2
 MAX_ROLE_COUNT = 32
 MAX_TASK_COUNT = 64
 MAX_TASK_INPUT_BYTES = 256 * 1024
@@ -60,6 +61,20 @@ class AgentRoleKind(str, Enum):
     WORKER = "worker"
     REVIEWER = "reviewer"
     AGGREGATOR = "aggregator"
+
+
+class AgentTaskPurpose(str, Enum):
+    EXPLORE = "explore"
+    RETRIEVE = "retrieve"
+    EXECUTE = "execute"
+    VERIFY = "verify"
+    JUDGE = "judge"
+    AGGREGATE = "aggregate"
+
+
+class AgentModelClass(str, Enum):
+    ECONOMY = "economy"
+    QUALITY = "quality"
 
 
 class AgentTaskOutputStatus(str, Enum):
@@ -249,6 +264,40 @@ class JsonObjectContract:
             raise ValueError(f"{name} 超过 {self.max_bytes} bytes")
         return frozen
 
+    def validate_partial(
+        self,
+        value: object,
+        *,
+        name: str,
+        extra_keys: tuple[str, ...] = (),
+    ) -> Mapping[str, object]:
+        """验证失败态 data：允许缺少成功必填字段，但仍拒绝越界字段。"""
+
+        if not isinstance(value, Mapping):
+            raise ValueError(f"{name} 必须是 JSON 对象")
+        extras = _text_tuple(
+            extra_keys,
+            "JSON partial extra key",
+            max_items=16,
+            max_chars=128,
+        )
+        frozen = _freeze_json(value)
+        assert isinstance(frozen, Mapping)
+        keys = frozenset(str(key) for key in frozen)
+        extra_set = set(extras)
+        unknown = keys - self.allowed_keys - extra_set
+        if unknown:
+            raise ValueError(f"{name} 含未知字段：{','.join(sorted(unknown))}")
+        host_extra_keys = extra_set - self.allowed_keys
+        contract_payload = {
+            key: item
+            for key, item in frozen.items()
+            if key not in host_extra_keys
+        }
+        if len(canonical_json_bytes(contract_payload)) > self.max_bytes:
+            raise ValueError(f"{name} 超过 {self.max_bytes} bytes")
+        return frozen
+
     def to_dict(self) -> dict[str, object]:
         return {
             "required_keys": list(self.required_keys),
@@ -289,6 +338,218 @@ class AgentRoleDefinition:
             "kind": self.kind.value,
             "description": self.description,
             "capabilities": list(self.capabilities),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTaskAccessRequirement:
+    """计划声明的最小资源需求；授权来源只能由宿主从父信封派生。"""
+
+    kind: RuntimeAccessKind
+    resource: str
+    operations: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", RuntimeAccessKind(self.kind))
+        resource = _identifier(
+            self.resource,
+            "task access resource",
+            max_chars=512,
+        )
+        if "*" in resource or "?" in resource:
+            raise ValueError("task access resource 不允许通配符")
+        object.__setattr__(self, "resource", resource)
+        object.__setattr__(
+            self,
+            "operations",
+            tuple(sorted(_text_tuple(
+                self.operations,
+                "task access operation",
+                max_items=32,
+                max_chars=128,
+                allow_empty=False,
+            ))),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind.value,
+            "resource": self.resource,
+            "operations": list(self.operations),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTaskAuthority:
+    """任务可见资源、Skill 与 MCP 的显式最小集合。"""
+
+    access: tuple[AgentTaskAccessRequirement, ...] = ()
+    skill_ids: tuple[str, ...] = ()
+    mcp_tool_names: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        raw_access = tuple(self.access)
+        if any(
+            not isinstance(item, AgentTaskAccessRequirement)
+            for item in raw_access
+        ):
+            raise ValueError("task authority access 无效")
+        access = tuple(sorted(
+            raw_access,
+            key=lambda item: (item.kind.value, item.resource),
+        ))
+        keys = [(item.kind, item.resource) for item in access]
+        if len(keys) != len(set(keys)):
+            raise ValueError("task authority 同一 kind/resource 只能声明一次")
+        object.__setattr__(self, "access", access)
+        skill_ids = tuple(sorted(_text_tuple(
+            self.skill_ids,
+            "task skill_id",
+            max_items=64,
+            max_chars=256,
+        )))
+        mcp_names = tuple(sorted(_text_tuple(
+            self.mcp_tool_names,
+            "task mcp_tool_name",
+            max_items=64,
+            max_chars=128,
+        )))
+        object.__setattr__(self, "skill_ids", skill_ids)
+        object.__setattr__(self, "mcp_tool_names", mcp_names)
+        if skill_ids and not any(
+            item.kind is RuntimeAccessKind.SKILL for item in access
+        ):
+            raise ValueError("task skill_ids 必须绑定显式 Skill access")
+        if not skill_ids and any(
+            item.kind is RuntimeAccessKind.SKILL for item in access
+        ):
+            raise ValueError("task Skill access 必须收窄到具体 skill_ids")
+        tool_names = {
+            item.resource.removeprefix("tool:")
+            for item in access
+            if item.kind is RuntimeAccessKind.TOOL
+            and item.resource.startswith("tool:")
+            and "execute" in item.operations
+        }
+        if not set(mcp_names) <= tool_names:
+            raise ValueError("task MCP 工具必须同时声明精确 Tool execute access")
+        if mcp_names and not any(
+            item.kind is RuntimeAccessKind.MCP for item in access
+        ):
+            raise ValueError("task MCP 工具必须绑定显式 MCP access")
+
+    @property
+    def tool_names(self) -> frozenset[str]:
+        return frozenset(
+            item.resource.removeprefix("tool:")
+            for item in self.access
+            if item.kind is RuntimeAccessKind.TOOL
+            and item.resource.startswith("tool:")
+            and "execute" in item.operations
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "access": [item.to_dict() for item in self.access],
+            "skill_ids": list(self.skill_ids),
+            "mcp_tool_names": list(self.mcp_tool_names),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTaskRuntimeBudget:
+    """单个子 Runtime 的硬预算；Subagent 预算固定为零。"""
+
+    model_call_limit: int
+    token_limit: int
+    cost_limit_microunits: int
+    tool_call_limit: int
+    time_limit_ms: int
+
+    def __post_init__(self) -> None:
+        maxima = {
+            "model_call_limit": 10_000,
+            "token_limit": 100_000_000,
+            "cost_limit_microunits": 10_000_000_000,
+            "tool_call_limit": 100_000,
+            "time_limit_ms": 3_600_000,
+        }
+        for name, maximum in maxima.items():
+            value = getattr(self, name)
+            minimum = 1 if name in {
+                "model_call_limit",
+                "token_limit",
+                "time_limit_ms",
+            } else 0
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError(
+                    f"task runtime budget {name} 必须是 {minimum}..{maximum} 的整数"
+                )
+
+    @property
+    def step_limit(self) -> int:
+        return self.model_call_limit + self.tool_call_limit
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "model_call_limit": self.model_call_limit,
+            "token_limit": self.token_limit,
+            "cost_limit_microunits": self.cost_limit_microunits,
+            "tool_call_limit": self.tool_call_limit,
+            "time_limit_ms": self.time_limit_ms,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTaskRuntimePolicy:
+    """绑定任务用途、模型等级、固定路由与最小权限。"""
+
+    purpose: AgentTaskPurpose
+    model_class: AgentModelClass
+    model_route_id: str
+    model_route_sha256: str
+    authority: AgentTaskAuthority
+    budget: AgentTaskRuntimeBudget
+
+    def __post_init__(self) -> None:
+        purpose = AgentTaskPurpose(self.purpose)
+        model_class = AgentModelClass(self.model_class)
+        object.__setattr__(self, "purpose", purpose)
+        object.__setattr__(self, "model_class", model_class)
+        object.__setattr__(
+            self,
+            "model_route_id",
+            _identifier(self.model_route_id, "task model_route_id", max_chars=256),
+        )
+        object.__setattr__(
+            self,
+            "model_route_sha256",
+            _sha256(self.model_route_sha256, "task model_route_sha256"),
+        )
+        if not isinstance(self.authority, AgentTaskAuthority):
+            raise ValueError("task runtime authority 无效")
+        if not isinstance(self.budget, AgentTaskRuntimeBudget):
+            raise ValueError("task runtime budget 无效")
+        if model_class is AgentModelClass.ECONOMY and purpose not in {
+            AgentTaskPurpose.EXPLORE,
+            AgentTaskPurpose.RETRIEVE,
+        }:
+            raise ValueError("低成本模型只允许探索或检索任务")
+        if purpose in {
+            AgentTaskPurpose.VERIFY,
+            AgentTaskPurpose.JUDGE,
+            AgentTaskPurpose.AGGREGATE,
+        } and model_class is not AgentModelClass.QUALITY:
+            raise ValueError("验证、裁判和汇总必须使用高质量模型")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "purpose": self.purpose.value,
+            "model_class": self.model_class.value,
+            "model_route_id": self.model_route_id,
+            "model_route_sha256": self.model_route_sha256,
+            "authority": self.authority.to_dict(),
+            "budget": self.budget.to_dict(),
         }
 
 
@@ -389,6 +650,7 @@ class AgentTaskOutput:
     data: Mapping[str, object] = field(default_factory=dict)
     usage: RuntimeUsage = field(default_factory=RuntimeUsage)
     model_calls: int = 1
+    tool_calls: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", AgentTaskOutputStatus(self.status))
@@ -420,6 +682,8 @@ class AgentTaskOutput:
             raise ValueError("task usage 必须是 RuntimeUsage")
         if type(self.model_calls) is not int or not 0 <= self.model_calls <= 100_000:
             raise ValueError("task model_calls 必须是 0..100000 的整数")
+        if type(self.tool_calls) is not int or not 0 <= self.tool_calls <= 100_000:
+            raise ValueError("task tool_calls 必须是 0..100000 的整数")
         if len(canonical_json_bytes(self.to_dict())) > MAX_TASK_OUTPUT_BYTES:
             raise ValueError("task output 超过 512 KiB")
 
@@ -457,6 +721,7 @@ class AgentTaskOutput:
                 "cost_microunits": self.usage.cost_microunits,
             },
             "model_calls": self.model_calls,
+            "tool_calls": self.tool_calls,
         }
 
 
@@ -471,6 +736,7 @@ class AgentTaskDefinition:
     output_contract: JsonObjectContract
     completion: AgentTaskCompletionCondition
     timeout_ms: int = 60_000
+    runtime_policy: AgentTaskRuntimePolicy | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "task_id", _identifier(self.task_id, "task_id"))
@@ -524,6 +790,11 @@ class AgentTaskDefinition:
             "timeout_ms",
             _positive_int(self.timeout_ms, "task timeout_ms", 3_600_000),
         )
+        if self.runtime_policy is not None:
+            if not isinstance(self.runtime_policy, AgentTaskRuntimePolicy):
+                raise ValueError("task runtime_policy 无效")
+            if self.runtime_policy.budget.time_limit_ms > self.timeout_ms:
+                raise ValueError("task runtime budget 不能超过任务 timeout_ms")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -536,6 +807,11 @@ class AgentTaskDefinition:
             "output_contract": self.output_contract.to_dict(),
             "completion": self.completion.to_dict(),
             "timeout_ms": self.timeout_ms,
+            "runtime_policy": (
+                self.runtime_policy.to_dict()
+                if self.runtime_policy is not None
+                else None
+            ),
         }
 
 
@@ -550,6 +826,7 @@ class AgentOrchestrationBudget:
     max_output_bytes: int
     max_checkpoints: int
     max_spawn_depth: int = 1
+    max_tool_calls: int = 0
 
     def __post_init__(self) -> None:
         maxima = {
@@ -561,13 +838,17 @@ class AgentOrchestrationBudget:
             "max_elapsed_ms": 86_400_000,
             "max_output_bytes": MAX_CHECKPOINT_BYTES,
             "max_checkpoints": MAX_TASK_COUNT,
+            "max_tool_calls": 100_000,
         }
         for name, maximum in maxima.items():
-            object.__setattr__(
-                self,
-                name,
-                _positive_int(getattr(self, name), name, maximum),
-            )
+            value = getattr(self, name)
+            if name == "max_tool_calls":
+                if type(value) is not int or not 0 <= value <= maximum:
+                    raise ValueError(
+                        f"{name} 必须是 0..{maximum} 的整数"
+                    )
+                continue
+            object.__setattr__(self, name, _positive_int(value, name, maximum))
         if self.max_concurrency > self.max_tasks:
             raise ValueError("max_concurrency 不能超过 max_tasks")
         if self.max_checkpoints < self.max_tasks:
@@ -586,6 +867,7 @@ class AgentOrchestrationBudget:
             "max_output_bytes": self.max_output_bytes,
             "max_checkpoints": self.max_checkpoints,
             "max_spawn_depth": self.max_spawn_depth,
+            "max_tool_calls": self.max_tool_calls,
         }
 
 
@@ -667,6 +949,62 @@ class AgentOrchestrationPlan:
         if any(aggregation_task_id in task.dependencies for task in tasks):
             raise ValueError("其他任务不能依赖 aggregation task")
         object.__setattr__(self, "aggregation_task_id", aggregation_task_id)
+        runtime_tasks = tuple(
+            task for task in tasks if task.runtime_policy is not None
+        )
+        if runtime_tasks and len(runtime_tasks) != len(tasks):
+            raise ValueError("同一计划不能混用 Runtime 任务和未绑定执行策略的任务")
+        if runtime_tasks:
+            totals = {
+                "max_model_calls": sum(
+                    task.runtime_policy.budget.model_call_limit
+                    for task in runtime_tasks
+                ),
+                "max_tokens": sum(
+                    task.runtime_policy.budget.token_limit
+                    for task in runtime_tasks
+                ),
+                "max_cost_microunits": sum(
+                    task.runtime_policy.budget.cost_limit_microunits
+                    for task in runtime_tasks
+                ),
+                "max_tool_calls": sum(
+                    task.runtime_policy.budget.tool_call_limit
+                    for task in runtime_tasks
+                ),
+            }
+            for budget_name, requested in totals.items():
+                if requested > getattr(self.budget, budget_name):
+                    raise ValueError(
+                        f"task runtime budgets 合计超过 plan {budget_name}"
+                    )
+            for task in runtime_tasks:
+                policy = task.runtime_policy
+                assert policy is not None
+                role_kind = role_by_id[task.role_id].kind
+                if role_kind is AgentRoleKind.WORKER and policy.purpose not in {
+                    AgentTaskPurpose.EXPLORE,
+                    AgentTaskPurpose.RETRIEVE,
+                    AgentTaskPurpose.EXECUTE,
+                }:
+                    raise ValueError("worker 任务用途必须是探索、检索或执行")
+                if role_kind is AgentRoleKind.REVIEWER:
+                    if policy.purpose not in {
+                        AgentTaskPurpose.VERIFY,
+                        AgentTaskPurpose.JUDGE,
+                    } or not task.dependencies:
+                        raise ValueError("reviewer 必须验证或裁判显式依赖")
+                    dependency_routes = {
+                        task_by_id[dependency].runtime_policy.model_route_id
+                        for dependency in task.dependencies
+                    }
+                    if policy.model_route_id in dependency_routes:
+                        raise ValueError("reviewer 必须使用独立模型路由")
+                if (
+                    role_kind is AgentRoleKind.AGGREGATOR
+                    and policy.purpose is not AgentTaskPurpose.AGGREGATE
+                ):
+                    raise ValueError("aggregator 任务用途必须是 aggregate")
         self._validate_acyclic(task_by_id)
         digest = hashlib.sha256(canonical_json_bytes(self.to_dict(include_hash=False))).hexdigest()
         declared = str(self.content_sha256 or "").strip().lower()
@@ -1112,8 +1450,11 @@ __all__ = [
     "AgentOrchestrationRequest",
     "AgentOrchestrationResult",
     "AgentOrchestrationState",
+    "AgentModelClass",
     "AgentRoleDefinition",
     "AgentRoleKind",
+    "AgentTaskAccessRequirement",
+    "AgentTaskAuthority",
     "AgentTaskCompletionCondition",
     "AgentTaskDefinition",
     "AgentTaskDependencyReceipt",
@@ -1123,6 +1464,9 @@ __all__ = [
     "AgentTaskInputBinding",
     "AgentTaskOutput",
     "AgentTaskOutputStatus",
+    "AgentTaskPurpose",
+    "AgentTaskRuntimeBudget",
+    "AgentTaskRuntimePolicy",
     "AgentTaskState",
     "JsonObjectContract",
     "MAX_CHECKPOINT_BYTES",

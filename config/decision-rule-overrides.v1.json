@@ -21,7 +21,7 @@
         "category": "compatibility"
       },
       "expected_count": 144,
-      "expected_rule_ids_sha256": "a46262ebe5e80970b0042486a684fcddb53052202a588082c1894f1acfb5af30",
+      "expected_rule_ids_sha256": "6672d4964f00c23b5e411aef575e1b077815ecb9e7ad4e6f5540f8c346b3a92c",
       "override": {
         "category": "compatibility",
         "disposition": "compatibility_migration",
@@ -1108,7 +1108,7 @@
       "review_status": "reviewed",
       "reason": "人工复核：遗留强制候选的单行状态迁移必须满足 CAS，属于数据一致性合同"
     },
-    "decision.8c15d5f61f464fc0f5b3": {
+    "decision.96369b6f45154bb81ca1": {
       "category": "protocol_syntax",
       "disposition": "policy",
       "review_status": "reviewed",

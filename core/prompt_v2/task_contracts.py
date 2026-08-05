@@ -820,7 +820,62 @@ _SESSION_SUMMARY_OUTPUT_SCHEMA = {
 }
 
 
+_AGENT_SUBTASK_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["success", "warning", "error"],
+        },
+        "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+        },
+        "next_actions": _string_array_schema(
+            max_items=16,
+            max_length=500,
+        ) | {"uniqueItems": True},
+        "artifacts": {
+            "type": "array",
+            "maxItems": 128,
+            "uniqueItems": True,
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+            },
+        },
+        "data": {
+            "type": "object",
+            "maxProperties": 256,
+        },
+    },
+    "required": [
+        "status",
+        "summary",
+        "next_actions",
+        "artifacts",
+        "data",
+    ],
+    "additionalProperties": False,
+}
+
+
 _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
+        _contract(
+            "tasks/agent_subtask",
+            owner_module="core.agent_orchestration.runtime_executor",
+            domain="agent_orchestration",
+            required=("message",),
+            non_empty=("message",),
+            payload=("message",),
+            render_mode="system_with_user_ref",
+            output_contract_id="agent_subtask_output_v1",
+            output_schema=_AGENT_SUBTASK_OUTPUT_SCHEMA,
+            template_failure_policy="runtime_default_fail_closed",
+            output_failure_policy="block",
+        ),
         _contract(
             "tasks/classifier_legacy",
             owner_module="clients.classifier_client",
@@ -1266,6 +1321,12 @@ _TASK_CONTRACT_REGISTRY = TaskContractRegistry((
 
 
 _TASK_INVOCATION_SPECS: tuple[TaskInvocationSpec, ...] = (
+    TaskInvocationSpec(
+        "agent_subtask",
+        ("tasks/agent_subtask",),
+        "messages",
+        "core.agent_orchestration.runtime_executor.AgentRuntimeTaskExecutor",
+    ),
     TaskInvocationSpec(
         "classifier_legacy",
         ("tasks/classifier_legacy",),

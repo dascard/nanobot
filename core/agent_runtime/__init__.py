@@ -55,6 +55,7 @@ from core.agent_runtime.errors import (
 )
 from core.agent_runtime.governance import (
     RuntimeBudgetAccount,
+    RuntimeBudgetConsumption,
     RuntimeBudgetDecision,
     RuntimeBudgetDecisionOutcome,
     RuntimeBudgetDecisionSink,
@@ -198,6 +199,7 @@ __all__ = [
     "RuntimeAttribute",
     "RuntimeChatType",
     "RuntimeBudgetAccount",
+    "RuntimeBudgetConsumption",
     "RuntimeBudgetDecision",
     "RuntimeBudgetDecisionOutcome",
     "RuntimeBudgetDecisionSink",

@@ -107,6 +107,7 @@ def _scoped_variables(scope: str) -> tuple[VariableDef, ...]:
         return _MEMORY_DIGEST_VARIABLES
     if normalized in {
         "tasks/classifier_legacy",
+        "tasks/agent_subtask",
         "tasks/private_decision",
         "tasks/news_daily_quality",
         "tasks/news_relevance_review",

@@ -5,6 +5,7 @@ from core.agent_orchestration.checkpoint_store import (
 )
 from core.agent_orchestration.contracts import (
     MULTI_AGENT_FEATURE_ID,
+    AgentModelClass,
     AgentOrchestrationApproval,
     AgentOrchestrationBudget,
     AgentOrchestrationCheckpoint,
@@ -16,6 +17,8 @@ from core.agent_orchestration.contracts import (
     AgentOrchestrationState,
     AgentRoleDefinition,
     AgentRoleKind,
+    AgentTaskAccessRequirement,
+    AgentTaskAuthority,
     AgentTaskCompletionCondition,
     AgentTaskDefinition,
     AgentTaskDependencyReceipt,
@@ -25,6 +28,9 @@ from core.agent_orchestration.contracts import (
     AgentTaskInputBinding,
     AgentTaskOutput,
     AgentTaskOutputStatus,
+    AgentTaskPurpose,
+    AgentTaskRuntimeBudget,
+    AgentTaskRuntimePolicy,
     AgentTaskState,
     JsonObjectContract,
 )
@@ -33,10 +39,19 @@ from core.agent_orchestration.scheduler import (
     AgentOrchestrationCancellation,
 )
 from core.agent_orchestration.scope import current_orchestration_depth
+from core.agent_orchestration.runtime_executor import (
+    AGENT_SUBTASK_PROMPT_KEY,
+    AgentRuntimeTaskExecutor,
+    AgentTaskRuntimeEnvironment,
+    ChildAgentRuntimeBinding,
+    ChildAgentRuntimeFactory,
+    ChildAgentRuntimeLease,
+)
 
 
 __all__ = [
     "AgentDagOrchestrator",
+    "AgentModelClass",
     "AgentOrchestrationApproval",
     "AgentOrchestrationBudget",
     "AgentOrchestrationCancellation",
@@ -49,6 +64,9 @@ __all__ = [
     "AgentOrchestrationState",
     "AgentRoleDefinition",
     "AgentRoleKind",
+    "AgentRuntimeTaskExecutor",
+    "AgentTaskAccessRequirement",
+    "AgentTaskAuthority",
     "AgentTaskCompletionCondition",
     "AgentTaskDefinition",
     "AgentTaskDependencyReceipt",
@@ -58,9 +76,17 @@ __all__ = [
     "AgentTaskInputBinding",
     "AgentTaskOutput",
     "AgentTaskOutputStatus",
+    "AgentTaskPurpose",
+    "AgentTaskRuntimeBudget",
+    "AgentTaskRuntimeEnvironment",
+    "AgentTaskRuntimePolicy",
     "AgentTaskState",
     "InMemoryAgentOrchestrationCheckpointStore",
     "JsonObjectContract",
     "MULTI_AGENT_FEATURE_ID",
+    "AGENT_SUBTASK_PROMPT_KEY",
+    "ChildAgentRuntimeBinding",
+    "ChildAgentRuntimeFactory",
+    "ChildAgentRuntimeLease",
     "current_orchestration_depth",
 ]

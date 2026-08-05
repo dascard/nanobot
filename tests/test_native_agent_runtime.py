@@ -880,6 +880,34 @@ async def test_native_runtime_streams_typed_deltas_usage_and_end_event():
 
 
 @pytest.mark.asyncio
+async def test_native_runtime_reports_each_call_usage_instead_of_turn_cumulative():
+    completion = _ScriptedCompletionPort(responses=(
+        _assistant_response(
+            "第一次",
+            usage={"prompt_tokens": 3, "completion_tokens": 2},
+        ),
+        _assistant_response(
+            "第二次",
+            usage={"prompt_tokens": 4, "completion_tokens": 1},
+        ),
+    ))
+    runtime = _runtime(completion)
+    await runtime.start()
+    context = _context(governance=_governance_with_limits(
+        model_calls=2,
+        tokens=20,
+    ))
+
+    first = await runtime.run(AgentTurnRequest(context, "第一次"))
+    second = await runtime.run(AgentTurnRequest(context, "第二次"))
+
+    assert first.model_calls == 1
+    assert second.model_calls == 1
+    assert first.usage.total_tokens == 5
+    assert second.usage.total_tokens == 5
+
+
+@pytest.mark.asyncio
 async def test_native_runtime_retries_only_before_irreversible_model_output():
     completion = _ScriptedCompletionPort(
         responses=(

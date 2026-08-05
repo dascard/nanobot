@@ -44,6 +44,7 @@ class RuntimePlanKind(str, Enum):
     PROMPT = "prompt"
     TOOL = "tool"
     SKILL = "skill"
+    MCP = "mcp"
     MODEL = "model"
     MEMORY = "memory"
     WORKSPACE = "workspace"
@@ -952,10 +953,16 @@ class AgentTurnResult:
     raw_result: object
     messages: tuple[RuntimeMessage, ...]
     tool_calls: tuple[RuntimeToolCall, ...] = ()
+    usage: RuntimeUsage = field(default_factory=RuntimeUsage)
+    model_calls: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "messages", tuple(self.messages))
         object.__setattr__(self, "tool_calls", tuple(self.tool_calls))
+        if not isinstance(self.usage, RuntimeUsage):
+            raise ValueError("turn result usage 必须是 RuntimeUsage")
+        if type(self.model_calls) is not int or self.model_calls < 0:
+            raise ValueError("turn result model_calls 必须是非负整数")
 
 
 @dataclass(frozen=True, slots=True)

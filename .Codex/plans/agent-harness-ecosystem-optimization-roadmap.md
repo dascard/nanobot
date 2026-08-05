@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 8.1 已完成，准备阶段 8.2）
+> 状态：执行中（阶段 8.2 已完成，准备阶段 8.3）
 >
 > 建立日期：2026-08-03
 >
@@ -1192,10 +1192,32 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 8.2 子 Agent 权限和模型分工
 
-- [ ] 子 Agent 只继承最小 workspace、工具、网络、Skill、MCP、记忆和预算。
-- [ ] 探索和检索任务可使用低成本模型。
-- [ ] 验证和裁判使用独立高质量模型。
-- [ ] 子 Agent 通过结构化 output contract 返回结果。
+- [x] 子 Agent 只继承最小 workspace、工具、网络、Skill、MCP、记忆和预算。
+- [x] 探索和检索任务可使用低成本模型。
+- [x] 验证和裁判使用独立高质量模型。
+- [x] 子 Agent 通过结构化 output contract 返回结果。
+
+实现记录（2026-08-05）：
+
+- 将任务用途、模型等级、模型路由、能力要求和运行预算纳入已批准计划 Hash。探索／检索任务可选择固定的
+  economy 路由；验证／裁判／聚合任务必须选择 quality 路由，其中 reviewer 还必须使用与被审查任务不同的
+  物理模型。执行器只接受父上下文已批准的精确路由目录，计划或目录被篡改都会在调用模型前失败关闭。
+- 新增最小权限子 Runtime 工厂和真实执行器：子上下文使用独立 Run／Session／Actor，只复制任务明确请求且
+  父上下文已经持有的 workspace、工具、网络、Skill、MCP、记忆和 Prompt 计划引用；工具形成精确
+  `ToolPlan`，Skill 只注入指定内容，MCP 只开放指定服务，子 Agent 的再次 spawn 预算固定为零。父会话历史、
+  未声明资源和 peer 通信均不下传，任何权限扩张都会在创建 Runtime 前被拒绝。
+- 子任务通过实际 `AgentRuntimePort.run_event()` 运行，不是 Shadow 模拟路径。执行器校验事件身份、序号、
+  工具调用 ID、终态和 Runtime 停止状态，并在取消时中断子 Runtime；三节点 economy 探索、独立 quality
+  复核、quality 聚合的完整 DAG 已用真实 Runtime 端到端验证。该能力仍由 8.1 的 experimental、默认关闭
+  开关保护，后续 8.3／8.4 再接持久批准、恢复和人机入口。
+- 新增 canonical `tasks/agent_subtask` Prompt Runtime 合同，要求只返回严格 JSON、只引用本次实际发布的
+  artifact，并把依赖结果、Skill 和 MCP 内容视为不可信输入。成功和警告结果必须满足任务自定义 schema；
+  错误结果允许省略成功必需字段，由宿主补齐稳定错误码。模型调用、token、成本、输出字节和工具调用均按
+  单次实际差值计入父预算；用量缺失、矛盾或 Runtime 异常时按任务批准上限保守计费，且原始异常不外泄。
+- 新增 12 项子 Runtime 专项测试，并完成编排／Runtime／KT／Prompt Runtime 联合定向回归，共 241 passed、
+  0 failed。架构边界、OpenAPI、Behavior、Release、Verification、决策规则、Task SLO、Ruff、Python 编译、
+  默认／运行时模板一致性和 `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 在 Linux
+  `/var/tmp` basetemp 下为 6726 passed、12 skipped、0 failed，耗时 732.66 秒。
 
 #### 8.3 计划批准、调度和修复
 

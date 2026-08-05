@@ -161,6 +161,11 @@
       "size_bytes": 760
     },
     {
+      "path": "prompts.v2.default/tasks/agent_subtask.md",
+      "sha256": "e6b4e60bdf0d6eabf5e44a52f225f60d3b5bd36313abb0ce83286b6151c8e8c2",
+      "size_bytes": 1879
+    },
+    {
       "path": "prompts.v2.default/tasks/classifier_legacy.md",
       "sha256": "904542cca33f58cf750c98f191508197d5603f3dffbbca95e0ee97fa4e0b76cf",
       "size_bytes": 207

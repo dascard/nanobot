@@ -7643,6 +7643,81 @@
   ],
   "task_contracts": [
     {
+      "domain": "agent_orchestration",
+      "editable": true,
+      "non_empty_call_values": [
+        "message"
+      ],
+      "output_contract_id": "agent_subtask_output_v1",
+      "output_failure_policy": "block",
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 128,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "data": {
+            "maxProperties": 256,
+            "type": "object"
+          },
+          "next_actions": {
+            "items": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "status": {
+            "enum": [
+              "success",
+              "warning",
+              "error"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "summary",
+          "next_actions",
+          "artifacts",
+          "data"
+        ],
+        "type": "object"
+      },
+      "owner_module": "core.agent_orchestration.runtime_executor",
+      "payload_variables": [
+        "message"
+      ],
+      "render_mode": "system_with_user_ref",
+      "required_call_values": [
+        "message"
+      ],
+      "required_variables": [
+        "message"
+      ],
+      "source_precedence": [
+        "runtime",
+        "default"
+      ],
+      "task_key": "tasks/agent_subtask",
+      "template_failure_policy": "runtime_default_fail_closed"
+    },
+    {
       "domain": "model_routing",
       "editable": true,
       "non_empty_call_values": [

@@ -98,6 +98,18 @@ class RuntimeBudgetReservation:
     turn_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeBudgetConsumption:
+    """预算账户的只读累计量，用于 Runtime 回传真实物理消费。"""
+
+    scope: RuntimeBudgetScope
+    model_calls: int
+    tokens: int
+    cost_microunits: int
+    steps: int
+    concurrency: int
+
+
 def _numeric_policy(limit: RuntimeBudgetLimit) -> tuple[int, ...]:
     return (
         limit.model_call_limit,
@@ -180,6 +192,23 @@ class RuntimeBudgetAccount:
     @property
     def governance(self) -> RuntimeGovernanceEnvelope:
         return self._governance
+
+    def consumption(
+        self,
+        scope: RuntimeBudgetScope,
+    ) -> RuntimeBudgetConsumption:
+        """返回当前 Run／Turn／Tool／Subagent 的不可变用量快照。"""
+
+        normalized = RuntimeBudgetScope(scope)
+        state = self._state(normalized)
+        return RuntimeBudgetConsumption(
+            scope=normalized,
+            model_calls=state.model_calls,
+            tokens=state.tokens,
+            cost_microunits=state.cost_microunits,
+            steps=state.steps,
+            concurrency=state.concurrency,
+        )
 
     def bind(
         self,
@@ -720,6 +749,7 @@ class RuntimeBudgetAccount:
         usage: RuntimeUsage,
         *,
         model_calls: int,
+        tool_calls: int = 0,
     ) -> None:
         """把结构化 Worker 用量计入父 Run、Turn 与 Subagent 总预算。"""
 
@@ -727,6 +757,8 @@ class RuntimeBudgetAccount:
             raise TypeError("subagent usage 必须是 RuntimeUsage")
         if type(model_calls) is not int or model_calls < 0:
             raise ValueError("subagent model_calls 必须是非负整数")
+        if type(tool_calls) is not int or tool_calls < 0:
+            raise ValueError("subagent tool_calls 必须是非负整数")
         identity = self._identity
         self._check_time(identity)
         self._check_subagent_time(
@@ -747,6 +779,7 @@ class RuntimeBudgetAccount:
                 model_calls=model_calls,
                 tokens=usage.total_tokens,
                 cost_microunits=usage.cost_microunits,
+                steps=tool_calls,
             )
             if exceeded:
                 self._deny(
@@ -769,6 +802,7 @@ class RuntimeBudgetAccount:
                 model_calls=model_calls,
                 tokens=usage.total_tokens,
                 cost_microunits=usage.cost_microunits,
+                steps=tool_calls,
             )
             self._emit(
                 identity,
@@ -834,6 +868,7 @@ class RuntimeBudgetManager:
 
 __all__ = [
     "RuntimeBudgetAccount",
+    "RuntimeBudgetConsumption",
     "RuntimeBudgetDecision",
     "RuntimeBudgetDecisionOutcome",
     "RuntimeBudgetDecisionSink",

@@ -49,6 +49,7 @@ from core.agent_runtime.governance import (
     RuntimeBudgetAccount,
     RuntimeBudgetManager,
 )
+from core.agent_runtime.governance_contracts import RuntimeBudgetScope
 from core.agent_runtime.recovery import (
     RuntimeCheckpointBoundary,
     RuntimeCheckpointCapture,
@@ -338,6 +339,26 @@ def _merge_usage(
         ),
         reasoning_tokens=current.reasoning_tokens + incoming.reasoning_tokens,
         cost_microunits=current.cost_microunits + incoming.cost_microunits,
+    )
+
+
+def _reported_usage(
+    detailed: RuntimeUsage | None,
+    *,
+    tokens: int,
+    cost_microunits: int,
+) -> RuntimeUsage:
+    """优先保留细分 usage；与预算累计不一致时以硬门禁计数为准。"""
+
+    if (
+        detailed is not None
+        and detailed.total_tokens == tokens
+        and detailed.cost_microunits == cost_microunits
+    ):
+        return detailed
+    return RuntimeUsage(
+        input_tokens=tokens,
+        cost_microunits=cost_microunits,
     )
 
 
@@ -1642,6 +1663,7 @@ class NativeAgentRuntime:
         on_context_decision: NativeContextDecisionHandler | None,
     ) -> _NativeRunOutcome:
         plan = self._resolve_tool_plan(request)
+        consumption_before = budget.consumption(RuntimeBudgetScope.TURN)
         messages = list(self._messages)
         if request.kind is RuntimeTurnKind.USER_INPUT:
             messages.append(RuntimeMessage("user", request.content))
@@ -1695,13 +1717,34 @@ class NativeAgentRuntime:
                     receipt_ids=receipt_ids,
                     resumable=recovery_resumable,
                 )
+                consumption = budget.consumption(RuntimeBudgetScope.TURN)
+                model_calls = (
+                    consumption.model_calls - consumption_before.model_calls
+                )
+                tokens = consumption.tokens - consumption_before.tokens
+                cost_microunits = (
+                    consumption.cost_microunits
+                    - consumption_before.cost_microunits
+                )
+                if min(model_calls, tokens, cost_microunits) < 0:
+                    raise AgentRuntimeExecutionError(
+                        "Native Turn 预算累计量发生回退",
+                        runtime_id=self.runtime_id,
+                    )
+                reported_usage = _reported_usage(
+                    turn_usage,
+                    tokens=tokens,
+                    cost_microunits=cost_microunits,
+                )
                 return _NativeRunOutcome(
                     result=AgentTurnResult(
                         raw_result=dict(completion.raw_response),
                         messages=self._messages,
                         tool_calls=self._tool_calls,
+                        usage=reported_usage,
+                        model_calls=model_calls,
                     ),
-                    usage=turn_usage,
+                    usage=reported_usage,
                 )
 
             tool_rounds += 1
@@ -1837,13 +1880,34 @@ class NativeAgentRuntime:
                     receipt_ids=receipt_ids,
                     resumable=recovery_resumable,
                 )
+                consumption = budget.consumption(RuntimeBudgetScope.TURN)
+                model_calls = (
+                    consumption.model_calls - consumption_before.model_calls
+                )
+                tokens = consumption.tokens - consumption_before.tokens
+                cost_microunits = (
+                    consumption.cost_microunits
+                    - consumption_before.cost_microunits
+                )
+                if min(model_calls, tokens, cost_microunits) < 0:
+                    raise AgentRuntimeExecutionError(
+                        "Native Turn 预算累计量发生回退",
+                        runtime_id=self.runtime_id,
+                    )
+                reported_usage = _reported_usage(
+                    turn_usage,
+                    tokens=tokens,
+                    cost_microunits=cost_microunits,
+                )
                 return _NativeRunOutcome(
                     result=AgentTurnResult(
                         raw_result=dict(completion.raw_response),
                         messages=self._messages,
                         tool_calls=self._tool_calls,
+                        usage=reported_usage,
+                        model_calls=model_calls,
                     ),
-                    usage=turn_usage,
+                    usage=reported_usage,
                 )
 
         raise AgentRuntimeExecutionError(

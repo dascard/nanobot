@@ -103,6 +103,7 @@ _LEGACY_ALIASES = MappingProxyType({
 })
 
 _TASK_TOOL_NAMES = MappingProxyType({
+    "tasks/agent_subtask": "agent_subtask",
     "tasks/classifier_legacy": "classifier_legacy",
     "tasks/private_decision": "private_decision",
     "tasks/news_daily_quality": "news_daily_quality",

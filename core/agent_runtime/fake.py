@@ -168,6 +168,12 @@ class FakeAgentRuntime:
             await emitter.text_delta(delta)
         for tool_call in result.tool_calls:
             await emitter.tool_activity(tool_call)
+        if (
+            result.usage.total_tokens
+            or result.usage.reasoning_tokens
+            or result.usage.cost_microunits
+        ):
+            await emitter.usage(result.usage)
         await emitter.end(RuntimeRunStatus.SUCCEEDED)
         return result
 

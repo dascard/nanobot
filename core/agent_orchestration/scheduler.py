@@ -43,6 +43,7 @@ from core.lifecycle.feature_registry import (
 @dataclass(slots=True)
 class _UsageTotals:
     model_calls: int = 0
+    tool_calls: int = 0
     tokens: int = 0
     cost_microunits: int = 0
     output_bytes: int = 0
@@ -285,6 +286,16 @@ class AgentDagOrchestrator:
                     next_actions=("缩小计划预算或由宿主下发非零且不扩张的父预算",),
                     stop_condition="没有显式父预算时禁止 spawn",
                 )
+        if (
+            plan_budget.max_tasks + plan_budget.max_tool_calls
+            > parent.step_limit
+        ):
+            raise AgentOrchestrationError(
+                "subagent_budget_denied",
+                "计划任务与子工具调用合计超过父 Run 的 subagent step 预算",
+                next_actions=("减少任务或工具调用预算后重新批准计划",),
+                stop_condition="没有足够父级 step 预算时禁止 spawn",
+            )
 
     async def _execute_batch(
         self,
@@ -372,14 +383,26 @@ class AgentDagOrchestrator:
                 timeout_seconds=timeout_seconds,
                 cancellation=cancellation,
             )
-            task.output_contract.validate(output.data, name="task output data")
+            if output.status is AgentTaskOutputStatus.ERROR:
+                task.output_contract.validate_partial(
+                    output.data,
+                    name="task error output data",
+                    extra_keys=("error_code",),
+                )
+            else:
+                task.output_contract.validate(output.data, name="task output data")
             self._record_usage(request, usage, output)
             if not task.completion.matches(output):
+                error_code = (
+                    self._reported_task_error_code(output)
+                    if output.status is AgentTaskOutputStatus.ERROR
+                    else "completion_condition_failed"
+                )
                 return self._outcome(
                     task,
                     state=AgentTaskState.FAILED,
                     output=output,
-                    error_code="completion_condition_failed",
+                    error_code=error_code,
                     started_at=started_at,
                     started_clock=started_clock,
                     reservation_id=reservation.reservation_id,
@@ -551,9 +574,11 @@ class AgentDagOrchestrator:
         self._budget.record_subagent_usage(
             output.usage,
             model_calls=output.model_calls,
+            tool_calls=output.tool_calls,
         )
         projected = _UsageTotals(
             model_calls=usage.model_calls + output.model_calls,
+            tool_calls=usage.tool_calls + output.tool_calls,
             tokens=usage.tokens + output.usage.total_tokens,
             cost_microunits=(
                 usage.cost_microunits + output.usage.cost_microunits
@@ -565,6 +590,7 @@ class AgentDagOrchestrator:
             name
             for name, value, limit in (
                 ("max_model_calls", projected.model_calls, budget.max_model_calls),
+                ("max_tool_calls", projected.tool_calls, budget.max_tool_calls),
                 ("max_tokens", projected.tokens, budget.max_tokens),
                 (
                     "max_cost_microunits",
@@ -583,6 +609,7 @@ class AgentDagOrchestrator:
                 stop_condition="预算超限后停止调度后续任务",
             )
         usage.model_calls = projected.model_calls
+        usage.tool_calls = projected.tool_calls
         usage.tokens = projected.tokens
         usage.cost_microunits = projected.cost_microunits
         usage.output_bytes = projected.output_bytes
@@ -645,6 +672,18 @@ class AgentDagOrchestrator:
             ),
             output,
         )
+
+    @staticmethod
+    def _reported_task_error_code(output: AgentTaskOutput) -> str:
+        value = output.data.get("error_code")
+        normalized = str(value or "").strip()
+        if (
+            not normalized
+            or len(normalized) > 128
+            or any(character.isspace() for character in normalized)
+        ):
+            return "task_reported_error"
+        return normalized
 
     @staticmethod
     def _error_output(code: str, summary: str, next_action: str) -> AgentTaskOutput:

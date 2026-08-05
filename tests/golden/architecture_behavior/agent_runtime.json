@@ -239,11 +239,19 @@
                 "tool_calls": []
               }
             ],
+            "model_calls": 0,
             "raw_result": {
               "text": "你好，有什么可以帮你？",
               "type": "text"
             },
-            "tool_calls": []
+            "tool_calls": [],
+            "usage": {
+              "cached_input_tokens": 0,
+              "cost_microunits": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "reasoning_tokens": 0
+            }
           }
         }
       ]
@@ -535,6 +543,7 @@
                 "tool_calls": []
               }
             ],
+            "model_calls": 0,
             "raw_result": {
               "events": [
                 {
@@ -551,7 +560,14 @@
                 }
               ]
             },
-            "tool_calls": []
+            "tool_calls": [],
+            "usage": {
+              "cached_input_tokens": 0,
+              "cost_microunits": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "reasoning_tokens": 0
+            }
           }
         }
       ]
@@ -906,6 +922,7 @@
                 ]
               }
             ],
+            "model_calls": 0,
             "raw_result": "tool-requested",
             "tool_calls": [
               {
@@ -917,7 +934,14 @@
                 "result": null,
                 "status": "requested"
               }
-            ]
+            ],
+            "usage": {
+              "cached_input_tokens": 0,
+              "cost_microunits": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "reasoning_tokens": 0
+            }
           }
         },
         {
@@ -1187,6 +1211,7 @@
                 ]
               }
             ],
+            "model_calls": 0,
             "raw_result": "reply-requested",
             "tool_calls": [
               {
@@ -1211,7 +1236,14 @@
                 "result": null,
                 "status": "requested"
               }
-            ]
+            ],
+            "usage": {
+              "cached_input_tokens": 0,
+              "cost_microunits": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "reasoning_tokens": 0
+            }
           }
         },
         {
@@ -1484,6 +1516,7 @@
                 "tool_calls": []
               }
             ],
+            "model_calls": 0,
             "raw_result": "completed",
             "tool_calls": [
               {
@@ -1508,7 +1541,14 @@
                 "result": "已发送",
                 "status": "completed"
               }
-            ]
+            ],
+            "usage": {
+              "cached_input_tokens": 0,
+              "cost_microunits": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "reasoning_tokens": 0
+            }
           }
         }
       ]
@@ -1776,6 +1816,7 @@
                 "tool_calls": []
               }
             ],
+            "model_calls": 0,
             "raw_result": {
               "events": [
                 {
@@ -1784,7 +1825,14 @@
                 }
               ]
             },
-            "tool_calls": []
+            "tool_calls": [],
+            "usage": {
+              "cached_input_tokens": 0,
+              "cost_microunits": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "reasoning_tokens": 0
+            }
           }
         }
       ]
