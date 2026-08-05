@@ -312,7 +312,7 @@ class AgentRuntimeTaskExecutor:
             ("max_elapsed_ms", requested.max_elapsed_ms, parent.time_limit_ms),
             (
                 "max_steps",
-                requested.max_tasks + requested.max_tool_calls,
+                self._plan.maximum_attempts + requested.max_tool_calls,
                 parent.step_limit,
             ),
         )
@@ -821,6 +821,8 @@ class AgentRuntimeTaskExecutor:
     ) -> tuple[RuntimeMessage, RuntimeMessage]:
         payload = {
             "task_id": context.task.task_id,
+            "attempt_no": context.attempt_no,
+            "idempotency_key": context.task.retry_policy.idempotency_key,
             "role": {
                 "role_id": context.role.role_id,
                 "kind": context.role.kind.value,
@@ -1008,14 +1010,20 @@ class AgentRuntimeTaskExecutor:
         if parent.deadline_at is not None:
             deadline = min(deadline, parent.deadline_at)
         suffix = hashlib.sha256(
-            f"{execution.orchestration_id}:{execution.task.task_id}".encode("utf-8")
+            (
+                f"{execution.orchestration_id}:{execution.task.task_id}:"
+                f"{execution.attempt_no}"
+            ).encode("utf-8")
         ).hexdigest()[:16]
         child_run_id = f"{parent_identity.run_id}:subagent:{suffix}"
         return RequestRuntimeContext(
             request_id=f"subagent-request:{suffix}",
             agent_id=f"{parent.agent_id}/subagent/{execution.role.role_id}",
             principal=parent.principal,
-            session_id=f"subagent:{execution.orchestration_id}:{execution.task.task_id}",
+            session_id=(
+                f"subagent:{execution.orchestration_id}:"
+                f"{execution.task.task_id}:{execution.attempt_no}"
+            ),
             chat_type=RuntimeChatType.TASK,
             trace_id=parent.trace_id or parent_identity.correlation_id,
             run_id=child_run_id,
@@ -1023,7 +1031,10 @@ class AgentRuntimeTaskExecutor:
             correlation_id=parent_identity.correlation_id,
             actor=RuntimeActor(
                 RuntimeActorType.AGENT,
-                f"subagent:{execution.role.role_id}:{execution.task.task_id}",
+                (
+                    f"subagent:{execution.role.role_id}:"
+                    f"{execution.task.task_id}:{execution.attempt_no}"
+                ),
                 parent_actor_id=parent_identity.actor.actor_id,
             ),
             capabilities=frozenset({"bounded_subagent"}),

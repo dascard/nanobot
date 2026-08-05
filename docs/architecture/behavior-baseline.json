@@ -145,7 +145,7 @@
       "stage": "Agent Harness 阶段 6.2"
     },
     {
-      "after_sha256": "8ffab3ad2eba3dd2bc07d4b615dde50252ba23c8d80ba497eecea19cea256436",
+      "after_sha256": "8de00d261da0faf1ef40313472d5057ee30948f3bd236131b43dc1027a3eca88",
       "before_sha256": "2bea17f21d71f93bf88174c1f0fdd56f624ca49f3227b02febd14a5cefed68e1",
       "id": "agent_harness_mcp_control_plane_prompt",
       "reason": "登记带 server namespace 的请求级 MCP 工具、冻结 schema、不可信结果信封和服务端秘密引用边界。",
@@ -233,7 +233,7 @@
       "stage": "Agent Harness 阶段 6.1"
     }
   ],
-  "baseline_git_commit": "bc666c1c7857f0bd000f06a548b42cb5040705e2",
+  "baseline_git_commit": "da9b59dfd49d893c5c8c309fbc1884e62d0d85c6",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -287,7 +287,7 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "8ffab3ad2eba3dd2bc07d4b615dde50252ba23c8d80ba497eecea19cea256436"
+      "sha256": "8de00d261da0faf1ef40313472d5057ee30948f3bd236131b43dc1027a3eca88"
     },
     {
       "classification": "preserve",

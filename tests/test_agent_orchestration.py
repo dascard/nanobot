@@ -13,6 +13,7 @@ from core.agent_orchestration import (
     AgentOrchestrationBudget,
     AgentOrchestrationCancellation,
     AgentOrchestrationError,
+    AgentOrchestrationFreeze,
     AgentOrchestrationPlan,
     AgentOrchestrationRequest,
     AgentOrchestrationState,
@@ -243,17 +244,28 @@ def _request(
     orchestration_id: str = "orch-1",
 ) -> AgentOrchestrationRequest:
     run_identity = identity or _identity()
+    approved_at = datetime.now(timezone.utc)
+    approval = AgentOrchestrationApproval(
+        approval_id=f"approval-{orchestration_id}",
+        plan_id=plan.plan_id,
+        plan_revision=plan.revision,
+        plan_sha256=plan.content_sha256,
+        approved_by="operator-1",
+        approved_at=approved_at,
+    )
     return AgentOrchestrationRequest(
         orchestration_id=orchestration_id,
         identity=run_identity,
         plan=plan,
-        approval=AgentOrchestrationApproval(
-            approval_id=f"approval-{orchestration_id}",
+        approval=approval,
+        freeze=AgentOrchestrationFreeze(
+            freeze_id=f"freeze-{orchestration_id}",
+            approval_id=approval.approval_id,
             plan_id=plan.plan_id,
             plan_revision=plan.revision,
             plan_sha256=plan.content_sha256,
-            approved_by="operator-1",
-            approved_at=datetime.now(timezone.utc),
+            frozen_by="scheduler-1",
+            frozen_at=approved_at,
         ),
         root_input={"topic": "中文 Agent Harness"},
     )
@@ -332,6 +344,18 @@ def test_plan_defines_roles_contracts_completion_and_deterministic_batches():
     assert plan.task_by_id["aggregate"].completion.required_data_keys == (
         "answer",
     )
+    compact_checkpoint_plan = replace(
+        plan,
+        budget=replace(plan.budget, max_checkpoints=2),
+        content_sha256="",
+    )
+    assert len(compact_checkpoint_plan.execution_barriers()) == 2
+    with pytest.raises(ValueError, match="确定性任务屏障"):
+        replace(
+            plan,
+            budget=replace(plan.budget, max_checkpoints=1),
+            content_sha256="",
+        )
 
 
 def test_plan_rejects_cycle_unknown_binding_and_incomplete_aggregation():
@@ -447,7 +471,7 @@ async def test_orchestrator_executes_real_dag_with_budget_and_checkpoints():
         owner_id=request.identity.owner.canonical_id,
     )
     assert latest is not None
-    assert latest.sequence == 3
+    assert latest.sequence == len(request.plan.execution_barriers())
     assert latest.checkpoint_id == result.latest_checkpoint_id
     assert len(latest.receipt_sha256s) == 3
     assert all(context.nesting_depth == 1 for context in executor.contexts)
@@ -571,7 +595,7 @@ async def test_cancellation_stops_workers_and_checkpoints_terminal_states():
         owner_id=request.identity.owner.canonical_id,
     )
     assert latest is not None
-    assert latest.sequence == len(request.plan.tasks)
+    assert latest.sequence == len(request.plan.execution_barriers())
 
 
 @pytest.mark.asyncio
@@ -652,7 +676,7 @@ async def test_actual_usage_over_plan_budget_fails_closed():
     executor = ExpensiveExecutor()
     plan = _plan(worker_ids=("research_a",), max_tokens=5)
     identity = _identity("run-usage")
-    orchestrator, _, _ = _orchestrator(
+    orchestrator, store, _ = _orchestrator(
         executor,
         identity=identity,
         governance=_governance(
@@ -670,6 +694,12 @@ async def test_actual_usage_over_plan_budget_fails_closed():
     assert result.receipts[0].error_code == "orchestration_budget_exceeded"
     assert result.receipts[-1].state is AgentTaskState.BLOCKED
     assert executor.calls == ["research_a"]
+    latest = await store.load_latest(
+        "usage",
+        owner_id=identity.owner.canonical_id,
+    )
+    assert latest is not None
+    assert latest.cumulative_usage.usage.total_tokens == 6
 
 
 @pytest.mark.asyncio
@@ -742,10 +772,14 @@ async def test_checkpoint_store_is_owner_isolated_and_monotonic():
     )
     assert result.state is AgentOrchestrationState.SUCCEEDED
 
-    assert await store.load_latest(
-        request.orchestration_id,
-        owner_id="qq:user:other",
-    ) is None
+    with pytest.raises(
+        AgentOrchestrationError,
+        match="checkpoint_owner_conflict",
+    ):
+        await store.load_latest(
+            request.orchestration_id,
+            owner_id="qq:user:other",
+        )
     latest = await store.load_latest(
         request.orchestration_id,
         owner_id=request.identity.owner.canonical_id,
@@ -756,14 +790,41 @@ async def test_checkpoint_store_is_owner_isolated_and_monotonic():
             checkpoint_id="forged-checkpoint",
             orchestration_id=latest.orchestration_id,
             identity=latest.identity,
+            plan_id=latest.plan_id,
+            plan_revision=latest.plan_revision,
             plan_sha256=latest.plan_sha256,
+            freeze_id=latest.freeze_id,
             sequence=latest.sequence,
             parent_checkpoint_id=latest.parent_checkpoint_id,
+            barrier_id=latest.barrier_id,
             task_states=latest.task_states,
             outputs=latest.outputs,
-            receipt_sha256s=latest.receipt_sha256s,
+            receipts=latest.receipts,
+            cumulative_usage=latest.cumulative_usage,
             created_at=datetime.now(timezone.utc),
         ))
+
+    foreign_identity = _identity("run-foreign-checkpoint-owner")
+    foreign_identity = replace(
+        foreign_identity,
+        owner=RuntimePrincipal("qq", RuntimeOwnerType.USER, "other"),
+    )
+    foreign_executor = _RecordingExecutor()
+    foreign, _, _ = _orchestrator(
+        foreign_executor,
+        identity=foreign_identity,
+        store=store,
+    )
+    with pytest.raises(AgentOrchestrationError, match="checkpoint_store_failed"):
+        await foreign.execute(
+            _request(
+                request.plan,
+                identity=foreign_identity,
+                orchestration_id=request.orchestration_id,
+            ),
+            feature_decision=_feature_decision(),
+        )
+    assert foreign_executor.calls == []
 
 
 def test_runtime_budget_account_reserves_releases_and_records_subagent_usage():

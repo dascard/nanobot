@@ -21,9 +21,11 @@ from core.agent_runtime.governance_contracts import RuntimeAccessKind
 
 
 MULTI_AGENT_FEATURE_ID = "multi_agent_orchestration_v1"
-ORCHESTRATION_SCHEMA_VERSION = 2
+ORCHESTRATION_SCHEMA_VERSION = 3
 MAX_ROLE_COUNT = 32
 MAX_TASK_COUNT = 64
+MAX_TASK_RETRY_ATTEMPTS = 5
+MAX_TASK_ATTEMPT_COUNT = MAX_TASK_COUNT * MAX_TASK_RETRY_ATTEMPTS
 MAX_TASK_INPUT_BYTES = 256 * 1024
 MAX_TASK_OUTPUT_BYTES = 512 * 1024
 MAX_CHECKPOINT_BYTES = 4 * 1024 * 1024
@@ -95,6 +97,48 @@ class AgentTaskState(str, Enum):
     @property
     def terminal(self) -> bool:
         return self not in {self.PENDING, self.RUNNING}
+
+
+_NON_RETRYABLE_ERROR_CODES = frozenset({
+    "budget_identity_mismatch",
+    "checkpoint_store_failed",
+    "child_access_scope_denied",
+    "child_mcp_scope_denied",
+    "child_mcp_server_access_missing",
+    "child_model_catalog_mismatch",
+    "child_model_route_drift",
+    "child_model_scope_denied",
+    "child_parent_identity_mismatch",
+    "child_prompt_payload_too_large",
+    "child_prompt_runtime_invalid",
+    "child_reported_budget_exceeded",
+    "child_runtime_capability_missing",
+    "child_runtime_factory_invalid",
+    "child_runtime_not_isolated",
+    "child_runtime_stop_failed",
+    "child_runtime_stop_unconfirmed",
+    "child_scope_plan_missing",
+    "child_skill_dependency_missing",
+    "child_skill_permission_missing",
+    "child_skill_scope_denied",
+    "child_skill_tool_missing",
+    "child_task_plan_mismatch",
+    "child_tool_access_invalid",
+    "child_tool_plan_missing",
+    "child_tool_policy_unavailable",
+    "child_tool_scope_denied",
+    "dependency_not_succeeded",
+    "dependency_output_missing",
+    "orchestration_budget_exceeded",
+    "recursive_spawn_denied",
+    "runtime_budget_exceeded",
+    "review_model_not_independent",
+    "subagent_budget_denied",
+    "task_cancelled",
+    "task_cancel_unconfirmed",
+    "task_input_missing",
+    "task_runtime_policy_missing",
+})
 
 
 class AgentOrchestrationState(str, Enum):
@@ -640,6 +684,72 @@ class AgentTaskCompletionCondition:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentTaskRetryPolicy:
+    """冻结在计划内的局部重试边界；不允许随机抖动或隐式扩容。"""
+
+    max_attempts: int = 1
+    retryable_error_codes: tuple[str, ...] = ()
+    backoff_ms: tuple[int, ...] = ()
+    idempotency_key: str = ""
+
+    def __post_init__(self) -> None:
+        attempts = _positive_int(
+            self.max_attempts,
+            "retry max_attempts",
+            MAX_TASK_RETRY_ATTEMPTS,
+        )
+        object.__setattr__(self, "max_attempts", attempts)
+        codes = tuple(sorted(_text_tuple(
+            self.retryable_error_codes,
+            "retryable error_code",
+            max_items=32,
+            max_chars=128,
+        )))
+        if set(codes) & _NON_RETRYABLE_ERROR_CODES:
+            raise ValueError("retry policy 包含不可重试的治理错误")
+        object.__setattr__(self, "retryable_error_codes", codes)
+        backoff = tuple(self.backoff_ms)
+        if len(backoff) != max(0, attempts - 1) or any(
+            type(value) is not int or not 0 <= value <= 60_000
+            for value in backoff
+        ):
+            raise ValueError("retry backoff_ms 必须精确覆盖后续尝试且位于 0..60000")
+        object.__setattr__(self, "backoff_ms", backoff)
+        key = str(self.idempotency_key or "").strip()
+        if attempts == 1:
+            if codes or backoff or key:
+                raise ValueError("单次任务不能声明重试字段")
+        else:
+            if not codes:
+                raise ValueError("多次任务必须声明可重试错误码")
+            key = _identifier(
+                key,
+                "retry idempotency_key",
+                max_chars=200,
+            )
+        object.__setattr__(self, "idempotency_key", key)
+
+    def permits(self, error_code: str, attempt_no: int) -> bool:
+        return bool(
+            attempt_no < self.max_attempts
+            and error_code in self.retryable_error_codes
+        )
+
+    def delay_seconds(self, attempt_no: int) -> float:
+        if not 1 <= attempt_no < self.max_attempts:
+            raise ValueError("attempt_no 不存在后续重试")
+        return self.backoff_ms[attempt_no - 1] / 1000
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "max_attempts": self.max_attempts,
+            "retryable_error_codes": list(self.retryable_error_codes),
+            "backoff_ms": list(self.backoff_ms),
+            "idempotency_key": self.idempotency_key,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AgentTaskOutput:
     """所有 Worker 的稳定观察合同。"""
 
@@ -737,6 +847,9 @@ class AgentTaskDefinition:
     completion: AgentTaskCompletionCondition
     timeout_ms: int = 60_000
     runtime_policy: AgentTaskRuntimePolicy | None = None
+    retry_policy: AgentTaskRetryPolicy = field(
+        default_factory=AgentTaskRetryPolicy
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "task_id", _identifier(self.task_id, "task_id"))
@@ -795,6 +908,8 @@ class AgentTaskDefinition:
                 raise ValueError("task runtime_policy 无效")
             if self.runtime_policy.budget.time_limit_ms > self.timeout_ms:
                 raise ValueError("task runtime budget 不能超过任务 timeout_ms")
+        if not isinstance(self.retry_policy, AgentTaskRetryPolicy):
+            raise ValueError("task retry_policy 无效")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -812,6 +927,7 @@ class AgentTaskDefinition:
                 if self.runtime_policy is not None
                 else None
             ),
+            "retry_policy": self.retry_policy.to_dict(),
         }
 
 
@@ -851,8 +967,6 @@ class AgentOrchestrationBudget:
             object.__setattr__(self, name, _positive_int(value, name, maximum))
         if self.max_concurrency > self.max_tasks:
             raise ValueError("max_concurrency 不能超过 max_tasks")
-        if self.max_checkpoints < self.max_tasks:
-            raise ValueError("max_checkpoints 必须覆盖每个任务边界")
         if self.max_spawn_depth != 1:
             raise ValueError("首版多 Agent 只允许一层 spawn")
 
@@ -868,6 +982,53 @@ class AgentOrchestrationBudget:
             "max_checkpoints": self.max_checkpoints,
             "max_spawn_depth": self.max_spawn_depth,
             "max_tool_calls": self.max_tool_calls,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTaskBarrier:
+    """由冻结 DAG 和并发上限确定性派生的任务屏障。"""
+
+    barrier_id: str
+    sequence: int
+    task_ids: tuple[str, ...]
+    completed_before: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "barrier_id",
+            _identifier(self.barrier_id, "barrier_id", max_chars=200),
+        )
+        object.__setattr__(
+            self,
+            "sequence",
+            _positive_int(self.sequence, "barrier sequence", MAX_TASK_COUNT),
+        )
+        task_ids = tuple(sorted(_text_tuple(
+            self.task_ids,
+            "barrier task_id",
+            max_items=MAX_TASK_COUNT,
+            max_chars=128,
+            allow_empty=False,
+        )))
+        completed = tuple(sorted(_text_tuple(
+            self.completed_before,
+            "barrier completed task_id",
+            max_items=MAX_TASK_COUNT,
+            max_chars=128,
+        )))
+        if set(task_ids) & set(completed):
+            raise ValueError("barrier 当前任务与已完成任务不能重叠")
+        object.__setattr__(self, "task_ids", task_ids)
+        object.__setattr__(self, "completed_before", completed)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "barrier_id": self.barrier_id,
+            "sequence": self.sequence,
+            "task_ids": list(self.task_ids),
+            "completed_before": list(self.completed_before),
         }
 
 
@@ -958,18 +1119,22 @@ class AgentOrchestrationPlan:
             totals = {
                 "max_model_calls": sum(
                     task.runtime_policy.budget.model_call_limit
+                    * task.retry_policy.max_attempts
                     for task in runtime_tasks
                 ),
                 "max_tokens": sum(
                     task.runtime_policy.budget.token_limit
+                    * task.retry_policy.max_attempts
                     for task in runtime_tasks
                 ),
                 "max_cost_microunits": sum(
                     task.runtime_policy.budget.cost_limit_microunits
+                    * task.retry_policy.max_attempts
                     for task in runtime_tasks
                 ),
                 "max_tool_calls": sum(
                     task.runtime_policy.budget.tool_call_limit
+                    * task.retry_policy.max_attempts
                     for task in runtime_tasks
                 ),
             }
@@ -1006,11 +1171,17 @@ class AgentOrchestrationPlan:
                 ):
                     raise ValueError("aggregator 任务用途必须是 aggregate")
         self._validate_acyclic(task_by_id)
+        if len(self.execution_barriers()) > self.budget.max_checkpoints:
+            raise ValueError("max_checkpoints 必须覆盖每个确定性任务屏障")
         digest = hashlib.sha256(canonical_json_bytes(self.to_dict(include_hash=False))).hexdigest()
         declared = str(self.content_sha256 or "").strip().lower()
         if declared and _sha256(declared, "plan content_sha256") != digest:
             raise ValueError("plan content_sha256 与内容不一致")
         object.__setattr__(self, "content_sha256", digest)
+
+    @property
+    def maximum_attempts(self) -> int:
+        return sum(task.retry_policy.max_attempts for task in self.tasks)
 
     @staticmethod
     def _validate_acyclic(task_by_id: Mapping[str, AgentTaskDefinition]) -> None:
@@ -1035,13 +1206,13 @@ class AgentOrchestrationPlan:
     def role_by_id(self) -> Mapping[str, AgentRoleDefinition]:
         return MappingProxyType({item.role_id: item for item in self.roles})
 
-    def execution_batches(self) -> tuple[tuple[str, ...], ...]:
-        """按依赖优先和 task_id 生成确定性并发批次。"""
+    def execution_barriers(self) -> tuple[AgentTaskBarrier, ...]:
+        """按依赖优先、task_id 与并发上限生成确定性屏障。"""
 
         task_by_id = self.task_by_id
         remaining = set(task_by_id)
         completed: set[str] = set()
-        batches: list[tuple[str, ...]] = []
+        barriers: list[AgentTaskBarrier] = []
         while remaining:
             ready = sorted(
                 task_id
@@ -1049,11 +1220,29 @@ class AgentOrchestrationPlan:
                 if set(task_by_id[task_id].dependencies) <= completed
             )
             for offset in range(0, len(ready), self.budget.max_concurrency):
-                batch = tuple(ready[offset:offset + self.budget.max_concurrency])
-                batches.append(batch)
-                completed.update(batch)
-                remaining.difference_update(batch)
-        return tuple(batches)
+                task_ids = tuple(
+                    ready[offset:offset + self.budget.max_concurrency]
+                )
+                sequence = len(barriers) + 1
+                task_set_sha256 = hashlib.sha256(
+                    canonical_json_bytes(task_ids)
+                ).hexdigest()[:16]
+                barriers.append(AgentTaskBarrier(
+                    barrier_id=(
+                        f"barrier-{sequence:04d}-{task_set_sha256}"
+                    ),
+                    sequence=sequence,
+                    task_ids=task_ids,
+                    completed_before=tuple(sorted(completed)),
+                ))
+                completed.update(task_ids)
+                remaining.difference_update(task_ids)
+        return tuple(barriers)
+
+    def execution_batches(self) -> tuple[tuple[str, ...], ...]:
+        """兼容旧调用方；批次内容来自同一确定性屏障计划。"""
+
+        return tuple(barrier.task_ids for barrier in self.execution_barriers())
 
     def to_dict(self, *, include_hash: bool = True) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -1103,11 +1292,77 @@ class AgentOrchestrationApproval:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentOrchestrationFreeze:
+    """批准后的独立冻结证明；执行入口必须同时校验两份证明。"""
+
+    freeze_id: str
+    approval_id: str
+    plan_id: str
+    plan_revision: int
+    plan_sha256: str
+    frozen_by: str
+    frozen_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "freeze_id",
+            _identifier(self.freeze_id, "freeze_id", max_chars=160),
+        )
+        object.__setattr__(
+            self,
+            "approval_id",
+            _identifier(self.approval_id, "freeze approval_id", max_chars=160),
+        )
+        object.__setattr__(
+            self,
+            "plan_id",
+            _identifier(self.plan_id, "freeze plan_id", max_chars=160),
+        )
+        object.__setattr__(
+            self,
+            "plan_revision",
+            _positive_int(
+                self.plan_revision,
+                "freeze plan_revision",
+                1_000_000,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "plan_sha256",
+            _sha256(self.plan_sha256, "freeze plan_sha256"),
+        )
+        object.__setattr__(
+            self,
+            "frozen_by",
+            _identifier(self.frozen_by, "frozen_by", max_chars=160),
+        )
+        if self.frozen_at.tzinfo is None or self.frozen_at.utcoffset() is None:
+            raise ValueError("frozen_at 必须包含时区")
+
+    def validates(
+        self,
+        plan: AgentOrchestrationPlan,
+        approval: AgentOrchestrationApproval,
+    ) -> bool:
+        return bool(
+            approval.validates(plan)
+            and self.approval_id == approval.approval_id
+            and self.plan_id == plan.plan_id
+            and self.plan_revision == plan.revision
+            and self.plan_sha256 == plan.content_sha256
+            and self.frozen_at >= approval.approved_at
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AgentOrchestrationRequest:
     orchestration_id: str
     identity: RuntimeRunIdentity
     plan: AgentOrchestrationPlan
     approval: AgentOrchestrationApproval
+    freeze: AgentOrchestrationFreeze
     root_input: Mapping[str, object]
     nesting_depth: int = 0
 
@@ -1125,6 +1380,10 @@ class AgentOrchestrationRequest:
             raise ValueError("orchestration approval 无效")
         if not self.approval.validates(self.plan):
             raise ValueError("approval 未绑定当前冻结计划")
+        if not isinstance(self.freeze, AgentOrchestrationFreeze):
+            raise ValueError("orchestration freeze 无效")
+        if not self.freeze.validates(self.plan, self.approval):
+            raise ValueError("freeze 未绑定当前批准计划")
         object.__setattr__(
             self,
             "root_input",
@@ -1163,6 +1422,8 @@ class AgentTaskExecutionContext:
     dependencies: tuple[AgentTaskDependencyReceipt, ...]
     nesting_depth: int = 1
     spawn_allowed: bool = False
+    attempt_no: int = 1
+    previous_attempts: tuple["AgentTaskExecutionReceipt", ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "orchestration_id", _identifier(self.orchestration_id, "orchestration_id", max_chars=160))
@@ -1187,6 +1448,29 @@ class AgentTaskExecutionContext:
         object.__setattr__(self, "dependencies", dependencies)
         if self.nesting_depth != 1 or self.spawn_allowed is not False:
             raise ValueError("首版 Worker 必须位于第 1 层且禁止继续 spawn")
+        attempt_no = _positive_int(
+            self.attempt_no,
+            "task attempt_no",
+            self.task.retry_policy.max_attempts,
+        )
+        object.__setattr__(self, "attempt_no", attempt_no)
+        previous = tuple(sorted(
+            self.previous_attempts,
+            key=lambda item: item.attempt_no,
+        ))
+        if any(
+            not isinstance(item, AgentTaskExecutionReceipt)
+            or item.task_id != self.task.task_id
+            for item in previous
+        ):
+            raise ValueError("previous_attempts 无效")
+        if tuple(item.attempt_no for item in previous) != tuple(
+            range(1, attempt_no)
+        ):
+            raise ValueError("previous_attempts 必须连续覆盖此前尝试")
+        if any(item.state is AgentTaskState.SUCCEEDED for item in previous):
+            raise ValueError("成功任务不能继续重试")
+        object.__setattr__(self, "previous_attempts", previous)
 
 
 @runtime_checkable
@@ -1217,8 +1501,15 @@ class AgentTaskExecutionReceipt:
         if not state.terminal:
             raise ValueError("receipt 必须是任务终态")
         object.__setattr__(self, "state", state)
-        if self.attempt_no != 1:
-            raise ValueError("8.1 尚不允许隐式任务重试")
+        object.__setattr__(
+            self,
+            "attempt_no",
+            _positive_int(
+                self.attempt_no,
+                "receipt attempt_no",
+                MAX_TASK_RETRY_ATTEMPTS,
+            ),
+        )
         object.__setattr__(
             self,
             "dependency_ids",
@@ -1288,16 +1579,65 @@ class AgentTaskExecutionReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentOrchestrationUsage:
+    """截至某个任务屏障的累计物理消费。"""
+
+    usage: RuntimeUsage = field(default_factory=RuntimeUsage)
+    model_calls: int = 0
+    tool_calls: int = 0
+    task_attempts: int = 0
+    output_bytes: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.usage, RuntimeUsage):
+            raise ValueError("orchestration usage 无效")
+        maxima = {
+            "model_calls": MAX_TASK_ATTEMPT_COUNT * 100_000,
+            "tool_calls": MAX_TASK_ATTEMPT_COUNT * 100_000,
+            "task_attempts": MAX_TASK_ATTEMPT_COUNT,
+            "output_bytes": MAX_TASK_ATTEMPT_COUNT * MAX_TASK_OUTPUT_BYTES,
+        }
+        for name, maximum in maxima.items():
+            value = getattr(self, name)
+            if type(value) is not int or not 0 <= value <= maximum:
+                raise ValueError(f"orchestration usage {name} 无效")
+
+    @property
+    def step_count(self) -> int:
+        return self.task_attempts + self.tool_calls
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "usage": {
+                "input_tokens": self.usage.input_tokens,
+                "output_tokens": self.usage.output_tokens,
+                "cached_input_tokens": self.usage.cached_input_tokens,
+                "reasoning_tokens": self.usage.reasoning_tokens,
+                "cost_microunits": self.usage.cost_microunits,
+            },
+            "model_calls": self.model_calls,
+            "tool_calls": self.tool_calls,
+            "task_attempts": self.task_attempts,
+            "output_bytes": self.output_bytes,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AgentOrchestrationCheckpoint:
     checkpoint_id: str
     orchestration_id: str
     identity: RuntimeRunIdentity
+    plan_id: str
+    plan_revision: int
     plan_sha256: str
+    freeze_id: str
     sequence: int
     parent_checkpoint_id: str
+    barrier_id: str
     task_states: Mapping[str, AgentTaskState]
     outputs: Mapping[str, AgentTaskOutput]
-    receipt_sha256s: tuple[str, ...]
+    receipts: tuple[AgentTaskExecutionReceipt, ...]
+    cumulative_usage: AgentOrchestrationUsage
     created_at: datetime
     state_sha256: str = ""
 
@@ -1306,7 +1646,26 @@ class AgentOrchestrationCheckpoint:
         object.__setattr__(self, "orchestration_id", _identifier(self.orchestration_id, "orchestration_id", max_chars=160))
         if not isinstance(self.identity, RuntimeRunIdentity):
             raise ValueError("checkpoint identity 无效")
+        object.__setattr__(
+            self,
+            "plan_id",
+            _identifier(self.plan_id, "checkpoint plan_id", max_chars=160),
+        )
+        object.__setattr__(
+            self,
+            "plan_revision",
+            _positive_int(
+                self.plan_revision,
+                "checkpoint plan_revision",
+                1_000_000,
+            ),
+        )
         object.__setattr__(self, "plan_sha256", _sha256(self.plan_sha256, "checkpoint plan_sha256"))
+        object.__setattr__(
+            self,
+            "freeze_id",
+            _identifier(self.freeze_id, "checkpoint freeze_id", max_chars=160),
+        )
         object.__setattr__(
             self,
             "sequence",
@@ -1318,6 +1677,11 @@ class AgentOrchestrationCheckpoint:
         if (self.sequence == 1) != (not parent):
             raise ValueError("checkpoint parent 与 sequence 不一致")
         object.__setattr__(self, "parent_checkpoint_id", parent)
+        object.__setattr__(
+            self,
+            "barrier_id",
+            _identifier(self.barrier_id, "checkpoint barrier_id", max_chars=200),
+        )
         states = {
             _identifier(task_id, "checkpoint task_id"): AgentTaskState(state)
             for task_id, state in self.task_states.items()
@@ -1332,12 +1696,49 @@ class AgentOrchestrationCheckpoint:
         ):
             raise ValueError("checkpoint outputs 无效")
         object.__setattr__(self, "outputs", MappingProxyType(outputs))
-        receipts = tuple(self.receipt_sha256s)
-        if len(receipts) != self.sequence or any(
-            _sha256(item, "checkpoint receipt_sha256") != item for item in receipts
+        receipts = tuple(self.receipts)
+        if not receipts or any(
+            not isinstance(item, AgentTaskExecutionReceipt)
+            for item in receipts
         ):
-            raise ValueError("checkpoint receipt_sha256s 与 sequence 不一致")
-        object.__setattr__(self, "receipt_sha256s", receipts)
+            raise ValueError("checkpoint receipts 无效")
+        receipt_keys = [
+            (item.task_id, item.attempt_no) for item in receipts
+        ]
+        if len(receipt_keys) != len(set(receipt_keys)):
+            raise ValueError("checkpoint receipt attempt 重复")
+        receipt_task_ids = {item.task_id for item in receipts}
+        terminal_task_ids = {
+            task_id for task_id, state in states.items() if state.terminal
+        }
+        if receipt_task_ids != terminal_task_ids or set(outputs) != terminal_task_ids:
+            raise ValueError("checkpoint 终态、输出与 receipt 任务集合不一致")
+        for task_id in sorted(receipt_task_ids):
+            attempts = tuple(
+                item for item in receipts if item.task_id == task_id
+            )
+            if tuple(item.attempt_no for item in attempts) != tuple(
+                range(1, len(attempts) + 1)
+            ):
+                raise ValueError("checkpoint 同一任务的 attempt 必须连续有序")
+            if any(
+                item.state is AgentTaskState.SUCCEEDED
+                for item in attempts[:-1]
+            ):
+                raise ValueError("checkpoint 成功任务不能存在后续 attempt")
+            final_receipt = attempts[-1]
+            final_output = outputs[task_id]
+            if (
+                states[task_id] is not final_receipt.state
+                or final_output.content_sha256 != final_receipt.output_sha256
+                or final_output.size_bytes != final_receipt.output_size_bytes
+            ):
+                raise ValueError("checkpoint 最终 receipt 与状态或输出不一致")
+        object.__setattr__(self, "receipts", receipts)
+        if not isinstance(self.cumulative_usage, AgentOrchestrationUsage):
+            raise ValueError("checkpoint cumulative_usage 无效")
+        if self.cumulative_usage.task_attempts != len(receipts):
+            raise ValueError("checkpoint 用量与 attempt receipt 数量不一致")
         if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
             raise ValueError("checkpoint created_at 必须包含时区")
         digest = hashlib.sha256(canonical_json_bytes(self.to_dict(include_hash=False))).hexdigest()
@@ -1352,6 +1753,10 @@ class AgentOrchestrationCheckpoint:
     def size_bytes(self) -> int:
         return len(canonical_json_bytes(self.to_dict()))
 
+    @property
+    def receipt_sha256s(self) -> tuple[str, ...]:
+        return tuple(item.receipt_sha256 for item in self.receipts)
+
     def to_dict(self, *, include_hash: bool = True) -> dict[str, object]:
         payload: dict[str, object] = {
             "schema_version": ORCHESTRATION_SCHEMA_VERSION,
@@ -1359,16 +1764,36 @@ class AgentOrchestrationCheckpoint:
             "orchestration_id": self.orchestration_id,
             "run_id": self.identity.run_id,
             "owner": self.identity.owner.canonical_id,
+            "identity": {
+                "run_id": self.identity.run_id,
+                "turn_id": self.identity.turn_id,
+                "correlation_id": self.identity.correlation_id,
+                "actor": {
+                    "actor_type": self.identity.actor.actor_type.value,
+                    "actor_id": self.identity.actor.actor_id,
+                    "parent_actor_id": self.identity.actor.parent_actor_id,
+                },
+                "owner": {
+                    "platform": self.identity.owner.platform,
+                    "owner_type": self.identity.owner.owner_type.value,
+                    "owner_id": self.identity.owner.owner_id,
+                },
+            },
+            "plan_id": self.plan_id,
+            "plan_revision": self.plan_revision,
             "plan_sha256": self.plan_sha256,
+            "freeze_id": self.freeze_id,
             "sequence": self.sequence,
             "parent_checkpoint_id": self.parent_checkpoint_id,
+            "barrier_id": self.barrier_id,
             "task_states": {
                 task_id: state.value for task_id, state in self.task_states.items()
             },
             "outputs": {
                 task_id: output.to_dict() for task_id, output in self.outputs.items()
             },
-            "receipt_sha256s": list(self.receipt_sha256s),
+            "receipts": [item.to_dict() for item in self.receipts],
+            "cumulative_usage": self.cumulative_usage.to_dict(),
             "created_at": self.created_at.isoformat(),
         }
         if include_hash:
@@ -1412,9 +1837,9 @@ class AgentOrchestrationResult:
         receipts = tuple(self.receipts)
         if any(not isinstance(item, AgentTaskExecutionReceipt) for item in receipts):
             raise ValueError("result receipts 无效")
-        receipt_ids = [item.task_id for item in receipts]
-        if len(receipt_ids) != len(set(receipt_ids)):
-            raise ValueError("result task receipt 不能重复")
+        receipt_keys = [(item.task_id, item.attempt_no) for item in receipts]
+        if len(receipt_keys) != len(set(receipt_keys)):
+            raise ValueError("result task attempt receipt 不能重复")
         object.__setattr__(self, "receipts", receipts)
         outputs = dict(sorted(self.outputs.items()))
         if any(not isinstance(item, AgentTaskOutput) for item in outputs.values()):
@@ -1446,15 +1871,18 @@ __all__ = [
     "AgentOrchestrationCheckpoint",
     "AgentOrchestrationCheckpointStore",
     "AgentOrchestrationError",
+    "AgentOrchestrationFreeze",
     "AgentOrchestrationPlan",
     "AgentOrchestrationRequest",
     "AgentOrchestrationResult",
     "AgentOrchestrationState",
+    "AgentOrchestrationUsage",
     "AgentModelClass",
     "AgentRoleDefinition",
     "AgentRoleKind",
     "AgentTaskAccessRequirement",
     "AgentTaskAuthority",
+    "AgentTaskBarrier",
     "AgentTaskCompletionCondition",
     "AgentTaskDefinition",
     "AgentTaskDependencyReceipt",
@@ -1465,11 +1893,14 @@ __all__ = [
     "AgentTaskOutput",
     "AgentTaskOutputStatus",
     "AgentTaskPurpose",
+    "AgentTaskRetryPolicy",
     "AgentTaskRuntimeBudget",
     "AgentTaskRuntimePolicy",
     "AgentTaskState",
     "JsonObjectContract",
     "MAX_CHECKPOINT_BYTES",
+    "MAX_TASK_ATTEMPT_COUNT",
+    "MAX_TASK_RETRY_ATTEMPTS",
     "MULTI_AGENT_FEATURE_ID",
     "ORCHESTRATION_SCHEMA_VERSION",
     "canonical_json_bytes",

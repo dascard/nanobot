@@ -11,6 +11,9 @@ from core.db.base import Base
 from core.db.models import (
     AdminAuditLog,
     AdminIdempotencyRecord,
+    AgentOrchestrationCheckpointRow,
+    AgentOrchestrationPlanEventRow,
+    AgentOrchestrationPlanRevisionRow,
     AgentRun,
     Asset,
     ChatDeliveryOutbox,
@@ -161,6 +164,9 @@ def init_db() -> None:
 __all__ = [
     "AdminAuditLog",
     "AdminIdempotencyRecord",
+    "AgentOrchestrationCheckpointRow",
+    "AgentOrchestrationPlanEventRow",
+    "AgentOrchestrationPlanRevisionRow",
     "AgentRun",
     "Asset",
     "Base",

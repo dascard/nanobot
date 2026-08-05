@@ -16,6 +16,8 @@ from core.agent_orchestration.contracts import (
     AgentOrchestrationRequest,
     AgentOrchestrationResult,
     AgentOrchestrationState,
+    AgentOrchestrationUsage,
+    AgentTaskBarrier,
     AgentTaskDefinition,
     AgentTaskDependencyReceipt,
     AgentTaskExecutionContext,
@@ -42,17 +44,57 @@ from core.lifecycle.feature_registry import (
 
 @dataclass(slots=True)
 class _UsageTotals:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_input_tokens: int = 0
+    reasoning_tokens: int = 0
     model_calls: int = 0
     tool_calls: int = 0
-    tokens: int = 0
     cost_microunits: int = 0
+    task_attempts: int = 0
     output_bytes: int = 0
+
+    @property
+    def tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def snapshot(self) -> AgentOrchestrationUsage:
+        return AgentOrchestrationUsage(
+            usage=RuntimeUsage(
+                input_tokens=self.input_tokens,
+                output_tokens=self.output_tokens,
+                cached_input_tokens=self.cached_input_tokens,
+                reasoning_tokens=self.reasoning_tokens,
+                cost_microunits=self.cost_microunits,
+            ),
+            model_calls=self.model_calls,
+            tool_calls=self.tool_calls,
+            task_attempts=self.task_attempts,
+            output_bytes=self.output_bytes,
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class _TaskOutcome:
     receipt: AgentTaskExecutionReceipt
     output: AgentTaskOutput
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskSeries:
+    outcomes: tuple[_TaskOutcome, ...]
+
+    def __post_init__(self) -> None:
+        if not self.outcomes:
+            raise ValueError("task series 不能为空")
+        task_ids = {item.receipt.task_id for item in self.outcomes}
+        attempts = tuple(item.receipt.attempt_no for item in self.outcomes)
+        if len(task_ids) != 1 or attempts != tuple(range(1, len(attempts) + 1)):
+            raise ValueError("task series 必须属于同一任务且尝试连续")
+
+    @property
+    def final(self) -> _TaskOutcome:
+        return self.outcomes[-1]
 
 
 class AgentOrchestrationCancellation:
@@ -128,6 +170,21 @@ class AgentDagOrchestrator:
         if not isinstance(cancel, AgentOrchestrationCancellation):
             raise TypeError("cancellation 无效")
 
+        try:
+            existing = await self._checkpoint_store.load_latest(
+                request.orchestration_id,
+                owner_id=request.identity.owner.canonical_id,
+            )
+        except Exception as exc:
+            raise AgentOrchestrationError(
+                "checkpoint_store_failed",
+                "无法确认编排是否已经开始",
+                next_actions=("修复持久 checkpoint Store 后重新读取",),
+                stop_condition="checkpoint 状态不明时禁止重复派发任务",
+            ) from exc
+        if existing is not None:
+            return self._existing_checkpoint_result(request, existing)
+
         started = self._monotonic()
         deadline = started + request.plan.budget.max_elapsed_ms / 1000
         task_states = {
@@ -139,29 +196,29 @@ class AgentDagOrchestrator:
         usage = _UsageTotals()
         latest_checkpoint_id = ""
 
-        for batch in request.plan.execution_batches():
+        for barrier in request.plan.execution_barriers():
             if cancel.requested:
-                outcomes = [
-                    self._terminal_outcome(
+                series = [
+                    _TaskSeries((self._terminal_outcome(
                         request.plan.task_by_id[task_id],
                         state=AgentTaskState.CANCELLED,
                         error_code=cancel.reason_code,
-                    )
-                    for task_id in batch
+                    ),))
+                    for task_id in barrier.task_ids
                 ]
             elif self._monotonic() >= deadline:
-                outcomes = [
-                    self._terminal_outcome(
+                series = [
+                    _TaskSeries((self._terminal_outcome(
                         request.plan.task_by_id[task_id],
                         state=AgentTaskState.TIMED_OUT,
                         error_code="orchestration_time_limit",
-                    )
-                    for task_id in batch
+                    ),))
+                    for task_id in barrier.task_ids
                 ]
             else:
-                outcomes = await self._execute_batch(
+                series = await self._execute_batch(
                     request,
-                    batch=batch,
+                    barrier=barrier,
                     task_states=task_states,
                     outputs=outputs,
                     receipts=receipt_by_id,
@@ -170,36 +227,45 @@ class AgentDagOrchestrator:
                     cancellation=cancel,
                 )
 
-            for outcome in sorted(outcomes, key=lambda item: item.receipt.task_id):
-                receipt = outcome.receipt
+            for task_series in sorted(
+                series,
+                key=lambda item: item.final.receipt.task_id,
+            ):
+                for outcome in task_series.outcomes:
+                    receipts.append(outcome.receipt)
+                    usage.task_attempts += 1
+                final = task_series.final
+                receipt = final.receipt
                 task_states[receipt.task_id] = receipt.state
-                outputs[receipt.task_id] = outcome.output
-                receipts.append(receipt)
+                outputs[receipt.task_id] = final.output
                 receipt_by_id[receipt.task_id] = receipt
-                try:
-                    checkpoint = await self._save_checkpoint(
-                        request,
-                        task_states=task_states,
-                        outputs=outputs,
-                        receipts=receipts,
-                        parent_checkpoint_id=latest_checkpoint_id,
-                    )
-                except Exception as exc:
-                    return AgentOrchestrationResult(
-                        orchestration_id=request.orchestration_id,
-                        state=AgentOrchestrationState.FAILED,
-                        plan_sha256=request.plan.content_sha256,
-                        receipts=tuple(receipts),
-                        outputs=outputs,
-                        aggregate_output=None,
-                        latest_checkpoint_id=latest_checkpoint_id,
-                        failure_code=(
-                            exc.code
-                            if isinstance(exc, AgentOrchestrationError)
-                            else "checkpoint_store_failed"
-                        ),
-                    )
-                latest_checkpoint_id = checkpoint.checkpoint_id
+            try:
+                checkpoint = await self._save_checkpoint(
+                    request,
+                    barrier=barrier,
+                    task_states=task_states,
+                    outputs=outputs,
+                    receipts=receipts,
+                    usage=usage,
+                    parent_checkpoint_id=latest_checkpoint_id,
+                )
+            except Exception as exc:
+                return AgentOrchestrationResult(
+                    orchestration_id=request.orchestration_id,
+                    state=AgentOrchestrationState.FAILED,
+                    plan_sha256=request.plan.content_sha256,
+                    receipts=tuple(receipts),
+                    outputs=outputs,
+                    aggregate_output=None,
+                    latest_checkpoint_id=latest_checkpoint_id,
+                    failure_code=(
+                        exc.code
+                        if isinstance(exc, AgentOrchestrationError)
+                        else "checkpoint_store_failed"
+                    ),
+                )
+
+            latest_checkpoint_id = checkpoint.checkpoint_id
 
         aggregate = outputs.get(request.plan.aggregation_task_id)
         aggregate_receipt = receipt_by_id.get(request.plan.aggregation_task_id)
@@ -210,8 +276,11 @@ class AgentDagOrchestrator:
         elif (
             aggregate_receipt is not None
             and aggregate_receipt.state is AgentTaskState.SUCCEEDED
-            and len(receipts) == len(request.plan.tasks)
-            and all(item.state is AgentTaskState.SUCCEEDED for item in receipts)
+            and len(receipt_by_id) == len(request.plan.tasks)
+            and all(
+                item.state is AgentTaskState.SUCCEEDED
+                for item in receipt_by_id.values()
+            )
         ):
             state = AgentOrchestrationState.SUCCEEDED
             failure_code = ""
@@ -221,7 +290,7 @@ class AgentDagOrchestrator:
             failure_code = next(
                 (
                     item.error_code
-                    for item in receipts
+                    for item in receipt_by_id.values()
                     if item.state is not AgentTaskState.SUCCEEDED
                 ),
                 "completion_condition_failed",
@@ -234,6 +303,111 @@ class AgentDagOrchestrator:
             outputs=outputs,
             aggregate_output=aggregate,
             latest_checkpoint_id=latest_checkpoint_id,
+            failure_code=failure_code,
+        )
+
+    @staticmethod
+    def _existing_checkpoint_result(
+        request: AgentOrchestrationRequest,
+        checkpoint: AgentOrchestrationCheckpoint,
+    ) -> AgentOrchestrationResult:
+        """只重放已持久化终态；中间屏障必须通过新计划修复。"""
+
+        barriers = request.plan.execution_barriers()
+        if (
+            checkpoint.orchestration_id != request.orchestration_id
+            or checkpoint.identity != request.identity
+            or checkpoint.plan_id != request.plan.plan_id
+            or checkpoint.plan_revision != request.plan.revision
+            or checkpoint.plan_sha256 != request.plan.content_sha256
+            or checkpoint.freeze_id != request.freeze.freeze_id
+            or checkpoint.sequence > len(barriers)
+            or checkpoint.barrier_id
+            != barriers[checkpoint.sequence - 1].barrier_id
+        ):
+            raise AgentOrchestrationError(
+                "checkpoint_identity_mismatch",
+                "已有 checkpoint 与当前冻结计划或身份不一致",
+                next_actions=("使用原 owner 和原冻结计划读取 checkpoint",),
+                stop_condition="不得覆盖或重解释已有 checkpoint",
+            )
+        if checkpoint.sequence != len(barriers):
+            raise AgentOrchestrationError(
+                "plan_repair_required",
+                "编排停在已持久化的任务屏障，禁止自动重放后续任务",
+                next_actions=("基于该 checkpoint 预览并批准新的计划修订",),
+                stop_condition="未批准 append-only repair 前保持停放",
+            )
+        task_ids = set(request.plan.task_by_id)
+        if set(checkpoint.task_states) != task_ids or any(
+            not state.terminal for state in checkpoint.task_states.values()
+        ):
+            raise AgentOrchestrationError(
+                "checkpoint_state_invalid",
+                "最终 checkpoint 的任务状态不完整",
+                next_actions=("审计 checkpoint 摘要链与任务回执",),
+            )
+        final_receipts: dict[str, AgentTaskExecutionReceipt] = {}
+        for receipt in checkpoint.receipts:
+            task = request.plan.task_by_id.get(receipt.task_id)
+            if (
+                task is None
+                or receipt.role_id != task.role_id
+                or receipt.attempt_no > task.retry_policy.max_attempts
+            ):
+                raise AgentOrchestrationError(
+                    "checkpoint_receipt_invalid",
+                    "checkpoint 含不属于冻结计划的任务回执",
+                    next_actions=("审计持久 Store 并停止该编排",),
+                )
+            previous = final_receipts.get(receipt.task_id)
+            if previous is None or receipt.attempt_no > previous.attempt_no:
+                final_receipts[receipt.task_id] = receipt
+        if set(final_receipts) != task_ids:
+            raise AgentOrchestrationError(
+                "checkpoint_receipt_invalid",
+                "最终 checkpoint 缺少任务回执",
+                next_actions=("审计持久 Store 并停止该编排",),
+            )
+        aggregate = checkpoint.outputs.get(
+            request.plan.aggregation_task_id
+        )
+        if all(
+            receipt.state is AgentTaskState.SUCCEEDED
+            for receipt in final_receipts.values()
+        ) and aggregate is not None:
+            state = AgentOrchestrationState.SUCCEEDED
+            failure_code = ""
+        elif any(
+            receipt.state is AgentTaskState.CANCELLED
+            for receipt in final_receipts.values()
+        ):
+            state = AgentOrchestrationState.CANCELLED
+            aggregate = None
+            failure_code = next(
+                receipt.error_code
+                for receipt in final_receipts.values()
+                if receipt.state is AgentTaskState.CANCELLED
+            )
+        else:
+            state = AgentOrchestrationState.FAILED
+            aggregate = None
+            failure_code = next(
+                (
+                    receipt.error_code
+                    for receipt in final_receipts.values()
+                    if receipt.state is not AgentTaskState.SUCCEEDED
+                ),
+                "completion_condition_failed",
+            )
+        return AgentOrchestrationResult(
+            orchestration_id=request.orchestration_id,
+            state=state,
+            plan_sha256=request.plan.content_sha256,
+            receipts=checkpoint.receipts,
+            outputs=checkpoint.outputs,
+            aggregate_output=aggregate,
+            latest_checkpoint_id=checkpoint.checkpoint_id,
             failure_code=failure_code,
         )
 
@@ -287,12 +461,12 @@ class AgentDagOrchestrator:
                     stop_condition="没有显式父预算时禁止 spawn",
                 )
         if (
-            plan_budget.max_tasks + plan_budget.max_tool_calls
+            request.plan.maximum_attempts + plan_budget.max_tool_calls
             > parent.step_limit
         ):
             raise AgentOrchestrationError(
                 "subagent_budget_denied",
-                "计划任务与子工具调用合计超过父 Run 的 subagent step 预算",
+                "计划最大尝试次数与子工具调用合计超过父 Run 的 subagent step 预算",
                 next_actions=("减少任务或工具调用预算后重新批准计划",),
                 stop_condition="没有足够父级 step 预算时禁止 spawn",
             )
@@ -301,27 +475,27 @@ class AgentDagOrchestrator:
         self,
         request: AgentOrchestrationRequest,
         *,
-        batch: tuple[str, ...],
+        barrier: AgentTaskBarrier,
         task_states: Mapping[str, AgentTaskState],
         outputs: Mapping[str, AgentTaskOutput],
         receipts: Mapping[str, AgentTaskExecutionReceipt],
         usage: _UsageTotals,
         deadline: float,
         cancellation: AgentOrchestrationCancellation,
-    ) -> list[_TaskOutcome]:
-        pending: list[asyncio.Task[_TaskOutcome]] = []
-        immediate: list[_TaskOutcome] = []
-        for task_id in batch:
+    ) -> list[_TaskSeries]:
+        pending: list[asyncio.Task[_TaskSeries]] = []
+        immediate: list[_TaskSeries] = []
+        for task_id in barrier.task_ids:
             task = request.plan.task_by_id[task_id]
             if any(
                 task_states[dependency] is not AgentTaskState.SUCCEEDED
                 for dependency in task.dependencies
             ):
-                immediate.append(self._terminal_outcome(
+                immediate.append(_TaskSeries((self._terminal_outcome(
                     task,
                     state=AgentTaskState.BLOCKED,
                     error_code="dependency_not_succeeded",
-                ))
+                ),)))
                 continue
             pending.append(asyncio.create_task(
                 self._execute_task(
@@ -350,12 +524,63 @@ class AgentDagOrchestrator:
         usage: _UsageTotals,
         deadline: float,
         cancellation: AgentOrchestrationCancellation,
+    ) -> _TaskSeries:
+        outcomes: list[_TaskOutcome] = []
+        for attempt_no in range(1, task.retry_policy.max_attempts + 1):
+            outcome = await self._execute_task_attempt(
+                request,
+                task=task,
+                outputs=outputs,
+                receipts=receipts,
+                previous_attempts=tuple(
+                    item.receipt for item in outcomes
+                ),
+                attempt_no=attempt_no,
+                usage=usage,
+                deadline=deadline,
+                cancellation=cancellation,
+            )
+            outcomes.append(outcome)
+            receipt = outcome.receipt
+            if receipt.state is AgentTaskState.SUCCEEDED:
+                break
+            if not task.retry_policy.permits(
+                receipt.error_code,
+                attempt_no,
+            ):
+                break
+            delay = task.retry_policy.delay_seconds(attempt_no)
+            if cancellation.requested or self._monotonic() + delay >= deadline:
+                break
+            if delay > 0:
+                try:
+                    await asyncio.wait_for(cancellation.wait(), timeout=delay)
+                except asyncio.TimeoutError:
+                    pass
+                if cancellation.requested:
+                    break
+        return _TaskSeries(tuple(outcomes))
+
+    async def _execute_task_attempt(
+        self,
+        request: AgentOrchestrationRequest,
+        *,
+        task: AgentTaskDefinition,
+        outputs: Mapping[str, AgentTaskOutput],
+        receipts: Mapping[str, AgentTaskExecutionReceipt],
+        previous_attempts: tuple[AgentTaskExecutionReceipt, ...],
+        attempt_no: int,
+        usage: _UsageTotals,
+        deadline: float,
+        cancellation: AgentOrchestrationCancellation,
     ) -> _TaskOutcome:
         started_at = self._now()
         started_clock = self._monotonic()
         reservation = None
         try:
-            reservation = self._budget.reserve_subagent(task.task_id)
+            reservation = self._budget.reserve_subagent(
+                f"{task.task_id}:attempt:{attempt_no}"
+            )
             inputs = self._resolve_inputs(request, task, outputs)
             dependency_receipts = tuple(
                 AgentTaskDependencyReceipt(
@@ -372,6 +597,8 @@ class AgentDagOrchestrator:
                 role=request.plan.role_by_id[task.role_id],
                 inputs=inputs,
                 dependencies=dependency_receipts,
+                attempt_no=attempt_no,
+                previous_attempts=previous_attempts,
             )
             timeout_seconds = min(
                 task.timeout_ms / 1000,
@@ -406,6 +633,7 @@ class AgentDagOrchestrator:
                     started_at=started_at,
                     started_clock=started_clock,
                     reservation_id=reservation.reservation_id,
+                    attempt_no=attempt_no,
                 )
             return self._outcome(
                 task,
@@ -415,6 +643,7 @@ class AgentDagOrchestrator:
                 started_at=started_at,
                 started_clock=started_clock,
                 reservation_id=reservation.reservation_id,
+                attempt_no=attempt_no,
             )
         except asyncio.TimeoutError:
             return self._outcome(
@@ -429,6 +658,7 @@ class AgentDagOrchestrator:
                 started_at=started_at,
                 started_clock=started_clock,
                 reservation_id=(reservation.reservation_id if reservation else ""),
+                attempt_no=attempt_no,
             )
         except AgentOrchestrationError as exc:
             return self._outcome(
@@ -447,6 +677,7 @@ class AgentDagOrchestrator:
                 started_at=started_at,
                 started_clock=started_clock,
                 reservation_id=(reservation.reservation_id if reservation else ""),
+                attempt_no=attempt_no,
             )
         except AgentRuntimeBudgetExceededError:
             return self._outcome(
@@ -461,6 +692,7 @@ class AgentDagOrchestrator:
                 started_at=started_at,
                 started_clock=started_clock,
                 reservation_id=(reservation.reservation_id if reservation else ""),
+                attempt_no=attempt_no,
             )
         except Exception:
             return self._outcome(
@@ -475,6 +707,7 @@ class AgentDagOrchestrator:
                 started_at=started_at,
                 started_clock=started_clock,
                 reservation_id=(reservation.reservation_id if reservation else ""),
+                attempt_no=attempt_no,
             )
         finally:
             if reservation is not None:
@@ -571,19 +804,38 @@ class AgentDagOrchestrator:
         usage: _UsageTotals,
         output: AgentTaskOutput,
     ) -> None:
+        projected = _UsageTotals(
+            input_tokens=usage.input_tokens + output.usage.input_tokens,
+            output_tokens=usage.output_tokens + output.usage.output_tokens,
+            cached_input_tokens=(
+                usage.cached_input_tokens
+                + output.usage.cached_input_tokens
+            ),
+            reasoning_tokens=(
+                usage.reasoning_tokens + output.usage.reasoning_tokens
+            ),
+            model_calls=usage.model_calls + output.model_calls,
+            tool_calls=usage.tool_calls + output.tool_calls,
+            cost_microunits=(
+                usage.cost_microunits + output.usage.cost_microunits
+            ),
+            task_attempts=usage.task_attempts,
+            output_bytes=usage.output_bytes + output.size_bytes,
+        )
+        # Worker 已经产生这些物理消费；即使随后触发父预算或计划预算拒绝，
+        # 屏障 checkpoint 也必须保留实际累计值，不能回退为“未消费”。
+        usage.model_calls = projected.model_calls
+        usage.tool_calls = projected.tool_calls
+        usage.input_tokens = projected.input_tokens
+        usage.output_tokens = projected.output_tokens
+        usage.cached_input_tokens = projected.cached_input_tokens
+        usage.reasoning_tokens = projected.reasoning_tokens
+        usage.cost_microunits = projected.cost_microunits
+        usage.output_bytes = projected.output_bytes
         self._budget.record_subagent_usage(
             output.usage,
             model_calls=output.model_calls,
             tool_calls=output.tool_calls,
-        )
-        projected = _UsageTotals(
-            model_calls=usage.model_calls + output.model_calls,
-            tool_calls=usage.tool_calls + output.tool_calls,
-            tokens=usage.tokens + output.usage.total_tokens,
-            cost_microunits=(
-                usage.cost_microunits + output.usage.cost_microunits
-            ),
-            output_bytes=usage.output_bytes + output.size_bytes,
         )
         budget = request.plan.budget
         exceeded = next((
@@ -608,11 +860,6 @@ class AgentDagOrchestrator:
                 next_actions=("缩小任务输出或提交预算更小的新计划",),
                 stop_condition="预算超限后停止调度后续任务",
             )
-        usage.model_calls = projected.model_calls
-        usage.tool_calls = projected.tool_calls
-        usage.tokens = projected.tokens
-        usage.cost_microunits = projected.cost_microunits
-        usage.output_bytes = projected.output_bytes
 
     def _outcome(
         self,
@@ -624,13 +871,14 @@ class AgentDagOrchestrator:
         started_at: datetime,
         started_clock: float,
         reservation_id: str,
+        attempt_no: int,
     ) -> _TaskOutcome:
         finished_at = self._now()
         receipt = AgentTaskExecutionReceipt(
             task_id=task.task_id,
             role_id=task.role_id,
             state=state,
-            attempt_no=1,
+            attempt_no=attempt_no,
             dependency_ids=task.dependencies,
             output_sha256=output.content_sha256,
             output_size_bytes=output.size_bytes,
@@ -700,12 +948,14 @@ class AgentDagOrchestrator:
         self,
         request: AgentOrchestrationRequest,
         *,
+        barrier: AgentTaskBarrier,
         task_states: Mapping[str, AgentTaskState],
         outputs: Mapping[str, AgentTaskOutput],
         receipts: list[AgentTaskExecutionReceipt],
+        usage: _UsageTotals,
         parent_checkpoint_id: str,
     ) -> AgentOrchestrationCheckpoint:
-        sequence = len(receipts)
+        sequence = barrier.sequence
         if sequence > request.plan.budget.max_checkpoints:
             raise AgentOrchestrationError(
                 "checkpoint_budget_exceeded",
@@ -718,12 +968,17 @@ class AgentDagOrchestrator:
             ),
             orchestration_id=request.orchestration_id,
             identity=request.identity,
+            plan_id=request.plan.plan_id,
+            plan_revision=request.plan.revision,
             plan_sha256=request.plan.content_sha256,
+            freeze_id=request.freeze.freeze_id,
             sequence=sequence,
             parent_checkpoint_id=parent_checkpoint_id,
+            barrier_id=barrier.barrier_id,
             task_states=task_states,
             outputs=outputs,
-            receipt_sha256s=tuple(item.receipt_sha256 for item in receipts),
+            receipts=tuple(receipts),
+            cumulative_usage=usage.snapshot(),
             created_at=self._now(),
         )
         if checkpoint.size_bytes > request.plan.budget.max_output_bytes:

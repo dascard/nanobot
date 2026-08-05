@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`bc666c1c7857f0bd000f06a548b42cb5040705e2`
-- 规则总数：8301
+- 源提交：`da9b59dfd49d893c5c8c309fbc1884e62d0d85c6`
+- 规则总数：8340
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,18 +12,18 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1586 |
+| `configurable_policy` | 1615 |
 | `data_consistency` | 478 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4395 |
+| `protocol_syntax` | 4405 |
 | `security_invariant` | 1668 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `core/schema_migrations.py` | 242 |
+| `core/schema_migrations.py` | 243 |
 | `scripts/manage-sandbox-production.sh` | 179 |
 | `core/scheduled_workflow.py` | 133 |
 | `webui/src/App.jsx` | 128 |
@@ -63,6 +63,7 @@
 | `app/memory_digest/builder.py` | 42 |
 | `core/persona_preprocess.py` | 41 |
 | `sandboxd/network_policy.py` | 41 |
+| `core/agent_orchestration/contracts.py` | 40 |
 | `core/context_engine.py` | 40 |
 | `api/admin/chat_config_routes.py` | 39 |
 | `app/session_memory/llm_summarizer.py` | 39 |
@@ -74,7 +75,6 @@
 | `app/group_analysis/preprocess.py` | 36 |
 | `core/release/deployment.py` | 36 |
 | `core/sticker_preview.py` | 36 |
-| `core/agent_orchestration/contracts.py` | 35 |
 | `core/db/group_learning_governance_adapter.py` | 35 |
 | `core/release/production_preflight.py` | 35 |
 | `sandboxd/unified_patch.py` | 35 |
@@ -154,6 +154,7 @@
 | `core/sandbox/diagnostics.py` | 19 |
 | `webui/src/features/prompt/PromptPages.jsx` | 19 |
 | `api/admin/prompt_v2_routes.py` | 18 |
+| `core/agent_orchestration/plan_governance.py` | 18 |
 | `core/outbound/control_transitions.py` | 18 |
 | `core/sandbox/lease_service.py` | 18 |
 | `core/sql_readonly.py` | 18 |
@@ -264,6 +265,7 @@
 | `api/chat_persistence.py` | 10 |
 | `app/group_learning/review_service.py` | 10 |
 | `app/session_config/discovery_service.py` | 10 |
+| `core/agent_orchestration/scheduler.py` | 10 |
 | `core/chat_delivery_outbox.py` | 10 |
 | `core/content_rules/contracts.py` | 10 |
 | `core/eval_sampling/timing_signal_audit.py` | 10 |
@@ -368,7 +370,7 @@
 | `app/session_memory/group_rollup.py` | 6 |
 | `app/tool_services/skill.py` | 6 |
 | `core/admin/idempotency.py` | 6 |
-| `core/agent_orchestration/scheduler.py` | 6 |
+| `core/agent_orchestration/persistence.py` | 6 |
 | `core/chat_delivery_service.py` | 6 |
 | `core/content_rules/adapters.py` | 6 |
 | `core/eval_sampling/db_sampler.py` | 6 |
@@ -396,6 +398,7 @@
 | `app/tool_services/image_summary.py` | 5 |
 | `clients/provider_adapter.py` | 5 |
 | `clients/task_runtime_adapter.py` | 5 |
+| `core/agent_orchestration/serialization.py` | 5 |
 | `core/agent_runtime/selection.py` | 5 |
 | `core/compaction.py` | 5 |
 | `core/durable_tasks/contracts.py` | 5 |
@@ -1983,13 +1986,13 @@
 | `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:924` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:726` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:729` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:726` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:729` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2465` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2468` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |

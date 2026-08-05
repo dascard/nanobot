@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 8.2 已完成，准备阶段 8.3）
+> 状态：执行中（阶段 8.3 已完成，准备阶段 8.4）
 >
 > 建立日期：2026-08-03
 >
@@ -1221,10 +1221,34 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 8.3 计划批准、调度和修复
 
-- [ ] 支持动态计划的 preview、approve 和 freeze。
-- [ ] 显式 DAG 使用确定性调度。
-- [ ] 支持 task barrier、局部重试和 append-only plan repair。
-- [ ] 修改已批准计划会生成新版本和审计事件。
+- [x] 支持动态计划的 preview、approve 和 freeze。
+- [x] 显式 DAG 使用确定性调度。
+- [x] 支持 task barrier、局部重试和 append-only plan repair。
+- [x] 修改已批准计划会生成新版本和审计事件。
+
+实现记录（2026-08-05）：
+
+- 新增动态计划治理控制面与 SQL 持久化 Adapter。候选计划先以 owner、Run、Turn、revision 和内容 Hash
+  形成不可变 preview，再使用精确事件序号分别 approve、freeze；执行入口必须从持久 Store 核验两份证明，
+  自造批准字段不能进入真实 DAG 调度。预算扩张、空修订、旧 revision、过期事件序号、Hash 漂移和跨 owner
+  读取均失败关闭；已批准或冻结计划的修改只能形成连续新 revision，并追加带前序摘要的 supersede／freeze
+  审计事件。
+- DAG 由依赖、`task_id` 和并发上限确定性生成 task barrier，每个屏障只提交一个原子 checkpoint。checkpoint
+  保存完整 Runtime 身份、计划 ID／revision／freeze、最终输出、每次尝试 receipt 和累计物理用量；SQL Store
+  每屏障独立提交且支持幂等回读。最终屏障可直接重放持久结果，中间屏障禁止盲目续跑，必须基于恢复点创建、
+  批准并冻结 append-only repair；同名编排的 owner 冲突在 Worker 执行前即停止。
+- 局部重试必须预先冻结最大次数、精确错误码、确定性 backoff 和稳定 idempotency key。预算按最大尝试数保守
+  预约，权限、预算、模型、输入和输出合同在重试间不扩张；权限、身份、预算、停止不确定等治理错误不可重试。
+  每次尝试使用独立子 Run／Session／Actor，但携带同一幂等键和连续失败回执；实际模型、token、工具、成本与
+  输出用量即使触发拒绝仍进入累计 checkpoint 证据。
+- 新增计划修订、审计事件和 checkpoint 三张表，事件通过复合外键绑定计划 revision；SQLite 为三表安装禁止
+  UPDATE／DELETE 的追加式触发器。首计划与 preview 事件、批量 supersede／freeze 事件都在 savepoint 中
+  原子写入，并在并发唯一键冲突后保持外层事务可用。canonical `tasks/agent_subtask` 模板升级至 v2，明确
+  `attempt_no`／`idempotency_key` 只属于冻结重试元数据，默认与运行时模板保持一致。
+- 新增 15 项计划治理、持久恢复与真实子 Runtime 重试专项测试，并扩展既有编排预算、checkpoint、owner 隔离
+  和迁移顺序回归。架构边界、OpenAPI、Behavior、Release／Verification Golden、决策规则、Task SLO、Ruff、
+  Python 编译、模板一致性和 `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 在 Linux
+  `/var/tmp` basetemp 下为 6741 passed、12 skipped、0 failed，耗时 629.39 秒。
 
 #### 8.4 人机与多 Agent 协作入口
 

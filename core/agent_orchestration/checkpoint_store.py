@@ -6,6 +6,7 @@ import asyncio
 
 from core.agent_orchestration.contracts import (
     AgentOrchestrationCheckpoint,
+    AgentOrchestrationError,
 )
 
 
@@ -41,6 +42,12 @@ class InMemoryAgentOrchestrationCheckpointStore:
                     raise ValueError("同一编排不能切换 checkpoint owner")
                 if checkpoint.plan_sha256 != previous.plan_sha256:
                     raise ValueError("同一编排不能切换冻结计划")
+                if (
+                    checkpoint.plan_id != previous.plan_id
+                    or checkpoint.plan_revision != previous.plan_revision
+                    or checkpoint.freeze_id != previous.freeze_id
+                ):
+                    raise ValueError("同一编排不能切换计划 revision 或冻结证明")
                 if checkpoint.sequence != previous.sequence + 1:
                     raise ValueError("checkpoint sequence 必须连续递增")
                 if checkpoint.parent_checkpoint_id != previous.checkpoint_id:
@@ -67,7 +74,11 @@ class InMemoryAgentOrchestrationCheckpointStore:
                 return None
             checkpoint = self._records[ordered[-1]]
             if checkpoint.identity.owner.canonical_id != normalized_owner:
-                return None
+                raise AgentOrchestrationError(
+                    "checkpoint_owner_conflict",
+                    "orchestration_id 已绑定其他 owner",
+                    stop_condition="owner 冲突时禁止执行或覆盖已有编排",
+                )
             return checkpoint
 
 

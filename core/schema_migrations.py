@@ -119,6 +119,9 @@ _MCP_CONTROL_PLANE_V1_VERSION = "20260804_mcp_control_plane_v1"
 _RUNTIME_PERMISSION_GOVERNANCE_V1_VERSION = (
     "20260804_runtime_permission_governance_v1"
 )
+_AGENT_ORCHESTRATION_GOVERNANCE_V1_VERSION = (
+    "20260805_agent_orchestration_governance_v1"
+)
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3953,6 +3956,44 @@ def _runtime_permission_governance_v1(
     PermissionSessionGrantRow.__table__.create(bind=conn, checkfirst=True)
 
 
+def _agent_orchestration_governance_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建不可变计划修订、追加式审计事件和屏障 checkpoint。"""
+
+    from core.db.models.agent_orchestration import (
+        AgentOrchestrationCheckpointRow,
+        AgentOrchestrationPlanEventRow,
+        AgentOrchestrationPlanRevisionRow,
+    )
+
+    for model in (
+        AgentOrchestrationPlanRevisionRow,
+        AgentOrchestrationPlanEventRow,
+        AgentOrchestrationCheckpointRow,
+    ):
+        model.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    for table_name in (
+        "agent_orchestration_plan_revisions",
+        "agent_orchestration_plan_events",
+        "agent_orchestration_checkpoints",
+    ):
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_update "
+            f"BEFORE UPDATE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_append_only'); END"
+        ))
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_delete "
+            f"BEFORE DELETE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_append_only'); END"
+        ))
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -5225,6 +5266,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _RUNTIME_PERMISSION_GOVERNANCE_V1_VERSION,
         "runtime permission session grants and revocation",
         _runtime_permission_governance_v1,
+    ),
+    (
+        _AGENT_ORCHESTRATION_GOVERNANCE_V1_VERSION,
+        "agent orchestration immutable plan revisions events and checkpoints",
+        _agent_orchestration_governance_v1,
     ),
 ]
 

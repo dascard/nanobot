@@ -14,6 +14,7 @@ from core.agent_orchestration import (
     AgentOrchestrationApproval,
     AgentOrchestrationBudget,
     AgentOrchestrationError,
+    AgentOrchestrationFreeze,
     AgentOrchestrationPlan,
     AgentOrchestrationRequest,
     AgentOrchestrationState,
@@ -28,6 +29,7 @@ from core.agent_orchestration import (
     AgentTaskInputBinding,
     AgentTaskOutputStatus,
     AgentTaskPurpose,
+    AgentTaskRetryPolicy,
     AgentTaskRuntimeBudget,
     AgentTaskRuntimeEnvironment,
     AgentTaskRuntimePolicy,
@@ -460,11 +462,21 @@ async def test_runtime_executor_runs_dag_with_isolated_models_and_parent_budget(
         approved_by="operator",
         approved_at=datetime.now(timezone.utc),
     )
+    freeze = AgentOrchestrationFreeze(
+        freeze_id="freeze-runtime",
+        approval_id=approval.approval_id,
+        plan_id=plan.plan_id,
+        plan_revision=plan.revision,
+        plan_sha256=plan.content_sha256,
+        frozen_by="scheduler",
+        frozen_at=approval.approved_at,
+    )
     request = AgentOrchestrationRequest(
         orchestration_id="orchestration-runtime",
         identity=parent.execution_identity(),
         plan=plan,
         approval=approval,
+        freeze=freeze,
         root_input={"topic": "Agent Harness"},
     )
 
@@ -500,6 +512,144 @@ async def test_runtime_executor_runs_dag_with_isolated_models_and_parent_budget(
     assert consumption.tokens == 6
     assert consumption.cost_microunits == 3
     assert consumption.steps == 3
+
+
+@pytest.mark.asyncio
+async def test_runtime_retry_keeps_frozen_idempotency_and_isolates_attempt_runs():
+    base = _plan()
+    research = replace(
+        base.task_by_id["research"],
+        retry_policy=AgentTaskRetryPolicy(
+            max_attempts=2,
+            retryable_error_codes=("child_reported_error",),
+            backoff_ms=(0,),
+            idempotency_key="research-stable-operation",
+        ),
+    )
+    plan = AgentOrchestrationPlan(
+        plan_id="runtime-retry-plan",
+        revision=1,
+        roles=base.roles,
+        tasks=(
+            research,
+            base.task_by_id["review"],
+            base.task_by_id["aggregate"],
+        ),
+        root_input_contract=base.root_input_contract,
+        aggregation_task_id=base.aggregation_task_id,
+        budget=replace(
+            base.budget,
+            max_model_calls=4,
+            max_tokens=400,
+            max_cost_microunits=400,
+        ),
+    )
+
+    class RetryFactory(_Factory):
+        async def create(self, binding):
+            first_research = (
+                binding.task_id == "research"
+                and not any(
+                    item.task_id == "research" for item in self.bindings
+                )
+            )
+            if first_research:
+                self.raw_output = json.dumps({
+                    "status": "error",
+                    "summary": "上游暂时不可用",
+                    "next_actions": ["按冻结策略局部重试"],
+                    "artifacts": [],
+                    "data": {},
+                }, ensure_ascii=False)
+            try:
+                return await super().create(binding)
+            finally:
+                self.raw_output = ""
+
+    parent = _parent_context()
+    factory = RetryFactory()
+    account = RuntimeBudgetAccount(
+        parent.execution_identity(),
+        parent.governance,
+    )
+    orchestrator = AgentDagOrchestrator(
+        executor=AgentRuntimeTaskExecutor(
+            plan=plan,
+            environment=AgentTaskRuntimeEnvironment(
+                parent_context=parent,
+                parent_tool_plan=None,
+                model_routes=(
+                    ROUTE_AGGREGATE,
+                    ROUTE_ECONOMY,
+                    ROUTE_REVIEW,
+                ),
+            ),
+            runtime_factory=factory,
+        ),
+        checkpoint_store=InMemoryAgentOrchestrationCheckpointStore(),
+        budget_account=account,
+    )
+    approved_at = datetime.now(timezone.utc)
+    approval = AgentOrchestrationApproval(
+        approval_id="approval-runtime-retry",
+        plan_id=plan.plan_id,
+        plan_revision=plan.revision,
+        plan_sha256=plan.content_sha256,
+        approved_by="operator",
+        approved_at=approved_at,
+    )
+    request = AgentOrchestrationRequest(
+        orchestration_id="orchestration-runtime-retry",
+        identity=parent.execution_identity(),
+        plan=plan,
+        approval=approval,
+        freeze=AgentOrchestrationFreeze(
+            freeze_id="freeze-runtime-retry",
+            approval_id=approval.approval_id,
+            plan_id=plan.plan_id,
+            plan_revision=plan.revision,
+            plan_sha256=plan.content_sha256,
+            frozen_by="scheduler",
+            frozen_at=approved_at,
+        ),
+        root_input={"topic": "Agent Harness 重试"},
+    )
+
+    result = await orchestrator.execute(
+        request,
+        feature_decision=_feature_decision(),
+    )
+
+    assert result.state is AgentOrchestrationState.SUCCEEDED
+    assert [item.task_id for item in factory.bindings] == [
+        "research",
+        "research",
+        "review",
+        "aggregate",
+    ]
+    retry_payloads = [
+        json.loads(item.request_content)
+        for item in factory.bindings[:2]
+    ]
+    assert [item["attempt_no"] for item in retry_payloads] == [1, 2]
+    assert {
+        item["idempotency_key"] for item in retry_payloads
+    } == {"research-stable-operation"}
+    assert (
+        factory.bindings[0].context.run_id
+        != factory.bindings[1].context.run_id
+    )
+    assert (
+        factory.bindings[0].context.session_id
+        != factory.bindings[1].context.session_id
+    )
+    assert [
+        (receipt.task_id, receipt.attempt_no, receipt.state)
+        for receipt in result.receipts[:2]
+    ] == [
+        ("research", 1, AgentTaskState.FAILED),
+        ("research", 2, AgentTaskState.SUCCEEDED),
+    ]
 
 
 def _schema(name: str) -> dict:
@@ -880,6 +1030,15 @@ async def test_runtime_failure_is_structured_and_charged_to_parent_budget():
         approved_by="operator",
         approved_at=datetime.now(timezone.utc),
     )
+    freeze = AgentOrchestrationFreeze(
+        freeze_id="freeze-runtime-failure",
+        approval_id=approval.approval_id,
+        plan_id=plan.plan_id,
+        plan_revision=plan.revision,
+        plan_sha256=plan.content_sha256,
+        frozen_by="scheduler",
+        frozen_at=approval.approved_at,
+    )
 
     result = await orchestrator.execute(
         AgentOrchestrationRequest(
@@ -887,6 +1046,7 @@ async def test_runtime_failure_is_structured_and_charged_to_parent_budget():
             identity=parent.execution_identity(),
             plan=plan,
             approval=approval,
+            freeze=freeze,
             root_input={"topic": "失败计费"},
         ),
         feature_decision=_feature_decision(),
