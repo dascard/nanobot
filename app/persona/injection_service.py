@@ -8,6 +8,7 @@ from typing import Any
 from app.persona.renderer import render_persona_context
 from app.persona.retrieval_service import PersonaRetrievalService
 from core.db import PersonaFactRepositoryPort, persona_fact_repository
+from core.memory_governance import MemoryInjectionBudget
 from core.time_utils import db_now_naive
 
 
@@ -34,7 +35,13 @@ class PersonaInjectionService:
         recent_messages: list[dict[str, Any]] | None = None,
         max_items: int = 6,
         max_chars: int = 900,
+        max_tokens: int | None = None,
     ) -> PersonaInjectionResult:
+        budget = MemoryInjectionBudget(
+            max_items=max_items,
+            max_chars=max_chars,
+            max_tokens=max_tokens or max_chars,
+        )
         debug: dict[str, Any] = {
             "persona_injected": False,
             "persona_fact_ids": [],
@@ -42,6 +49,11 @@ class PersonaInjectionService:
             "persona_context_chars": 0,
             "persona_context": "",
             "score_components": {},
+            "memory_access": {
+                "scope": f"user:{str(user_id or '').strip()}",
+                "authorization": "context_builder_identity",
+            },
+            "injection_budget": budget.usage("", item_count=0),
         }
         if not str(user_id or "").strip():
             return PersonaInjectionResult(debug=debug)
@@ -52,6 +64,7 @@ class PersonaInjectionService:
             recent_messages=recent_messages or [],
             max_items=max_items,
             max_chars=max_chars,
+            max_tokens=budget.max_tokens,
         )
         context = render_persona_context(str(user_id), selection.selected)
         debug.update({
@@ -61,6 +74,10 @@ class PersonaInjectionService:
             "persona_context": context,
             "persona_context_chars": len(context),
             "score_components": selection.score_components,
+            "injection_budget": budget.usage(
+                context,
+                item_count=len(selection.selected_ids),
+            ),
         })
         return PersonaInjectionResult(
             context=context,

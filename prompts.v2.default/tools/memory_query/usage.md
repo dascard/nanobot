@@ -1,6 +1,6 @@
 ---
 name: 摘要记忆查询工具
-version: 2
+version: 3
 kind: tool
 tool_name: memory_query
 description: memory_query 工具的使用边界。
@@ -23,4 +23,5 @@ description: memory_query 工具的使用边界。
 - 展开 session summary 时传 `summary_id`，不要把它和 `digest_id` 混用。
 - 默认不要开启 `include_detail`，除非用户明确要求更完整背景。
 - 不要把它当作原始数据库查询工具；它不会返回 ChatLog 全文。
-- 不要跨会话无限搜索；能确定当前会话时传入 `session_id`。
+- 用户、群组和当前会话作用域由服务端根据受信 Runtime 身份自动绑定，工具参数不能指定或扩大作用域。
+- 私聊长期摘要只在当前用户私有域内检索；rolling summary 进一步限定当前会话。群聊只检索当前群组会话。

@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`d74c9070a5169477c8b88e90344f1b0ddae16151`
-- 规则总数：8196
+- 源提交：`5b5389380bf2b6e8b15907f517aa314779259948`
+- 规则总数：8223
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1540 |
-| `data_consistency` | 476 |
+| `configurable_policy` | 1548 |
+| `data_consistency` | 478 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4362 |
-| `security_invariant` | 1644 |
+| `protocol_syntax` | 4372 |
+| `security_invariant` | 1651 |
 
 ## 文件汇总
 
@@ -126,6 +126,7 @@
 | `core/sandbox/access_policy.py` | 22 |
 | `core/sandbox/tool_service.py` | 22 |
 | `api/admin/proactive_outreach_routes.py` | 21 |
+| `app/persona/retrieval_service.py` | 21 |
 | `core/db/group_learning_command_adapter.py` | 21 |
 | `core/prompt_v2/task_contracts.py` | 21 |
 | `core/semantic/indexer.py` | 21 |
@@ -147,10 +148,10 @@
 | `app/session_memory/windowing.py` | 19 |
 | `app/tool_services/schedule_task.py` | 19 |
 | `core/inbound_idempotency.py` | 19 |
+| `core/memory_governance.py` | 19 |
 | `core/sandbox/diagnostics.py` | 19 |
 | `webui/src/features/prompt/PromptPages.jsx` | 19 |
 | `api/admin/prompt_v2_routes.py` | 18 |
-| `app/persona/retrieval_service.py` | 18 |
 | `core/outbound/control_transitions.py` | 18 |
 | `core/sandbox/lease_service.py` | 18 |
 | `core/sql_readonly.py` | 18 |
@@ -226,6 +227,7 @@
 | `scripts/write_runtime_build_evidence.py` | 13 |
 | `webui/src/features/reply-eval/ReplyEvalPage.jsx` | 13 |
 | `app/group_analysis/repository.py` | 12 |
+| `app/group_memory/retrieval_service.py` | 12 |
 | `app/memory_digest/retrieval_service.py` | 12 |
 | `core/agent_runtime/service_ports.py` | 12 |
 | `core/db/group_learning_adapter.py` | 12 |
@@ -275,11 +277,11 @@
 | `api/asset_routes.py` | 9 |
 | `api/routes.py` | 9 |
 | `app/group_learning/candidate_service.py` | 9 |
-| `app/group_memory/retrieval_service.py` | 9 |
 | `core/agent_runtime/native.py` | 9 |
 | `core/db/session.py` | 9 |
 | `core/group_learning/evidence.py` | 9 |
 | `core/jobs/contracts.py` | 9 |
+| `core/knowledge_rag.py` | 9 |
 | `core/mcp/config_service.py` | 9 |
 | `core/outbound/replay.py` | 9 |
 | `core/prompt_v2/contribution_registry.py` | 9 |
@@ -327,7 +329,6 @@
 | `core/evolution.py` | 7 |
 | `core/inbound_claim_lifecycle.py` | 7 |
 | `core/knowledge_library.py` | 7 |
-| `core/knowledge_rag.py` | 7 |
 | `core/memory_provider/contracts.py` | 7 |
 | `core/model_route_health.py` | 7 |
 | `core/modules/contracts.py` | 7 |
@@ -1050,16 +1051,16 @@
 | `decision.076fd0b7710323cbdf09` | `app/memory_digest/llm_builder.py:100` | `python.regex_call` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：re.findall(r"[一-鿿]{2,}", source_text) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.3ec46f98a1bce6cba4d1` | `app/memory_digest/retrieval_service.py:67` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.3ec46f98a1bce6cba4d1` | `app/memory_digest/retrieval_service.py:68` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：digest_status(meta) == "legacy" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.51c34ffa0c7759509179` | `app/persona/retrieval_service.py:185` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.51c34ffa0c7759509179` | `app/persona/retrieval_service.py:203` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：str(getattr(row, "confidence", "") or "") == "归档" |  |  |  |  |  |
 |  | 原因：人工复核：归档是画像事实状态，不是自然语言语义判断 |  |  |  |  |  |
-| `decision.6bef7f69b6fb4e670dc4` | `app/persona/retrieval_service.py:189` | `python.numeric_control_flow` | `configurable_policy` | `configure` | 阶段 3／4 | `reviewed` |
+| `decision.6bef7f69b6fb4e670dc4` | `app/persona/retrieval_service.py:207` | `python.numeric_control_flow` | `configurable_policy` | `configure` | 阶段 3／4 | `reviewed` |
 |  | 摘要：relevance < 0.15 |  |  |  |  |  |
 |  | 原因：人工复核：相关度下限是检索策略阈值，应进入类型化策略配置 |  |  |  |  |  |
-| `decision.2650cad6573be55a3a47` | `app/persona/retrieval_service.py:192` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.2650cad6573be55a3a47` | `app/persona/retrieval_service.py:210` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：relevance <= 0 |  |  |  |  |  |
 |  | 原因：人工复核：非正相关度是检索结果有效性边界 |  |  |  |  |  |
 | `decision.af88d31aed6bfa0ced76` | `app/session_memory/jobs.py:46` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |

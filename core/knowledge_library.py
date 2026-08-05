@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.database import KnowledgeChunk, KnowledgeDocument
+from core.memory_governance import normalize_knowledge_meta
 from core.time_utils import db_now_naive
 
 
@@ -118,6 +119,7 @@ def create_manual_document(
     filename = validate_manual_filename(filename)
     clean_title = str(title or "").strip() or Path(filename).stem
     now = db_now_naive()
+    governed_meta = normalize_knowledge_meta(meta)
     document = KnowledgeDocument(
         document_kind="manual_file",
         title=clean_title,
@@ -127,7 +129,11 @@ def create_manual_document(
         created_by=str(created_by or ""),
         updated_by=str(created_by or ""),
         latest_seen=now,
-        meta_json=json.dumps({"filename": filename, **(meta or {})}, ensure_ascii=False, sort_keys=True),
+        meta_json=json.dumps(
+            {"filename": filename, **governed_meta},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
         created_at=now,
         updated_at=now,
     )

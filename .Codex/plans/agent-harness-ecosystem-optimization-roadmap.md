@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 7.3 已完成，准备阶段 7.4）
+> 状态：执行中（阶段 7.4 已完成，准备阶段 8.1）
 >
 > 建立日期：2026-08-03
 >
@@ -1126,13 +1126,39 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 7.4 记忆质量和作用域
 
-- [ ] 在现有数据模型上明确 working、episodic 和 semantic 层次。
-- [ ] 记录证据来源、置信度、冲突、衰减、删除和注入预算。
-- [ ] 区分 Agent 私有、用户私有、群组共享和项目共享记忆。
-- [ ] 知识图谱或新后端必须先通过真实中文会话评测。
-- [ ] 不因外部项目宣称直接替换当前 RAG 和画像治理。
+- [x] 在现有数据模型上明确 working、episodic 和 semantic 层次。
+- [x] 记录证据来源、置信度、冲突、衰减、删除和注入预算。
+- [x] 区分 Agent 私有、用户私有、群组共享和项目共享记忆。
+- [x] 知识图谱或新后端必须先通过真实中文会话评测。
+- [x] 不因外部项目宣称直接替换当前 RAG 和画像治理。
 
 验收条件：每次数据、工具、Sandbox 和子 Agent 访问都能解释“谁以什么授权访问什么资源”。
+
+实施记录（2026-08-05）：
+
+- 新增统一记忆治理清单，在不迁移现有表和事实源的前提下，把 `ConversationTurn`、滚动摘要、会话片段、
+  原始 `ChatLog`、记忆摘要、画像事实、群记忆、知识文档和语义索引明确归入 working、episodic 或
+  semantic 层，并标注 raw evidence、canonical memory 或 derived index 存储职责。每类来源同时声明证据
+  来源、置信度、冲突策略、衰减、删除语义及注入项数／字符／token 预算；派生索引不再被描述成权威事实源。
+- 新增不可变 `MemoryAccessContext` 和 Agent 私有、用户私有、群组共享、项目共享四类作用域。授权上下文只从
+  受信的 principal、session、agent 和 Runtime 身份派生，并验证 canonical／legacy 会话别名；模型提交的
+  `user_id`、`session_id` 和 `group_id` 不再进入工具 schema，也不能覆盖服务端身份。记忆 Provider 的结果
+  metadata 会解释访问主体、授权来源、Provider、工具、资源、会话和项目范围。
+- 私有摘要、滚动摘要、群记忆、画像和知识检索在列表、搜索、聚合、RAG recall、按 ID 展开及 parent chain
+  各入口都执行同一作用域过滤；按 ID 或来源命中不能再绕过 owner。知识文档写入显式 Agent／Project scope，
+  旧的未标注文档按既有部署事实收口为 `nanobot` 项目共享；语义 chunk 只继承来源作用域，不扩大授权。
+- 画像和群记忆注入同时执行项数、字符和共享 token 估算预算，并在 debug evidence 中记录授权、候选数、
+  实际注入量及预算消耗。Sandbox 与子 Agent 继续复用阶段 7.1／7.3 的统一治理信封和稳定身份，因此记忆、
+  工具、工作区与子任务均能用同一 principal／agent／session／grant 链解释访问主体、授权和资源边界。
+- 新记忆后端或知识图谱采用失败关闭的注册门禁：必须提供至少 50 段真实中文会话的不可变评测 manifest，
+  每项通过且不存在作用域泄漏或删除失败，并证明质量正增益；缺失、伪造摘要或未注册候选均不能成为活动后端。
+  本阶段没有因外部项目宣传引入图后端或替换现有 SQLite／RAG／画像治理，活动后端仍为现有实现。
+- 同步更新 `memory_query`、`knowledge_query`、`sticker_search` 的 canonical Prompt Runtime 使用契约，以及
+  已受版本控制的 sticker 运行时模板；行为 Golden 和决策规则清单已按当前源码重新生成。
+- 记忆治理新增 11 项端到端专项测试；记忆／RAG 联合定向回归为 224 passed，画像／群记忆预算回归为
+  47 passed。最终完整 `python -m pytest tests/ -v` 为 6699 passed、12 skipped、0 failed，耗时
+  520.98 秒；架构边界、OpenAPI、Release／Verification／Behavior Golden、决策规则、Task SLO、Ruff、
+  Python 编译和 `git diff --check` 均通过。
 
 ### 阶段 8：有界多 Agent 编排和协作
 

@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from core.db import PersonaFactRepositoryPort, persona_fact_repository
+from core.token_utils import estimate_tokens
 from core.time_utils import db_now_naive
 
 
@@ -107,6 +108,7 @@ class PersonaRetrievalService:
         recent_messages: list[dict[str, Any]] | None = None,
         max_items: int = DEFAULT_MAX_ITEMS,
         max_chars: int = DEFAULT_MAX_CHARS,
+        max_tokens: int | None = None,
     ) -> PersonaSelection:
         recent_text = "\n".join(str(item.get("content") or "") for item in (recent_messages or []))
         query_text = f"{current_user_input}\n{recent_text}".strip()
@@ -139,7 +141,11 @@ class PersonaRetrievalService:
                 selection.score_components[str(row.id)]["skip_reason"] = "type_limit"
                 selection.skipped.append({"id": row.id, "reason": "type_limit"})
                 continue
-            if self._would_exceed_budget(selection.selected + [row], max_chars):
+            if self._would_exceed_budget(
+                selection.selected + [row],
+                max_chars,
+                max_tokens,
+            ):
                 selection.score_components[str(row.id)]["skip_reason"] = "over_budget"
                 selection.skipped.append({"id": row.id, "reason": "over_budget"})
                 continue
@@ -166,12 +172,24 @@ class PersonaRetrievalService:
         components["final"] = round(final, 6)
         return components
 
-    def _would_exceed_budget(self, rows: list[Any], max_chars: int) -> bool:
-        if int(max_chars or 0) <= 0:
+    def _would_exceed_budget(
+        self,
+        rows: list[Any],
+        max_chars: int,
+        max_tokens: int | None,
+    ) -> bool:
+        if int(max_chars or 0) <= 0 and int(max_tokens or 0) <= 0:
             return False
         from app.persona.renderer import render_persona_context
 
-        return len(render_persona_context("", rows)) > int(max_chars)
+        rendered = render_persona_context("", rows)
+        return (
+            (int(max_chars or 0) > 0 and len(rendered) > int(max_chars))
+            or (
+                int(max_tokens or 0) > 0
+                and estimate_tokens(rendered) > int(max_tokens or 0)
+            )
+        )
 
     def _skip_reason(self, row: Any, memory_type: str, relevance: float) -> str:
         status = str(getattr(row, "status", "") or "")

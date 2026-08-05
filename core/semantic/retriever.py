@@ -73,6 +73,9 @@ def load_recall_rows(
     source_types: set[str],
     user_id: str = "",
     session_id: str = "",
+    source_ids: set[str] | None = None,
+    user_ids: set[str] | None = None,
+    session_ids: set[str] | None = None,
     limit: int = 200,
     ensure_schema: bool = True,
 ) -> list[SemanticIndexItem]:
@@ -86,8 +89,18 @@ def load_recall_rows(
     )
     if user_id:
         query = query.filter(SemanticIndexItem.user_id == user_id)
+    elif user_ids:
+        query = query.filter(SemanticIndexItem.user_id.in_(sorted(user_ids)))
     if session_id:
         query = query.filter(SemanticIndexItem.session_id == session_id)
+    elif session_ids:
+        query = query.filter(
+            SemanticIndexItem.session_id.in_(sorted(session_ids))
+        )
+    if source_ids:
+        query = query.filter(
+            SemanticIndexItem.source_id.in_(sorted(source_ids))
+        )
     return query.order_by(SemanticIndexItem.id.desc()).limit(max(1, int(limit))).all()
 
 
@@ -95,6 +108,10 @@ def load_recall_rows_by_ids(
     db: Session,
     item_ids: list[int],
     *,
+    source_types: set[str] | None = None,
+    source_ids: set[str] | None = None,
+    user_ids: set[str] | None = None,
+    session_ids: set[str] | None = None,
     ensure_schema: bool = True,
 ) -> dict[int, SemanticIndexItem]:
     ids = [int(item_id) for item_id in item_ids if int(item_id) > 0]
@@ -102,13 +119,27 @@ def load_recall_rows_by_ids(
         return {}
     if ensure_schema:
         ensure_semantic_schema(db.bind)
-    rows = (
+    query = (
         db.query(SemanticIndexItem)
         .filter(SemanticIndexItem.id.in_(ids))
         .filter(SemanticIndexItem.status == "active")
         .filter(SemanticIndexItem.visibility == "recall")
-        .all()
     )
+    if source_types:
+        query = query.filter(
+            SemanticIndexItem.source_type.in_(sorted(source_types))
+        )
+    if source_ids:
+        query = query.filter(
+            SemanticIndexItem.source_id.in_(sorted(source_ids))
+        )
+    if user_ids:
+        query = query.filter(SemanticIndexItem.user_id.in_(sorted(user_ids)))
+    if session_ids:
+        query = query.filter(
+            SemanticIndexItem.session_id.in_(sorted(session_ids))
+        )
+    rows = query.all()
     return {int(row.id): row for row in rows}
 
 
@@ -134,6 +165,8 @@ def fts_recall_hits(
     source_ids: set[str] | None = None,
     user_id: str = "",
     session_id: str = "",
+    user_ids: set[str] | None = None,
+    session_ids: set[str] | None = None,
     limit: int = 200,
     ensure_schema: bool = True,
 ) -> list[FtsRecallHit]:
@@ -173,9 +206,23 @@ def fts_recall_hits(
     if user_id:
         params["user_id"] = user_id
         clauses.append("i.user_id = :user_id")
+    elif user_ids:
+        placeholders = []
+        for index, scoped_user_id in enumerate(sorted(user_ids)):
+            key = f"user_id_{index}"
+            params[key] = scoped_user_id
+            placeholders.append(f":{key}")
+        clauses.append(f"i.user_id IN ({', '.join(placeholders)})")
     if session_id:
         params["session_id"] = session_id
         clauses.append("i.session_id = :session_id")
+    elif session_ids:
+        placeholders = []
+        for index, scoped_session_id in enumerate(sorted(session_ids)):
+            key = f"session_id_{index}"
+            params[key] = scoped_session_id
+            placeholders.append(f":{key}")
+        clauses.append(f"i.session_id IN ({', '.join(placeholders)})")
     sql = (
         "SELECT semantic_index_fts.rowid AS item_id, "
         "bm25(semantic_index_fts) AS bm25_raw "
@@ -215,6 +262,9 @@ def _stored_vector_query(
     session_id: str = "",
     group_id: str = "",
     chat_stream_id: str = "",
+    source_ids: set[str] | None = None,
+    user_ids: set[str] | None = None,
+    session_ids: set[str] | None = None,
 ) -> Any:
     query = (
         db.query(SemanticIndexItem)
@@ -225,10 +275,18 @@ def _stored_vector_query(
     )
     if source_types:
         query = query.filter(SemanticIndexItem.source_type.in_(sorted(source_types)))
+    if source_ids:
+        query = query.filter(SemanticIndexItem.source_id.in_(sorted(source_ids)))
     if user_id:
         query = query.filter(SemanticIndexItem.user_id == user_id)
+    elif user_ids:
+        query = query.filter(SemanticIndexItem.user_id.in_(sorted(user_ids)))
     if session_id:
         query = query.filter(SemanticIndexItem.session_id == session_id)
+    elif session_ids:
+        query = query.filter(
+            SemanticIndexItem.session_id.in_(sorted(session_ids))
+        )
     if group_id:
         query = query.filter(SemanticIndexItem.group_id == group_id)
     if chat_stream_id:
@@ -244,6 +302,9 @@ def has_vector_recall_rows(
     session_id: str = "",
     group_id: str = "",
     chat_stream_id: str = "",
+    source_ids: set[str] | None = None,
+    user_ids: set[str] | None = None,
+    session_ids: set[str] | None = None,
     ensure_schema: bool = True,
 ) -> bool:
     if ensure_schema:
@@ -256,6 +317,9 @@ def has_vector_recall_rows(
             session_id=session_id,
             group_id=group_id,
             chat_stream_id=chat_stream_id,
+            source_ids=source_ids,
+            user_ids=user_ids,
+            session_ids=session_ids,
         )
         .limit(1)
         .first()
@@ -272,6 +336,9 @@ def vector_recall_hits(
     session_id: str = "",
     group_id: str = "",
     chat_stream_id: str = "",
+    source_ids: set[str] | None = None,
+    user_ids: set[str] | None = None,
+    session_ids: set[str] | None = None,
     limit: int = 200,
     max_scan: int = 5000,
     ensure_schema: bool = True,
@@ -289,6 +356,9 @@ def vector_recall_hits(
             session_id=session_id,
             group_id=group_id,
             chat_stream_id=chat_stream_id,
+            source_ids=source_ids,
+            user_ids=user_ids,
+            session_ids=session_ids,
         )
         .order_by(SemanticIndexItem.id.desc())
         .limit(max(1, int(max_scan)))

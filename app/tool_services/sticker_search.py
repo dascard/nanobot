@@ -16,10 +16,21 @@ async def execute_sticker_search(
     *,
     session_factory: Callable[[], Any] | None = None,
 ) -> ToolServiceResult:
-    query = str(args.get("query") or "").strip()
-    group_id = str(args.get("group_id") or "").strip()
-    limit = int(args.get("limit") or 3)
-    include_global = bool(args.get("include_global", True))
+    from core.memory_governance import (
+        current_or_runtime_memory_access,
+        scope_memory_tool_arguments,
+    )
+
+    access = current_or_runtime_memory_access()
+    effective_args = (
+        scope_memory_tool_arguments("sticker_search", args, access)
+        if access is not None
+        else dict(args)
+    )
+    query = str(effective_args.get("query") or "").strip()
+    group_id = str(effective_args.get("group_id") or "").strip()
+    limit = int(effective_args.get("limit") or 3)
+    include_global = bool(effective_args.get("include_global", True))
     if not query:
         return ToolServiceResult(error="Missing 'query' argument")
 

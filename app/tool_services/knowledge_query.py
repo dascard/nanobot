@@ -15,6 +15,7 @@ def _search(
     limit: int,
     *,
     allow_degraded: bool,
+    access_context=None,
 ) -> ToolServiceResult:
     query = str(args.get("query") or "").strip()
     if not query:
@@ -29,6 +30,7 @@ def _search(
         date_end=str(args.get("date_end") or ""),
         published_after=str(args.get("published_after") or ""),
         published_before=str(args.get("published_before") or ""),
+        access_context=access_context,
     )
     if result.get("degraded") and not allow_degraded:
         from core.semantic.provider_factory import degraded_error
@@ -66,14 +68,23 @@ def _search(
     )
 
 
-def _expand(service: Any, args: dict[str, Any]) -> ToolServiceResult:
+def _expand(
+    service: Any,
+    args: dict[str, Any],
+    *,
+    access_context=None,
+) -> ToolServiceResult:
     document_id = args.get("document_id")
     chunk_id = str(args.get("chunk_id") or "").strip()
     if not document_id or not chunk_id:
         return ToolServiceResult(
             error="expand mode requires document_id and chunk_id"
         )
-    expanded = service.expand(document_id=int(document_id), chunk_id=chunk_id)
+    expanded = service.expand(
+        document_id=int(document_id),
+        chunk_id=chunk_id,
+        access_context=access_context,
+    )
     return ToolServiceResult(
         output=json.dumps(expanded, ensure_ascii=False),
         exit_code=0,
@@ -85,6 +96,9 @@ async def execute_knowledge_query(args: dict[str, Any]) -> ToolServiceResult:
     mode = str(args.get("mode") or "search").strip()
     limit = max(1, min(int(args.get("limit") or 5), 10))
     try:
+        from core.memory_governance import current_or_runtime_memory_access
+
+        access_context = current_or_runtime_memory_access()
         with UnitOfWork() as uow:
             if uow.db is None:
                 return ToolServiceResult(error="database session is unavailable")
@@ -113,9 +127,14 @@ async def execute_knowledge_query(args: dict[str, Any]) -> ToolServiceResult:
                     args,
                     limit,
                     allow_degraded=runtime.allow_degraded,
+                    access_context=access_context,
                 )
             if mode == "expand":
-                return _expand(service, args)
+                return _expand(
+                    service,
+                    args,
+                    access_context=access_context,
+                )
             return ToolServiceResult(error=f"Unsupported mode: {mode}")
     except Exception as exc:
         return ToolServiceResult(error=f"knowledge_query failed: {exc}")

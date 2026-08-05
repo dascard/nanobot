@@ -55,14 +55,6 @@ class MemoryQueryTool(BaseTool):
                     "type": "string",
                     "description": "关键词。search 模式必填。",
                 },
-                "session_id": {
-                    "type": "string",
-                    "description": "会话 ID，例如 group_1097666427 或 private_0000000000。",
-                },
-                "user_id": {
-                    "type": "string",
-                    "description": "用户或群实体 ID；不确定时优先传 session_id。",
-                },
                 "digest_id": {
                     "type": "integer",
                     "description": "expand 模式要展开的摘要 ID。",
@@ -115,7 +107,13 @@ class MemoryQueryTool(BaseTool):
         return await execute_memory_query(args, adapter=self)
 
     def _rag_search(
-        self, db, args: dict[str, Any], limit: int, *, source: str
+        self,
+        db,
+        args: dict[str, Any],
+        limit: int,
+        *,
+        source: str,
+        scope_filter=None,
     ) -> ToolResult:
         query = str(args.get("query") or "").strip()
         if not query:
@@ -130,18 +128,21 @@ class MemoryQueryTool(BaseTool):
 
         runtime = get_rag_runtime_config("memory")
         started = time.perf_counter()
-        result = MemoryRagService(
+        service = MemoryRagService(
             db,
             embedding_provider=get_embedding_provider(),
             reranker_provider=get_reranker_provider(),
             allow_degraded=runtime.allow_degraded,
-        ).query(
-            query,
-            source=source,
-            user_id=str(args.get("user_id") or "").strip(),
-            session_id=str(args.get("session_id") or "").strip(),
-            limit=limit,
         )
+        query_kwargs = {
+            "source": source,
+            "user_id": str(args.get("user_id") or "").strip(),
+            "session_id": str(args.get("session_id") or "").strip(),
+            "limit": limit,
+        }
+        if scope_filter is not None:
+            query_kwargs["scope_filter"] = scope_filter
+        result = service.query(query, **query_kwargs)
         latency_ms = max(0, int((time.perf_counter() - started) * 1000))
         self._record_rag_query(
             db,
@@ -757,13 +758,33 @@ async def execute_memory_query(
     """执行 Memory Query；供 KT Tool 与 Memory Provider 共用。"""
 
     tool = adapter or MemoryQueryTool()
-    mode = str(args.get("mode") or "search").strip()
-    source = str(args.get("source") or "digest").strip() or "digest"
-    limit = max(1, min(int(args.get("limit") or 5), 10))
-    include_detail = bool(args.get("include_detail", False))
-    include_legacy = bool(args.get("include_legacy", False))
+    from core.memory_governance import (
+        current_or_runtime_memory_access,
+        memory_data_scope_filter,
+        scope_memory_tool_arguments,
+    )
+
     try:
-        tool._validate_date_args(args)
+        access = current_or_runtime_memory_access()
+        effective_args = (
+            scope_memory_tool_arguments("memory_query", args, access)
+            if access is not None
+            else dict(args)
+        )
+    except ValueError as exc:
+        return ToolResult(error=f"memory_query scope denied: {exc}")
+    mode = str(effective_args.get("mode") or "search").strip()
+    source = str(effective_args.get("source") or "digest").strip() or "digest"
+    limit = max(1, min(int(effective_args.get("limit") or 5), 10))
+    include_detail = bool(effective_args.get("include_detail", False))
+    include_legacy = bool(effective_args.get("include_legacy", False))
+    scope_filter = (
+        memory_data_scope_filter(access, source=source)
+        if access is not None
+        else None
+    )
+    try:
+        tool._validate_date_args(effective_args)
     except ValueError as exc:
         return ToolResult(error=str(exc))
 
@@ -778,18 +799,27 @@ async def execute_memory_query(
                 if runtime.enabled and (
                     source == "all" or tool._has_rag_index(uow.db, source)
                 ):
-                    return tool._rag_search(uow.db, args, limit, source=source)
+                    return tool._rag_search(
+                        uow.db,
+                        effective_args,
+                        limit,
+                        source=source,
+                        scope_filter=scope_filter,
+                    )
                 if source == "all":
                     return ToolResult(error="source=all requires MEMORY_RAG_ENABLED=1")
             if source == "session_summary":
                 # session summary 没有独立的 include_archived 参数；沿用
                 # include_legacy 表达「包含已归档摘要」，此处显式命名以免
                 # 位置参数错位被误读为其他语义。
-                service = SessionSummaryRetrievalService(uow.db)
+                service = SessionSummaryRetrievalService(
+                    uow.db,
+                    scope_filter=scope_filter,
+                )
                 if mode == "search":
                     return tool._session_search(
                         service,
-                        args,
+                        effective_args,
                         limit,
                         include_detail,
                         include_archived=include_legacy,
@@ -797,7 +827,7 @@ async def execute_memory_query(
                 if mode == "time":
                     return tool._session_time(
                         service,
-                        args,
+                        effective_args,
                         limit,
                         include_detail,
                         include_archived=include_legacy,
@@ -805,13 +835,13 @@ async def execute_memory_query(
                 if mode == "expand":
                     return tool._session_expand(
                         service,
-                        args,
+                        effective_args,
                         include_archived=include_legacy,
                     )
                 if mode == "aggregate":
                     return tool._session_aggregate(
                         service,
-                        args,
+                        effective_args,
                         limit,
                         include_archived=include_legacy,
                     )
@@ -823,11 +853,14 @@ async def execute_memory_query(
             if source != "digest":
                 return ToolResult(error=f"Unsupported source: {source}")
 
-            service = MemoryDigestRetrievalService(uow.db)
+            service = MemoryDigestRetrievalService(
+                uow.db,
+                scope_filter=scope_filter,
+            )
             if mode == "search":
                 return tool._search(
                     service,
-                    args,
+                    effective_args,
                     limit,
                     include_detail,
                     include_legacy,
@@ -835,15 +868,25 @@ async def execute_memory_query(
             if mode == "time":
                 return tool._time(
                     service,
-                    args,
+                    effective_args,
                     limit,
                     include_detail,
                     include_legacy,
                 )
             if mode == "expand":
-                return tool._expand(service, args, include_detail, include_legacy)
+                return tool._expand(
+                    service,
+                    effective_args,
+                    include_detail,
+                    include_legacy,
+                )
             if mode == "aggregate":
-                return tool._aggregate(service, args, limit, include_legacy)
+                return tool._aggregate(
+                    service,
+                    effective_args,
+                    limit,
+                    include_legacy,
+                )
             return ToolResult(error=f"Unsupported mode: {mode}")
     except Exception as exc:
         return ToolResult(error=f"memory_query failed: {exc}")

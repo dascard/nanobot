@@ -28,6 +28,16 @@ from core.memory_provider import (
     MemoryToolCall,
     MemoryToolSchemaContext,
 )
+from core.memory_governance import (
+    ACTIVE_MEMORY_BACKEND,
+    MemoryAccessContext,
+    MemoryBackendCandidate,
+    build_memory_access_context,
+    memory_access_scope,
+    memory_tool_resource_scope,
+    scope_memory_tool_arguments,
+    validate_memory_backend_candidate,
+)
 from core.registry import RegistrySnapshot
 
 
@@ -93,6 +103,21 @@ async def dispatch_memory_tool_call(
     binding = _CURRENT_MEMORY_TOOL_RUNTIME.get()
     if binding is None or not binding.runtime.initialized:
         raise MemoryProviderContractError("当前请求未绑定 Memory Provider Runtime")
+    from core.agent_runtime.request_scope import get_current_runtime_context
+
+    runtime_context = get_current_runtime_context() or {}
+    trusted_metadata = {
+        key: runtime_context[key]
+        for key in (
+            "agent_id",
+            "actor_id",
+            "owner_type",
+            "owner_id",
+            "platform",
+            "skill_project_id",
+        )
+        if key in runtime_context
+    }
     return await binding.runtime.handle_tool_call(
         MemoryToolCall(
             request_id=binding.request_id,
@@ -101,6 +126,7 @@ async def dispatch_memory_tool_call(
             call_id=binding.next_call_id(tool_name),
             name=tool_name,
             arguments=arguments,
+            metadata=trusted_metadata,
         )
     )
 
@@ -198,8 +224,60 @@ class ExistingToolMemoryProvider:
             raise MemoryProviderContractError(
                 f"Memory Provider {self.descriptor.id} 不拥有工具 {call.name}"
             )
-        result = await handler(dict(call.arguments))
-        return _normalize_tool_result(result)
+        access = self._access_context(call)
+        arguments = dict(call.arguments)
+        if access is None:
+            result = await handler(arguments)
+            return _normalize_tool_result(result)
+        scoped_arguments = scope_memory_tool_arguments(
+            call.name,
+            arguments,
+            access,
+        )
+        with memory_access_scope(access):
+            result = await handler(scoped_arguments)
+        normalized = dict(_normalize_tool_result(result))
+        metadata = normalized.get("metadata")
+        normalized_metadata = (
+            dict(metadata) if isinstance(metadata, Mapping) else {}
+        )
+        normalized_metadata["memory_access"] = access.audit_metadata(
+            provider_id=self.descriptor.id,
+            tool_name=call.name,
+            resource_scope=memory_tool_resource_scope(call.name, access),
+        )
+        normalized["metadata"] = normalized_metadata
+        return normalized
+
+    @staticmethod
+    def _access_context(call: MemoryToolCall) -> MemoryAccessContext | None:
+        """MemoryToolCall 由组合根构造；模型参数不能参与此处身份派生。"""
+
+        principal_id = str(call.principal_id or "").strip()
+        if not principal_id:
+            return None
+        metadata = call.metadata
+        project_ids = ["nanobot"]
+        skill_project_id = str(metadata.get("skill_project_id") or "").strip()
+        if skill_project_id:
+            project_ids.append(skill_project_id)
+        access = build_memory_access_context(
+            principal_id=principal_id,
+            session_id=call.session_id,
+            agent_id=str(metadata.get("agent_id") or "nanobot"),
+            project_ids=project_ids,
+            actor_id=str(metadata.get("actor_id") or ""),
+        )
+        expected_owner_type = str(metadata.get("owner_type") or "").strip()
+        expected_owner_id = str(metadata.get("owner_id") or "").strip()
+        expected_platform = str(metadata.get("platform") or "").strip().lower()
+        if expected_owner_type and expected_owner_type != access.owner_type.value:
+            raise MemoryProviderContractError("Runtime 与 Memory principal 类型不一致")
+        if expected_owner_id and expected_owner_id != access.owner_id:
+            raise MemoryProviderContractError("Runtime 与 Memory principal 所有者不一致")
+        if expected_platform and expected_platform != access.platform:
+            raise MemoryProviderContractError("Runtime 与 Memory principal 平台不一致")
+        return access
 
     async def on_session_start(self, context: MemorySessionContext) -> None:
         del context
@@ -293,6 +371,7 @@ def _default_tool_handlers() -> dict[str, MemoryToolHandler]:
 def _build_memory_provider_registry(
     handlers: Mapping[str, MemoryToolHandler],
 ) -> MemoryProviderRegistry:
+    validate_memory_backend_candidate(ACTIVE_MEMORY_BACKEND)
     registry = MemoryProviderRegistry()
     for descriptor in MEMORY_PROVIDER_DESCRIPTORS:
         provider_handlers = {
@@ -322,9 +401,15 @@ def memory_provider_registry_snapshot() -> RegistrySnapshot[
 def build_memory_provider_runtime(
     *,
     handlers: Mapping[str, MemoryToolHandler] | None = None,
+    backend_candidate: MemoryBackendCandidate = ACTIVE_MEMORY_BACKEND,
 ) -> MemoryProviderRuntime:
     """显式组合根：登记完成后冻结，运行期间禁止隐式覆盖。"""
 
+    validate_memory_backend_candidate(backend_candidate)
+    if backend_candidate.backend_id != ACTIVE_MEMORY_BACKEND.backend_id:
+        raise MemoryProviderContractError(
+            f"Memory 后端尚未注册生产实现: {backend_candidate.backend_id}"
+        )
     effective_handlers = _default_tool_handlers()
     if handlers:
         effective_handlers.update(handlers)

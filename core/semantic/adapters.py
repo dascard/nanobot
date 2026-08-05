@@ -591,6 +591,8 @@ def chunk_from_ai_daily_item(item: dict[str, Any]) -> SemanticChunk:
 
 
 def chunk_from_knowledge_chunk(row: Any, *, document: Any | None = None) -> SemanticChunk:
+    from core.memory_governance import knowledge_scope_from_meta
+
     citation = _safe_json(getattr(row, "citation_json", ""), {})
     if not citation and document is not None:
         citation = {
@@ -608,6 +610,12 @@ def chunk_from_knowledge_chunk(row: Any, *, document: Any | None = None) -> Sema
     trust_level = str(getattr(row, "trust_level", "") or citation.get("trust_level") or "medium")
     document_published_at = getattr(document, "published_at", "") if document is not None else ""
     published_at = _stringify(citation.get("published_at") or document_published_at)
+    document_meta = (
+        _safe_json(getattr(document, "meta_json", ""), {})
+        if document is not None
+        else {}
+    )
+    memory_scope = knowledge_scope_from_meta(document_meta)
     lexical = _join_parts(
         title,
         text,
@@ -628,6 +636,7 @@ def chunk_from_knowledge_chunk(row: Any, *, document: Any | None = None) -> Sema
             "chunk_id": chunk_id,
             "published_at": published_at,
             "citation": citation,
+            "memory_scope": memory_scope.metadata(),
         },
         trust_level=trust_level,
         source_prior=0.55,

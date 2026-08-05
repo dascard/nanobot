@@ -1,6 +1,6 @@
 ---
 name: 外部知识库查询工具
-version: 1
+version: 2
 kind: tool
 tool_name: knowledge_query
 description: knowledge_query 工具的使用边界。
@@ -15,3 +15,4 @@ description: knowledge_query 工具的使用边界。
 - `search` 返回 chunk 级结果和 `document_id` / `chunk_id`；需要更多内容时再用 `expand` 展开该 chunk。
 - `expand` 只展开单个 chunk，不返回整篇原始文档。
 - 需要限定资料可信度时传 `min_trust_level`；需要限定时间时传 `published_after` / `published_before`。
+- Agent 私有和项目共享作用域由服务端授权并在召回前过滤；`document_id` 只能展开当前 Agent/项目已授权文档。

@@ -97,8 +97,8 @@
     },
     {
       "path": "data/prompts_v2/tools/sticker_search/usage.md",
-      "sha256": "2fb98b720dd5c41f9df82ef7da9190276c039ddaadd159b2592fd0ebc3bed9b8",
-      "size_bytes": 918
+      "sha256": "d7e67bb14ee52619dccd0e6a2e6cf5a3a9e29e183ca4a398e3da86ef969503e0",
+      "size_bytes": 1026
     },
     {
       "path": "data/prompts_v2/tools/workspace_edit/usage.md",
@@ -367,13 +367,13 @@
     },
     {
       "path": "prompts.v2.default/tools/knowledge_query/usage.md",
-      "sha256": "c4632c7b280d5fa1ebce3c9acdb11b9644687e5fded1e9cad88c320047522126",
-      "size_bytes": 929
+      "sha256": "4dec10704e2ffd7e2288eb2800a0bcbe3ab4a1a9cad9b446677aaa2366e23965",
+      "size_bytes": 1073
     },
     {
       "path": "prompts.v2.default/tools/memory_query/usage.md",
-      "sha256": "1a6a7152aeba47fc2fed7ff6a11488219c2707dfc252502c2edd972f32bed690",
-      "size_bytes": 2387
+      "sha256": "58e8705d37123b0ab564dc448c40805e98b98c7aa7be35f9051c3a4c24fdc519",
+      "size_bytes": 2591
     },
     {
       "path": "prompts.v2.default/tools/no_reply/usage.md",
@@ -442,8 +442,8 @@
     },
     {
       "path": "prompts.v2.default/tools/sticker_search/usage.md",
-      "sha256": "2fb98b720dd5c41f9df82ef7da9190276c039ddaadd159b2592fd0ebc3bed9b8",
-      "size_bytes": 918
+      "sha256": "d7e67bb14ee52619dccd0e6a2e6cf5a3a9e29e183ca4a398e3da86ef969503e0",
+      "size_bytes": 1026
     },
     {
       "path": "prompts.v2.default/tools/web_search/usage.md",

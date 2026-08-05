@@ -11,6 +11,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from core.db.models.session_memory import MemoryDigest
+from core.memory_governance import MemoryDataScopeFilter
 from core.semantic.adapters import is_recallable_memory_digest_meta
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -85,8 +86,14 @@ def calc_recall_confidence(keyword: str, content: str, meta: dict[str, Any]) -> 
 
 
 class MemoryDigestRetrievalService:
-    def __init__(self, db: Session):
+    def __init__(
+        self,
+        db: Session,
+        *,
+        scope_filter: MemoryDataScopeFilter | None = None,
+    ):
         self.db = db
+        self.scope_filter = scope_filter
 
     def list_digests(
         self,
@@ -100,11 +107,15 @@ class MemoryDigestRetrievalService:
         limit: int = 50,
         include_content: bool = False,
         include_legacy: bool = True,
+        scope_filter: MemoryDataScopeFilter | None = None,
     ) -> list[dict[str, Any]]:
         digest_date = validate_digest_date(digest_date, "digest_date")
         date_start, date_end = validate_digest_date_range(date_start, date_end)
         target_limit = max(1, min(int(limit), 500))
-        query = self.db.query(MemoryDigest)
+        query = self._apply_scope(
+            self.db.query(MemoryDigest),
+            scope_filter,
+        )
         if user_id:
             query = query.filter(MemoryDigest.user_id == user_id)
         if session_id:
@@ -154,6 +165,7 @@ class MemoryDigestRetrievalService:
         reveal_to_level: int = 2,
         include_content: bool = False,
         include_legacy: bool = False,
+        scope_filter: MemoryDataScopeFilter | None = None,
     ) -> list[dict[str, Any]]:
         key = str(keyword or "").strip()
         if not key:
@@ -162,7 +174,10 @@ class MemoryDigestRetrievalService:
         date_start, date_end = validate_digest_date_range(date_start, date_end)
         target_limit = max(1, min(int(limit), 200))
         reveal_to_level = max(0, min(2, int(reveal_to_level)))
-        base = self.db.query(MemoryDigest).filter(MemoryDigest.level == 2)
+        base = self._apply_scope(
+            self.db.query(MemoryDigest).filter(MemoryDigest.level == 2),
+            scope_filter,
+        )
         if user_id:
             base = base.filter(MemoryDigest.user_id == user_id)
         if session_id:
@@ -212,7 +227,11 @@ class MemoryDigestRetrievalService:
                     seen_cards.add(identity)
                     logical_cards.append(card)
             logical_meta["recall_cards"] = logical_cards
-            chain = self.expand_chain(row, reveal_to_level=reveal_to_level)
+            chain = self.expand_chain(
+                row,
+                reveal_to_level=reveal_to_level,
+                scope_filter=scope_filter,
+            )
             expanded = [
                 self.serialize(
                     node,
@@ -257,14 +276,22 @@ class MemoryDigestRetrievalService:
         digest_id: int,
         include_detail: bool = False,
         include_legacy: bool = False,
+        scope_filter: MemoryDataScopeFilter | None = None,
     ) -> dict[str, Any] | None:
-        row = self.db.query(MemoryDigest).filter(MemoryDigest.id == int(digest_id)).first()
+        query = self.db.query(MemoryDigest).filter(
+            MemoryDigest.id == int(digest_id)
+        )
+        row = self._apply_scope(query, scope_filter).first()
         if not row:
             return None
         meta = safe_digest_meta(row.meta_json)
         if not _is_retrievable(meta, include_legacy=include_legacy):
             return None
-        chain = self.expand_chain(row, reveal_to_level=0)
+        chain = self.expand_chain(
+            row,
+            reveal_to_level=0,
+            scope_filter=scope_filter,
+        )
         return {
             "digest_id": row.id,
             "user_id": row.user_id,
@@ -287,6 +314,7 @@ class MemoryDigestRetrievalService:
         source_id: str,
         include_detail: bool = False,
         include_legacy: bool = False,
+        scope_filter: MemoryDataScopeFilter | None = None,
     ) -> dict[str, Any] | None:
         """按 digest_source_id 展开：聚合所有同 source 的 level0/1/2 行。
 
@@ -298,7 +326,10 @@ class MemoryDigestRetrievalService:
         sid = str(source_id).strip()
         # json_extract 语义正确；LIKE 兜底兼容无 JSON1 的 SQLite 或紧凑 JSON
         rows = (
-            self.db.query(MemoryDigest)
+            self._apply_scope(
+                self.db.query(MemoryDigest),
+                scope_filter,
+            )
             .filter(
                 or_(
                     func.json_extract(MemoryDigest.meta_json, "$.source_id") == sid,
@@ -369,16 +400,39 @@ class MemoryDigestRetrievalService:
             "chain": chain,
         }
 
-    def expand_chain(self, base: MemoryDigest, *, reveal_to_level: int) -> list[MemoryDigest]:
+    def expand_chain(
+        self,
+        base: MemoryDigest,
+        *,
+        reveal_to_level: int,
+        scope_filter: MemoryDataScopeFilter | None = None,
+    ) -> list[MemoryDigest]:
         chain = [base]
         current = base
         while current.parent_id and current.level > reveal_to_level:
-            parent = self.db.query(MemoryDigest).filter(MemoryDigest.id == current.parent_id).first()
+            query = self.db.query(MemoryDigest).filter(
+                MemoryDigest.id == current.parent_id
+            )
+            parent = self._apply_scope(query, scope_filter).first()
             if not parent:
                 break
             chain.append(parent)
             current = parent
         return chain
+
+    def _apply_scope(self, query, scope_filter: MemoryDataScopeFilter | None):
+        scope_filter = scope_filter or self.scope_filter
+        if scope_filter is None:
+            return query
+        if scope_filter.user_ids:
+            query = query.filter(
+                MemoryDigest.user_id.in_(scope_filter.user_ids)
+            )
+        if scope_filter.session_ids:
+            query = query.filter(
+                MemoryDigest.session_id.in_(scope_filter.session_ids)
+            )
+        return query
 
     @staticmethod
     def serialize(

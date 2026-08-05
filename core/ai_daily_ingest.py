@@ -250,7 +250,9 @@ def _apply_document_payload(
     document.updated_at = now
     if created:
         document.created_at = now
-    meta = _safe_meta(document.meta_json)
+    from core.memory_governance import normalize_knowledge_meta
+
+    meta = normalize_knowledge_meta(_safe_meta(document.meta_json))
     meta.update({
         "source_name": normalized.get("source_name") or "",
         "query": normalized.get("query") or "",

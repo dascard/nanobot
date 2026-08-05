@@ -10,6 +10,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.database import KnowledgeChunk, KnowledgeDocument, SemanticIndexItem
+from core.memory_governance import (
+    MemoryAccessContext,
+    knowledge_scope_from_meta,
+)
 from core.retrieval import (
     CitationEvaluation,
     RankingOutcome,
@@ -163,9 +167,15 @@ class KnowledgeRagService:
         published_after: str = "",
         published_before: str = "",
         include_debug: bool = False,
+        access_context: MemoryAccessContext | None = None,
     ) -> dict[str, Any]:
         published_after = str(published_after or date_start or "")
         published_before = str(published_before or date_end or "")
+        authorized_document_ids = (
+            self._authorized_document_ids(access_context)
+            if access_context is not None
+            else None
+        )
         request = RetrievalRequest(
             query=query,
             limit=max(1, int(limit)),
@@ -177,6 +187,11 @@ class KnowledgeRagService:
                 "knowledge_domain": domain,
                 "published_after": published_after,
                 "published_before": published_before,
+                "authorized_document_ids": (
+                    tuple(sorted(authorized_document_ids))
+                    if authorized_document_ids is not None
+                    else None
+                ),
             },
         )
         return self._build_pipeline().execute(request)
@@ -194,10 +209,27 @@ class KnowledgeRagService:
             provider_id="knowledge_rag",
         )
 
-    def _recall(self, query: str) -> _KnowledgeRecallResult:
+    def _recall(
+        self,
+        query: str,
+        *,
+        authorized_document_ids: set[str] | None = None,
+    ) -> _KnowledgeRecallResult:
+        if authorized_document_ids is not None and not authorized_document_ids:
+            return _KnowledgeRecallResult(
+                rows=[],
+                rows_by_id={},
+                fts_hits=[],
+                vector_hits=[],
+                lexical_by_id={},
+                bm25_by_id={},
+                semantic_by_id={},
+                query_vector=None,
+            )
         has_vector_rows = has_vector_recall_rows(
             self.db,
             source_types={"knowledge"},
+            source_ids=authorized_document_ids,
             ensure_schema=not self.readonly,
         )
         query_vector = _query_vector(query, self.embedding_provider) if has_vector_rows else None
@@ -205,6 +237,7 @@ class KnowledgeRagService:
             self.db,
             query,
             source_types={"knowledge"},
+            source_ids=authorized_document_ids,
             limit=300,
             ensure_schema=not self.readonly,
         )
@@ -214,6 +247,7 @@ class KnowledgeRagService:
             self.db,
             query_vector=query_vector,
             source_types={"knowledge"},
+            source_ids=authorized_document_ids,
             limit=300,
             ensure_schema=not self.readonly,
         )
@@ -221,6 +255,7 @@ class KnowledgeRagService:
         recent_rows = load_recall_rows(
             self.db,
             source_types={"knowledge"},
+            source_ids=authorized_document_ids,
             limit=600,
             ensure_schema=not self.readonly,
         )
@@ -230,6 +265,8 @@ class KnowledgeRagService:
         rows_by_id.update(load_recall_rows_by_ids(
             self.db,
             missing_ids,
+            source_types={"knowledge"},
+            source_ids=authorized_document_ids,
             ensure_schema=not self.readonly,
         ))
         fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
@@ -477,7 +514,24 @@ class KnowledgeRagService:
             result["debug_trace"] = debug_trace
         return result
 
-    def expand(self, *, document_id: int | str, chunk_id: str, max_chars: int = 1200) -> dict[str, Any]:
+    def expand(
+        self,
+        *,
+        document_id: int | str,
+        chunk_id: str,
+        max_chars: int = 1200,
+        access_context: MemoryAccessContext | None = None,
+    ) -> dict[str, Any]:
+        document = self.db.get(KnowledgeDocument, int(document_id))
+        if document is None or str(document.status or "active") != "active":
+            raise ValueError("knowledge chunk not found")
+        if access_context is not None:
+            try:
+                scope = knowledge_scope_from_meta(document.meta_json)
+            except ValueError as exc:
+                raise ValueError("knowledge chunk not found") from exc
+            if not access_context.allows(scope):
+                raise ValueError("knowledge chunk not found")
         row = (
             self.db.query(KnowledgeChunk)
             .filter(KnowledgeChunk.document_id == int(document_id))
@@ -497,6 +551,26 @@ class KnowledgeRagService:
             "citation": citation,
             "trust_level": row.trust_level or citation.get("trust_level") or "medium",
         }
+
+    def _authorized_document_ids(
+        self,
+        access_context: MemoryAccessContext,
+    ) -> set[str]:
+        authorized: set[str] = set()
+        rows = (
+            self.db.query(KnowledgeDocument)
+            .filter(KnowledgeDocument.status == "active")
+            .order_by(KnowledgeDocument.id.asc())
+            .all()
+        )
+        for row in rows:
+            try:
+                scope = knowledge_scope_from_meta(row.meta_json)
+            except ValueError:
+                continue
+            if access_context.allows(scope):
+                authorized.add(str(int(row.id)))
+        return authorized
 
     def _load_documents(self, rows: list[SemanticIndexItem]) -> dict[int, KnowledgeDocument]:
         ids = sorted({doc_id for row in rows if (doc_id := _safe_int(row.source_id)) is not None})
@@ -674,7 +748,16 @@ class _KnowledgeCandidateSource:
     service: KnowledgeRagService
 
     def recall(self, request: RetrievalRequest) -> _KnowledgeSourceData:
-        recall = self.service._recall(request.query)
+        raw_authorized = request.options.get("authorized_document_ids")
+        authorized_document_ids = (
+            None
+            if raw_authorized is None
+            else {str(item) for item in raw_authorized}
+        )
+        recall = self.service._recall(
+            request.query,
+            authorized_document_ids=authorized_document_ids,
+        )
         return _KnowledgeSourceData(
             recall=recall,
             documents=self.service._load_documents(recall.rows),

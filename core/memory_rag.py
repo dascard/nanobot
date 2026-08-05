@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.database import SemanticIndexItem
+from core.memory_governance import MemoryDataScopeFilter
 from core.retrieval import (
     AllowAllCitationPolicy,
     CitationEvaluation,
@@ -174,7 +175,12 @@ class MemoryRagService:
         session_id: str = "",
         limit: int = 5,
         include_debug: bool = False,
+        scope_filter: MemoryDataScopeFilter | None = None,
     ) -> dict[str, Any]:
+        scoped_user_ids = tuple(scope_filter.user_ids) if scope_filter else ()
+        scoped_session_ids = (
+            tuple(scope_filter.session_ids) if scope_filter else ()
+        )
         request = RetrievalRequest(
             query=query,
             limit=max(1, int(limit)),
@@ -185,6 +191,8 @@ class MemoryRagService:
                 "source_types": frozenset(_source_types(source)),
                 "user_id": user_id,
                 "session_id": session_id,
+                "user_ids": scoped_user_ids,
+                "session_ids": scoped_session_ids,
             },
         )
         return self._build_pipeline().execute(request)
@@ -209,12 +217,16 @@ class MemoryRagService:
         source_types: set[str],
         user_id: str,
         session_id: str,
+        user_ids: set[str] | None = None,
+        session_ids: set[str] | None = None,
     ) -> _MemoryRecallResult:
         has_vector_rows = has_vector_recall_rows(
             self.db,
             source_types=source_types,
             user_id=user_id,
             session_id=session_id,
+            user_ids=user_ids,
+            session_ids=session_ids,
             ensure_schema=not self.readonly,
         )
         query_vector = _query_vector(query, self.embedding_provider) if has_vector_rows else None
@@ -224,6 +236,8 @@ class MemoryRagService:
             source_types=source_types,
             user_id=user_id,
             session_id=session_id,
+            user_ids=user_ids,
+            session_ids=session_ids,
             limit=200,
             ensure_schema=not self.readonly,
         )
@@ -235,6 +249,8 @@ class MemoryRagService:
             source_types=source_types,
             user_id=user_id,
             session_id=session_id,
+            user_ids=user_ids,
+            session_ids=session_ids,
             limit=200,
             ensure_schema=not self.readonly,
         )
@@ -244,6 +260,8 @@ class MemoryRagService:
             source_types=source_types,
             user_id=user_id,
             session_id=session_id,
+            user_ids=user_ids,
+            session_ids=session_ids,
             limit=400,
             ensure_schema=not self.readonly,
         )
@@ -253,6 +271,9 @@ class MemoryRagService:
         rows_by_id.update(load_recall_rows_by_ids(
             self.db,
             missing_ids,
+            source_types=source_types,
+            user_ids=user_ids,
+            session_ids=session_ids,
             ensure_schema=not self.readonly,
         ))
         fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
@@ -276,12 +297,14 @@ class MemoryRagService:
         source_types: set[str],
         user_id: str,
         session_id: str,
+        user_ids: set[str] | None = None,
+        session_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         return {
             "sql_filters": {
                 "source_types": sorted(source_types),
-                "user_id": user_id,
-                "session_id": session_id,
+                "user_id": user_id or sorted(user_ids or set()),
+                "session_id": session_id or sorted(session_ids or set()),
                 "status": "active",
                 "visibility": "recall",
             },
@@ -641,6 +664,8 @@ class _MemoryCandidateSource:
             source_types=set(request.options["source_types"]),
             user_id=str(request.options.get("user_id") or ""),
             session_id=str(request.options.get("session_id") or ""),
+            user_ids=set(request.options.get("user_ids") or ()),
+            session_ids=set(request.options.get("session_ids") or ()),
         )
 
 
@@ -791,6 +816,8 @@ class _MemoryDebugTraceSink:
             source_types=set(request.options["source_types"]),
             user_id=str(request.options.get("user_id") or ""),
             session_id=str(request.options.get("session_id") or ""),
+            user_ids=set(request.options.get("user_ids") or ()),
+            session_ids=set(request.options.get("session_ids") or ()),
         )
 
     def candidates_ready(

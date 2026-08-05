@@ -20,6 +20,7 @@ from core.group_runtime.ids import (
 from core.group_learning.prompt_injection import (
     build_group_memory_prompt_revision,
 )
+from core.memory_governance import MemoryInjectionBudget
 
 from app.group_memory.renderer import render_group_memory_context
 from app.group_memory.retrieval_service import (
@@ -93,6 +94,7 @@ class GroupMemoryInjectionService:
         recent_messages: list[dict[str, Any]] | None = None,
         max_items: int = 10,
         max_chars: int = 1200,
+        max_tokens: int | None = None,
         record_injection: bool = False,
         rag_timeout_ms: int = 1200,
         allow_model_calls: bool = True,
@@ -101,6 +103,11 @@ class GroupMemoryInjectionService:
             GroupMemoryQueryService,
         )
 
+        budget = MemoryInjectionBudget(
+            max_items=max_items,
+            max_chars=max_chars,
+            max_tokens=max_tokens or max_chars,
+        )
         session_id = normalize_group_session_id(group_id)
         cfg_ids = group_memory_config_ids(group_id)
         mode = GroupMemoryQueryService(
@@ -120,6 +127,11 @@ class GroupMemoryInjectionService:
             "latency_ms": 0,
             "timeout_fallback": False,
             "model_calls_allowed": bool(allow_model_calls),
+            "memory_access": {
+                "scope": f"group:{raw_group_id(group_id)}",
+                "authorization": "context_builder_identity",
+            },
+            "injection_budget": budget.usage("", item_count=0),
         }
         if mode not in {"preview", "on"}:
             return GroupMemoryInjectionResult(debug=debug)
@@ -140,6 +152,7 @@ class GroupMemoryInjectionService:
             mode=mode,
             max_items=max_items,
             max_chars=max_chars,
+            max_tokens=budget.max_tokens,
             allow_model_calls=allow_model_calls,
             reranker_enabled=(
                 runtime.enabled and runtime.reranker_enabled
@@ -198,6 +211,7 @@ class GroupMemoryInjectionService:
                 recent_messages=recent_messages or [],
                 max_items=max_items,
                 max_chars=max_chars,
+                max_tokens=budget.max_tokens,
             )
         except GroupMemoryRerankerTimeout:
             debug["latency_ms"] = int((time.perf_counter() - started) * 1000)
@@ -222,6 +236,10 @@ class GroupMemoryInjectionService:
             "group_memory_context": context,
             "group_memory_context_chars": len(context),
             "score_components": selection.score_components,
+            "injection_budget": budget.usage(
+                context,
+                item_count=len(selection.selected_ids),
+            ),
         })
         if mode == "on" and context:
             debug["group_memory_injected"] = True
@@ -288,6 +306,7 @@ def _cache_key(
     mode: str,
     max_items: int,
     max_chars: int,
+    max_tokens: int,
     allow_model_calls: bool,
     reranker_enabled: bool,
     allow_degraded: bool,
@@ -298,6 +317,7 @@ def _cache_key(
         "mode": str(mode or ""),
         "max_items": max(1, int(max_items)),
         "max_chars": max(0, int(max_chars)),
+        "max_tokens": max(0, int(max_tokens)),
         "allow_model_calls": bool(allow_model_calls),
         "reranker_enabled": bool(reranker_enabled),
         "allow_degraded": bool(allow_degraded),

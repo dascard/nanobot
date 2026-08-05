@@ -37,10 +37,6 @@ class StickerSearchTool(BaseTool):
                     "type": "string",
                     "description": "表情包关键词、情绪或使用场景，如 震惊、拍桌、生气、疑惑",
                 },
-                "group_id": {
-                    "type": "string",
-                    "description": "当前群号，优先来自 runtime_context.group_id",
-                },
                 "limit": {
                     "type": "integer",
                     "description": "返回数量，默认 3，最大 8",

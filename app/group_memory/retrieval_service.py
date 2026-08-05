@@ -40,6 +40,7 @@ from core.retrieval import (
 )
 from core.semantic.reranker import SemanticCandidate
 from core.time_utils import db_now_naive
+from core.token_utils import estimate_tokens
 
 logger = logging.getLogger("nanobot.group_memory.retrieval")
 
@@ -170,6 +171,7 @@ class GroupMemoryRetrievalService:
         recent_messages: list[dict[str, Any]] | None = None,
         max_items: int = 10,
         max_chars: int = 1200,
+        max_tokens: int | None = None,
     ) -> GroupMemorySelection:
         identity = resolve_group_memory_identity(
             group_id,
@@ -189,6 +191,7 @@ class GroupMemoryRetrievalService:
                 "chat_stream_id": identity.chat_stream_id,
                 "platform": identity.platform,
                 "max_chars": int(max_chars),
+                "max_tokens": int(max_tokens or 0),
             },
         )
         return self._build_pipeline().execute(request)
@@ -301,13 +304,24 @@ class GroupMemoryRetrievalService:
         return components
 
     def _would_exceed_render_budget(
-        self, group_id: str, rows: list[Any], max_chars: int
+        self,
+        group_id: str,
+        rows: list[Any],
+        max_chars: int,
+        max_tokens: int = 0,
     ) -> bool:
         from app.group_memory.renderer import render_group_memory_context
 
-        if int(max_chars or 0) <= 0:
+        if int(max_chars or 0) <= 0 and int(max_tokens or 0) <= 0:
             return False
-        return len(render_group_memory_context(group_id, rows)) > int(max_chars)
+        rendered = render_group_memory_context(group_id, rows)
+        return (
+            (int(max_chars or 0) > 0 and len(rendered) > int(max_chars))
+            or (
+                int(max_tokens or 0) > 0
+                and estimate_tokens(rendered) > int(max_tokens)
+            )
+        )
 
     def _skip_reason(self, row: Any) -> str:
         decision = evaluate_group_memory_prompt_injection(row)
@@ -548,6 +562,7 @@ class _GroupMemoryBudgetPolicy:
         type_counts: dict[str, int] = {}
         group_id = str(request.options.get("group_id") or "")
         max_chars = int(request.options.get("max_chars") or 0)
+        max_tokens = int(request.options.get("max_tokens") or 0)
         for candidate in ranking.items:
             row = candidate.row
             reason = ""
@@ -562,6 +577,7 @@ class _GroupMemoryBudgetPolicy:
                 group_id,
                 selection.selected + [row],
                 max_chars,
+                max_tokens,
             ):
                 reason = "over_budget"
             if reason:

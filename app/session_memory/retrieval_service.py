@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.memory_digest.retrieval_service import validate_digest_date_range
 from core.db.models.session_memory import RollingSessionSummary
+from core.memory_governance import MemoryDataScopeFilter
 
 
 def _date_bounds(date_start: str = "", date_end: str = "") -> tuple[datetime | None, datetime | None]:
@@ -32,8 +33,14 @@ def _safe_json(meta_json: str | None) -> dict[str, Any]:
 
 
 class SessionSummaryRetrievalService:
-    def __init__(self, db: Session):
+    def __init__(
+        self,
+        db: Session,
+        *,
+        scope_filter: MemoryDataScopeFilter | None = None,
+    ):
         self.db = db
+        self.scope_filter = scope_filter
 
     def list_summaries(
         self,
@@ -45,9 +52,13 @@ class SessionSummaryRetrievalService:
         limit: int = 10,
         include_content: bool = False,
         include_archived: bool = False,
+        scope_filter: MemoryDataScopeFilter | None = None,
     ) -> list[dict[str, Any]]:
         start_dt, end_dt = _date_bounds(date_start, date_end)
-        query = self.db.query(RollingSessionSummary)
+        query = self._apply_scope(
+            self.db.query(RollingSessionSummary),
+            scope_filter,
+        )
         if user_id:
             query = query.filter(RollingSessionSummary.user_id == user_id)
         if session_id:
@@ -76,12 +87,16 @@ class SessionSummaryRetrievalService:
         limit: int = 10,
         include_content: bool = False,
         include_archived: bool = False,
+        scope_filter: MemoryDataScopeFilter | None = None,
     ) -> list[dict[str, Any]]:
         key = str(keyword or "").strip()
         if not key:
             return []
         start_dt, end_dt = _date_bounds(date_start, date_end)
-        query = self.db.query(RollingSessionSummary)
+        query = self._apply_scope(
+            self.db.query(RollingSessionSummary),
+            scope_filter,
+        )
         if user_id:
             query = query.filter(RollingSessionSummary.user_id == user_id)
         if session_id:
@@ -108,17 +123,31 @@ class SessionSummaryRetrievalService:
         *,
         summary_id: int,
         include_archived: bool = False,
+        scope_filter: MemoryDataScopeFilter | None = None,
     ) -> dict[str, Any] | None:
-        row = (
-            self.db.query(RollingSessionSummary)
-            .filter(RollingSessionSummary.id == int(summary_id))
-            .first()
+        query = self.db.query(RollingSessionSummary).filter(
+            RollingSessionSummary.id == int(summary_id)
         )
+        row = self._apply_scope(query, scope_filter).first()
         if row is None:
             return None
         if not include_archived and row.status != "active":
             return None
         return self.serialize(row, include_content=True)
+
+    def _apply_scope(self, query, scope_filter: MemoryDataScopeFilter | None):
+        scope_filter = scope_filter or self.scope_filter
+        if scope_filter is None:
+            return query
+        if scope_filter.user_ids:
+            query = query.filter(
+                RollingSessionSummary.user_id.in_(scope_filter.user_ids)
+            )
+        if scope_filter.session_ids:
+            query = query.filter(
+                RollingSessionSummary.session_id.in_(scope_filter.session_ids)
+            )
+        return query
 
     @staticmethod
     def serialize(row: RollingSessionSummary, *, include_content: bool = False) -> dict[str, Any]:
