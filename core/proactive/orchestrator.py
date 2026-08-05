@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from core.agent_runtime.contracts import RuntimePrincipal
 from core.db.models.proactive import ProactiveOutreachLog
 from core.model_provider.response_normalization import strip_think_blocks
 from core.outbound.contracts import OutboundConflictError, OutboundSafetyError
@@ -16,6 +17,7 @@ from core.outbound.control import check_outbound_generation_gate
 from core.outbound.policy import proactive_outreach_destination_fingerprint
 from core.proactive.config import (
     DEFAULT_AMBIGUOUS_HOLD_MIN,
+    DEFAULT_DAILY_DELIVERY_QUOTA,
     DEFAULT_MAX_CHECK_INTERVAL_MIN,
     DEFAULT_MAX_SILENCE_MIN,
     DEFAULT_MIN_INTERVAL_MIN,
@@ -58,6 +60,7 @@ from core.proactive.repository import (
 from core.proactive.runtime_support import (
     _outbound_occurrence_utc,
     _outreach_endpoint_revision,
+    _outreach_session_factory,
     session_scope as _session_scope,
 )
 from core.proactive.schedule_repository import (
@@ -70,9 +73,126 @@ from core.proactive.serialization import (
     json_object as _json_object,
 )
 from core.proactive_candidate import evaluate_outreach_min_interval_gate
+from core.trigger_runtime import (
+    TriggerKind,
+    TriggerRunContext,
+    build_trigger_envelope,
+    trigger_run_status,
+)
 
 
 logger = logging.getLogger("nanobot.proactive.orchestrator")
+
+_DAILY_QUOTA_STATUSES = frozenset({
+    "candidate",
+    "sending",
+    "queued",
+    "delivering",
+    "retry_wait",
+    "sent",
+    "sent_after_ambiguous_replay",
+    "blocked",
+    "ambiguous",
+    "legacy_ambiguous_hold",
+})
+
+
+def _daily_quota_gate(
+    session: Session,
+    *,
+    user_id: str,
+    now: datetime,
+    quota: int,
+) -> dict[str, Any] | None:
+    """在模型调用前按上海业务日限制新外呼候选数。"""
+
+    normalized_quota = max(0, int(quota))
+    if normalized_quota == 0:
+        return {
+            "status": "skipped_daily_quota",
+            "daily_delivery_quota": 0,
+            "daily_delivery_count": 0,
+        }
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    used = (
+        session.query(ProactiveOutreachLog.id)
+        .filter(
+            ProactiveOutreachLog.user_id == user_id,
+            ProactiveOutreachLog.created_at >= day_start,
+            ProactiveOutreachLog.created_at < day_end,
+            ProactiveOutreachLog.status.in_(_DAILY_QUOTA_STATUSES),
+        )
+        .count()
+    )
+    if used < normalized_quota:
+        return None
+    return {
+        "status": "skipped_daily_quota",
+        "daily_delivery_quota": normalized_quota,
+        "daily_delivery_count": int(used),
+        "next_check_at": day_end.isoformat(),
+    }
+
+
+def _governed_generator(
+    generator: Callable[..., str],
+    trigger_runtime: TriggerRunContext | None,
+) -> Callable[..., str]:
+    if trigger_runtime is None:
+        return generator
+
+    def invoke(*args: Any, **kwargs: Any) -> str:
+        # 默认 Generator 还会执行一次质量复核；两次调用在入口处一并预约，
+        # 即使第一步失败也不会把剩余额度错误地交给同轮其它工作。
+        trigger_runtime.reserve_model("proactive_generate")
+        trigger_runtime.reserve_model("proactive_quality")
+        return generator(*args, **kwargs)
+
+    return invoke
+
+
+def _governed_research(
+    research: Callable[..., Any] | None,
+    trigger_runtime: TriggerRunContext | None,
+) -> Callable[..., Any] | None:
+    if research is None or trigger_runtime is None:
+        return research
+
+    async def invoke(*args: Any, **kwargs: Any) -> Any:
+        reservation = trigger_runtime.reserve_subagent("proactive_research")
+        try:
+            return await research(*args, **kwargs)
+        finally:
+            trigger_runtime.release(reservation)
+
+    return invoke
+
+
+async def _run_governed_delivery(
+    operation: Callable[..., Any],
+    *,
+    trigger_runtime: TriggerRunContext | None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    if trigger_runtime is None:
+        return await operation(**kwargs)
+    reservation = trigger_runtime.reserve_delivery(OUTREACH_ENDPOINT_KEY)
+    try:
+        result = await operation(**kwargs)
+    finally:
+        trigger_runtime.release(reservation)
+    if str(result.get("status") or "") in {
+        "queued",
+        "sending",
+        "sent",
+        "sent_after_ambiguous_replay",
+        "delivering",
+        "retry_wait",
+        "ambiguous",
+    }:
+        trigger_runtime.mark_delivery_committed(str(result.get("status") or ""))
+    return result
 
 
 async def _run_outreach_once_acquired(
@@ -85,6 +205,7 @@ async def _run_outreach_once_acquired(
     max_silence_min: int = DEFAULT_MAX_SILENCE_MIN,
     ambiguous_hold_min: int = DEFAULT_AMBIGUOUS_HOLD_MIN,
     repeat_topic_cooldown_min: int = DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
+    daily_delivery_quota: int = DEFAULT_DAILY_DELIVERY_QUOTA,
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
@@ -92,6 +213,7 @@ async def _run_outreach_once_acquired(
     publisher: Callable[[str, str, str], Any] | None = None,
     evaluation_owner_token: str | None = None,
     evaluation_generation_at: datetime | None = None,
+    trigger_runtime: TriggerRunContext | None = None,
     judge_service: Callable[..., dict[str, Any]] = judge_outreach,
     generator_service: Callable[..., str] = generate_outreach_message,
     grounding_builder: Callable[..., dict[str, Any]] = build_outreach_grounding,
@@ -139,12 +261,20 @@ async def _run_outreach_once_acquired(
                     from core.proactive_research import run_proactive_research
 
                     effective_research_fn = run_proactive_research
-                return await generated_runner(
-                    session,
+                return await _run_governed_delivery(
+                    generated_runner,
+                    trigger_runtime=trigger_runtime,
+                    session=session,
                     work=work,
                     user_id=user_id,
-                    generator_fn=generator_fn or generator_service,
-                    research_fn=effective_research_fn,
+                    generator_fn=_governed_generator(
+                        generator_fn or generator_service,
+                        trigger_runtime,
+                    ),
+                    research_fn=_governed_research(
+                        effective_research_fn,
+                        trigger_runtime,
+                    ),
                     publisher=publisher,
                     evaluation_owner_token=evaluation_owner_token,
                 )
@@ -272,7 +402,9 @@ async def _run_outreach_once_acquired(
                     "log_id": schedule_row.id,
                     "forced": bool(schedule_row.forced),
                 }
-            return await delivery_service(
+            return await _run_governed_delivery(
+                delivery_service,
+                trigger_runtime=trigger_runtime,
                 user_id=user_id,
                 idempotency_key=str(schedule_row.idempotency_key or ""),
                 grounding=_json_object(schedule_row.grounding_json),
@@ -390,7 +522,9 @@ async def _run_outreach_once_acquired(
         if schedule_row is not None and schedule_row.status == "candidate":
             candidate_message = sanitize_text(schedule_row.message or "").strip()
             if candidate_message:
-                return await delivery_service(
+                return await _run_governed_delivery(
+                    delivery_service,
+                    trigger_runtime=trigger_runtime,
                     user_id=user_id,
                     idempotency_key=schedule_row.idempotency_key,
                     grounding=_json_object(schedule_row.grounding_json),
@@ -410,6 +544,14 @@ async def _run_outreach_once_acquired(
             schedule_row.status = "cancelled"
             session.commit()
             schedule_row = None
+        quota_decision = _daily_quota_gate(
+            session,
+            user_id=user_id,
+            now=current,
+            quota=daily_delivery_quota,
+        )
+        if quota_decision is not None:
+            return quota_decision
         latest_next_check_at = _latest_next_check_at(session, user_id)
         schedule_anchor = (
             schedule_row.next_check_at
@@ -420,6 +562,14 @@ async def _run_outreach_once_acquired(
         if thread_extractor is not None:
             grounding_kwargs["thread_extractor"] = thread_extractor
         grounding = grounding_builder(user_id, **grounding_kwargs)
+        persistence_grounding = grounding
+        if trigger_runtime is not None:
+            persistence_grounding = dict(grounding)
+            persistence_grounding["_trigger_runtime"] = (
+                trigger_runtime.envelope.safe_snapshot(
+                    run_id=trigger_runtime.run_id,
+                )
+            )
         if force_evaluation:
             grounding = dict(grounding)
             grounding["trigger"] = {
@@ -427,11 +577,15 @@ async def _run_outreach_once_acquired(
                 "requires_delivery": False,
                 "max_silence_min": max(1, int(max_silence_min)),
             }
+            persistence_grounding = dict(persistence_grounding)
+            persistence_grounding["trigger"] = dict(grounding["trigger"])
 
         from core.proactive_candidate import evaluate_outreach_judgement
         from core.proactive_research import run_proactive_research
 
         idempotency_key = _outreach_key(user_id, schedule_anchor, forced=False)
+        if trigger_runtime is not None:
+            trigger_runtime.reserve_model("proactive_judge")
         evaluation = evaluate_outreach_judgement(
             grounding=grounding,
             now=current,
@@ -452,7 +606,7 @@ async def _run_outreach_once_acquired(
                 user_id=user_id,
                 idempotency_key=idempotency_key,
                 phase="judge",
-                grounding=grounding,
+                grounding=persistence_grounding,
                 error_type=error_type,
                 reason=error_reason,
                 next_check_at=next_check_at,
@@ -480,7 +634,7 @@ async def _run_outreach_once_acquired(
                 session,
                 user_id=user_id,
                 idempotency_key=_outreach_key(user_id, next_check_at or schedule_anchor, forced=False),
-                grounding=grounding,
+                grounding=persistence_grounding,
                 judge_reason=str(judge.get("reason") or ""),
                 next_check_at=next_check_at,
                 next_intent=str(judge.get("next_intent") or ""),
@@ -508,7 +662,7 @@ async def _run_outreach_once_acquired(
                 user_id=user_id,
                 idempotency_key=idempotency_key,
                 phase="candidate_contract",
-                grounding=grounding,
+                grounding=persistence_grounding,
                 error_type="contract_error",
                 reason=error_reason,
                 next_check_at=next_check_at,
@@ -554,7 +708,7 @@ async def _run_outreach_once_acquired(
                     deferred_next_check,
                     forced=False,
                 ),
-                grounding=grounding,
+                grounding=persistence_grounding,
                 judge_reason=f"重复话题门禁:{reason_code}",
                 next_check_at=deferred_next_check,
                 next_intent=str(judge.get("next_intent") or ""),
@@ -590,7 +744,7 @@ async def _run_outreach_once_acquired(
             session,
             user_id=user_id,
             idempotency_key=idempotency_key,
-            grounding=grounding,
+            grounding=persistence_grounding,
             judge=judge,
             kind=kind,
             next_check_at=next_check_at,
@@ -607,15 +761,23 @@ async def _run_outreach_once_acquired(
             return preparation_result
         if work is None:
             raise RuntimeError("generated 准备未返回工作或结果")
-        return await generated_runner(
-            session,
+        return await _run_governed_delivery(
+            generated_runner,
+            trigger_runtime=trigger_runtime,
+            session=session,
             work=work,
             user_id=user_id,
-            generator_fn=generator_fn or generator_service,
-            research_fn=(
-                research_fn or run_proactive_research
-                if kind == "research"
-                else None
+            generator_fn=_governed_generator(
+                generator_fn or generator_service,
+                trigger_runtime,
+            ),
+            research_fn=_governed_research(
+                (
+                    research_fn or run_proactive_research
+                    if kind == "research"
+                    else None
+                ),
+                trigger_runtime,
             ),
             publisher=publisher,
             evaluation_owner_token=evaluation_owner_token,
@@ -632,11 +794,17 @@ async def run_outreach_once(
     max_silence_min: int = DEFAULT_MAX_SILENCE_MIN,
     ambiguous_hold_min: int = DEFAULT_AMBIGUOUS_HOLD_MIN,
     repeat_topic_cooldown_min: int = DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
+    daily_delivery_quota: int = DEFAULT_DAILY_DELIVERY_QUOTA,
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
     thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
     publisher: Callable[[str, str, str], Any] | None = None,
+    trigger_kind: TriggerKind | str = TriggerKind.EVENT,
+    trigger_source_ref: str = "",
+    trigger_idempotency_key: str = "",
+    trigger_occurred_at: datetime | None = None,
+    trigger_evaluated_status: str = "allowed",
     acquired_runner: Callable[..., Any] = _run_outreach_once_acquired,
     acquire_lease: Callable[..., str | None] = _acquire_evaluation_lease,
     release_lease: Callable[..., Any] = _release_evaluation_lease,
@@ -644,6 +812,28 @@ async def run_outreach_once(
     """获取按用户评估租约后执行一次主动外呼检查。"""
 
     current = now or datetime.now()
+    occurred_at = trigger_occurred_at or datetime.now(timezone.utc)
+    if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
+        occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+    source_ref = str(trigger_source_ref or "").strip() or (
+        f"proactive:{user_id}:{current.isoformat()}"
+    )
+    trigger_key = str(trigger_idempotency_key or "").strip() or source_ref
+    trigger_envelope = build_trigger_envelope(
+        kind=TriggerKind(trigger_kind),
+        source_type=OUTREACH_SOURCE_TYPE,
+        source_ref=source_ref,
+        idempotency_key=trigger_key,
+        principal=RuntimePrincipal("qq", "user", user_id),
+        delivery_endpoints=(OUTREACH_ENDPOINT_KEY,),
+        allowed_subagents=("proactive_research",),
+        max_model_calls=3,
+        max_steps=8,
+        timeout_seconds=180,
+        max_subagents=1,
+        occurred_at=occurred_at,
+        ttl_seconds=180,
+    )
     with _session_scope(db) as session:
         lease_acquired_at = datetime.now()
         owner_token = acquire_lease(
@@ -660,8 +850,16 @@ async def run_outreach_once(
                 lease_acquired_at,
                 clear_at + timedelta(microseconds=1),
             )
+        trigger_runtime: TriggerRunContext | None = None
+        result: dict[str, Any] | None = None
+        failure: BaseException | None = None
         try:
-            return await acquired_runner(
+            trigger_runtime = await TriggerRunContext.start(
+                trigger_envelope,
+                session_factory=_outreach_session_factory(session),
+                evaluated_status=trigger_evaluated_status,
+            )
+            business_result = await acquired_runner(
                 user_id,
                 db=session,
                 now=current,
@@ -670,6 +868,7 @@ async def run_outreach_once(
                 max_silence_min=max_silence_min,
                 ambiguous_hold_min=ambiguous_hold_min,
                 repeat_topic_cooldown_min=repeat_topic_cooldown_min,
+                daily_delivery_quota=daily_delivery_quota,
                 judge_fn=judge_fn,
                 generator_fn=generator_fn,
                 research_fn=research_fn,
@@ -677,8 +876,12 @@ async def run_outreach_once(
                 publisher=publisher,
                 evaluation_owner_token=owner_token,
                 evaluation_generation_at=evaluation_generation_at,
+                trigger_runtime=trigger_runtime,
             )
-        except BaseException:
+            result = dict(business_result or {})
+            return result
+        except BaseException as exc:
+            failure = exc
             session.rollback()
             raise
         finally:
@@ -693,6 +896,20 @@ async def run_outreach_once(
                     "释放主动外呼评估租约失败，等待租约 TTL 自动失效: user_id=%s",
                     user_id,
                 )
+            if trigger_runtime is not None:
+                try:
+                    await trigger_runtime.finish(
+                        status=trigger_run_status(result, failure),
+                        output=result,
+                        error=failure,
+                    )
+                except Exception:
+                    if failure is None:
+                        raise
+                    logger.exception(
+                        "主动外呼 Trigger Run 终结失败，保留原业务异常: user_id=%s",
+                        user_id,
+                    )
 
 
 

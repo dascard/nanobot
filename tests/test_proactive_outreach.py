@@ -2003,6 +2003,9 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
             "max_silence_min": 2880,
             "ambiguous_hold_min": 75,
             "repeat_topic_cooldown_min": 720,
+            "daily_delivery_quota": (
+                proactive_outreach.DEFAULT_DAILY_DELIVERY_QUOTA
+            ),
             "allow_early_surge": True,
             "surge_min_prob": proactive_outreach.DEFAULT_SURGE_MIN_PROB,
             "surge_max_prob": proactive_outreach.DEFAULT_SURGE_MAX_PROB,

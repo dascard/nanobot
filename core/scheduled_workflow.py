@@ -46,6 +46,13 @@ from core.scheduled_task_outbound import (
     scheduled_manual_occurrence,
     snapshot_scheduled_task,
 )
+from core.agent_runtime.contracts import RuntimeOwnerType, RuntimePrincipal
+from core.trigger_runtime import (
+    TriggerContractError,
+    TriggerEnvelope,
+    TriggerKind,
+    build_trigger_envelope,
+)
 
 
 DEFAULT_WORKFLOW_LEASE_SECONDS = 900.0
@@ -108,6 +115,8 @@ class ScheduledWorkflowContext:
     trigger_type: str
     runtime_step_id: str
     static_step_id: str
+    trigger_envelope: TriggerEnvelope | None = None
+    model_tool_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,6 +324,9 @@ def _trigger_snapshot(
     *,
     trigger_type: str,
     scheduled_for: datetime,
+    occurrence_key: str,
+    program: Mapping[str, Any],
+    model_tool_names: Sequence[str],
 ) -> dict[str, Any]:
     spec = spec_from_fields(
         snapshot.schedule_kind,
@@ -323,13 +335,145 @@ def _trigger_snapshot(
     )
     if spec is None:
         raise ScheduledWorkflowStateError("任务 trigger 无法解析")
+    envelope = _scheduled_trigger_envelope(
+        snapshot,
+        trigger_type=trigger_type,
+        scheduled_for=scheduled_for,
+        occurrence_key=occurrence_key,
+        program=program,
+        model_tool_names=model_tool_names,
+    )
     return {
         "trigger_type": trigger_type,
         "kind": snapshot.schedule_kind,
         "spec": spec,
         "timezone": snapshot.timezone,
         "scheduled_for": scheduled_for.isoformat(timespec="seconds"),
+        "model_tool_names": list(model_tool_names),
+        "envelope": envelope.to_dict(),
     }
+
+
+def _program_trigger_capabilities(
+    steps: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[str, ...], bool, bool]:
+    tools: set[str] = set()
+    has_emit = False
+    has_model = False
+
+    def visit(items: Sequence[Mapping[str, Any]]) -> None:
+        nonlocal has_emit, has_model
+        for step in items:
+            operation = str(step.get("op") or "")
+            if operation == "tool":
+                tool_name = str(step.get("tool") or "").strip()
+                if tool_name:
+                    tools.add(tool_name)
+            elif operation == "emit":
+                has_emit = True
+            elif operation == "model":
+                has_model = True
+            nested = step.get("steps")
+            if isinstance(nested, list):
+                visit([item for item in nested if isinstance(item, Mapping)])
+            for branch_key in ("then", "else"):
+                branch = step.get(branch_key)
+                if isinstance(branch, list):
+                    visit([item for item in branch if isinstance(item, Mapping)])
+
+    visit(steps)
+    return tuple(sorted(tools)), has_emit, has_model
+
+
+def _scheduled_model_tool_names(
+    db: Session,
+    snapshot: ScheduledTaskSnapshot,
+    program: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """按 execution 入队时的现有 ToolPlan 冻结模型可用工具。"""
+
+    _tools, _has_emit, has_model = _program_trigger_capabilities(
+        program["steps"]
+    )
+    if not has_model:
+        return ()
+    from core.tool_plan import build_tool_plan
+
+    is_group = snapshot.target_type == "group"
+    plan = build_tool_plan(
+        chat_type="group" if is_group else "private",
+        group_id=snapshot.target_id if is_group else "",
+        user_id=(
+            snapshot.created_by_actor_id
+            or ("" if is_group else snapshot.target_id)
+        ),
+        platform=snapshot.owner_platform,
+        session_id=snapshot.owner_session_id,
+        runtime_preset="full",
+        db=db,
+        extra_disabled={
+            "schedule_task": "定时任务 workflow 禁止递归调度",
+        },
+    )
+    return tuple(sorted(plan.executable_tool_names))
+
+
+def _scheduled_trigger_envelope(
+    snapshot: ScheduledTaskSnapshot,
+    *,
+    trigger_type: str,
+    scheduled_for: datetime,
+    occurrence_key: str,
+    program: Mapping[str, Any],
+    model_tool_names: Sequence[str] = (),
+    ttl_seconds: int | None = None,
+) -> TriggerEnvelope:
+    kind = (
+        TriggerKind.MANUAL
+        if trigger_type == "manual"
+        else TriggerKind.SCHEDULE
+    )
+    tools, has_emit, _has_model = _program_trigger_capabilities(
+        program["steps"]
+    )
+    allowed_tools = tuple(sorted({*tools, *model_tool_names}))
+    limits = program["limits"]
+    duration = int(limits["max_duration_seconds"])
+    effective_ttl = ttl_seconds or max(
+        duration,
+        3600 if kind is TriggerKind.MANUAL else 86_400,
+    )
+    occurred_at = scheduled_for
+    if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
+        occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+    owner_type = (
+        RuntimeOwnerType.GROUP
+        if snapshot.target_type == "group"
+        else RuntimeOwnerType.USER
+    )
+    principal_owner_id = (
+        snapshot.target_id
+        if owner_type is RuntimeOwnerType.GROUP
+        else snapshot.created_by_actor_id or snapshot.target_id
+    )
+    return build_trigger_envelope(
+        kind=kind,
+        source_type="scheduled_task",
+        source_ref=occurrence_key,
+        idempotency_key=occurrence_key,
+        principal=RuntimePrincipal(
+            snapshot.owner_platform,
+            owner_type,
+            principal_owner_id,
+        ),
+        allowed_tools=allowed_tools,
+        delivery_endpoints=("qq_push",) if has_emit else (),
+        max_model_calls=int(limits["max_steps"]),
+        max_steps=int(limits["max_steps"]),
+        timeout_seconds=duration,
+        occurred_at=occurred_at,
+        ttl_seconds=min(effective_ttl, 7 * 24 * 60 * 60),
+    )
 
 
 def enqueue_scheduled_task_execution(
@@ -369,20 +513,28 @@ def enqueue_scheduled_task_execution(
         task_snapshot_json.encode("utf-8")
     ).hexdigest()
     owner_snapshot_json = _canonical_json(_owner_snapshot(snapshot))
+    normalized_program, program_json, program_sha256 = (
+        normalize_scheduled_task_program(snapshot.program)
+    )
+    if program_sha256 != snapshot.program_sha256:
+        raise ScheduledWorkflowStateError("任务 program 快照摘要不一致")
+    model_tool_names = _scheduled_model_tool_names(
+        db,
+        snapshot,
+        normalized_program,
+    )
     trigger_snapshot_json = _canonical_json(
         _trigger_snapshot(
             snapshot,
             trigger_type=trigger_type,
             scheduled_for=occurrence.scheduled_for,
+            occurrence_key=occurrence.occurrence_key,
+            program=normalized_program,
+            model_tool_names=model_tool_names,
         )
     )
-    _, program_json, program_sha256 = normalize_scheduled_task_program(
-        snapshot.program
-    )
-    if program_sha256 != snapshot.program_sha256:
-        raise ScheduledWorkflowStateError("任务 program 快照摘要不一致")
     state_json = _bounded_json(
-        _initial_state(snapshot.program),
+        _initial_state(normalized_program),
         max_bytes=MAX_WORKFLOW_STATE_BYTES,
         label="任务初始状态",
     )
@@ -1662,6 +1814,90 @@ async def execute_claimed_scheduled_task(
         or program_sha256 != task_snapshot.program_sha256
     ):
         raise ScheduledWorkflowStateError("任务冻结 program 不一致")
+    trigger_snapshot = _load_canonical_mapping(
+        execution.trigger_snapshot_json,
+        label="任务 Trigger 快照",
+    )
+    raw_envelope = trigger_snapshot.get("envelope")
+    expected_trigger_type = str(execution.trigger_type)
+    expected_scheduled_for = execution.scheduled_for.isoformat(
+        timespec="seconds"
+    )
+    if (
+        str(trigger_snapshot.get("trigger_type") or "")
+        != expected_trigger_type
+        or str(trigger_snapshot.get("scheduled_for") or "")
+        != expected_scheduled_for
+    ):
+        raise ScheduledWorkflowStateError("任务 Trigger 基础快照与 execution 不一致")
+    raw_model_tool_names = trigger_snapshot.get("model_tool_names")
+    if raw_model_tool_names is None:
+        _tools, _has_emit, has_model = _program_trigger_capabilities(
+            program["steps"]
+        )
+        raw_model_tool_names = (
+            ["no_reply", "reply"]
+            if raw_envelope is None and has_model
+            else []
+        )
+    if not isinstance(raw_model_tool_names, list) or any(
+        not isinstance(item, str)
+        for item in raw_model_tool_names
+    ):
+        raise ScheduledWorkflowStateError("任务 Trigger 模型工具快照无效")
+    model_tool_names = tuple(sorted({
+        str(item).strip()
+        for item in raw_model_tool_names
+        if str(item).strip()
+    }))
+    if (
+        list(model_tool_names) != raw_model_tool_names
+        or any("*" in item or "?" in item for item in model_tool_names)
+    ):
+        raise ScheduledWorkflowStateError("任务 Trigger 模型工具快照无效")
+    if raw_envelope is None:
+        # 升级前已安全冻结的 execution 没有 envelope。只能从同一行的任务、
+        # owner、occurrence 与 program 快照确定性补齐，不能回读 live task。
+        trigger_envelope = _scheduled_trigger_envelope(
+            task_snapshot,
+            trigger_type=expected_trigger_type,
+            scheduled_for=execution.scheduled_for,
+            occurrence_key=str(execution.occurrence_key),
+            program=program,
+            model_tool_names=model_tool_names,
+        )
+        trigger_snapshot["model_tool_names"] = list(model_tool_names)
+        trigger_snapshot["envelope"] = trigger_envelope.to_dict()
+        execution = _require_claim(db, claim, now=current_time())
+        execution.trigger_snapshot_json = _canonical_json(trigger_snapshot)
+        execution.updated_at = current_time()
+        db.commit()
+        raw_envelope = trigger_snapshot["envelope"]
+    if not isinstance(raw_envelope, Mapping):
+        raise ScheduledWorkflowStateError("任务 Trigger envelope 无效")
+    try:
+        trigger_envelope = TriggerEnvelope.from_mapping(raw_envelope)
+        ttl_seconds = int(
+            (
+                trigger_envelope.expires_at
+                - trigger_envelope.occurred_at
+            ).total_seconds()
+        )
+        expected_trigger = _scheduled_trigger_envelope(
+            task_snapshot,
+            trigger_type=str(execution.trigger_type),
+            scheduled_for=execution.scheduled_for,
+            occurrence_key=str(execution.occurrence_key),
+            program=program,
+            model_tool_names=model_tool_names,
+            ttl_seconds=ttl_seconds,
+        )
+    except (TriggerContractError, TypeError, ValueError) as exc:
+        raise ScheduledWorkflowStateError(
+            "任务 Trigger envelope 无效"
+        ) from exc
+    if expected_trigger.to_dict() != trigger_envelope.to_dict():
+        raise ScheduledWorkflowStateError("任务 Trigger envelope 与冻结任务不一致")
     state = _load_state(execution.state_json, program)
     steps_by_id = _step_map(program)
     limits = program["limits"]
@@ -1980,8 +2216,13 @@ async def execute_claimed_scheduled_task(
             trigger_type=str(execution.trigger_type),
             runtime_step_id=runtime_step_id,
             static_step_id=static_step_id,
+            trigger_envelope=trigger_envelope,
+            model_tool_names=model_tool_names,
         )
         try:
+            trigger_envelope.assert_active(
+                now=current.replace(tzinfo=timezone.utc),
+            )
             if operation in {"set", "branch", "loop"}:
                 outcome = ScheduledWorkflowStepOutcome(
                     output=resolved_input
@@ -2011,6 +2252,8 @@ async def execute_claimed_scheduled_task(
                     output={"waited": True}
                 )
             elif operation == "tool":
+                trigger_envelope.assert_tool(str(resolved_input["tool"]))
+
                 async def call_tool() -> ScheduledWorkflowStepOutcome:
                     return await _invoke_callback(
                         callbacks.execute_tool,
@@ -2042,6 +2285,8 @@ async def execute_claimed_scheduled_task(
                     lease_seconds=lease_seconds,
                 )
             else:
+                trigger_envelope.assert_delivery("qq_push")
+
                 async def call_emit() -> ScheduledWorkflowStepOutcome:
                     return await _invoke_callback(
                         callbacks.emit,
@@ -2059,6 +2304,13 @@ async def execute_claimed_scheduled_task(
                 )
         except ScheduledWorkflowFencingError:
             raise
+        except TriggerContractError as exc:
+            outcome = ScheduledWorkflowStepOutcome.failed(
+                "trigger_policy_denied",
+                str(exc),
+                blocked=True,
+                stop=True,
+            )
         except Exception as exc:
             retry_safe = _started_attempt_is_retry_safe(step)
             outcome = ScheduledWorkflowStepOutcome.failed(

@@ -112,6 +112,9 @@ AGENT_HARNESS_CONTEXT_COMPACTION_REGISTRY_BASELINE_SHA256 = (
 AGENT_HARNESS_PLAN_MODE_REGISTRY_BASELINE_SHA256 = (
     "ce3a26119eb761eb9f4635fb017f668aab162096a298d7da27fc277350dc2cc9"
 )
+AGENT_HARNESS_PROACTIVE_TRIGGER_REGISTRY_BASELINE_SHA256 = (
+    "7a3b03d3e418c061aaded2c6a9d8515670641cbe4b5acf8b0aa22a0055736cb4"
+)
 
 SNAPSHOT_CLASSIFICATIONS = {
     "agent_runtime": "preserve",
@@ -1589,12 +1592,28 @@ def _manifest(
                 "before_sha256": (
                     AGENT_HARNESS_PLAN_MODE_REGISTRY_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["runtime_registries"]
+                "after_sha256": (
+                    AGENT_HARNESS_PROACTIVE_TRIGGER_REGISTRY_BASELINE_SHA256
                 ),
                 "reason": (
                     "把 skill 从 KT 隐藏框架入口迁移为 Nanobot active 工具；"
                     "只有服务端冻结可见版本锁后才动态启用。"
+                ),
+            },
+            {
+                "id": "agent_harness_proactive_trigger_registry",
+                "snapshot_id": "runtime_registries",
+                "stage": "Agent Harness 阶段 9.2",
+                "before_sha256": (
+                    AGENT_HARNESS_PROACTIVE_TRIGGER_REGISTRY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["runtime_registries"]
+                ),
+                "reason": (
+                    "登记主动外呼每日投递配额，并把定时、事件与"
+                    "心跳入口收敛到冻结 Trigger 权限和硬预算；"
+                    "新的主动行为仍默认关闭。"
                 ),
             },
         ],

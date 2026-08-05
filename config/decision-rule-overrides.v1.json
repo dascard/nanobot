@@ -6,8 +6,8 @@
       "match": {
         "category": "natural_language_semantic"
       },
-      "expected_count": 87,
-      "expected_rule_ids_sha256": "f00bb202cc0ab88835502635fd1181142a1349ddd488720fc189fb3be62dd5ee",
+      "expected_count": 86,
+      "expected_rule_ids_sha256": "3fda79fb485201c04e745db9e18af01ae6e1fc784ea0ee781d275c9176caf334",
       "override": {
         "category": "natural_language_semantic",
         "disposition": "model_signal_only",

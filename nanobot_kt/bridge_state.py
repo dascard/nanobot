@@ -19,6 +19,76 @@ from nanobot_kt.reply_contract import RichTerminalOutput
 logger = logging.getLogger("nanobot.kt.bridge")
 
 
+@dataclass(frozen=True, slots=True)
+class BridgeTriggerPolicy:
+    """把受信 Trigger 绑定从 Bridge 生命周期代码中隔离出来。"""
+
+    constraint: Any = None
+
+    @classmethod
+    def from_metadata(cls, metadata: dict[str, Any]) -> "BridgeTriggerPolicy":
+        from core.trigger_runtime import TriggerToolConstraint
+
+        value = metadata.pop("_trigger_tool_constraint", None)
+        return cls(
+            value if isinstance(value, TriggerToolConstraint) else None
+        )
+
+    def validate_request(
+        self,
+        run_meta: dict[str, Any],
+        *,
+        platform: str,
+        is_group: bool,
+        group_id: str,
+        user_id: str,
+        session_id: str,
+    ) -> None:
+        if self.constraint is None:
+            return
+        if run_meta.get("_trigger_run_binding") != self.constraint.binding:
+            raise ValueError("Trigger 工具约束缺少匹配的 Run 绑定")
+        from core.agent_runtime.contracts import (
+            RuntimeOwnerType,
+            RuntimePrincipal,
+        )
+
+        self.constraint.assert_owner(RuntimePrincipal(
+            platform,
+            (
+                RuntimeOwnerType.GROUP
+                if is_group
+                else RuntimeOwnerType.USER
+            ),
+            group_id if is_group else user_id or session_id,
+        ))
+
+    @staticmethod
+    def project_safe_trace_meta(run_meta: dict[str, Any]) -> None:
+        from core.run_ledger.contracts import RunTriggerBinding
+
+        binding = run_meta.pop("_trigger_run_binding", None)
+        if not isinstance(binding, RunTriggerBinding):
+            return
+        run_meta.update({
+            "trigger_id": binding.trigger_id,
+            "trigger_type": binding.trigger_type,
+            "trigger_sha256": binding.trigger_sha256,
+            "governance_sha256": binding.governance_sha256,
+        })
+
+    def restrict_tool_plan(self, tool_plan: Any) -> Any:
+        if self.constraint is None:
+            return tool_plan
+        from core.tool_plan import restrict_tool_plan
+
+        return restrict_tool_plan(
+            tool_plan,
+            self.constraint.allowed_tool_names,
+            disabled_reason="Trigger 冻结权限未授权",
+        )
+
+
 def build_bridge_run_meta(
     meta: dict[str, Any],
     *,
@@ -48,7 +118,45 @@ def build_bridge_run_meta(
     gateway_admission = meta.pop("_gateway_run_admission", None)
     if isinstance(gateway_admission, GatewayRunAdmission):
         result["_gateway_run_admission"] = gateway_admission
+    from core.run_ledger.contracts import RunTriggerBinding
+
+    trigger_binding = meta.pop("_trigger_run_binding", None)
+    if isinstance(trigger_binding, RunTriggerBinding):
+        result["_trigger_run_binding"] = trigger_binding
     return result
+
+
+def prepare_bridge_run_meta(
+    metadata: dict[str, Any],
+    sender_name: str,
+    is_group: bool,
+    prompt_engine: str,
+    platform: str,
+    chat_type: str,
+    group_id: str,
+    user_id: str,
+    session_id: str,
+) -> tuple[BridgeTriggerPolicy, dict[str, Any]]:
+    """构造 Run metadata，并在接纳前验证类型化 Trigger 约束。"""
+
+    trigger_policy = BridgeTriggerPolicy.from_metadata(metadata)
+    run_meta = build_bridge_run_meta(
+        metadata,
+        sender_name=sender_name,
+        is_group=is_group,
+        prompt_engine=prompt_engine,
+        platform=platform,
+        chat_type=chat_type,
+    )
+    trigger_policy.validate_request(
+        run_meta,
+        platform=platform,
+        is_group=is_group,
+        group_id=group_id,
+        user_id=str(metadata.get("user_id") or user_id or "").strip(),
+        session_id=str(session_id or "").strip(),
+    )
+    return trigger_policy, run_meta
 
 
 async def bind_run_task_owner(request_scope: Any, task_lease: Any) -> None:
@@ -273,10 +381,12 @@ class BridgeTraceFinalizer:
 __all__ = [
     "BridgeEventPayload",
     "BridgeRuntimeToolState",
+    "BridgeTriggerPolicy",
     "BridgeTraceFinalizer",
     "ModelLoopResult",
     "PromptRuntimeAssemblyContext",
     "ReplyResolution",
     "bind_run_task_owner",
     "build_bridge_run_meta",
+    "prepare_bridge_run_meta",
 ]

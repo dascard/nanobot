@@ -30,6 +30,7 @@ from core.scheduled_workflow import (
     renew_scheduled_task_execution_lease,
     run_scheduled_task_workflow_worker,
 )
+from core.trigger_runtime import TriggerContractError, TriggerEnvelope, TriggerKind
 from tests.async_helpers import run_async
 
 
@@ -151,6 +152,171 @@ def _enqueue_and_claim(db, task: ScheduledTask, *, key: str = "manual-1"):
     assert len(claims) == 1
     assert claims[0].execution_id == queued.execution_id
     return queued, claims[0]
+
+
+def test_scheduled_execution_freezes_exact_trigger_access(db_session):
+    task = _seed_task(db_session, {
+        "version": 1,
+        "steps": [
+            {
+                "id": "data",
+                "op": "loop",
+                "items": [{"op": "tool", "tool": "schedule_task"}],
+                "max_iterations": 1,
+                "steps": [
+                    {
+                        "id": "copy",
+                        "op": "set",
+                        "name": "copied",
+                        "value": {"$ref": "variables.item"},
+                    }
+                ],
+            },
+            {
+                "id": "inspect",
+                "op": "tool",
+                "tool": "inspect_image",
+                "args": {},
+            },
+            {"id": "send", "op": "emit", "content": "完成"},
+        ],
+    })
+    queued, _claim = _enqueue_and_claim(db_session, task)
+
+    execution = db_session.get(ScheduledTaskExecution, queued.execution_id)
+    snapshot = json.loads(execution.trigger_snapshot_json)
+    envelope = TriggerEnvelope.from_mapping(snapshot["envelope"])
+
+    assert envelope.kind is TriggerKind.MANUAL
+    assert envelope.principal.owner_id == "workflow-user"
+    envelope.assert_tool("inspect_image")
+    envelope.assert_delivery("qq_push")
+    with pytest.raises(TriggerContractError, match="未授权工具"):
+        envelope.assert_tool("schedule_task")
+
+
+def test_scheduled_model_freezes_current_tool_plan_without_recursive_tool(
+    db_session,
+):
+    task = _seed_task(db_session, {
+        "version": 1,
+        "steps": [
+            {
+                "id": "model",
+                "op": "model",
+                "prompt": "检查并返回结果",
+            },
+        ],
+    })
+    queued, _claim = _enqueue_and_claim(db_session, task)
+
+    execution = db_session.get(ScheduledTaskExecution, queued.execution_id)
+    snapshot = json.loads(execution.trigger_snapshot_json)
+    model_tool_names = snapshot["model_tool_names"]
+    envelope = TriggerEnvelope.from_mapping(snapshot["envelope"])
+
+    assert model_tool_names == sorted(set(model_tool_names))
+    assert model_tool_names
+    assert "schedule_task" not in model_tool_names
+    constraint = envelope.tool_constraint(model_tool_names)
+    assert constraint.allowed_tool_names == frozenset(model_tool_names)
+
+
+def test_legacy_execution_backfills_trigger_only_from_frozen_snapshot(
+    db_session,
+):
+    task = _seed_task(db_session, {
+        "version": 1,
+        "steps": [
+            {
+                "id": "inspect",
+                "op": "tool",
+                "tool": "inspect_image",
+                "args": {"value": "冻结输入"},
+            },
+        ],
+    })
+    queued, claim = _enqueue_and_claim(db_session, task)
+    execution = db_session.get(ScheduledTaskExecution, queued.execution_id)
+    legacy_snapshot = json.loads(execution.trigger_snapshot_json)
+    legacy_snapshot.pop("envelope")
+    execution.trigger_snapshot_json = json.dumps(
+        legacy_snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    task.target_id = "live-owner-must-not-be-read"
+    db_session.commit()
+
+    class CaptureCallbacks(_Callbacks):
+        trigger_envelope = None
+
+        async def execute_tool(self, context, **kwargs):
+            self.trigger_envelope = context.trigger_envelope
+            return await super().execute_tool(context, **kwargs)
+
+    callbacks = CaptureCallbacks()
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=callbacks,
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    db_session.expire_all()
+    execution = db_session.get(ScheduledTaskExecution, queued.execution_id)
+    restored = TriggerEnvelope.from_mapping(
+        json.loads(execution.trigger_snapshot_json)["envelope"]
+    )
+    assert status == "succeeded"
+    assert callbacks.trigger_envelope == restored
+    assert restored.principal.owner_id == "workflow-user"
+    restored.assert_tool("inspect_image")
+
+
+def test_legacy_model_execution_backfills_only_final_action_tools(db_session):
+    task = _seed_task(db_session, {
+        "version": 1,
+        "steps": [
+            {
+                "id": "model",
+                "op": "model",
+                "prompt": "生成结果",
+            },
+        ],
+    })
+    queued, claim = _enqueue_and_claim(db_session, task)
+    execution = db_session.get(ScheduledTaskExecution, queued.execution_id)
+    legacy_snapshot = json.loads(execution.trigger_snapshot_json)
+    legacy_snapshot.pop("envelope")
+    legacy_snapshot.pop("model_tool_names")
+    execution.trigger_snapshot_json = json.dumps(
+        legacy_snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    db_session.commit()
+
+    status = run_async(execute_claimed_scheduled_task(
+        db_session,
+        claim=claim,
+        callbacks=_Callbacks(),
+        session_factory=_factory(db_session),
+        clock=lambda: NOW,
+    ))
+
+    db_session.expire_all()
+    execution = db_session.get(ScheduledTaskExecution, queued.execution_id)
+    restored_snapshot = json.loads(execution.trigger_snapshot_json)
+    restored = TriggerEnvelope.from_mapping(restored_snapshot["envelope"])
+    assert status == "succeeded"
+    assert restored_snapshot["model_tool_names"] == ["no_reply", "reply"]
+    assert restored.tool_constraint(("no_reply", "reply"))
+    with pytest.raises(TriggerContractError, match="未授权工具"):
+        restored.assert_tool("web_search")
 
 
 def test_program_rejects_duplicate_step_id_and_recursive_task_tool():

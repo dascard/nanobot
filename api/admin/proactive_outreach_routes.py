@@ -11,7 +11,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -34,8 +34,14 @@ from core.proactive_outreach import (
     run_outreach_due_once,
     run_outreach_once,
 )
+from core.proactive.feedback import (
+    ProactiveFeedbackConflict,
+    ProactiveFeedbackError,
+    record_proactive_outreach_feedback,
+)
 from core.safe_diagnostics import safe_response_summary
 from core.settings_service import settings
+from core.trigger_runtime import TriggerKind
 
 
 router = APIRouter(prefix="/proactive-outreach", tags=["admin-proactive-outreach"])
@@ -48,6 +54,7 @@ _MANAGED_SETTING_KEYS = (
     "proactive_outreach.max_silence_min",
     "proactive_outreach.ambiguous_hold_min",
     "proactive_outreach.repeat_topic_cooldown_min",
+    "proactive_outreach.daily_delivery_quota",
     "proactive_outreach.allow_early_surge",
     "proactive_outreach.surge_min_prob",
     "proactive_outreach.surge_max_prob",
@@ -79,6 +86,19 @@ class ProactiveRunOnceRequest(BaseModel):
 class ProactiveSimulationRequest(BaseModel):
     mode: Literal["scripted", "live_dry_run"] = "scripted"
     user_id: str = ""
+
+
+class ProactiveFeedbackRequest(BaseModel):
+    label: Literal[
+        "helpful",
+        "neutral",
+        "not_helpful",
+        "intrusive",
+        "incorrect",
+        "duplicate",
+    ]
+    source: Literal["user_reported", "operator_review"]
+    evidence_ref: str = Field(min_length=1, max_length=512)
 
 
 def _parse_json_object(raw: object) -> dict[str, Any]:
@@ -456,7 +476,15 @@ def _safe_run_once_result(result: object) -> dict[str, Any]:
         value = result.get(key)
         if isinstance(value, str):
             safe[key] = value[:500]
-    for key in ("log_id", "run_id", "outbox_id", "minutes_since_last", "hour"):
+    for key in (
+        "log_id",
+        "run_id",
+        "outbox_id",
+        "minutes_since_last",
+        "hour",
+        "daily_delivery_quota",
+        "daily_delivery_count",
+    ):
         value = result.get(key)
         if type(value) is int:
             safe[key] = value
@@ -591,6 +619,57 @@ def proactive_outreach_logs(
     }
 
 
+@router.post("/logs/{log_id}/feedback")
+def record_proactive_outreach_feedback_route(
+    log_id: int,
+    body: ProactiveFeedbackRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """记录可信渠道转交的用户反馈或管理员复核，不接收反馈原文。"""
+
+    try:
+        result = record_proactive_outreach_feedback(
+            db,
+            log_id=log_id,
+            label=body.label,
+            source=body.source,
+            evidence_ref=body.evidence_ref,
+        )
+        db.commit()
+    except ProactiveFeedbackConflict as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ProactiveFeedbackError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    audit(
+        db,
+        "record_proactive_outreach_feedback",
+        "proactive_outreach",
+        str(log_id),
+        {
+            "case_id": result.case_id,
+            "label": result.label,
+            "source": result.source,
+            "evidence_sha256": result.evidence_sha256,
+            "created": result.created,
+            "deduplicated": result.deduplicated,
+        },
+        ip_address=client_ip(request),
+    )
+    return {
+        "ok": True,
+        "case_id": result.case_id,
+        "label": result.label,
+        "source": result.source,
+        "evidence_sha256": result.evidence_sha256,
+        "created": result.created,
+        "deduplicated": result.deduplicated,
+    }
+
+
 @router.put("/settings/{key:path}")
 def update_proactive_outreach_setting(
     key: str,
@@ -677,12 +756,14 @@ async def proactive_outreach_run_once(
             result = await run_outreach_once(
                 user_id,
                 db=db,
+                trigger_kind=TriggerKind.MANUAL,
                 **outreach_check_threshold_kwargs(),
             )
         else:
             result = await run_outreach_due_once(
                 user_id,
                 db=db,
+                trigger_kind=TriggerKind.MANUAL,
                 **outreach_due_threshold_kwargs(),
             )
     except Exception:

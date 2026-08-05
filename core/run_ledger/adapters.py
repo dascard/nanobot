@@ -15,6 +15,7 @@ from core.run_ledger.contracts import (
     RunLedgerEventDraft,
     RunLedgerIdentity,
     RunLedgerScalar,
+    RunTriggerBinding,
     canonical_run_status,
 )
 from core.runtime.events import RuntimeEvent
@@ -517,6 +518,31 @@ def run_terminated_event(
     )
 
 
+def run_trigger_bound_event(
+    *,
+    accepted_event: RunLedgerEventDraft,
+    binding: RunTriggerBinding,
+    occurred_at: datetime | None = None,
+) -> RunLedgerEventDraft:
+    """把受信入口冻结的 Trigger 摘要绑定到真实业务 Run。"""
+
+    return RunLedgerEventDraft(
+        event_id=_bounded_event_id("run", accepted_event.run_id, "trigger-bound"),
+        run_id=accepted_event.run_id,
+        event_type="trigger.bound",
+        occurred_at=occurred_at or _now(),
+        source="trace.run",
+        correlation=accepted_event.correlation,
+        identity=accepted_event.identity,
+        payload={
+            "trigger_id": binding.trigger_id,
+            "trigger_type": binding.trigger_type,
+            "trigger_sha256": binding.trigger_sha256,
+            "governance_sha256": binding.governance_sha256,
+        },
+    )
+
+
 def run_prompt_resolved_event(
     *,
     run_id: str,
@@ -880,6 +906,7 @@ __all__ = [
     "run_accepted_event",
     "run_prompt_resolved_event",
     "run_status_changed_event",
+    "run_trigger_bound_event",
     "run_terminated_event",
     "runtime_event_to_ledger",
     "runtime_event_admission_events",

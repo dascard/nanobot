@@ -12,6 +12,7 @@ from core.async_bridge import run_awaitable_sync
 from core.identity import get_super_user_ids
 from core.proactive.config import (
     DEFAULT_AMBIGUOUS_HOLD_MIN,
+    DEFAULT_DAILY_DELIVERY_QUOTA,
     DEFAULT_MAX_CHECK_INTERVAL_MIN,
     DEFAULT_MAX_SILENCE_MIN,
     DEFAULT_MIN_INTERVAL_MIN,
@@ -54,6 +55,10 @@ def outreach_due_threshold_kwargs(settings_port: Any = settings) -> dict[str, An
             "proactive_outreach.repeat_topic_cooldown_min",
             DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
         ),
+        "daily_delivery_quota": settings_port.get_int(
+            "proactive_outreach.daily_delivery_quota",
+            DEFAULT_DAILY_DELIVERY_QUOTA,
+        ),
         "allow_early_surge": settings_port.get_bool(
             "proactive_outreach.allow_early_surge",
             False,
@@ -75,6 +80,7 @@ _CHECK_THRESHOLD_KEYS = (
     "max_silence_min",
     "ambiguous_hold_min",
     "repeat_topic_cooldown_min",
+    "daily_delivery_quota",
 )
 
 

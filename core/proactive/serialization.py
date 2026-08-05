@@ -123,6 +123,8 @@ def grounding_json_for_model(grounding: dict[str, Any]) -> str:
 
     compact: dict[str, Any] = {}
     for key, value in grounding.items():
+        if key == "_trigger_runtime":
+            continue
         if key in {"recent_messages", "recent_outreaches"}:
             continue
         if key == "last_outreach":

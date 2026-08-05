@@ -153,6 +153,7 @@ def test_proactive_outreach_page_is_wired_into_admin_app():
     assert "proactive_outreach.ambiguous_hold_min" in page_source
     assert "投递不确定冻结" in page_source
     assert "proactive_outreach.repeat_topic_cooldown_min" in page_source
+    assert "proactive_outreach.daily_delivery_quota" in page_source
     assert "proactive_outreach.allow_early_surge" in page_source
     assert "bot.super_user_ids" not in page_source
     assert "super_user_ids" not in page_source

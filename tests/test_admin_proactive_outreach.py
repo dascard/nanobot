@@ -91,6 +91,10 @@ def test_admin_proactive_outreach_routes_are_registered():
     expected = (
         ("GET", "/api/v1/admin/proactive-outreach/status"),
         ("GET", "/api/v1/admin/proactive-outreach/logs"),
+        (
+            "POST",
+            "/api/v1/admin/proactive-outreach/logs/{log_id}/feedback",
+        ),
         ("PUT", "/api/v1/admin/proactive-outreach/settings/{key:path}"),
         ("POST", "/api/v1/admin/proactive-outreach/settings/reload"),
         ("POST", "/api/v1/admin/proactive-outreach/run-once"),
@@ -219,6 +223,58 @@ def test_proactive_outreach_logs_filter_by_status_and_target_fingerprint(
     assert data["items"][0]["status"] == "pending"
     assert "user_id" not in data["items"][0]
     assert data["items"][0]["target_fingerprint"] == target_fingerprint
+
+
+def test_proactive_outreach_feedback_endpoint_hashes_reference_and_is_idempotent(
+    proactive_client,
+):
+    db = next(app.dependency_overrides[get_db]())
+    row = ProactiveOutreachLog(
+        user_id="u-proactive",
+        idempotency_key="outreach:u-proactive:feedback",
+        grounding_json="{}",
+        message="需要收集反馈的外呼",
+        status="sent",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    evidence_ref = "qq-message:user-feedback-raw-reference"
+
+    first = proactive_client.post(
+        f"/api/v1/admin/proactive-outreach/logs/{row.id}/feedback",
+        json={
+            "label": "helpful",
+            "source": "user_reported",
+            "evidence_ref": evidence_ref,
+        },
+        headers=_auth_header(),
+    )
+    second = proactive_client.post(
+        f"/api/v1/admin/proactive-outreach/logs/{row.id}/feedback",
+        json={
+            "label": "helpful",
+            "source": "user_reported",
+            "evidence_ref": evidence_ref,
+        },
+        headers=_auth_header(),
+    )
+    conflict = proactive_client.post(
+        f"/api/v1/admin/proactive-outreach/logs/{row.id}/feedback",
+        json={
+            "label": "intrusive",
+            "source": "user_reported",
+            "evidence_ref": "qq-message:conflicting-reference",
+        },
+        headers=_auth_header(),
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["created"] is True
+    assert second.json()["deduplicated"] is True
+    assert evidence_ref not in first.text
+    assert conflict.status_code == 409
 
 
 def test_proactive_outreach_status_exposes_safe_outbox_linkage(

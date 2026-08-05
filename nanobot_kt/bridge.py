@@ -48,7 +48,7 @@ from nanobot_kt.bridge_state import (
     PromptRuntimeAssemblyContext,
     ReplyResolution,
     bind_run_task_owner,
-    build_bridge_run_meta,
+    prepare_bridge_run_meta,
 )
 from nanobot_kt.direct_tool_execution import (
     DirectToolExecutionResult,
@@ -1591,13 +1591,9 @@ class NanobotBridge(MessageContractBridgeMixin):
 
             trace_id = str(meta.get("trace_id") or new_trace_id())
             meta["trace_id"] = trace_id
-            run_meta = build_bridge_run_meta(
-                meta,
-                sender_name=sender_name,
-                is_group=is_group,
-                prompt_engine=prompt_engine,
-                platform=platform,
-                chat_type=chat_type,
+            trigger_policy, run_meta = prepare_bridge_run_meta(
+                meta, sender_name, is_group, prompt_engine, platform,
+                chat_type, group_id, user_id, session_id,
             )
             run_handle = RunTracer.start_run(
                 trace_id=trace_id,
@@ -1615,6 +1611,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 input_preview=query,
                 meta=run_meta,
             )
+            trigger_policy.project_safe_trace_meta(run_meta)
             trace_tokens = set_trace_context(trace_id, run_handle.run_id)
             correlation_tokens = bind_bridge_runtime_correlation(
                 meta, session_id, trace_id, run_handle.run_id
@@ -1707,7 +1704,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     query=query,
                     agent=self._agent, cleanup_registrar=request_scope.bind_async_cleanup,
                 )
-                tool_plan = extension_binding.tool_plan
+                tool_plan = trigger_policy.restrict_tool_plan(extension_binding.tool_plan)
                 meta["project_context"] = extension_binding.project_context
                 run_meta.update(extension_binding.run_meta_update)
                 decision_recorded = record_runtime_tool_decision(

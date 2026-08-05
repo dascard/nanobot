@@ -6526,6 +6526,43 @@
         "title": "PresetTestBody",
         "type": "object"
       },
+      "ProactiveFeedbackRequest": {
+        "properties": {
+          "evidence_ref": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Evidence Ref",
+            "type": "string"
+          },
+          "label": {
+            "enum": [
+              "helpful",
+              "neutral",
+              "not_helpful",
+              "intrusive",
+              "incorrect",
+              "duplicate"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "user_reported",
+              "operator_review"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "source",
+          "evidence_ref"
+        ],
+        "title": "ProactiveFeedbackRequest",
+        "type": "object"
+      },
       "ProactiveRunOnceRequest": {
         "properties": {
           "mode": {
@@ -23062,6 +23099,81 @@
         ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "page_limit"
+      }
+    },
+    "/api/v1/admin/proactive-outreach/logs/{log_id}/feedback": {
+      "post": {
+        "description": "记录可信渠道转交的用户反馈或管理员复核，不接收反馈原文。",
+        "operationId": "post_api_v1_admin_proactive_outreach_logs_log_id_feedback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "log_id",
+            "required": true,
+            "schema": {
+              "title": "Log Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProactiveFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Record Proactive Outreach Feedback Route",
+        "tags": [
+          "admin-proactive-outreach"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
       }
     },
     "/api/v1/admin/proactive-outreach/run-once": {

@@ -891,14 +891,16 @@ async def _run_generated_outreach(
     from core.proactive_candidate import materialize_outreach_candidate
 
     try:
+        candidate_grounding = dict(work.input_grounding)
+        candidate_grounding.pop("_trigger_runtime", None)
         evaluation = await materialize_outreach_candidate(
             user_id=user_id,
             request_id=work.idempotency_key,
-            grounding=work.input_grounding,
+            grounding=candidate_grounding,
             judge=work.judge,
             generator_fn=generator_fn,
             research_fn=research_fn,
-            context_summary=_grounding_json_for_model(work.input_grounding),
+            context_summary=_grounding_json_for_model(candidate_grounding),
         )
     except asyncio.CancelledError as exc:
         durable_reason = {

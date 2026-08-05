@@ -9,7 +9,9 @@ import pytest
 async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
     monkeypatch,
 ):
+    from core.agent_runtime.contracts import RuntimePrincipal
     from core.agent_runtime.request_scope import require_current_runtime_context
+    from core.trigger_runtime import TriggerKind, build_trigger_envelope
     from nanobot_kt.direct_tool_execution import execute_registered_tool
 
     captured = {}
@@ -56,7 +58,20 @@ async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
         ensure_executable=executable_names.append,
     )
     finish_runs = []
+    started_runs = []
     task_lease = object()
+
+    trigger_binding = build_trigger_envelope(
+        kind=TriggerKind.SCHEDULE,
+        source_type="scheduled_task",
+        source_ref="direct-tool:test",
+        idempotency_key="direct-tool:test:1",
+        principal=RuntimePrincipal("qq", "user", "user-1"),
+        allowed_tools=("memory_query",),
+        max_model_calls=0,
+        max_steps=1,
+        timeout_seconds=5,
+    ).run_binding()
 
     class FakeRunTaskOwner:
         def __init__(self, lease):
@@ -72,13 +87,14 @@ async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
     monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
     monkeypatch.setattr("core.tool_plan.build_tool_plan", lambda **_kwargs: tool_plan)
     monkeypatch.setattr("core.tracing.new_trace_id", lambda: "trace-direct")
-    monkeypatch.setattr(
-        "core.tracing.RunTracer.start_run",
-        lambda **_kwargs: SimpleNamespace(
+    def fake_start_run(**kwargs):
+        started_runs.append(kwargs)
+        return SimpleNamespace(
             run_id="run-direct",
             task_lease=task_lease,
-        ),
-    )
+        )
+
+    monkeypatch.setattr("core.tracing.RunTracer.start_run", fake_start_run)
     monkeypatch.setattr(
         "core.tracing.RunTracer.finish_run",
         lambda run_id, **kwargs: finish_runs.append((run_id, kwargs)),
@@ -149,7 +165,11 @@ async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
         {"query": "运行时"},
         user_id="user-1",
         session_id="private_user-1",
-        metadata={"platform": "qq", "request_id": "request-direct"},
+        metadata={
+            "platform": "qq",
+            "request_id": "request-direct",
+            "_trigger_run_binding": trigger_binding,
+        },
         idempotency_key="idem-direct",
         trace_id="trace-direct",
         timeout_seconds=5,
@@ -188,6 +208,13 @@ async def test_direct_tool_execution_uses_port_and_preserves_runtime_identity(
     assert finish_runs[0][0] == "run-direct"
     assert finish_runs[0][1]["status"] == "success"
     assert finish_runs[0][1]["task_lease"] is task_lease
+    assert started_runs[0]["meta"]["_trigger_run_binding"] == trigger_binding
+    assert finish_runs[0][1]["meta"]["trigger_id"] == (
+        trigger_binding.trigger_id
+    )
+    assert finish_runs[0][1]["meta"]["trigger_sha256"] == (
+        trigger_binding.trigger_sha256
+    )
     assert captured["task_owner_started"] is True
     assert captured["task_owner_stopped"] is True
     assert any(

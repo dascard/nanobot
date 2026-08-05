@@ -618,6 +618,16 @@ SETTING_DEFS: dict[str, SettingDef] = {
         min_value=1,
         max_value=10080,
     ),
+    "proactive_outreach.daily_delivery_quota": SettingDef(
+        key="proactive_outreach.daily_delivery_quota",
+        env_name="PROACTIVE_OUTREACH_DAILY_DELIVERY_QUOTA",
+        default=2,
+        value_type="int",
+        category="proactive",
+        description="每个目标每天允许创建的主动投递候选上限；0 表示暂停新候选",
+        min_value=0,
+        max_value=100,
+    ),
     "proactive_outreach.allow_early_surge": SettingDef(
         key="proactive_outreach.allow_early_surge",
         env_name="PROACTIVE_OUTREACH_ALLOW_EARLY_SURGE",

@@ -1,10 +1,10 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`cdbdb9cd59977316714b4e2ec9a51ac1fee481d5`
-- 规则总数：8413
+- 源提交：`40998e01955cad6438f697913d91a90e39850911`
+- 规则总数：8454
 - 扫描错误：0
-- 人工复核队列：722
+- 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
 
 ## 分类汇总
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1632 |
+| `configurable_policy` | 1644 |
 | `data_consistency` | 486 |
-| `natural_language_semantic` | 31 |
+| `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4449 |
-| `security_invariant` | 1672 |
+| `protocol_syntax` | 4476 |
+| `security_invariant` | 1675 |
 
 ## 文件汇总
 
@@ -25,7 +25,7 @@
 |---|---:|
 | `core/schema_migrations.py` | 245 |
 | `scripts/manage-sandbox-production.sh` | 179 |
-| `core/scheduled_workflow.py` | 133 |
+| `core/scheduled_workflow.py` | 143 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
 | `core/proactive_research.py` | 82 |
@@ -74,6 +74,7 @@
 | `app/session_memory/admin_browser.py` | 37 |
 | `app/group_analysis/preprocess.py` | 36 |
 | `core/release/deployment.py` | 36 |
+| `core/run_ledger/contracts.py` | 36 |
 | `core/sticker_preview.py` | 36 |
 | `core/db/group_learning_governance_adapter.py` | 35 |
 | `core/release/production_preflight.py` | 35 |
@@ -83,7 +84,6 @@
 | `core/group_runtime/scoring.py` | 34 |
 | `core/sandbox/admin_operations.py` | 34 |
 | `core/context_builder.py` | 33 |
-| `core/run_ledger/contracts.py` | 33 |
 | `webui/src/features/sandbox/SandboxPage.test.jsx` | 33 |
 | `app/session_memory/llm_contract.py` | 32 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/adapters.py` | 32 |
@@ -124,10 +124,11 @@
 | `core/prompt_v2/compiler.py` | 23 |
 | `core/release/artifacts.py` | 23 |
 | `sandboxd/lease_store.py` | 23 |
+| `api/admin/proactive_outreach_routes.py` | 22 |
 | `core/agent_runtime/extension_ports.py` | 22 |
+| `core/proactive/orchestrator.py` | 22 |
 | `core/sandbox/access_policy.py` | 22 |
 | `core/sandbox/tool_service.py` | 22 |
-| `api/admin/proactive_outreach_routes.py` | 21 |
 | `app/persona/retrieval_service.py` | 21 |
 | `core/agent_runtime/contracts.py` | 21 |
 | `core/db/group_learning_command_adapter.py` | 21 |
@@ -139,7 +140,6 @@
 | `core/admin/table_views.py` | 20 |
 | `core/interoperability/acp.py` | 20 |
 | `core/model_provider/provider_config.py` | 20 |
-| `core/proactive/orchestrator.py` | 20 |
 | `core/semantic/jobs.py` | 20 |
 | `core/web_search/relevance.py` | 20 |
 | `nanobot_kt/reply_contract.py` | 20 |
@@ -160,6 +160,7 @@
 | `core/sql_readonly.py` | 18 |
 | `core/task_runtime/validators.py` | 18 |
 | `core/tool_contracts/ai_daily.py` | 18 |
+| `core/trigger_runtime.py` | 18 |
 | `core/web_search/url_policy.py` | 18 |
 | `creatures/nanobot/prompts/skills/news_search/legacy_report.py` | 18 |
 | `api/admin_routes.py` | 17 |
@@ -237,6 +238,7 @@
 | `core/group_learning/prompt_injection.py` | 12 |
 | `core/news/source_registry.py` | 12 |
 | `core/proactive/grounding.py` | 12 |
+| `core/proactive/serialization.py` | 12 |
 | `core/prompt_v2/flow.py` | 12 |
 | `core/run_ledger/adapters.py` | 12 |
 | `core/semantic/scoring.py` | 12 |
@@ -251,7 +253,6 @@
 | `core/agent_runtime/native.py` | 11 |
 | `core/asset_transport.py` | 11 |
 | `core/generated_images.py` | 11 |
-| `core/proactive/serialization.py` | 11 |
 | `core/prompt_v2/prefix_cache.py` | 11 |
 | `core/prompt_v2/task_templates.py` | 11 |
 | `core/reply_postprocess.py` | 11 |
@@ -314,6 +315,7 @@
 | `core/agent_collaboration/service.py` | 8 |
 | `core/agent_runtime/governance.py` | 8 |
 | `core/agent_runtime/governance_contracts.py` | 8 |
+| `core/eval_sampling/db_sampler.py` | 8 |
 | `core/gateway_control/service.py` | 8 |
 | `core/jobs/policies.py` | 8 |
 | `core/prompt_v2/template_loader.py` | 8 |
@@ -378,7 +380,6 @@
 | `core/agent_orchestration/persistence.py` | 6 |
 | `core/chat_delivery_service.py` | 6 |
 | `core/content_rules/adapters.py` | 6 |
-| `core/eval_sampling/db_sampler.py` | 6 |
 | `core/fencing.py` | 6 |
 | `core/group_learning/legacy_migration.py` | 6 |
 | `core/message_envelope.py` | 6 |
@@ -500,6 +501,7 @@
 | `core/mcp/secrets.py` | 3 |
 | `core/private_timing_policy.py` | 3 |
 | `core/proactive/delivery_runtime.py` | 3 |
+| `core/proactive/feedback.py` | 3 |
 | `core/proactive/lease.py` | 3 |
 | `core/proactive/runtime_support.py` | 3 |
 | `core/proactive/scheduler.py` | 3 |
@@ -625,6 +627,7 @@
 | `foundation/llm/tool_policy.py` | 1 |
 | `nanobot_kt/agent_link_adapter.py` | 1 |
 | `nanobot_kt/agent_link_tools.py` | 1 |
+| `nanobot_kt/bridge_state.py` | 1 |
 | `nanobot_kt/codex_admin_adapter.py` | 1 |
 | `nanobot_kt/optional_message_api.py` | 1 |
 | `nanobot_kt/optional_output_api.py` | 1 |
@@ -1215,28 +1218,28 @@
 | `decision.ec7febdaf357dde829ce` | `core/config_registry.py:116` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：default_kind == "kt" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b285bea2e346029ab3bb` | `core/config_registry.py:2008` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b285bea2e346029ab3bb` | `core/config_registry.py:2018` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_route_descriptor.inherits_from != "reply" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b311d9dcf2b5deda403e` | `core/config_registry.py:2062` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b311d9dcf2b5deda403e` | `core/config_registry.py:2072` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.2bb496715819bdcd3bc9` | `core/config_registry.py:2073` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.2bb496715819bdcd3bc9` | `core/config_registry.py:2083` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.dae06bbee217953780ff` | `core/config_registry.py:2074` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.dae06bbee217953780ff` | `core/config_registry.py:2084` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "timeout" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.671ba1803851f9f59377` | `core/config_registry.py:2076` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.671ba1803851f9f59377` | `core/config_registry.py:2086` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b80da902b1dcbf99117e` | `core/config_registry.py:2077` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b80da902b1dcbf99117e` | `core/config_registry.py:2087` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "timeout" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.5f13cbd491b0243fead7` | `core/config_registry.py:2093` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.5f13cbd491b0243fead7` | `core/config_registry.py:2103` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_route_descriptor.inherits_from == "reply" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b79aa7ab1e709629e053` | `core/config_registry.py:2124` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b79aa7ab1e709629e053` | `core/config_registry.py:2134` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：descriptor.route_type != "controller" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
 | `decision.98636769c55b8c6ac665` | `core/content_rules/adapters.py:23` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
@@ -1305,13 +1308,13 @@
 | `decision.7394f0a8e35745a4fecb` | `core/context_legacy.py:156` | `python.numeric_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：len(parts) <= 3 |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.4d04ce9359769d72985c` | `core/daily_digest.py:91` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.4d04ce9359769d72985c` | `core/daily_digest.py:92` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：MODEL_HINTS = [ "qwen", "deepseek", "kimi", "gpt", "claude", "gemini", "llama", "mistral", "hunyuan", "glm", "通义", "豆包", "混元", "智谱", "阶跃", "minimax", ] |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.76a46241e9db8ec981b3` | `core/daily_digest.py:282` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.76a46241e9db8ec981b3` | `core/daily_digest.py:283` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要："日报" in c |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.ee061c0ba1dbf62f8028` | `core/daily_digest.py:284` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.ee061c0ba1dbf62f8028` | `core/daily_digest.py:285` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要："群聊分析" in c |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.52a58c1f6f59aa737780` | `core/db/group_learning_adapter.py:62` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 7A–7D | `reviewed` |
@@ -1926,18 +1929,15 @@
 | `decision.6c43c766f99b505f85ec` | `core/proactive/model_service.py:141` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：topic_type == "status_check" |  |  |  |  |  |
 |  | 原因：人工复核：状态检查只能映射已核验行动，属于服务端事实合同 |  |  |  |  |  |
-| `decision.03885a80753f3086107d` | `core/proactive/orchestrator.py:253` | `python.numeric_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.03885a80753f3086107d` | `core/proactive/orchestrator.py:383` | `python.numeric_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：retired != 1 |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.b373e07199e739e0b6b5` | `core/proactive/orchestrator.py:344` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／7D | `reviewed` |
+| `decision.b373e07199e739e0b6b5` | `core/proactive/orchestrator.py:476` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／7D | `reviewed` |
 |  | 摘要：retired != 1 |  |  |  |  |  |
 |  | 原因：人工复核：遗留强制候选的单行状态迁移必须满足 CAS，属于数据一致性合同 |  |  |  |  |  |
 | `decision.87cc29573490f0f1a615` | `core/proactive/schedule_repository.py:176` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：status in { "sending", "queued", "delivering", "retry_wait", "sent", "sent_after_ambiguous_replay", "failed", "blocked", "ambiguous", "legacy_ambiguous_hold", } |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.436021170e2b7d8fbc18` | `core/proactive/scheduler.py:72` | `python.literal_collection` | `natural_language_semantic` | `model_signal_only` | 阶段 3／4 | `reviewed` |
-|  | 摘要：_CHECK_THRESHOLD_KEYS = ( "min_interval_min", "max_check_interval_min", "max_silence_min", "ambiguous_hold_min", "repeat_topic_cooldown_min", ) |  |  |  |  |  |
-|  | 原因：人工复核：自然语言字面量只能作为候选信号，最终语义必须由结构化模型任务或人工结论产生 |  |  |  |  |  |
 | `decision.72b67d4767c725caf6c6` | `core/proactive_diagnostics.py:9` | `python.literal_mapping` | `presentation` | `resource` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_GENERATION_ERROR_SUMMARIES = { "model_truncated": "主动外呼正文生成被截断", "model_finish_error": "主动外呼正文生成未正常结束", "empty_response": "主动外呼正文生成返回空正文", "contract_error": "主动外呼正文不符合生成契约", "quality_rejected": "主动外呼正文未通过质量复核", "generation_timeout": "主动外呼… |  |  |  |  |  |
 |  | 原因：人工复核：错误摘要是面向运维的稳定展示资源 |  |  |  |  |  |
@@ -2592,52 +2592,52 @@
 | `decision.d742c571ef6ef1b0a850` | `scripts/benchmark_classifier.py:320` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
 |  | 摘要：parsed["type"] in ("否", "否≈") |  |  |  |  |  |
 |  | 原因：人工复核：基准脚本解析旧分类器自由文本输出 |  |  |  |  |  |
-| `decision.098668cf86d4007e5ea6` | `scripts/build_behavior_baseline.py:116` | `python.literal_mapping` | `data_consistency` | `policy` | 阶段 5 | `reviewed` |
+| `decision.098668cf86d4007e5ea6` | `scripts/build_behavior_baseline.py:119` | `python.literal_mapping` | `data_consistency` | `policy` | 阶段 5 | `reviewed` |
 |  | 摘要：SNAPSHOT_CLASSIFICATIONS = { "agent_runtime": "preserve", "group_analysis": "known_bad", "news_heuristics": "preserve", "private_timing": "preserve", "prompt_runtime": "preserve", "runtime_registries": "preserve", "security_invariants": "s… |  |  |  |  |  |
 |  | 原因：人工复核：行为快照分类和结构数量属于 Golden 数据一致性合同 |  |  |  |  |  |
-| `decision.e090d7390ad4316ff731` | `scripts/build_behavior_baseline.py:198` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.e090d7390ad4316ff731` | `scripts/build_behavior_baseline.py:201` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：payload.get("schema_version") != 1 |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.81e1e57e2a58fa938286` | `scripts/build_behavior_baseline.py:229` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.81e1e57e2a58fa938286` | `scripts/build_behavior_baseline.py:232` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：payload.get("schema_version") != 1 |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.8f2046cada7c2fdc7bbf` | `scripts/build_behavior_baseline.py:279` | `python.literal_mapping` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.8f2046cada7c2fdc7bbf` | `scripts/build_behavior_baseline.py:282` | `python.literal_mapping` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：model_defaults = { "action": "reply_now", "effort": "short", "intent": "general_question", "response_mode": "agent", "confidence": 0.92, "parse_quality": "schema_valid", "error_type": None, "conflicting_signals": [], "material_state": "non… |  |  |  |  |  |
 |  | 原因：人工复核：行为快照分类和结构数量属于 Golden 数据一致性合同 |  |  |  |  |  |
-| `decision.a9564ac3a044b9cc74eb` | `scripts/build_behavior_baseline.py:315` | `python.literal_collection` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.a9564ac3a044b9cc74eb` | `scripts/build_behavior_baseline.py:318` | `python.literal_collection` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：allowed_arguments = { "is_group", "is_private", "is_at_bot", "is_reply_to_bot", "bot_name_mentioned", "direct_call", "is_directed_to_other", "has_other_recipient", "is_other_bot", "has_files", "linger_score", "force_direct_score", "min_int… |  |  |  |  |  |
 |  | 原因：人工复核：行为快照分类和结构数量属于 Golden 数据一致性合同 |  |  |  |  |  |
-| `decision.e2f4bef788d7aaeaab5a` | `scripts/build_behavior_baseline.py:483` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.e2f4bef788d7aaeaab5a` | `scripts/build_behavior_baseline.py:486` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：request_schema.get("additionalProperties") is False |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.e1f8e8e1eba712aa081c` | `scripts/build_behavior_baseline.py:593` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.e1f8e8e1eba712aa081c` | `scripts/build_behavior_baseline.py:596` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：path.suffix in {".md", ".json"} |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.7977e9a871a9ff25ba2b` | `scripts/build_behavior_baseline.py:1135` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.7977e9a871a9ff25ba2b` | `scripts/build_behavior_baseline.py:1138` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：len(revision) != 40 |  |  |  |  |  |
 |  | 原因：人工复核：行为快照分类和结构数量属于 Golden 数据一致性合同 |  |  |  |  |  |
-| `decision.f12fe030561f6532f104` | `scripts/build_behavior_baseline.py:1671` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.f12fe030561f6532f104` | `scripts/build_behavior_baseline.py:1690` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：manifest.get("schema_version") != SCHEMA_VERSION |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.005abcd2d8c0d229c9d8` | `scripts/build_behavior_baseline.py:1674` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.005abcd2d8c0d229c9d8` | `scripts/build_behavior_baseline.py:1693` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：fixture_record.get("sha256") != _sha256_file(fixture_path) |  |  |  |  |  |
 |  | 原因：人工复核：Golden 禁止符号链接和宿主路径泄露的检查属于安全边界 |  |  |  |  |  |
-| `decision.17f8179df4ce3988794d` | `scripts/build_behavior_baseline.py:1677` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.17f8179df4ce3988794d` | `scripts/build_behavior_baseline.py:1696` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：runtime_fixture_record.get("path") != ( RUNTIME_FIXTURE_RELATIVE_PATH.as_posix() ) |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.3babdf923857902b7d1e` | `scripts/build_behavior_baseline.py:1681` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.3babdf923857902b7d1e` | `scripts/build_behavior_baseline.py:1700` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：runtime_fixture_record.get("sha256") != _sha256_file( runtime_fixture_path ) |  |  |  |  |  |
 |  | 原因：人工复核：Golden 禁止符号链接和宿主路径泄露的检查属于安全边界 |  |  |  |  |  |
-| `decision.1e4c9e6b436f09a9fced` | `scripts/build_behavior_baseline.py:1685` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.1e4c9e6b436f09a9fced` | `scripts/build_behavior_baseline.py:1704` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：runtime_fixture_record.get("framework_dependency") != "none" |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.1874863f7711e8b2c7db` | `scripts/build_behavior_baseline.py:1697` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.1874863f7711e8b2c7db` | `scripts/build_behavior_baseline.py:1716` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：record.get("classification") != classification |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
-| `decision.45f61540e7c872834245` | `scripts/build_behavior_baseline.py:1699` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.45f61540e7c872834245` | `scripts/build_behavior_baseline.py:1718` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：record.get("sha256") != _sha256_file(path) |  |  |  |  |  |
 |  | 原因：人工复核：Golden 禁止符号链接和宿主路径泄露的检查属于安全边界 |  |  |  |  |  |
-| `decision.1de126df46f2f30cd742` | `scripts/build_behavior_baseline.py:1739` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.1de126df46f2f30cd742` | `scripts/build_behavior_baseline.py:1758` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：__name__ == "__main__" |  |  |  |  |  |
 |  | 原因：人工复核：行为 Golden 的文件类型、Schema 与批准链校验属于生成器协议 |  |  |  |  |  |
 | `decision.2cdec36c001b54d55808` | `scripts/build_task_slo_manifest.py:48` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |

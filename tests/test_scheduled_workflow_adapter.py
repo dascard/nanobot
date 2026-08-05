@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from sqlalchemy.orm import sessionmaker
@@ -159,3 +160,73 @@ def test_no_reply_is_successful_stop_and_keeps_trace(
     assert result.model_trace_id == captured["trace_id"]
     assert captured["workflow_idempotency_key"] == "workflow-key"
     assert captured["task_run_id"] == "9"
+
+
+def test_model_step_passes_frozen_typed_trigger_constraint(
+    monkeypatch,
+    db_session,
+):
+    from core import daily_digest
+    from core.agent_runtime.contracts import RuntimePrincipal
+    from core.database import AgentRun
+    from core.trigger_runtime import TriggerKind, build_trigger_envelope
+
+    factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autocommit=False,
+        autoflush=False,
+    )
+    envelope = build_trigger_envelope(
+        kind=TriggerKind.MANUAL,
+        source_type="scheduled_task",
+        source_ref="manual:1",
+        idempotency_key="manual:1",
+        principal=RuntimePrincipal("qq", "user", "u1"),
+        allowed_tools=("reply",),
+        max_model_calls=1,
+        max_steps=2,
+        timeout_seconds=60,
+        occurred_at=datetime.now(timezone.utc),
+    )
+    context = replace(
+        _context(),
+        trigger_envelope=envelope,
+        model_tool_names=("reply",),
+    )
+    captured = {}
+
+    async def fake_generate(
+        _task,
+        *,
+        trace_id="",
+        workflow_idempotency_key="",
+        task_run_id="",
+        trigger_constraint=None,
+    ):
+        captured["constraint"] = trigger_constraint
+        db = factory()
+        try:
+            db.add(AgentRun(
+                run_id="run-trigger-model",
+                trace_id=trace_id,
+                session_id="u1",
+                status="success",
+            ))
+            db.commit()
+        finally:
+            db.close()
+        return "完成"
+
+    monkeypatch.setattr(daily_digest, "_generate_task_message", fake_generate)
+    callbacks = KtScheduledWorkflowCallbacks(session_factory=factory)
+
+    result = run_async(callbacks.execute_model(
+        context,
+        prompt="执行冻结任务",
+        idempotency_key="workflow-trigger-key",
+    ))
+
+    assert result.success is True
+    assert captured["constraint"].binding == envelope.run_binding()
+    assert captured["constraint"].principal == envelope.principal
+    assert captured["constraint"].allowed_tool_names == frozenset({"reply"})

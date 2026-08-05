@@ -96,6 +96,31 @@ _SENSITIVE_KEY_PARTS = (
 RunLedgerScalar: TypeAlias = str | int | float | bool | None
 
 
+@dataclass(frozen=True, slots=True)
+class RunTriggerBinding:
+    """仅供受信进程内入口绑定 Trigger 与 Run 的类型化证明。"""
+
+    trigger_id: str
+    trigger_type: str
+    trigger_sha256: str
+    governance_sha256: str
+
+    def __post_init__(self) -> None:
+        trigger_id = str(self.trigger_id or "").strip()
+        trigger_type = str(self.trigger_type or "").strip()
+        if not trigger_id or len(trigger_id) > 160:
+            raise RunLedgerContractError("trigger_id 无效")
+        if trigger_type not in {"schedule", "manual", "event", "heartbeat"}:
+            raise RunLedgerContractError("trigger_type 无效")
+        object.__setattr__(self, "trigger_id", trigger_id)
+        object.__setattr__(self, "trigger_type", trigger_type)
+        for field_name in ("trigger_sha256", "governance_sha256"):
+            digest = str(getattr(self, field_name) or "").strip().lower()
+            if _SHA256_RE.fullmatch(digest) is None:
+                raise RunLedgerContractError(f"{field_name} 无效")
+            object.__setattr__(self, field_name, digest)
+
+
 def canonical_run_status(value: object) -> str:
     """把既有 Trace 状态归一为稳定的 Ledger 状态词汇。"""
 
@@ -609,6 +634,7 @@ __all__ = [
     "RunLedgerIdentity",
     "RunLedgerIntegrityError",
     "RunLedgerScalar",
+    "RunTriggerBinding",
     "UnsupportedRunLedgerSchemaError",
     "canonical_run_status",
     "find_run_ledger_authority_error",

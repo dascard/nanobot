@@ -17,6 +17,7 @@ from core.model_provider.response_normalization import strip_think_blocks
 from core.proactive_diagnostics import OutreachModelContractError
 from core.proactive.config import (
     DEFAULT_AMBIGUOUS_HOLD_MIN,
+    DEFAULT_DAILY_DELIVERY_QUOTA,
     DEFAULT_MAX_CHECK_INTERVAL_MIN,
     DEFAULT_MAX_SILENCE_MIN,
     DEFAULT_MIN_INTERVAL_MIN,
@@ -71,6 +72,7 @@ from core.proactive.schedule_repository import (
 )
 from core.identity import get_super_user_ids
 from core.settings_service import settings
+from core.trigger_runtime import TriggerKind, TriggerRunContext
 
 # 兼容现有调用方显式注入旧三态 publisher；生产默认保持为空并走结构化 transport。
 push_to_qq: Callable[[str, str, str], Any] | None = None
@@ -173,6 +175,7 @@ async def _run_outreach_once_acquired(
     max_silence_min: int = DEFAULT_MAX_SILENCE_MIN,
     ambiguous_hold_min: int = DEFAULT_AMBIGUOUS_HOLD_MIN,
     repeat_topic_cooldown_min: int = DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
+    daily_delivery_quota: int = DEFAULT_DAILY_DELIVERY_QUOTA,
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
@@ -180,6 +183,7 @@ async def _run_outreach_once_acquired(
     publisher: Callable[[str, str, str], Any] | None = None,
     evaluation_owner_token: str | None = None,
     evaluation_generation_at: datetime | None = None,
+    trigger_runtime: TriggerRunContext | None = None,
 ) -> dict[str, Any]:
     return await _run_outreach_once_acquired_impl(
         user_id,
@@ -190,6 +194,7 @@ async def _run_outreach_once_acquired(
         max_silence_min=max_silence_min,
         ambiguous_hold_min=ambiguous_hold_min,
         repeat_topic_cooldown_min=repeat_topic_cooldown_min,
+        daily_delivery_quota=daily_delivery_quota,
         judge_fn=judge_fn,
         generator_fn=generator_fn,
         research_fn=research_fn,
@@ -197,6 +202,7 @@ async def _run_outreach_once_acquired(
         publisher=publisher,
         evaluation_owner_token=evaluation_owner_token,
         evaluation_generation_at=evaluation_generation_at,
+        trigger_runtime=trigger_runtime,
         judge_service=judge_outreach,
         generator_service=generate_outreach_message,
         grounding_builder=build_outreach_grounding,
@@ -216,11 +222,17 @@ async def run_outreach_once(
     max_silence_min: int = DEFAULT_MAX_SILENCE_MIN,
     ambiguous_hold_min: int = DEFAULT_AMBIGUOUS_HOLD_MIN,
     repeat_topic_cooldown_min: int = DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN,
+    daily_delivery_quota: int = DEFAULT_DAILY_DELIVERY_QUOTA,
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
     thread_extractor: Callable[[list[dict[str, Any]]], list[Any]] | None = None,
     publisher: Callable[[str, str, str], Any] | None = None,
+    trigger_kind: TriggerKind | str = TriggerKind.EVENT,
+    trigger_source_ref: str = "",
+    trigger_idempotency_key: str = "",
+    trigger_occurred_at: datetime | None = None,
+    trigger_evaluated_status: str = "allowed",
 ) -> dict[str, Any]:
     return await _run_outreach_once_impl(
         user_id,
@@ -231,11 +243,17 @@ async def run_outreach_once(
         max_silence_min=max_silence_min,
         ambiguous_hold_min=ambiguous_hold_min,
         repeat_topic_cooldown_min=repeat_topic_cooldown_min,
+        daily_delivery_quota=daily_delivery_quota,
         judge_fn=judge_fn,
         generator_fn=generator_fn,
         research_fn=research_fn,
         thread_extractor=thread_extractor,
         publisher=publisher,
+        trigger_kind=trigger_kind,
+        trigger_source_ref=trigger_source_ref,
+        trigger_idempotency_key=trigger_idempotency_key,
+        trigger_occurred_at=trigger_occurred_at,
+        trigger_evaluated_status=trigger_evaluated_status,
         acquired_runner=_run_outreach_once_acquired,
         acquire_lease=_acquire_evaluation_lease,
         release_lease=_release_evaluation_lease,
@@ -279,11 +297,13 @@ async def run_outreach_due_once(
     max_silence_min: int | None = None,
     ambiguous_hold_min: int | None = None,
     repeat_topic_cooldown_min: int | None = None,
+    daily_delivery_quota: int | None = None,
     allow_early_surge: bool = False,
     surge_min_prob: float | None = None,
     surge_max_prob: float | None = None,
     random_fn: Callable[[], float] | None = None,
     publisher: Callable[[str, str, str], Any] | None = None,
+    trigger_kind: TriggerKind | str = TriggerKind.HEARTBEAT,
 ) -> dict[str, Any]:
     return await _run_outreach_due_once_impl(
         user_id,
@@ -294,11 +314,13 @@ async def run_outreach_due_once(
         max_silence_min=max_silence_min,
         ambiguous_hold_min=ambiguous_hold_min,
         repeat_topic_cooldown_min=repeat_topic_cooldown_min,
+        daily_delivery_quota=daily_delivery_quota,
         allow_early_surge=allow_early_surge,
         surge_min_prob=surge_min_prob,
         surge_max_prob=surge_max_prob,
         random_fn=random_fn,
         publisher=publisher,
+        trigger_kind=trigger_kind,
         outreach_runner=run_outreach_once,
     )
 

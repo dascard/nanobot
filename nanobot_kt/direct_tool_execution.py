@@ -154,6 +154,9 @@ async def execute_registered_tool(
         raise ValueError("timeout_seconds 必须大于 0")
 
     meta = dict(metadata or {})
+    from core.run_ledger.contracts import RunTriggerBinding
+
+    trigger_binding = meta.pop("_trigger_run_binding", None)
     is_group = bool(meta.get("is_group"))
     chat_type = "group" if is_group else "private"
     runtime_chat_type = str(
@@ -220,6 +223,17 @@ async def execute_registered_tool(
     )
 
     resolved_trace_id = str(trace_id or new_trace_id())
+    run_meta = {
+        "platform": platform,
+        "message_id": request_id,
+        "tool_name": name,
+        "task_run_id": str(meta.get("task_run_id") or ""),
+        "workflow_idempotency_key": str(idempotency_key or ""),
+        "run_timeout_seconds": timeout_seconds,
+        "tool_plan_sha256": tool_plan.sha256,
+    }
+    if isinstance(trigger_binding, RunTriggerBinding):
+        run_meta["_trigger_run_binding"] = trigger_binding
     run_handle = RunTracer.start_run(
         trace_id=resolved_trace_id,
         session_id=normalized_session_id,
@@ -230,15 +244,17 @@ async def execute_registered_tool(
         prompt_mode="workflow",
         prompt_key="",
         input_preview=f"{name} 直接工具步骤",
-        meta={
-            "platform": platform,
-            "message_id": request_id,
-            "tool_name": name,
-            "task_run_id": str(meta.get("task_run_id") or ""),
-            "workflow_idempotency_key": str(idempotency_key or ""),
-            "run_timeout_seconds": timeout_seconds,
-            "tool_plan_sha256": tool_plan.sha256,
-        },
+        meta=run_meta,
+    )
+    trigger_trace_meta = (
+        {
+            "trigger_id": trigger_binding.trigger_id,
+            "trigger_type": trigger_binding.trigger_type,
+            "trigger_sha256": trigger_binding.trigger_sha256,
+            "governance_sha256": trigger_binding.governance_sha256,
+        }
+        if isinstance(trigger_binding, RunTriggerBinding)
+        else {}
     )
     from core.durable_tasks import RunTaskOwner
 
@@ -396,6 +412,7 @@ async def execute_registered_tool(
                         idempotency_key or ""
                     ),
                     "tool_plan_sha256": tool_plan.sha256,
+                    **trigger_trace_meta,
                 },
             )
         finally:

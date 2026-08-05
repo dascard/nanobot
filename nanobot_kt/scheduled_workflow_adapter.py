@@ -13,6 +13,8 @@ from core.scheduled_workflow import (
     ScheduledWorkflowContext,
     ScheduledWorkflowStepOutcome,
 )
+from core.run_ledger.contracts import RunTriggerBinding
+from core.trigger_runtime import TriggerToolConstraint
 from core.tool_execution_policy import extract_tool_failure
 
 
@@ -55,6 +57,24 @@ def _workflow_tool_output(result: Any) -> Any:
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
     return _render_tool_output(getattr(result, "output", result))
+
+
+def _trigger_run_binding(
+    context: ScheduledWorkflowContext,
+) -> RunTriggerBinding | None:
+    envelope = context.trigger_envelope
+    if envelope is None:
+        return None
+    return envelope.run_binding()
+
+
+def _trigger_tool_constraint(
+    context: ScheduledWorkflowContext,
+) -> TriggerToolConstraint | None:
+    envelope = context.trigger_envelope
+    if envelope is None:
+        return None
+    return envelope.tool_constraint(context.model_tool_names)
 
 
 class KtScheduledWorkflowCallbacks:
@@ -102,14 +122,15 @@ class KtScheduledWorkflowCallbacks:
                 additional_schemas = dynamic
 
             metadata = _scheduled_task_metadata(context.task_snapshot)
-            metadata.update(
-                {
-                    "request_id": idempotency_key,
-                    "task_run_id": str(context.execution_id),
-                    "workflow_idempotency_key": idempotency_key,
-                    "runtime_preset": "full",
-                }
-            )
+            metadata.update({
+                "request_id": idempotency_key,
+                "task_run_id": str(context.execution_id),
+                "workflow_idempotency_key": idempotency_key,
+                "runtime_preset": "full",
+            })
+            trigger_binding = _trigger_run_binding(context)
+            if trigger_binding is not None:
+                metadata["_trigger_run_binding"] = trigger_binding
             try:
                 result = await bridge.execute_registered_tool(
                     tool_name,
@@ -245,11 +266,17 @@ class KtScheduledWorkflowCallbacks:
             context.task_snapshot,
             prompt_template=prompt,
         )
+        generation_kwargs: dict[str, Any] = {
+            "trace_id": trace_id,
+            "workflow_idempotency_key": idempotency_key,
+            "task_run_id": str(context.execution_id),
+        }
+        trigger_constraint = _trigger_tool_constraint(context)
+        if trigger_constraint is not None:
+            generation_kwargs["trigger_constraint"] = trigger_constraint
         content = await _generate_task_message(
             step_snapshot,
-            trace_id=trace_id,
-            workflow_idempotency_key=idempotency_key,
-            task_run_id=str(context.execution_id),
+            **generation_kwargs,
         )
         agent_run_id = ""
         agent_status = ""

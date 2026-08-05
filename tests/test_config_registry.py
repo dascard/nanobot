@@ -34,6 +34,7 @@ def test_proactive_outreach_settings_are_registered_as_plain_boolean_switch():
         "proactive_outreach.max_silence_min": (2880, "int"),
         "proactive_outreach.ambiguous_hold_min": (120, "int"),
         "proactive_outreach.repeat_topic_cooldown_min": (1440, "int"),
+        "proactive_outreach.daily_delivery_quota": (2, "int"),
         "proactive_outreach.allow_early_surge": (False, "bool"),
         "proactive_outreach.surge_min_prob": (0.1, "float"),
         "proactive_outreach.surge_max_prob": (0.6, "float"),

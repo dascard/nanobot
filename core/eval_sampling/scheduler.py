@@ -14,7 +14,12 @@ async def run_sampling_cycle():
     from core.settings_service import settings
     from core.eval_sampling.store import upsert_candidate, get_cursor, save_cursor
     from core.eval_sampling.log_sampler import sample_log_file
-    from core.eval_sampling.db_sampler import sample_chatlog_replies, sample_timing_events, sample_memory_learning
+    from core.eval_sampling.db_sampler import (
+        sample_chatlog_replies,
+        sample_memory_learning,
+        sample_proactive_outreach_evidence,
+        sample_timing_events,
+    )
 
     db = SessionLocal()
     created = 0
@@ -102,6 +107,13 @@ async def run_sampling_cycle():
 
             for cursor_key in cursors:
                 save_cursor(db, "db", cursor_key, cursors[cursor_key])
+
+            # 主动外呼按“终态且 source_ref 尚未采样”查询，不能使用游标，
+            # 否则游标前方由 pending 转终态的记录会永久漏采。
+            items = sample_proactive_outreach_evidence(db, limit=30)
+            for item in items:
+                if upsert_candidate(db, item):
+                    created += 1
 
         if created:
             logger.info(f"[EvalSample] cycle done, created={created}")

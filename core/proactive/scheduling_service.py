@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from core.outbound.contracts import PROACTIVE_GENERATION_METADATA_KEY
 from core.proactive.config import (
     DEFAULT_AMBIGUOUS_HOLD_MIN,
+    DEFAULT_DAILY_DELIVERY_QUOTA,
     DEFAULT_MAX_CHECK_INTERVAL_MIN,
     DEFAULT_MAX_SILENCE_MIN,
     DEFAULT_MIN_INTERVAL_MIN,
@@ -34,6 +35,7 @@ from core.proactive.runtime_support import session_scope as _session_scope
 from core.proactive.serialization import json_object
 from core.proactive.topic_policy import generation_input_grounding
 from core.proactive_candidate import evaluate_outreach_due_gate
+from core.trigger_runtime import TriggerKind
 
 
 def _last_evaluation_at(row: Any) -> datetime | None:
@@ -68,11 +70,13 @@ async def run_outreach_due_once(
     max_silence_min: int | None = None,
     ambiguous_hold_min: int | None = None,
     repeat_topic_cooldown_min: int | None = None,
+    daily_delivery_quota: int | None = None,
     allow_early_surge: bool = False,
     surge_min_prob: float | None = None,
     surge_max_prob: float | None = None,
     random_fn: Callable[[], float] | None = None,
     publisher: Callable[[str, str, str], Any] | None = None,
+    trigger_kind: TriggerKind | str = TriggerKind.HEARTBEAT,
     outreach_runner: Callable[..., Any] = run_outreach_once,
 ) -> dict[str, Any]:
     """执行一次到期外呼检查；安静时段直接跳过。"""
@@ -154,7 +158,22 @@ async def run_outreach_due_once(
             if repeat_topic_cooldown_min is not None
             else DEFAULT_REPEAT_TOPIC_COOLDOWN_MIN
         ),
+        daily_delivery_quota=(
+            daily_delivery_quota
+            if daily_delivery_quota is not None
+            else DEFAULT_DAILY_DELIVERY_QUOTA
+        ),
         publisher=publisher,
+        trigger_kind=trigger_kind,
+        trigger_source_ref=(
+            f"proactive-due:{TriggerKind(trigger_kind).value}:"
+            f"{user_id}:{current.isoformat()}"
+        ),
+        trigger_idempotency_key=(
+            f"proactive-due:{TriggerKind(trigger_kind).value}:"
+            f"{user_id}:{current.isoformat()}"
+        ),
+        trigger_evaluated_status=str(decision.get("status") or "allowed"),
     )
 
 

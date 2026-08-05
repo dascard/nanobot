@@ -791,6 +791,7 @@ class RunTracer:
         model: str = "",
         input_preview: str = "",
         meta: dict[str, Any] | None = None,
+        session_factory: Any | None = None,
     ) -> RunHandle:
         run_id = new_run_id()
         trace_id = trace_id or new_trace_id()
@@ -847,7 +848,9 @@ class RunTracer:
             from core.run_ledger.adapters import (
                 run_accepted_event,
                 run_status_changed_event,
+                run_trigger_bound_event,
             )
+            from core.run_ledger.contracts import RunTriggerBinding
             from core.run_ledger.persistence import SqlAlchemyRunEventLedger
 
             accepted_event = run_accepted_event(
@@ -874,8 +877,19 @@ class RunTracer:
                 status="running",
                 previous_status="accepted",
             )
+            trigger_binding = normalized_meta.pop(
+                "_trigger_run_binding",
+                None,
+            )
+            trigger_event = None
+            if isinstance(trigger_binding, RunTriggerBinding):
+                trigger_event = run_trigger_bound_event(
+                    accepted_event=accepted_event,
+                    binding=trigger_binding,
+                    occurred_at=accepted_at,
+                )
 
-            db = _session()
+            db = session_factory() if session_factory is not None else _session()
             try:
                 def operation() -> None:
                     SqlAlchemyRunEventLedger(db).append(
@@ -886,6 +900,11 @@ class RunTracer:
                         running_event,
                         expected_sequence=2,
                     )
+                    if trigger_event is not None:
+                        SqlAlchemyRunEventLedger(db).append(
+                            trigger_event,
+                            expected_sequence=3,
+                        )
                     db.add(AgentRun(
                         run_id=run_id,
                         trace_id=trace_id,
@@ -1098,6 +1117,7 @@ class RunTracer:
         model: str = "",
         finished_at: datetime | None = None,
         meta: dict[str, Any] | None = None,
+        session_factory: Any | None = None,
     ) -> None:
         if not run_id:
             return
@@ -1114,7 +1134,7 @@ class RunTracer:
             from core.run_ledger.adapters import run_terminated_event
             from core.run_ledger.persistence import SqlAlchemyRunEventLedger
 
-            db = _session()
+            db = session_factory() if session_factory is not None else _session()
             try:
                 def operation() -> None:
                     row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()

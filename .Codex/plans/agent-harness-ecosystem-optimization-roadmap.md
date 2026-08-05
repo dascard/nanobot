@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 9.1 已完成，准备阶段 9.2）
+> 状态：执行中（阶段 9.2 已完成，准备阶段 9.3）
 >
 > 建立日期：2026-08-03
 >
@@ -1327,10 +1327,36 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 9.2 主动能力和 Sentinel 收敛
 
-- [ ] 将主动外呼、定时任务、事件触发和 heartbeat 统一为 `Trigger → Evaluate → Lease → Run → Deliver`。
-- [ ] 默认关闭并保留冷却、预算、幂等和 ambiguous 冻结。
-- [ ] 保存用户反馈和运行证据，供后续评测。
-- [ ] 不允许主动任务自行扩大权限。
+- [x] 将主动外呼、定时任务、事件触发和 heartbeat 统一为 `Trigger → Evaluate → Lease → Run → Deliver`。
+- [x] 默认关闭并保留冷却、预算、幂等和 ambiguous 冻结。
+- [x] 保存用户反馈和运行证据，供后续评测。
+- [x] 不允许主动任务自行扩大权限。
+
+实现记录（2026-08-05）：
+
+- 新增框架无关、不可变的类型化 Trigger 信封，统一表达 schedule、manual、event 和 heartbeat，并冻结精确
+  owner、来源、幂等摘要、TTL、治理快照、工具／交付／子 Agent 授权和硬预算。Trigger 与父 Run 通过类型化
+  Ledger binding 关联；普通字符串 metadata 不能伪造权威绑定。运行阶段、预算预留和终态均进入追加式
+  Ledger，终态写入支持暂时性持久化失败后的幂等重试，且禁止重试时改写最终状态。
+- 主动外呼在评估 lease 成功后创建统一 Trigger 和父 Run，模型判断、生成、质量检查、研究及交付分别消费
+  冻结预算；每日配额默认 2，设为 0 时暂停新候选。功能继续默认关闭，并保留冷却、静默时间、幂等和
+  ambiguous 冻结。评估依据只作为服务端持久化证据，不进入 judge／generator 模型输入，避免内部触发证据
+  污染用户可见输出。
+- 定时工作流把冻结 Trigger 信封保存进现有任务快照，并在每一步执行前校验 owner、TTL、精确工具和交付授权。
+  模型步骤在入队时冻结 ToolPlan，Bridge 只接受受信类型化约束并在 Runtime 扩展后再次收窄；循环数据中的
+  伪造 `tool` 字段不能被解释为授权。旧记录只能从自身冻结快照安全回填，不能读取后来变更的在线任务；旧模型
+  步骤缺失授权时只保留 `reply`／`no_reply`，主动任务不能通过递归结构或兼容回退扩大权限。
+- 新增脱敏终态证据采样和可信反馈事实。采样只保存状态、计数、标识和内容摘要，不保存用户 ID、消息正文或
+  Judge 文本；相关子查询避免已采样记录阻塞后续候选。用户报告和运营复核通过受管理员令牌保护的接口写入，
+  相同证据幂等、冲突证据拒绝覆盖，为后续离线评测提供可追溯来源。
+- 本阶段检查了 canonical `chat`、`tasks`、`tools` 模板、变量与模板注册表。受信 Trigger metadata 在 Prompt
+  编译前被消费并投影为安全摘要，模型可见业务结果、`enriched_query`、历史、conversation 和工具输出合同
+  均未改变，因此无需修改模板。前端已同步每日主动配额设置并重建正式发布资产。
+- Trigger、主动外呼、定时工作流、Bridge、证据、反馈、Prompt 和生成合同定向联合回归为 456 passed。
+  最终完整 `python -m pytest tests/ -v` 在清除代理变量并使用 Linux `/var/tmp` basetemp 后为
+  6800 passed、12 skipped、0 failed，耗时 623.34 秒；前端 lint、测试和生产构建，架构边界、OpenAPI、
+  行为基线、Release／Verification Golden、决策规则、Task SLO、受控范围 Ruff、Python 编译和
+  `git diff --check` 均通过。
 
 #### 9.3 Provider 诊断和成本治理
 

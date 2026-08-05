@@ -47,6 +47,7 @@ from core.outbound_transport import (
     delivery_outcome_to_legacy,
     resolve_qq_push_token,
 )
+from core.trigger_runtime import TriggerToolConstraint
 from core.safe_diagnostics import safe_response_summary
 from core.schedule_spec import (
     SHANGHAI,
@@ -1458,6 +1459,7 @@ async def _generate_task_message(
     trace_id: str = "",
     workflow_idempotency_key: str = "",
     task_run_id: str = "",
+    trigger_constraint: TriggerToolConstraint | None = None,
 ) -> str | None:
     """通过隔离 Agent Gateway 执行定时任务，让模型拥有真实工具调用能力。"""
     from core.agent_runtime.gateway import create_isolated_agent_gateway
@@ -1479,6 +1481,9 @@ async def _generate_task_message(
             )
         if task_run_id:
             metadata["task_run_id"] = str(task_run_id)
+        if trigger_constraint is not None:
+            metadata["_trigger_run_binding"] = trigger_constraint.binding
+            metadata["_trigger_tool_constraint"] = trigger_constraint
         response = await asyncio.wait_for(
             bridge.handle_message(
                 _build_scheduled_task_query(task),

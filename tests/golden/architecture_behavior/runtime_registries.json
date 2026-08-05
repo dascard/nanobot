@@ -6002,6 +6002,24 @@
     {
       "category": "proactive",
       "dangerous": false,
+      "default": 2,
+      "env_name": "PROACTIVE_OUTREACH_DAILY_DELIVERY_QUOTA",
+      "key": "proactive_outreach.daily_delivery_quota",
+      "owner_module": "core.proactive",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "proactive",
+      "dangerous": false,
       "default": false,
       "env_name": "PROACTIVE_OUTREACH_ENABLED",
       "key": "proactive_outreach.enabled",
