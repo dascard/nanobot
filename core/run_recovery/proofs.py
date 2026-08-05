@@ -31,11 +31,13 @@ from core.agent_runtime import (
     RuntimePlanRef,
     RuntimePrincipal,
 )
+from core.chat_stream_identity import resolve_chat_stream_identity
 from core.db.models import (
     SandboxAccessGrant,
     Workspace,
 )
 from core.run_recovery.contracts import canonical_sha256
+from core.sandbox.workspace_acl import workspace_matches_sandbox_grant
 from core.tool_registration import (
     TOOL_REGISTRATION_REGISTRY,
     get_tool_registration,
@@ -64,6 +66,7 @@ def _tool_extension(name: str) -> AgentExtensionRef:
 
 def _build_manifest(
     *,
+    agent_id: str,
     principal: RuntimePrincipal,
     runtime_id: str,
     prompt_key: str,
@@ -74,7 +77,7 @@ def _build_manifest(
         schema_version=1,
         version="1.0.0",
         identity=AgentIdentity(
-            agent_id="nanobot.chat",
+            agent_id=agent_id,
             display_name="Nanobot 对话 Agent",
             description="使用 canonical Prompt Runtime 与冻结工具计划处理消息。",
             owner=principal,
@@ -138,10 +141,39 @@ def _build_manifest(
     )
 
 
-def _workspace(
+def _sandbox_grant(
     db: Session,
+    *,
     principal: RuntimePrincipal,
+    session_id: str,
+    chat_type: str,
+) -> SandboxAccessGrant | None:
+    identity = resolve_chat_stream_identity(
+        platform=principal.platform,
+        chat_type=chat_type,
+        session_id=session_id,
+    )
+    return (
+        db.query(SandboxAccessGrant)
+        .filter(
+            SandboxAccessGrant.chat_stream_id == identity.chat_stream_id,
+            SandboxAccessGrant.platform == identity.platform,
+            SandboxAccessGrant.chat_type == identity.chat_type,
+            SandboxAccessGrant.external_session_id
+            == identity.external_session_id,
+        )
+        .one_or_none()
+    )
+
+
+def _scope_workspace(
+    db: Session,
+    *,
+    principal: RuntimePrincipal,
+    grant: SandboxAccessGrant | None,
 ) -> Workspace | None:
+    if grant is not None and str(grant.workspace_id or ""):
+        return db.get(Workspace, str(grant.workspace_id))
     return (
         db.query(Workspace)
         .filter(
@@ -155,21 +187,9 @@ def _workspace(
 
 
 def _grant_document(
-    db: Session,
-    *,
-    principal: RuntimePrincipal,
-    session_id: str,
-    chat_type: str,
+    grant: SandboxAccessGrant | None,
+    workspace: Workspace | None,
 ) -> dict[str, object]:
-    grant = (
-        db.query(SandboxAccessGrant)
-        .filter(
-            SandboxAccessGrant.platform == principal.platform,
-            SandboxAccessGrant.chat_type == chat_type,
-            SandboxAccessGrant.external_session_id == session_id,
-        )
-        .one_or_none()
-    )
     if grant is None:
         return {"present": False}
     return {
@@ -182,41 +202,66 @@ def _grant_document(
         "execution_profile": str(grant.execution_profile),
         "status": str(grant.status),
         "version": int(grant.version),
+        "workspace_acl_bound": workspace_matches_sandbox_grant(
+            workspace,
+            grant,
+        ),
     }
 
 
-def build_live_recovery_plans(
+def build_runtime_scope_plans(
     db: Session,
     *,
+    agent_id: str,
     principal: RuntimePrincipal,
     session_id: str,
     chat_type: str,
-    runtime_id: str,
-    prompt_key: str,
-    prompt_sha256: str,
     tool_plan: object,
+    memory_registry_generation: int,
+    memory_registry_sha256: str,
 ) -> tuple[RuntimePlanRef, ...]:
-    """构建除候选模型外的生产恢复证明；模型证明由路由冻结后补入。"""
+    """构建不依赖 KT／Native 的 Agent 数据和授权范围证明。"""
 
     if not isinstance(db, Session):
         raise TypeError("db 必须是 SQLAlchemy Session")
     if not isinstance(principal, RuntimePrincipal):
         raise TypeError("principal 必须是 RuntimePrincipal")
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_agent_id:
+        raise ValueError("agent_id 不能为空")
     tool_digest = str(getattr(tool_plan, "sha256", "") or "").lower()
-    if len(tool_digest) != 64:
+    if len(tool_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in tool_digest
+    ):
         raise ValueError("ToolPlan 缺少稳定摘要")
-    tools = _tool_names(tool_plan)
-    manifest = _build_manifest(
-        principal=principal,
-        runtime_id=runtime_id,
-        prompt_key=prompt_key,
-        prompt_sha256=prompt_sha256,
-        tool_names=tools,
+    memory_digest = str(memory_registry_sha256 or "").strip().lower()
+    if len(memory_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in memory_digest
+    ):
+        raise ValueError("Memory Provider Registry 缺少稳定摘要")
+    if (
+        type(memory_registry_generation) is not int
+        or memory_registry_generation <= 0
+    ):
+        raise ValueError("Memory Provider Registry generation 必须是正整数")
+
+    chat_identity = resolve_chat_stream_identity(
+        platform=principal.platform,
+        chat_type=chat_type,
+        session_id=session_id,
     )
-    workspace = _workspace(db, principal)
+    grant = _sandbox_grant(
+        db,
+        principal=principal,
+        session_id=chat_identity.chat_stream_id,
+        chat_type=chat_identity.chat_type,
+    )
+    workspace = _scope_workspace(db, principal=principal, grant=grant)
     workspace_id = str(workspace.id) if workspace is not None else ""
+    tools = _tool_names(tool_plan)
     workspace_document = (
         {
+            "schema_version": 1,
             "present": True,
             "workspace_id": workspace_id,
             "platform": str(workspace.platform),
@@ -227,10 +272,30 @@ def build_live_recovery_plans(
             "name": str(workspace.name),
             "status": str(workspace.status),
             "quota_bytes": int(workspace.quota_bytes),
+            "sandbox_acl_bound": (
+                workspace_matches_sandbox_grant(workspace, grant)
+                if grant is not None
+                else None
+            ),
         }
         if workspace is not None
-        else {"present": False}
+        else {"schema_version": 1, "present": False}
     )
+    session_digest = hashlib.sha256(
+        chat_identity.chat_stream_id.encode("utf-8")
+    ).hexdigest()
+    owner_digest = hashlib.sha256(
+        principal.canonical_id.encode("utf-8")
+    ).hexdigest()
+    memory_document = {
+        "schema_version": 1,
+        "agent_id": normalized_agent_id,
+        "policy_id": "conversation.default",
+        "owner_sha256": owner_digest,
+        "chat_stream_sha256": session_digest,
+        "provider_registry_generation": memory_registry_generation,
+        "provider_registry_sha256": memory_digest,
+    }
     # Artifact Plan 固定发布合同和 owner workspace 边界，而不是把工作区内
     # 所有历史资产都纳入摘要。具体被本 Run 引用或生成的资产由 Checkpoint
     # 的 artifact_proofs 单独固定，否则新增一个无关资产也会永久阻断恢复。
@@ -241,7 +306,10 @@ def build_live_recovery_plans(
         "workspace_id": workspace_id or "none",
     }
     security_document = {
-        "runtime_id": runtime_id,
+        "schema_version": 1,
+        "agent_id": normalized_agent_id,
+        "owner_sha256": owner_digest,
+        "chat_stream_sha256": session_digest,
         "tool_plan_sha256": tool_digest,
         "tool_registry_sha256": (
             TOOL_REGISTRATION_REGISTRY.registry_snapshot.sha256
@@ -255,19 +323,13 @@ def build_live_recovery_plans(
             }
             for name in tools
         ],
-        "sandbox_grant": _grant_document(
-            db,
-            principal=principal,
-            session_id=session_id,
-            chat_type=chat_type,
-        ),
+        "sandbox_grant": _grant_document(grant, workspace),
     }
-    session_digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
     return (
         RuntimePlanRef(
-            RuntimePlanKind.MANIFEST,
-            "agent-manifest:nanobot.chat@1.0.0",
-            manifest.content_sha256,
+            RuntimePlanKind.MEMORY,
+            f"memory-session:{session_digest[:16]}",
+            canonical_sha256(memory_document),
         ),
         RuntimePlanRef(
             RuntimePlanKind.WORKSPACE,
@@ -287,6 +349,52 @@ def build_live_recovery_plans(
     )
 
 
+def build_live_recovery_plans(
+    db: Session,
+    *,
+    agent_id: str,
+    principal: RuntimePrincipal,
+    session_id: str,
+    chat_type: str,
+    runtime_id: str,
+    prompt_key: str,
+    prompt_sha256: str,
+    tool_plan: object,
+    memory_registry_generation: int,
+    memory_registry_sha256: str,
+) -> tuple[RuntimePlanRef, ...]:
+    """构建 Native Checkpoint 证明，并复用 Runtime 无关作用域。"""
+
+    normalized_agent_id = str(agent_id or "").strip()
+    scope_plans = build_runtime_scope_plans(
+        db,
+        agent_id=normalized_agent_id,
+        principal=principal,
+        session_id=session_id,
+        chat_type=chat_type,
+        tool_plan=tool_plan,
+        memory_registry_generation=memory_registry_generation,
+        memory_registry_sha256=memory_registry_sha256,
+    )
+    tools = _tool_names(tool_plan)
+    manifest = _build_manifest(
+        agent_id=normalized_agent_id,
+        principal=principal,
+        runtime_id=runtime_id,
+        prompt_key=prompt_key,
+        prompt_sha256=prompt_sha256,
+        tool_names=tools,
+    )
+    return (
+        RuntimePlanRef(
+            RuntimePlanKind.MANIFEST,
+            f"agent-manifest:{normalized_agent_id}@1.0.0",
+            manifest.content_sha256,
+        ),
+        *scope_plans,
+    )
+
+
 def replace_recovery_plan(
     plans: Sequence[RuntimePlanRef],
     reference: RuntimePlanRef,
@@ -298,5 +406,6 @@ def replace_recovery_plan(
 
 __all__ = [
     "build_live_recovery_plans",
+    "build_runtime_scope_plans",
     "replace_recovery_plan",
 ]

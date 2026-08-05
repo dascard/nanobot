@@ -23,6 +23,7 @@ def _request() -> AgentTurnRequest:
     return AgentTurnRequest(
         context=RequestRuntimeContext(
             request_id="request-artifact-1",
+            agent_id="test.agent",
             principal=RuntimePrincipal(
                 platform="qq",
                 owner_type=RuntimeOwnerType.USER,

@@ -65,6 +65,7 @@ def _build_tool_execution_request(
     return RuntimeToolExecutionRequest(
         context=RequestRuntimeContext(
             request_id=request_id,
+            agent_id="nanobot",
             principal=RuntimePrincipal(
                 platform=platform,
                 owner_type=(

@@ -94,6 +94,7 @@ def _context(
 ) -> RequestRuntimeContext:
     return RequestRuntimeContext(
         request_id=f"request-{turn}",
+        agent_id="test.agent",
         principal=RuntimePrincipal(
             platform="qq",
             owner_type=RuntimeOwnerType.USER,

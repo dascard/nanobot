@@ -101,6 +101,7 @@ def _context(
     )
     return RequestRuntimeContext(
         request_id="request-native-1",
+        agent_id="test.agent",
         principal=RuntimePrincipal(
             platform="qq",
             owner_type=RuntimeOwnerType.USER,

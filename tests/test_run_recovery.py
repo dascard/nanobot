@@ -46,6 +46,7 @@ from core.database import (
     RunCheckpointRow,
     RunRecoveryOperation,
     RunSideEffectReceipt,
+    SandboxAccessGrant,
     Workspace,
     WorkspaceAsset,
 )
@@ -68,6 +69,7 @@ from core.run_recovery import (
     SqlAlchemyRunRecoveryService,
     SqlAlchemyRuntimeRecoveryCoordinator,
     build_live_recovery_plans,
+    build_runtime_scope_plans,
 )
 from core.telemetry.contracts import TelemetryCorrelation
 from core.tool_plan import ToolPlan
@@ -198,6 +200,7 @@ def _context(
     identity = _identity(run_id, suffix=suffix)
     return RequestRuntimeContext(
         request_id=f"request-{suffix}",
+        agent_id="test.agent",
         principal=identity.owner,
         session_id="private_10001",
         chat_type=RuntimeChatType.PRIVATE,
@@ -767,6 +770,7 @@ def test_artifact_plan_pins_policy_without_freezing_unrelated_inventory(db_sessi
     plan = _tool_plan("reply")
     first = build_live_recovery_plans(
         db_session,
+        agent_id="nanobot",
         principal=_principal(),
         session_id="private_10001",
         chat_type="private",
@@ -774,6 +778,8 @@ def test_artifact_plan_pins_policy_without_freezing_unrelated_inventory(db_sessi
         prompt_key="prompt:test",
         prompt_sha256="2" * 64,
         tool_plan=plan,
+        memory_registry_generation=1,
+        memory_registry_sha256="9" * 64,
     )
     digest = "a" * 64
     db_session.add_all([
@@ -799,6 +805,7 @@ def test_artifact_plan_pins_policy_without_freezing_unrelated_inventory(db_sessi
     db_session.commit()
     second = build_live_recovery_plans(
         db_session,
+        agent_id="nanobot",
         principal=_principal(),
         session_id="private_10001",
         chat_type="private",
@@ -806,11 +813,86 @@ def test_artifact_plan_pins_policy_without_freezing_unrelated_inventory(db_sessi
         prompt_key="prompt:test",
         prompt_sha256="2" * 64,
         tool_plan=plan,
+        memory_registry_generation=1,
+        memory_registry_sha256="9" * 64,
     )
 
     assert next(
         item for item in first if item.kind is RuntimePlanKind.ARTIFACT
     ) == next(item for item in second if item.kind is RuntimePlanKind.ARTIFACT)
+
+
+def test_runtime_scope_plans_survive_runtime_and_session_alias_switch(db_session):
+    workspace = Workspace(
+        id="workspace-group-scope",
+        platform="qq",
+        owner_type="group",
+        owner_id="42",
+        name="default",
+        status="active",
+        quota_bytes=1024 * 1024,
+    )
+    grant = SandboxAccessGrant(
+        id="grant-group-scope",
+        chat_stream_id="qq:42:group",
+        platform="qq",
+        chat_type="group",
+        external_session_id="42",
+        workspace_id=workspace.id,
+        capability_level="workspace",
+        execution_profile="restricted",
+        status="active",
+        version=1,
+    )
+    db_session.add(workspace)
+    db_session.flush()
+    db_session.add(grant)
+    db_session.commit()
+    principal = RuntimePrincipal("qq", RuntimeOwnerType.GROUP, "42")
+    plan = _tool_plan("reply")
+    common = {
+        "agent_id": "nanobot",
+        "principal": principal,
+        "chat_type": "group",
+        "tool_plan": plan,
+        "memory_registry_generation": 3,
+        "memory_registry_sha256": "9" * 64,
+    }
+
+    legacy_scope = build_runtime_scope_plans(
+        db_session,
+        session_id="group_42",
+        **common,
+    )
+    canonical_scope = build_runtime_scope_plans(
+        db_session,
+        session_id="qq:42:group",
+        **common,
+    )
+    native_plans = build_live_recovery_plans(
+        db_session,
+        session_id="group_42",
+        runtime_id="native:nanobot",
+        prompt_key="chat.default",
+        prompt_sha256="2" * 64,
+        **common,
+    )
+
+    assert legacy_scope == canonical_scope
+    assert tuple(
+        item for item in native_plans
+        if item.kind is not RuntimePlanKind.MANIFEST
+    ) == legacy_scope
+    assert [item.kind for item in legacy_scope] == [
+        RuntimePlanKind.MEMORY,
+        RuntimePlanKind.WORKSPACE,
+        RuntimePlanKind.ARTIFACT,
+        RuntimePlanKind.SECURITY,
+    ]
+    assert next(
+        item for item in legacy_scope
+        if item.kind is RuntimePlanKind.WORKSPACE
+    ).identity == f"workspace:{workspace.id}"
 
 
 @pytest.mark.asyncio

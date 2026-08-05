@@ -11,6 +11,7 @@ from nanobot_kt.memory_runtime import (
     MEMORY_PROVIDER_DESCRIPTORS,
     bind_memory_tool_runtime,
     build_memory_provider_runtime,
+    memory_provider_registry_snapshot,
     reset_memory_tool_runtime,
 )
 from nanobot_kt.tools.memory_query import MemoryQueryTool
@@ -29,6 +30,11 @@ async def test_memory_runtime_composition_freezes_explicit_tool_ownership() -> N
         }
 
     runtime = build_memory_provider_runtime(handlers={"memory_query": execute_memory})
+    snapshot = runtime.registry_snapshot
+    assert snapshot == memory_provider_registry_snapshot()
+    assert snapshot.ordered_ids == ("knowledge", "memory", "sticker")
+    assert snapshot.generation > 0
+    assert len(snapshot.sha256) == 64
     await runtime.initialize(MemoryProviderInitContext(runtime_id="kt13:test"))
 
     schemas = await runtime.tool_schemas(

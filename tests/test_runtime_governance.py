@@ -263,6 +263,7 @@ def test_production_request_context_declares_every_access_scope_exactly():
     )
     context = build_request_runtime_context(
         request_id="request-1",
+        agent_id="nanobot",
         platform="qq",
         user_id="user-1",
         group_id="",
@@ -449,6 +450,7 @@ async def test_kt_guards_block_and_defer_original_authority_or_budget_failure():
     governance = _governance(model_calls=1)
     context = RequestRuntimeContext(
         request_id="request-kt-governance",
+        agent_id="test.agent",
         principal=identity.owner,
         session_id="session-1",
         chat_type=RuntimeChatType.PRIVATE,

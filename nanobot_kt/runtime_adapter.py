@@ -361,6 +361,7 @@ class KtRuntimeAdapter:
             principal.owner_id if not is_group else ""
         )
         runtime_context: dict[str, object] = {
+            "agent_id": context.agent_id,
             "chat_type": context.chat_type.value,
             "runtime_chat_type": str(
                 attributes.get("runtime_chat_type", context.chat_type.value) or ""

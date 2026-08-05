@@ -22,6 +22,7 @@ from core.sandbox.access_contracts import (
 from core.sandbox.access_repository import SandboxAccessRepository
 from core.sandbox.contracts import SandboxServiceError
 from core.sandbox.execution_profiles import load_execution_profile_registry
+from core.sandbox.workspace_acl import workspace_matches_sandbox_grant
 from core.runtime.extensions import (
     PolicyDescriptor,
     PolicyTypedFailure,
@@ -391,6 +392,7 @@ class SandboxAccessPolicy:
         maintenance = self.repository.get_maintenance_state(workspace_id)
         if (
             workspace is None
+            or not workspace_matches_sandbox_grant(workspace, grant)
             or workspace.status != "active"
             or binding is None
             or binding.status != "applied"

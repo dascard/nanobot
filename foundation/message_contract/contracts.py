@@ -671,10 +671,16 @@ class InboundMessageContract:
         if (
             self.principal.owner_type != expected_owner_type
             or self.recipient.recipient_type != expected_owner_type
+            or self.principal.owner_id != self.recipient.recipient_id
+            or (
+                self.chat_stream.chat_type == "group"
+                and self.principal.owner_id
+                != self.chat_stream.external_session_id
+            )
         ):
             raise MessageContractError(
                 "identity_scope_mismatch",
-                "principal 或 recipient 与 chat type 不一致",
+                "principal、recipient 或 chat stream 的资源范围不一致",
             )
 
 

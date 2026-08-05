@@ -83,6 +83,7 @@ def _rich_tool_exchange(
 def _runtime_context(session_id: str = "test-session") -> RequestRuntimeContext:
     return RequestRuntimeContext(
         request_id=f"request:{session_id}",
+        agent_id="test.agent",
         principal=RuntimePrincipal("qq", RuntimeOwnerType.USER, "u1"),
         session_id=session_id,
         chat_type=RuntimeChatType.PRIVATE,
@@ -1852,7 +1853,7 @@ class TestNanobotBridge:
                 disabled={},
                 executable_tool_names=set(),
                 runtime_tool_prompt="",
-                sha256="test-tool-plan",
+                sha256="0" * 64,
             ),
         )
         monkeypatch.setattr("core.runtime_tool_service.record_runtime_tool_decision", lambda **_kwargs: False)

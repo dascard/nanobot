@@ -779,6 +779,9 @@ def _runtime_context_from_fixture(
     deadline_at = datetime.fromisoformat(deadline_text) if deadline_text else None
     return RequestRuntimeContext(
         request_id=str(payload.get("request_id") or ""),
+        agent_id=str(
+            payload.get("agent_id") or "behavior-baseline.agent"
+        ),
         principal=RuntimePrincipal(
             platform=str(principal_payload.get("platform") or ""),
             owner_type=RuntimeOwnerType(

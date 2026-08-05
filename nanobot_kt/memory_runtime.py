@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from core.memory_provider import (
@@ -27,6 +28,7 @@ from core.memory_provider import (
     MemoryToolCall,
     MemoryToolSchemaContext,
 )
+from core.registry import RegistrySnapshot
 
 
 MemoryToolHandler = Callable[[dict[str, Any]], Awaitable[Any]]
@@ -288,6 +290,35 @@ def _default_tool_handlers() -> dict[str, MemoryToolHandler]:
     }
 
 
+def _build_memory_provider_registry(
+    handlers: Mapping[str, MemoryToolHandler],
+) -> MemoryProviderRegistry:
+    registry = MemoryProviderRegistry()
+    for descriptor in MEMORY_PROVIDER_DESCRIPTORS:
+        provider_handlers = {
+            tool_name: handlers[tool_name]
+            for tool_name in descriptor.tool_names
+            if tool_name in handlers
+        }
+        registry.register(
+            descriptor.id,
+            descriptor,
+            lambda descriptor=descriptor, provider_handlers=provider_handlers: (
+                ExistingToolMemoryProvider(descriptor, provider_handlers)
+            ),
+        )
+    return registry.freeze()
+
+
+@lru_cache(maxsize=1)
+def memory_provider_registry_snapshot() -> RegistrySnapshot[
+    MemoryProviderDescriptor
+]:
+    """返回两种 Agent Runtime 共用的 canonical Provider 身份。"""
+
+    return _build_memory_provider_registry({}).registry_snapshot
+
+
 def build_memory_provider_runtime(
     *,
     handlers: Mapping[str, MemoryToolHandler] | None = None,
@@ -297,21 +328,9 @@ def build_memory_provider_runtime(
     effective_handlers = _default_tool_handlers()
     if handlers:
         effective_handlers.update(handlers)
-    registry = MemoryProviderRegistry()
-    for descriptor in MEMORY_PROVIDER_DESCRIPTORS:
-        provider_handlers = {
-            tool_name: effective_handlers[tool_name]
-            for tool_name in descriptor.tool_names
-            if tool_name in effective_handlers
-        }
-        registry.register(
-            descriptor.id,
-            descriptor,
-            lambda descriptor=descriptor, provider_handlers=provider_handlers: (
-                ExistingToolMemoryProvider(descriptor, provider_handlers)
-            ),
-        )
-    return MemoryProviderRuntime(registry.freeze())
+    return MemoryProviderRuntime(
+        _build_memory_provider_registry(effective_handlers)
+    )
 
 
 __all__ = [
@@ -323,6 +342,7 @@ __all__ = [
     "build_memory_provider_runtime",
     "dispatch_memory_tool_call",
     "has_memory_tool_runtime_binding",
+    "memory_provider_registry_snapshot",
     "provider_result_to_tool_result",
     "reset_memory_tool_runtime",
 ]

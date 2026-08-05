@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 7.2 已完成，准备阶段 7.3）
+> 状态：执行中（阶段 7.3 已完成，准备阶段 7.4）
 >
 > 建立日期：2026-08-03
 >
@@ -1092,11 +1092,37 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 7.3 Agent Identity、Workspace 和 ACL
 
-- [ ] Agent identity 与 KT、Native 或远程 Runtime 解耦。
-- [ ] 明确 user、group、project、session 和 agent owner。
-- [ ] 明确私有和共享 workspace、ACL、配额和生命周期。
-- [ ] 切换 Runtime 不丢失身份、授权和记忆引用。
-- [ ] 模型只能看到容器内虚拟路径。
+- [x] Agent identity 与 KT、Native 或远程 Runtime 解耦。
+- [x] 明确 user、group、project、session 和 agent owner。
+- [x] 明确私有和共享 workspace、ACL、配额和生命周期。
+- [x] 切换 Runtime 不丢失身份、授权和记忆引用。
+- [x] 模型只能看到容器内虚拟路径。
+
+实施记录（2026-08-05）：
+
+- `RequestRuntimeContext` 新增必填、不可变的稳定 `agent_id`，并与 `runtime_id`／Runtime 实现名分离；Bridge
+  从 creature profile 派生 Agent 身份，Native、KT Adapter、确定性直接工具执行及行为基线均传递同一身份。
+  切换 KT、Native 或后续远程 Runtime 只改变执行实现，不再改变 Agent owner、Skill 绑定或恢复引用。
+- owner 合同明确区分 user、group、project、session、agent 和 actor：消息入口要求 principal 与接收方及
+  canonical chat stream 一致；既有 Workspace owner 支持 user／group／project，私聊 Sandbox 以不可由请求方
+  伪造的 session grant ID 隔离 Workspace，群聊则以 canonical 外部 group ID 共享。跨平台、跨 owner、跨
+  session 的消息或 Workspace/grant 组合全部失败关闭。
+- Sandbox 唯一 Access Policy 新增 grant 与 Workspace owner 的交叉绑定校验，并继续同时要求 Workspace active、
+  Workspace quota、Runtime quota 和维护 generation 全部已应用。由此私有 Workspace、群组共享 Workspace、
+  project owner、ACL、硬配额和既有 provision／quiesce／recycle 生命周期形成同一服务端授权链，模型元数据
+  不能把一个会话的 grant 指向其他 owner 的 Workspace。
+- 恢复证明拆分为 Runtime 中立的 MEMORY、WORKSPACE、ARTIFACT、SECURITY 四类作用域计划，以及 Native
+  独有的 MANIFEST 计划。中立引用固定稳定 Agent 身份、canonical owner/session、Memory Provider Registry、
+  ToolPlan、Sandbox grant／ACL 和 Workspace；不包含 KT／Native 实现名。legacy/canonical 会话别名和
+  Runtime 切换均产生相同引用，实际群组 Workspace 也优先按 grant 精确解析。
+- 模型可见路径继续只使用 `/workspace`、`/runtime` 和只读 `/inputs` 等容器内虚拟路径；宿主 owner key、
+  Workspace 根目录和资产真实路径只在服务端授权及恢复摘要中使用，不进入 Runtime 请求。现有路径规范化、
+  符号链接、路径穿越、跨 Workspace 及容器重建持久化合同测试继续覆盖该边界。
+- Agent／Memory／Message／Sandbox／Recovery／Prompt Runtime 联合定向回归为 200 passed；首轮全量发现的
+  旧测试夹具已按真实私聊 grant owner 和 64 位 ToolPlan 摘要合同修正，专项回归为 13 passed，Sandbox／
+  Workspace 文件系统组复验为 98 passed。最终完整 `python -m pytest tests/ -v` 为 6689 passed、
+  12 skipped、0 failed；架构边界、OpenAPI、Release／Verification／Behavior Golden、决策规则、Task SLO、
+  Ruff、Python 编译和 `git diff --check` 均通过。
 
 #### 7.4 记忆质量和作用域
 

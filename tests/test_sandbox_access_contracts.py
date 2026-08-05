@@ -50,11 +50,12 @@ def _grant(
     execution_profile: str = "restricted",
 ):
     workspace_id = str(uuid4())
+    grant_id = str(uuid4())
     db_session.add(Workspace(
         id=workspace_id,
         platform="qq",
         owner_type="user",
-        owner_id=session_id,
+        owner_id=grant_id,
         name="default",
         status="active",
         quota_bytes=32 * MIB,
@@ -87,7 +88,7 @@ def _grant(
             generation=1,
         ),
         SandboxAccessGrant(
-            id=str(uuid4()),
+            id=grant_id,
             chat_stream_id=f"qq:{session_id}:private",
             platform="qq",
             chat_type="private",

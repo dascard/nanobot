@@ -223,6 +223,14 @@ class MemoryProviderRuntime:
     def initialized(self) -> bool:
         return self._initialized
 
+    @property
+    def registry_snapshot(
+        self,
+    ) -> RegistrySnapshot[MemoryProviderDescriptor]:
+        """公开冻结的 Provider 身份，不暴露可变 Registry。"""
+
+        return self._registry.registry_snapshot
+
     def diagnostics(self) -> tuple[MemoryProviderDiagnostic, ...]:
         """返回确定性、无正文和无异常消息的 Provider 诊断快照。"""
 

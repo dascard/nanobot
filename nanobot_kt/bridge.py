@@ -18,10 +18,12 @@ from nanobot_kt.output import BufferedOutput
 from nanobot_kt.bridge_runtime_support import (
     bind_bridge_runtime_correlation,
     bind_native_recovery_model_plan,
+    bridge_agent_id,
+    bridge_memory_registry_snapshot,
     build_attempt_cache_context,
     build_bridge_llm_cache_context,
     build_child_bridge,
-    build_native_request_recovery_plans,
+    build_request_runtime_plans,
     compatibility_runtime_selection_policy,
     set_bridge_runtime_model_route,
 )
@@ -196,7 +198,8 @@ class NanobotBridge(MessageContractBridgeMixin):
         self._output = BufferedOutput()
         self._agent: Any | None = None
         self._runtime: AgentRuntimePort | None = None
-        self._runtime_name = Path(creature_path).name or "agent"
+        self._agent_id = Path(creature_path).name or "agent"
+        self._runtime_name = self._agent_id
         self._native_completion_port: ReplyRouteChatCompletionAdapter | None = None
         self._memory_runtime: Any = None
         self._active_route_plan: ReplyRoutePlan | None = None
@@ -1700,7 +1703,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     user_id=user_id,
                     session_id=session_id,
                     runtime_preset=runtime_preset,
-                    agent_id=getattr(self, "_runtime_name", "nanobot") or "nanobot",
+                    agent_id=bridge_agent_id(self),
                     query=query,
                     agent=self._agent, cleanup_registrar=request_scope.bind_async_cleanup,
                 )
@@ -1901,7 +1904,9 @@ class NanobotBridge(MessageContractBridgeMixin):
             image_parts = event_payload.image_parts
             event_content = event_payload.event_content
             required_capabilities = event_payload.required_capabilities
-            recovery_plans = build_native_request_recovery_plans(
+            memory_snapshot = bridge_memory_registry_snapshot(self)
+            runtime_plans = build_request_runtime_plans(
+                agent_id=bridge_agent_id(self),
                 runtime_kind=getattr(
                     self,
                     "runtime_kind",
@@ -1916,9 +1921,12 @@ class NanobotBridge(MessageContractBridgeMixin):
                 prompt_key=prompt_build.prompt_key,
                 prompt_sha256=prompt_build.prompt_sha256,
                 tool_plan=tool_plan,
+                memory_registry_generation=memory_snapshot.generation,
+                memory_registry_sha256=memory_snapshot.sha256,
             )
             runtime_context = build_request_runtime_context(
                 request_id=str(meta.get("message_id") or run_handle.run_id),
+                agent_id=bridge_agent_id(self),
                 platform=platform,
                 user_id=user_id,
                 group_id=group_id,
@@ -1940,7 +1948,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                 prompt_key=prompt_build.prompt_key,
                 prompt_sha256=prompt_build.prompt_sha256,
                 tool_plan=tool_plan,
-                recovery_plans=recovery_plans,
+                runtime_plans=runtime_plans,
                 session_goal_plan=extension_binding.session_goal_plan,
                 skill_plan=extension_binding.skill_plan,
             )

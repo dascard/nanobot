@@ -45,6 +45,7 @@ def _sandbox_infrastructure_ceiling(monkeypatch):
 
 def _grant(db, *, suffix: str, profile_id: str) -> str:
     workspace_id = str(uuid4())
+    grant_id = str(uuid4())
     session_id = f"prompt-{suffix}"
     runtime_quota = (
         10 * 1024 * MIB
@@ -55,7 +56,7 @@ def _grant(db, *, suffix: str, profile_id: str) -> str:
         id=workspace_id,
         platform="qq",
         owner_type="user",
-        owner_id=session_id,
+        owner_id=grant_id,
         name="default",
         status="active",
         quota_bytes=32 * MIB,
@@ -80,7 +81,7 @@ def _grant(db, *, suffix: str, profile_id: str) -> str:
             generation=1,
         ),
         SandboxAccessGrant(
-            id=str(uuid4()),
+            id=grant_id,
             chat_stream_id=f"qq:{session_id}:private",
             platform="qq",
             chat_type="private",

@@ -737,6 +737,7 @@ def test_native_and_kt_runtime_adapters_forward_only_present_skill_lock_fields()
 
     context = RequestRuntimeContext(
         request_id="request-skill",
+        agent_id="nanobot",
         principal=RuntimePrincipal("qq", RuntimeOwnerType.USER, "u1"),
         session_id="private-u1",
         chat_type=RuntimeChatType.PRIVATE,
@@ -755,6 +756,7 @@ def test_native_and_kt_runtime_adapters_forward_only_present_skill_lock_fields()
 
     native = _runtime_context_payload(request)
     kt = KtRuntimeAdapter._request_context(object(), request)
+    assert native["agent_id"] == kt["agent_id"] == "nanobot"
     assert native["skill_lock_sha256"] == "a" * 64
     assert kt["skill_agent_id"] == "nanobot"
     no_lock_request = AgentTurnRequest(context, "测试")

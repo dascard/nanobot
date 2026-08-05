@@ -189,6 +189,7 @@ def build_request_runtime_governance(
 def build_request_runtime_context(
     *,
     request_id: str,
+    agent_id: str,
     platform: str,
     user_id: str,
     group_id: str,
@@ -204,7 +205,7 @@ def build_request_runtime_context(
     prompt_key: str,
     prompt_sha256: str,
     tool_plan: Any,
-    recovery_plans: tuple[RuntimePlanRef, ...] = (),
+    runtime_plans: tuple[RuntimePlanRef, ...] = (),
     session_goal_plan: RuntimePlanRef | None = None,
     skill_plan: RuntimePlanRef | None = None,
 ) -> RequestRuntimeContext:
@@ -230,9 +231,9 @@ def build_request_runtime_context(
                 tool_digest,
             )
         )
-    for reference in recovery_plans:
+    for reference in runtime_plans:
         if not isinstance(reference, RuntimePlanRef):
-            raise TypeError("recovery_plans 必须只包含 RuntimePlanRef")
+            raise TypeError("runtime_plans 必须只包含 RuntimePlanRef")
         if reference.kind in {item.kind for item in plans}:
             raise ValueError(f"重复 RuntimePlan：{reference.kind.value}")
         plans.append(reference)
@@ -252,6 +253,7 @@ def build_request_runtime_context(
         plans.append(skill_plan)
     return RequestRuntimeContext(
         request_id=request_id or run_id,
+        agent_id=agent_id,
         principal=RuntimePrincipal(
             platform=platform,
             owner_type=(RuntimeOwnerType.GROUP if is_group else RuntimeOwnerType.USER),
@@ -294,6 +296,7 @@ def build_fallback_request_runtime_context(
 
     return RequestRuntimeContext(
         request_id=run_id or trace_id or session_id,
+        agent_id="nanobot",
         principal=RuntimePrincipal(
             platform="qq",
             owner_type=RuntimeOwnerType.USER,

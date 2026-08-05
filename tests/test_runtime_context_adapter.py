@@ -20,6 +20,7 @@ class _ToolPlan:
 def test_build_request_runtime_context_keeps_trusted_identity_and_plan_pins():
     context = build_request_runtime_context(
         request_id="request-1",
+        agent_id="nanobot",
         platform="qq",
         user_id="user-1",
         group_id="group-1",
@@ -35,6 +36,18 @@ def test_build_request_runtime_context_keeps_trusted_identity_and_plan_pins():
         prompt_key="chat.default",
         prompt_sha256="a" * 64,
         tool_plan=_ToolPlan(),
+        runtime_plans=(
+            RuntimePlanRef(
+                RuntimePlanKind.MEMORY,
+                "memory-session:test",
+                "d" * 64,
+            ),
+            RuntimePlanRef(
+                RuntimePlanKind.WORKSPACE,
+                "workspace:test",
+                "e" * 64,
+            ),
+        ),
         skill_plan=RuntimePlanRef(
             RuntimePlanKind.SKILL,
             "skill-lock:test",
@@ -43,6 +56,7 @@ def test_build_request_runtime_context_keeps_trusted_identity_and_plan_pins():
     )
 
     assert context.principal.owner_type is RuntimeOwnerType.GROUP
+    assert context.agent_id == "nanobot"
     assert context.principal.owner_id == "group-1"
     assert context.actor is not None
     assert context.actor.actor_type is RuntimeActorType.USER
@@ -54,6 +68,8 @@ def test_build_request_runtime_context_keeps_trusted_identity_and_plan_pins():
     assert [plan.kind for plan in context.plans] == [
         RuntimePlanKind.PROMPT,
         RuntimePlanKind.TOOL,
+        RuntimePlanKind.MEMORY,
+        RuntimePlanKind.WORKSPACE,
         RuntimePlanKind.SKILL,
     ]
 

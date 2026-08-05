@@ -371,6 +371,7 @@ class RequestRuntimeContext:
     """一次运行的不可变身份、追踪与策略快照。"""
 
     request_id: str
+    agent_id: str
     principal: RuntimePrincipal
     session_id: str
     chat_type: RuntimeChatType
@@ -397,6 +398,7 @@ class RequestRuntimeContext:
                 raise ValueError("chat_type 无效") from exc
         object.__setattr__(self, "chat_type", chat_type)
         object.__setattr__(self, "request_id", _required(self.request_id, "request_id"))
+        object.__setattr__(self, "agent_id", _required(self.agent_id, "agent_id"))
         object.__setattr__(self, "session_id", _required(self.session_id, "session_id"))
         normalized_capabilities = frozenset(
             _required(value, "capability") for value in self.capabilities

@@ -55,6 +55,7 @@ from tests.async_helpers import run_async
 def _request_context() -> RequestRuntimeContext:
     return RequestRuntimeContext(
         request_id="req-1",
+        agent_id="test.agent",
         principal=RuntimePrincipal(
             platform="QQ",
             owner_type=RuntimeOwnerType.USER,
@@ -99,9 +100,18 @@ def test_request_runtime_context_is_immutable_and_has_typed_snapshots():
 
 def test_request_runtime_context_rejects_duplicate_policy_sources():
     principal = RuntimePrincipal("qq", RuntimeOwnerType.USER, "1")
+    with pytest.raises(ValueError, match="agent_id"):
+        RequestRuntimeContext(
+            request_id="req",
+            agent_id="",
+            principal=principal,
+            session_id="s",
+            chat_type=RuntimeChatType.PRIVATE,
+        )
     with pytest.raises(ValueError, match="features"):
         RequestRuntimeContext(
             request_id="req",
+            agent_id="test.agent",
             principal=principal,
             session_id="s",
             chat_type=RuntimeChatType.PRIVATE,
@@ -113,6 +123,7 @@ def test_request_runtime_context_rejects_duplicate_policy_sources():
     with pytest.raises(ValueError, match="plans"):
         RequestRuntimeContext(
             request_id="req",
+            agent_id="test.agent",
             principal=principal,
             session_id="s",
             chat_type=RuntimeChatType.PRIVATE,
@@ -859,6 +870,7 @@ def test_kt_runtime_adapter_wraps_turn_conversation_route_and_interrupt():
     assert getattr(agent.events[0], "context")["source"] == "contract-test"
     assert agent.runtime_contexts == [
         {
+            "agent_id": "test.agent",
             "chat_type": "private",
             "runtime_chat_type": "private",
             "is_group": False,

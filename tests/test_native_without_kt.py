@@ -107,6 +107,7 @@ def test_native_runtime_and_server_import_without_kt() -> None:
 
         context = RequestRuntimeContext(
             request_id="without-kt-1",
+            agent_id="nanobot",
             principal=RuntimePrincipal(
                 "qq",
                 RuntimeOwnerType.USER,

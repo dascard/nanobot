@@ -95,6 +95,24 @@ def test_runtime_selection_requires_identity_and_rejects_wildcard_scope():
         parse_runtime_scope_ids("private_1,group_*")
 
 
+def test_bridge_agent_identity_does_not_follow_runtime_implementation_name():
+    from nanobot_kt.bridge import NanobotBridge
+    from nanobot_kt.bridge_runtime_support import bridge_agent_id
+
+    native = NanobotBridge(
+        "creatures/nanobot",
+        runtime_kind=AgentRuntimeKind.NATIVE,
+    )
+    kt = NanobotBridge(
+        "creatures/nanobot",
+        runtime_kind=AgentRuntimeKind.KT,
+    )
+    native._runtime_name = "native:temporary"
+    kt._runtime_name = "kt:temporary"
+
+    assert bridge_agent_id(native) == bridge_agent_id(kt) == "nanobot"
+
+
 class _FakeBridge:
     def __init__(
         self,

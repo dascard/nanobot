@@ -54,6 +54,50 @@ def test_inbound_message_contract_requires_one_identity_platform():
     assert exc.value.code == "identity_platform_mismatch"
 
 
+@pytest.mark.parametrize(
+    ("principal_id", "recipient_id"),
+    (("42", "99"), ("99", "99")),
+)
+def test_inbound_message_contract_rejects_cross_scope_owner_ids(
+    principal_id,
+    recipient_id,
+):
+    from foundation.identity import (
+        ActorIdentity,
+        Principal,
+        RecipientIdentity,
+        resolve_chat_stream_identity,
+    )
+    from foundation.message_contract import (
+        InboundMessageContract,
+        MessageContractError,
+    )
+
+    with pytest.raises(MessageContractError) as exc:
+        InboundMessageContract(
+            message_id="m-scope",
+            chat_stream=resolve_chat_stream_identity(
+                platform="qq",
+                chat_type="group",
+                session_id="group_42",
+            ),
+            actor=ActorIdentity(platform="qq", actor_id="u-1"),
+            recipient=RecipientIdentity(
+                platform="qq",
+                recipient_type="group",
+                recipient_id=recipient_id,
+            ),
+            principal=Principal(
+                platform="qq",
+                owner_type="group",
+                owner_id=principal_id,
+            ),
+            text="你好",
+        )
+
+    assert exc.value.code == "identity_scope_mismatch"
+
+
 def test_unknown_content_part_fails_closed():
     from foundation.message_contract import (
         MessageContractError,

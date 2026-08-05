@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from clients.new_api_client import NewAPIClient
@@ -36,6 +37,26 @@ logger = logging.getLogger("nanobot.kt.bridge")
 
 if TYPE_CHECKING:
     from core.tracing_context import RuntimeCorrelationTokens
+
+
+def bridge_agent_id(bridge: Any) -> str:
+    """从 creature profile 派生稳定身份，不读取 Runtime 实现名称。"""
+
+    explicit = str(getattr(bridge, "_agent_id", "") or "").strip()
+    return explicit or Path(
+        str(getattr(bridge, "creature_path", "") or "")
+    ).name or "agent"
+
+
+def bridge_memory_registry_snapshot(bridge: Any):
+    """读取已启动 Runtime 的快照，并兼容不启动生命周期的合同夹具。"""
+
+    memory_runtime = getattr(bridge, "_memory_runtime", None)
+    if memory_runtime is not None:
+        return memory_runtime.registry_snapshot
+    from nanobot_kt.memory_runtime import memory_provider_registry_snapshot
+
+    return memory_provider_registry_snapshot()
 
 
 def bind_bridge_runtime_correlation(
@@ -334,8 +355,9 @@ def bind_native_recovery_model_plan(
     )
 
 
-def build_native_request_recovery_plans(
+def build_request_runtime_plans(
     *,
+    agent_id: str,
     runtime_kind: AgentRuntimeKind,
     platform: str,
     user_id: str,
@@ -346,19 +368,22 @@ def build_native_request_recovery_plans(
     prompt_key: str,
     prompt_sha256: str,
     tool_plan: Any,
+    memory_registry_generation: int,
+    memory_registry_sha256: str,
 ) -> tuple[RuntimePlanRef, ...]:
-    """从实时权威配置生成 Native Checkpoint 的版本证明。"""
+    """生成共用身份作用域；Native 额外固定 Checkpoint Manifest。"""
 
-    if runtime_kind is not AgentRuntimeKind.NATIVE:
-        return ()
     from core import database
-    from core.run_recovery.proofs import build_live_recovery_plans
+    from core.run_recovery.proofs import (
+        build_live_recovery_plans,
+        build_runtime_scope_plans,
+    )
 
     recovery_db = database.SessionLocal()
     try:
-        return build_live_recovery_plans(
-            recovery_db,
-            principal=RuntimePrincipal(
+        common = {
+            "agent_id": agent_id,
+            "principal": RuntimePrincipal(
                 platform=platform,
                 owner_type=(
                     RuntimeOwnerType.GROUP
@@ -367,13 +392,21 @@ def build_native_request_recovery_plans(
                 ),
                 owner_id=(group_id if is_group else user_id) or session_id,
             ),
-            session_id=session_id,
-            chat_type="group" if is_group else "private",
-            runtime_id=runtime_id,
-            prompt_key=prompt_key,
-            prompt_sha256=prompt_sha256,
-            tool_plan=tool_plan,
-        )
+            "session_id": session_id,
+            "chat_type": "group" if is_group else "private",
+            "tool_plan": tool_plan,
+            "memory_registry_generation": memory_registry_generation,
+            "memory_registry_sha256": memory_registry_sha256,
+        }
+        if runtime_kind is AgentRuntimeKind.NATIVE:
+            return build_live_recovery_plans(
+                recovery_db,
+                runtime_id=runtime_id,
+                prompt_key=prompt_key,
+                prompt_sha256=prompt_sha256,
+                **common,
+            )
+        return build_runtime_scope_plans(recovery_db, **common)
     finally:
         recovery_db.close()
 
@@ -464,9 +497,11 @@ async def reconcile_selected_bridge(
 __all__ = [
     "bind_bridge_runtime_correlation",
     "bind_native_recovery_model_plan",
+    "bridge_agent_id",
+    "bridge_memory_registry_snapshot",
     "build_child_bridge",
     "build_native_bridge_runtime",
-    "build_native_request_recovery_plans",
+    "build_request_runtime_plans",
     "build_native_tool_registry_runtime_info",
     "compatibility_runtime_selection_policy",
     "emit_runtime_selection",

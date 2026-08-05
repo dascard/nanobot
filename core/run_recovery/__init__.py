@@ -22,6 +22,7 @@ from core.run_recovery.coordinator import (
 )
 from core.run_recovery.proofs import (
     build_live_recovery_plans,
+    build_runtime_scope_plans,
     replace_recovery_plan,
 )
 from core.run_recovery.service import (
@@ -51,6 +52,7 @@ __all__ = [
     "SandboxdRecoveryFileVerifier",
     "SqlAlchemyRunRecoveryService",
     "build_live_recovery_plans",
+    "build_runtime_scope_plans",
     "default_runtime_recovery_port",
     "replace_recovery_plan",
 ]

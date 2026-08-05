@@ -101,6 +101,7 @@ def _build_runtime_request(
     request_id = _runtime_request_id(message, content=content)
     context = RequestRuntimeContext(
         request_id=request_id,
+        agent_id="nanobot",
         principal=RuntimePrincipal(
             platform=str(message.principal.platform),
             owner_type=RuntimeOwnerType(message.principal.owner_type),

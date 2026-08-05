@@ -616,6 +616,7 @@ def _runtime_context_payload(request: AgentTurnRequest) -> dict[str, object]:
     owner_id = context.principal.owner_id
     actor_id = actor.actor_id if actor is not None else owner_id
     payload: dict[str, object] = {
+        "agent_id": context.agent_id,
         "chat_type": context.chat_type.value,
         "runtime_chat_type": str(
             attributes.get("runtime_chat_type", context.chat_type.value) or ""

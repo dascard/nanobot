@@ -194,6 +194,29 @@ def test_canonical_alias_resolves_to_the_same_explicit_session_grant(
     assert alias.identity.chat_stream_id == "qq:alice:private"
 
 
+def test_grant_cannot_authorize_workspace_owned_by_another_scope(
+    db_session,
+    infrastructure_allowed,
+):
+    _set_bool(db_session, "sandbox.enabled", True)
+    _set_bool(db_session, "sandbox.exec_enabled", False)
+    workspace_id = _grant_session(db_session, session_id="alice")
+    workspace = db_session.get(Workspace, workspace_id)
+    workspace.owner_id = "foreign-grant"
+    db_session.commit()
+
+    decision = SandboxAccessPolicy(db_session).evaluate(
+        "workspace_read",
+        platform="qq",
+        chat_type="private",
+        session_id="private_alice",
+    )
+
+    assert decision.allowed is False
+    assert decision.code == "authorization_failed"
+    assert decision.workspace_id == workspace_id
+
+
 def test_same_user_metadata_cannot_bridge_two_sessions(
     db_session,
     infrastructure_allowed,
