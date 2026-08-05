@@ -9,6 +9,18 @@ from core.agent_link.runtime import (
     AgentLinkToolCaller,
 )
 from core.tool_plan import additional_tool_schemas_scope
+from foundation.identity import (
+    ActorIdentity,
+    Principal,
+    RecipientIdentity,
+    resolve_chat_stream_identity,
+)
+from foundation.message_contract import (
+    GatewayMetadata,
+    InboundMessageContract,
+    MessageTrace,
+    TextContent,
+)
 from nanobot_kt.agent_link_tools import build_agent_link_tools
 
 
@@ -66,6 +78,7 @@ class KtAgentLinkChatAdapter:
             client_id = request.client.platform_id
             metadata = {
                 "platform": client_id,
+                "gateway_transport": "agent_link",
                 "policy_profile": request.policy_profile,
                 "chat_type": "private",
                 "is_group": False,
@@ -83,14 +96,50 @@ class KtAgentLinkChatAdapter:
                     ),
                 },
             }
+            chat_stream = resolve_chat_stream_identity(
+                platform=client_id,
+                chat_type="private",
+                session_id=request.key.bridge_session_id,
+            )
+            message = InboundMessageContract(
+                message_id=request.request_id,
+                chat_stream=chat_stream,
+                actor=ActorIdentity(
+                    platform=client_id,
+                    actor_id=request.key.bridge_user_id,
+                ),
+                recipient=RecipientIdentity(
+                    platform=client_id,
+                    recipient_type="user",
+                    recipient_id=request.key.bridge_user_id,
+                ),
+                principal=Principal(
+                    platform=client_id,
+                    owner_type="user",
+                    owner_id=request.key.bridge_user_id,
+                ),
+                text=request.user_text,
+                parts=(TextContent(request.user_text or request.content),),
+                gateway=GatewayMetadata(
+                    source="agent_link",
+                    session_name=request.client.name,
+                ),
+                trace=MessageTrace(
+                    request_id=request.request_id,
+                    correlation_id=request.request_id,
+                    idempotency_key=request.request_id,
+                ),
+            )
             with additional_tool_schemas_scope(schemas):
-                return await bridge.handle_message(
-                    request.content,
-                    user_id=request.key.bridge_user_id,
-                    session_id=request.key.bridge_session_id,
+                return await bridge.handle_message_contract(
+                    message,
+                    content=request.content,
+                    runtime_user_id=request.key.bridge_user_id,
+                    runtime_session_id=request.key.bridge_session_id,
                     sender_name=f"{client_id} 用户",
                     metadata=metadata,
                     stream=False,
+                    trusted_gateway_transport="agent_link",
                 )
         finally:
             await pool._release_bridge(pool_key)

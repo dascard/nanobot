@@ -22,6 +22,7 @@ def resolve_reply_route_plans(
     default_base_url: str,
     default_api_key: str,
     session_id: str = "",
+    preferred_profile_id: str = "",
 ) -> list[ReplyRoutePlan]:
     """优先解析 Route Binding；未绑定时返回旧 Route 的兼容计划。"""
 
@@ -29,10 +30,10 @@ def resolve_reply_route_plans(
 
     bound_candidates = resolve_route_binding_candidates("reply")
     if not bound_candidates:
-        return [_resolve_legacy_reply_route_plan(
+        return _prioritize_reply_profile([_resolve_legacy_reply_route_plan(
             default_base_url=default_base_url,
             default_api_key=default_api_key,
-        )]
+        )], preferred_profile_id)
 
     from core.model_provider.provider_config import get_provider_instance
 
@@ -118,7 +119,72 @@ def resolve_reply_route_plans(
         raise RuntimeError(f"reply Route Binding 无可用模型：{detail}")
     if unavailable:
         logger.warning("reply Route 跳过不可用模型：%s", "；".join(unavailable))
-    return plans
+    return _prioritize_reply_profile(plans, preferred_profile_id)
+
+
+def resolve_gateway_reply_route_plans(
+    *,
+    default_base_url: str,
+    default_api_key: str,
+    session_id: str,
+    gateway_binding_id: str,
+) -> list[ReplyRoutePlan]:
+    """按 Gateway 当前生效 Profile 解析已验证的 reply 候选。"""
+
+    from core.gateway_control import active_gateway_model_profile
+
+    return resolve_reply_route_plans(
+        default_base_url=default_base_url,
+        default_api_key=default_api_key,
+        session_id=session_id,
+        preferred_profile_id=active_gateway_model_profile(
+            gateway_binding_id
+        ),
+    )
+
+
+def _prioritize_reply_profile(
+    plans: list[ReplyRoutePlan],
+    preferred_profile_id: str,
+) -> list[ReplyRoutePlan]:
+    """只在已验证 reply 候选内提升会话指定 Profile。"""
+
+    preferred = str(preferred_profile_id or "").strip()
+    if not preferred:
+        return list(plans)
+    selected = [plan for plan in plans if plan.profile_id == preferred]
+    if not selected:
+        raise RuntimeError(
+            "会话指定的模型 Profile 已不在当前 reply Route 候选中"
+        )
+    return selected + [plan for plan in plans if plan.profile_id != preferred]
+
+
+def reply_model_profile_descriptors(
+    plans: list[ReplyRoutePlan],
+) -> list[dict[str, object]]:
+    """返回不含凭据、URL 和账号 ID 的可选模型 Profile。"""
+
+    result: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for plan in plans:
+        profile_id = str(plan.profile_id or "").strip()
+        if not profile_id or profile_id in seen:
+            continue
+        seen.add(profile_id)
+        result.append({
+            "profile_id": profile_id,
+            "model": str(plan.model or ""),
+            "provider_id": str(plan.provider_id or ""),
+            "provider_name": str(plan.provider_name or ""),
+            "supports_tools": bool(
+                dict(plan.capabilities or {}).get("supports_tools", False)
+            ),
+            "supports_image": bool(
+                dict(plan.capabilities or {}).get("supports_image", False)
+            ),
+        })
+    return result
 
 
 def resolve_reply_route_plan(
@@ -309,6 +375,8 @@ __all__ = [
     "PresetRouteClient",
     "ReplyRoutePlan",
     "registry_provider_for_route",
+    "reply_model_profile_descriptors",
+    "resolve_gateway_reply_route_plans",
     "resolve_reply_route_plan",
     "resolve_reply_route_plans",
 ]

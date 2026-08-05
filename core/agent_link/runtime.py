@@ -301,6 +301,23 @@ class AgentLinkCollaborationPort(Protocol):
         ...
 
 
+class AgentLinkSessionControlPort(Protocol):
+    """Agent Link 会话控制帧到 Gateway 控制服务的应用层 Port。"""
+
+    async def handle_session_control(
+        self,
+        *,
+        platform_id: str,
+        owner_id: str,
+        actor_id: str,
+        runtime_session_id: str,
+        message_type: str,
+        request_id: str,
+        payload: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        ...
+
+
 @dataclass(slots=True)
 class AgentLinkPeer:
     """一条已完成握手的 WebSocket 连接。"""
@@ -312,6 +329,10 @@ class AgentLinkPeer:
     policy_profile: str = DEFAULT_EXTERNAL_POLICY_PROFILE
     collaboration_claim: bool = False
     collaboration_deliver: bool = False
+    session_control_status: bool = False
+    session_control_stop: bool = False
+    session_control_resume: bool = False
+    session_control_model_switch: bool = False
     online: bool = True
     snapshot_revision: int | None = None
     _tools: dict[str, AgentLinkToolDefinition] = field(
@@ -623,6 +644,7 @@ class AgentLinkRuntime:
         self._closed = False
         self._chat_port: AgentLinkChatPort | None = None
         self._collaboration_port: AgentLinkCollaborationPort | None = None
+        self._session_control_port: AgentLinkSessionControlPort | None = None
 
     def bind_chat_port(self, port: AgentLinkChatPort) -> None:
         """由 Composition Root 注入具体 Agent Adapter。"""
@@ -640,6 +662,20 @@ class AgentLinkRuntime:
         if self._closed:
             raise RuntimeError("Agent Link Runtime 已关闭")
         self._collaboration_port = port
+
+    def bind_session_control_port(
+        self,
+        port: AgentLinkSessionControlPort | None,
+    ) -> None:
+        """由 Composition Root 注入可选 Gateway 会话控制服务。"""
+
+        if self._closed:
+            raise RuntimeError("Agent Link Runtime 已关闭")
+        self._session_control_port = port
+
+    @property
+    def session_control_available(self) -> bool:
+        return self._session_control_port is not None
 
     async def attach(self, peer: AgentLinkPeer) -> None:
         old: AgentLinkPeer | None = None
@@ -816,6 +852,14 @@ class AgentLinkRuntime:
         }:
             await self._handle_collaboration(peer, frame)
             return
+        if frame.type in {
+            "session.status",
+            "session.stop",
+            "session.resume",
+            "session.model_switch",
+        }:
+            await self._handle_session_control(peer, frame)
+            return
         if frame.type in {"tool.accepted", "tool.result", "tool.error"}:
             peer.resolve_tool_frame(frame)
             return
@@ -910,6 +954,127 @@ class AgentLinkRuntime:
                 "retryable": error.code in {
                     "collaboration_concurrency_exhausted",
                     "collaboration_task_claim_conflict",
+                },
+            },
+            session_id=peer.key.session_id,
+            reply_to=frame.id,
+        )
+
+    async def _handle_session_control(
+        self,
+        peer: AgentLinkPeer,
+        frame: AgentLinkFrame,
+    ) -> None:
+        capability = {
+            "session.status": peer.session_control_status,
+            "session.stop": peer.session_control_stop,
+            "session.resume": peer.session_control_resume,
+            "session.model_switch": peer.session_control_model_switch,
+        }[frame.type]
+        if not capability:
+            error = AgentLinkProtocolError(
+                "SESSION_CONTROL_CAPABILITY_REQUIRED",
+                "客户端握手未声明对应的会话控制能力",
+            )
+            await peer.send(self._session_error_frame(peer, frame, error))
+            return
+        port = self._session_control_port
+        if port is None:
+            error = AgentLinkProtocolError(
+                "SESSION_CONTROL_UNAVAILABLE",
+                "Nanobot 当前没有可用的 Gateway 会话控制服务",
+            )
+            await peer.send(self._session_error_frame(peer, frame, error))
+            return
+
+        resume_chat: Mapping[str, object] | None = None
+        if frame.type == "session.resume":
+            if peer.snapshot_revision is None:
+                error = AgentLinkProtocolError(
+                    "TOOLS_NOT_SYNCED",
+                    "Agent Link 必须先发送 tools.snapshot",
+                )
+                await peer.send(self._session_error_frame(peer, frame, error))
+                return
+            raw_chat = frame.payload.get("chat")
+            if not isinstance(raw_chat, Mapping):
+                error = AgentLinkProtocolError(
+                    "INVALID_SESSION_CONTROL_REQUEST",
+                    "session.resume 缺少标准 chat 请求对象",
+                )
+                await peer.send(self._session_error_frame(peer, frame, error))
+                return
+            try:
+                self._validate_chat_payload(raw_chat)
+            except AgentLinkProtocolError as exc:
+                await peer.send(self._session_error_frame(peer, frame, exc))
+                return
+            nested_extensions = raw_chat.get("required_extensions") or []
+            if not isinstance(nested_extensions, list):
+                error = AgentLinkProtocolError(
+                    "INVALID_EXTENSIONS",
+                    "chat required_extensions 必须是数组",
+                )
+                await peer.send(self._session_error_frame(peer, frame, error))
+                return
+            if nested_extensions:
+                error = AgentLinkProtocolError(
+                    "UNSUPPORTED_EXTENSION",
+                    "Nanobot 不支持续接聊天要求的必需扩展",
+                )
+                await peer.send(self._session_error_frame(peer, frame, error))
+                return
+            resume_chat = raw_chat
+
+        try:
+            result = await port.handle_session_control(
+                platform_id=peer.client.platform_id,
+                owner_id=peer.key.bridge_user_id,
+                actor_id=collaboration_actor_id(peer),
+                runtime_session_id=peer.key.bridge_session_id,
+                message_type=frame.type,
+                request_id=frame.id,
+                payload=frame.payload,
+            )
+        except AgentLinkProtocolError as exc:
+            await peer.send(self._session_error_frame(peer, frame, exc))
+            return
+        response_type = {
+            "session.status": "session.status",
+            "session.stop": "session.stopped",
+            "session.resume": "session.resumed",
+            "session.model_switch": "session.model_switched",
+        }[frame.type]
+        await peer.send(make_agent_link_frame(
+            response_type,
+            dict(result),
+            session_id=peer.key.session_id,
+            reply_to=frame.id,
+        ))
+        if resume_chat is not None:
+            synthetic = AgentLinkFrame.parse(make_agent_link_frame(
+                "chat.submit",
+                dict(resume_chat),
+                message_id=frame.id,
+                session_id=peer.key.session_id,
+            ))
+            await self.handle_frame(peer, synthetic)
+
+    @staticmethod
+    def _session_error_frame(
+        peer: AgentLinkPeer,
+        frame: AgentLinkFrame,
+        error: AgentLinkProtocolError,
+    ) -> dict[str, Any]:
+        return make_agent_link_frame(
+            "session.error",
+            {
+                "code": error.code,
+                "safe_message": error.safe_message,
+                "retryable": error.code in {
+                    "SESSION_CONTROL_UNAVAILABLE",
+                    "gateway_control_integrity_failed",
+                    "gateway_control_error",
                 },
             },
             session_id=peer.key.session_id,
@@ -1281,6 +1446,7 @@ class AgentLinkRuntime:
             self._registered_clients.clear()
             self._chat_port = None
             self._collaboration_port = None
+            self._session_control_port = None
             tasks = tuple(
                 state.task
                 for state in self._chat_states.values()

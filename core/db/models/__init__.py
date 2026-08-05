@@ -46,6 +46,11 @@ from core.db.models.group_learning import (
     GroupLearningSchedule,
     GroupLearningStreamState,
 )
+from core.db.models.gateway_control import (
+    GatewayControlEventRow,
+    GatewayRunBindingRow,
+    GatewaySessionBindingRow,
+)
 from core.db.models.inbound import ChatDeliveryOutbox, InboundMessageClaim
 from core.db.models.knowledge import (
     KnowledgeChunk,
@@ -168,6 +173,9 @@ __all__ = [
     "EvalRunResult",
     "EvalSampleCursor",
     "ExpressionMemory",
+    "GatewayControlEventRow",
+    "GatewayRunBindingRow",
+    "GatewaySessionBindingRow",
     "GroupLearningCandidate",
     "GroupLearningEvidence",
     "GroupLearningRun",

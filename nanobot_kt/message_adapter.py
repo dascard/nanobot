@@ -44,6 +44,7 @@ class MessageContractBridgeMixin:
         metadata: Mapping[str, Any] | None = None,
         stream_queue: Any = None,
         stream: bool = False,
+        trusted_gateway_transport: str = "",
     ) -> Any:
         invocation = build_kt_message_invocation(
             message,
@@ -53,6 +54,7 @@ class MessageContractBridgeMixin:
             sender_name=sender_name,
             metadata=metadata,
             stream=stream,
+            trusted_gateway_transport=trusted_gateway_transport,
         )
         runtime_request = invocation.runtime_request
         return await self.handle_message(
@@ -145,6 +147,7 @@ def build_kt_message_invocation(
     sender_name: str,
     metadata: Mapping[str, Any] | None = None,
     stream: bool = False,
+    trusted_gateway_transport: str = "",
 ) -> KTMessageInvocation:
     """用受信合同覆盖所有身份字段，兼容元数据不能反向改写身份。"""
 
@@ -161,9 +164,28 @@ def build_kt_message_invocation(
 
     normalized_meta = dict(metadata or {})
     is_group = message.chat_stream.chat_type == "group"
+    if (
+        not is_group
+        and message.principal.owner_type == "user"
+        and message.principal.owner_id != user_id
+    ):
+        raise ValueError("私聊 Runtime user 与受信 principal 不一致")
+    platform = str(message.chat_stream.platform)
+    trusted_transport = str(trusted_gateway_transport or "").strip().lower()
+    if trusted_transport and trusted_transport != "agent_link":
+        raise ValueError("trusted_gateway_transport 非法")
+    if trusted_transport and message.gateway.source != trusted_transport:
+        raise ValueError("受信 Gateway transport 与消息来源不一致")
+    transport = trusted_transport or platform
+    from core.gateway_control import build_gateway_session_binding_id
+
+    gateway_binding_id = build_gateway_session_binding_id(
+        transport,
+        message.chat_stream.chat_stream_id,
+    )
     normalized_meta.update(
         {
-            "platform": message.chat_stream.platform,
+            "platform": platform,
             "chat_type": message.chat_stream.chat_type,
             "user_id": user_id,
             "session_id": session_id,
@@ -172,10 +194,29 @@ def build_kt_message_invocation(
             "is_group": is_group,
             "chat_stream_id": message.chat_stream.chat_stream_id,
             "principal_id": message.principal.canonical_id,
+            "principal_owner_type": message.principal.owner_type,
+            "principal_owner_id": message.principal.owner_id,
             "recipient_id": message.recipient.canonical_id,
             "message_contract_version": message.schema_version,
+            "gateway_transport": transport,
+            "gateway_binding_id": gateway_binding_id,
             "stream": bool(stream),
         }
+    )
+    from core.gateway_control import GatewayRunAdmission
+
+    normalized_meta["_gateway_run_admission"] = GatewayRunAdmission(
+        binding_id=gateway_binding_id,
+        transport=transport,
+        principal=RuntimePrincipal(
+            platform=str(message.principal.platform),
+            owner_type=RuntimeOwnerType(message.principal.owner_type),
+            owner_id=message.principal.owner_id,
+        ),
+        actor_id=message.actor.actor_id,
+        chat_type=message.chat_stream.chat_type,
+        chat_stream_id=message.chat_stream.chat_stream_id,
+        runtime_session_id=session_id,
     )
     if is_group:
         normalized_meta["group_id"] = (

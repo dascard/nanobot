@@ -31,6 +31,7 @@ def _hello(
     token: str = "secret",
     client_id: str = "meapet",
     collaboration: bool = False,
+    session_control: bool = False,
 ) -> dict:
     capabilities = {
         "chat": {
@@ -49,6 +50,13 @@ def _hello(
         capabilities["collaboration"] = {
             "claim": True,
             "deliver": True,
+        }
+    if session_control:
+        capabilities["session_control"] = {
+            "status": True,
+            "stop": True,
+            "resume": True,
+            "model_switch": True,
         }
     return make_agent_link_frame(
         "control.hello",
@@ -218,6 +226,34 @@ def test_agent_link_advertises_optional_collaboration_capability(
         "claim": True,
         "deliver": True,
         "human_review_required": True,
+    }
+
+
+def test_agent_link_negotiates_optional_session_control_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AgentLinkRuntime()
+
+    class Port:
+        async def handle_session_control(self, **_kwargs):
+            return {}
+
+    runtime.bind_session_control_port(Port())
+    app = _test_app(monkeypatch, runtime=runtime)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/agent-link") as websocket:
+            websocket.send_json(_hello(session_control=True))
+            response = websocket.receive_json()
+
+    assert response["type"] == "control.ready"
+    assert response["payload"]["capabilities"]["session_control"] == {
+        "status": True,
+        "stop": True,
+        "resume": True,
+        "model_switch": True,
+        "authorization": "owner_and_session_binding",
+        "resume_mode": "channel_continuation",
     }
 
 
@@ -606,6 +642,163 @@ async def test_agent_link_rejects_undeclared_collaboration_frame_without_closing
 
 
 @pytest.mark.asyncio
+async def test_agent_link_session_control_uses_trusted_peer_identity() -> None:
+    runtime = AgentLinkRuntime()
+    sent_frames: list[dict] = []
+    calls: list[dict[str, object]] = []
+
+    class Port:
+        async def handle_session_control(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"run_id": kwargs["payload"]["run_id"], "status": "running"}
+
+    async def send_frame(frame) -> None:
+        sent_frames.append(dict(frame))
+
+    async def close_transport(_code: int, _reason: str) -> None:
+        return None
+
+    peer = AgentLinkPeer(
+        key=AgentLinkSessionKey("device-control", "session-control"),
+        send_frame=send_frame,
+        close_transport=close_transport,
+        client=AgentLinkClientIdentity("meapet", "MeaPet", "1.0.0"),
+        session_control_status=True,
+    )
+    runtime.bind_session_control_port(Port())
+    await runtime.attach(peer)
+    await runtime.handle_frame(
+        peer,
+        AgentLinkFrame.parse(make_agent_link_frame(
+            "session.status",
+            {
+                "run_id": "run-control-one",
+                "owner_id": "伪造 owner",
+                "runtime_session_id": "伪造会话",
+            },
+            message_id="session-status-one",
+            session_id=peer.key.session_id,
+        )),
+    )
+
+    assert calls[0]["platform_id"] == "meapet"
+    assert calls[0]["owner_id"] == peer.key.bridge_user_id
+    assert calls[0]["runtime_session_id"] == peer.key.bridge_session_id
+    assert calls[0]["actor_id"] != "伪造 owner"
+    assert sent_frames[0]["type"] == "session.status"
+    assert sent_frames[0]["reply_to"] == "session-status-one"
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agent_link_resume_reenters_standard_chat_path() -> None:
+    runtime = AgentLinkRuntime()
+    sent_frames: list[dict] = []
+    chat_requests: list[AgentLinkChatRequest] = []
+    chat_started = asyncio.Event()
+
+    class ControlPort:
+        async def handle_session_control(self, **kwargs):
+            assert kwargs["message_type"] == "session.resume"
+            return {
+                "run_id": kwargs["payload"]["run_id"],
+                "status": "authorized",
+                "resume_mode": "channel_continuation",
+            }
+
+    class ChatPort:
+        async def run_chat(self, request, _tool_caller):
+            chat_requests.append(request)
+            chat_started.set()
+            return "已从标准聊天入口继续"
+
+    async def send_frame(frame) -> None:
+        sent_frames.append(dict(frame))
+
+    async def close_transport(_code: int, _reason: str) -> None:
+        return None
+
+    peer = AgentLinkPeer(
+        key=AgentLinkSessionKey("device-resume", "session-resume"),
+        send_frame=send_frame,
+        close_transport=close_transport,
+        client=AgentLinkClientIdentity("meapet", "MeaPet", "1.0.0"),
+        session_control_resume=True,
+        snapshot_revision=1,
+    )
+    runtime.bind_session_control_port(ControlPort())
+    runtime.bind_chat_port(ChatPort())
+    await runtime.attach(peer)
+    chat_payload = dict(_chat_submit("resume-control-one")["payload"])
+    await runtime.handle_frame(
+        peer,
+        AgentLinkFrame.parse(make_agent_link_frame(
+            "session.resume",
+            {
+                "run_id": "run-waiting-input",
+                "chat": chat_payload,
+                "owner_id": "伪造 owner",
+            },
+            message_id="resume-control-one",
+            session_id=peer.key.session_id,
+        )),
+    )
+    await asyncio.wait_for(chat_started.wait(), timeout=1)
+    for _ in range(20):
+        if any(frame["type"] == "chat.final" for frame in sent_frames):
+            break
+        await asyncio.sleep(0)
+
+    assert [frame["type"] for frame in sent_frames[:2]] == [
+        "session.resumed",
+        "chat.accepted",
+    ]
+    assert any(frame["type"] == "chat.final" for frame in sent_frames)
+    assert chat_requests[0].request_id == "resume-control-one"
+    assert chat_requests[0].key == peer.key
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agent_link_rejects_undeclared_session_control_without_closing() -> None:
+    runtime = AgentLinkRuntime()
+    sent_frames: list[dict] = []
+
+    async def send_frame(frame) -> None:
+        sent_frames.append(dict(frame))
+
+    async def close_transport(_code: int, _reason: str) -> None:
+        return None
+
+    peer = AgentLinkPeer(
+        key=AgentLinkSessionKey("device-no-control", "session-no-control"),
+        send_frame=send_frame,
+        close_transport=close_transport,
+    )
+    await runtime.attach(peer)
+    await runtime.handle_frame(
+        peer,
+        AgentLinkFrame.parse(make_agent_link_frame(
+            "session.model_switch",
+            {
+                "run_id": "run-one",
+                "profile_id": "quality",
+                "expected_generation": 1,
+            },
+            message_id="model-switch-one",
+            session_id=peer.key.session_id,
+        )),
+    )
+
+    assert sent_frames[0]["type"] == "session.error"
+    assert sent_frames[0]["payload"]["code"] == (
+        "SESSION_CONTROL_CAPABILITY_REQUIRED"
+    )
+    assert peer.online is True
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_agent_link_runtime_can_call_frontend_without_active_chat() -> None:
     runtime = AgentLinkRuntime()
     key = AgentLinkSessionKey("device-test", "session-test")
@@ -692,6 +885,11 @@ async def test_agent_link_dynamic_tool_enters_registry_and_tool_plan() -> None:
                 executor=executor,
             )
 
+        async def handle_message_contract(self, message, **kwargs):
+            captured["message_contract"] = message
+            content = kwargs.pop("content")
+            return await self.handle_message(content, **kwargs)
+
         async def handle_message(self, query, **kwargs):
             from core.prompt_v2.compiler import compile_prompt_plan
             from core.prompt_v2.schema import PromptCompileRequest
@@ -761,6 +959,10 @@ async def test_agent_link_dynamic_tool_enters_registry_and_tool_plan() -> None:
     )
 
     assert answer == "完成"
+    assert captured["message_contract"].gateway.source == "agent_link"
+    assert captured["message_contract"].principal.owner_id == (
+        key.bridge_user_id
+    )
     assert registry.get_tool("meapet.echo") is not None
     assert executor.get_tool("meapet.echo") is registry.get_tool("meapet.echo")
     plan = captured["plan"]

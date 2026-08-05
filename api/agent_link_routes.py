@@ -295,6 +295,29 @@ def _client_collaboration_capabilities(
     return claim, deliver
 
 
+def _client_session_control_capabilities(
+    frame: AgentLinkFrame,
+) -> tuple[bool, bool, bool, bool]:
+    capabilities = frame.payload.get("capabilities")
+    capabilities = capabilities if isinstance(capabilities, Mapping) else {}
+    raw = capabilities.get("session_control")
+    if raw is None:
+        return False, False, False, False
+    if not isinstance(raw, Mapping):
+        raise AgentLinkProtocolError(
+            "INVALID_HANDSHAKE",
+            "control.hello session_control capability 必须是对象",
+        )
+    names = ("status", "stop", "resume", "model_switch")
+    values = tuple(raw.get(name, False) for name in names)
+    if any(type(value) is not bool for value in values):
+        raise AgentLinkProtocolError(
+            "INVALID_HANDSHAKE",
+            "session_control capability 字段必须是 bool",
+        )
+    return values
+
+
 def _authenticate_hello(frame: AgentLinkFrame) -> None:
     configured = str(NANOBOT_AGENT_LINK_TOKEN or "")
     if not configured:
@@ -386,6 +409,12 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
         collaboration_claim, collaboration_deliver = (
             _client_collaboration_capabilities(hello)
         )
+        (
+            session_control_status,
+            session_control_stop,
+            session_control_resume,
+            session_control_model_switch,
+        ) = _client_session_control_capabilities(hello)
         client_identity = _client_identity(hello)
         policy_profile = await _preflight_prompt_policy(client_identity)
         device_id = _safe_device_id(hello)
@@ -400,6 +429,10 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
             policy_profile=policy_profile,
             collaboration_claim=collaboration_claim,
             collaboration_deliver=collaboration_deliver,
+            session_control_status=session_control_status,
+            session_control_stop=session_control_stop,
+            session_control_resume=session_control_resume,
+            session_control_model_switch=session_control_model_switch,
         )
         await runtime.attach(peer)
         server_capabilities: dict[str, object] = {
@@ -422,6 +455,24 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
                 "claim": collaboration_claim,
                 "deliver": collaboration_deliver,
                 "human_review_required": True,
+            }
+        session_control_requested = any((
+            session_control_status,
+            session_control_stop,
+            session_control_resume,
+            session_control_model_switch,
+        ))
+        if session_control_requested:
+            available = runtime.session_control_available
+            server_capabilities["session_control"] = {
+                "status": available and session_control_status,
+                "stop": available and session_control_stop,
+                "resume": available and session_control_resume,
+                "model_switch": (
+                    available and session_control_model_switch
+                ),
+                "authorization": "owner_and_session_binding",
+                "resume_mode": "channel_continuation",
             }
         await peer.send(
             make_agent_link_frame(

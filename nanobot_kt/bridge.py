@@ -1975,12 +1975,17 @@ class NanobotBridge(MessageContractBridgeMixin):
 
             # 从 WebUI route 读取 provider 配置，让 route provider 控制实际 API 调用
             try:
-                from nanobot_kt.model_runtime import resolve_reply_route_plans
+                from nanobot_kt.model_runtime import (
+                    resolve_gateway_reply_route_plans,
+                )
 
-                route_plans = resolve_reply_route_plans(
+                route_plans = resolve_gateway_reply_route_plans(
                     default_base_url=NEW_API_BASE_URL,
                     default_api_key=NEW_API_KEY,
                     session_id=session_id,
+                    gateway_binding_id=str(
+                        meta.get("gateway_binding_id") or ""
+                    ),
                 )
                 route_plan = route_plans[0]
             except RuntimeError as e:

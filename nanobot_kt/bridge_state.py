@@ -30,7 +30,7 @@ def build_bridge_run_meta(
 ) -> dict[str, Any]:
     """构造 Trace 与 Durable Task 共用的有界请求元数据。"""
 
-    return {
+    result = {
         "sender_name": sender_name,
         "is_group": is_group,
         "message_id": meta.get("message_id", ""),
@@ -43,6 +43,12 @@ def build_bridge_run_meta(
         "workflow_idempotency_key": meta.get("workflow_idempotency_key", ""),
         "run_timeout_seconds": meta.get("run_timeout_seconds", ""),
     }
+    from core.gateway_control import GatewayRunAdmission
+
+    gateway_admission = meta.pop("_gateway_run_admission", None)
+    if isinstance(gateway_admission, GatewayRunAdmission):
+        result["_gateway_run_admission"] = gateway_admission
+    return result
 
 
 async def bind_run_task_owner(request_scope: Any, task_lease: Any) -> None:

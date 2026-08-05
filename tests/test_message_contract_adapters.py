@@ -198,6 +198,10 @@ def test_kt_adapter_identity_fields_override_untrusted_metadata():
     assert invocation.metadata["message_id"] == "m-1"
     assert invocation.metadata["chat_stream_id"] == "qq:42:group"
     assert invocation.metadata["principal_id"] == "qq:group:42"
+    assert invocation.metadata["principal_owner_type"] == "group"
+    assert invocation.metadata["principal_owner_id"] == "42"
+    assert invocation.metadata["gateway_transport"] == "qq"
+    assert len(invocation.metadata["gateway_binding_id"]) == 64
     assert invocation.stream is True
     assert (
         invocation.runtime_request.context.session_id
@@ -276,6 +280,63 @@ def test_kt_adapter_uses_trace_request_id_before_message_id():
     assert invocation.runtime_request.context.message_id == (
         "m-lower-priority"
     )
+
+
+def test_kt_adapter_does_not_trust_client_gateway_source_as_transport():
+    from foundation.identity import (
+        ActorIdentity,
+        Principal,
+        RecipientIdentity,
+        resolve_chat_stream_identity,
+    )
+    from foundation.message_contract import (
+        GatewayMetadata,
+        InboundMessageContract,
+        TextContent,
+    )
+    from nanobot_kt.message_adapter import build_kt_message_invocation
+
+    message = InboundMessageContract(
+        message_id="m-source-spoof",
+        chat_stream=resolve_chat_stream_identity(
+            platform="external_web",
+            chat_type="private",
+            session_id="private_user-one",
+        ),
+        actor=ActorIdentity(platform="external_web", actor_id="user-one"),
+        recipient=RecipientIdentity(
+            platform="external_web",
+            recipient_type="user",
+            recipient_id="user-one",
+        ),
+        principal=Principal(
+            platform="external_web",
+            owner_type="user",
+            owner_id="user-one",
+        ),
+        text="测试",
+        parts=(TextContent("测试"),),
+        gateway=GatewayMetadata(source="agent_link"),
+    )
+
+    invocation = build_kt_message_invocation(
+        message,
+        content="测试",
+        runtime_user_id="user-one",
+        runtime_session_id="private_user-one",
+        sender_name="用户",
+    )
+
+    assert invocation.metadata["gateway_transport"] == "external_web"
+
+    with pytest.raises(ValueError, match="principal"):
+        build_kt_message_invocation(
+            message,
+            content="测试",
+            runtime_user_id="other-user",
+            runtime_session_id="private_user-one",
+            sender_name="用户",
+        )
 
 
 def test_chat_adapter_rejects_control_character_gateway_metadata():

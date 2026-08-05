@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 8.4 已完成，准备阶段 9.1）
+> 状态：执行中（阶段 9.1 已完成，准备阶段 9.2）
 >
 > 建立日期：2026-08-03
 >
@@ -1289,10 +1289,41 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 9.1 多渠道 Gateway 与远程会话控制
 
-- [ ] 统一 QQ、Web、Agent Link 和未来 IM 的 session binding。
-- [ ] 支持状态、pending approval、pending question、stop、resume 和 model switch。
-- [ ] 远程客户端只能控制已有授权 Run。
-- [ ] 任何远程操作不得绕过身份、ACL、ToolPlan 和 Sandbox。
+- [x] 统一 QQ、Web、Agent Link 和未来 IM 的 session binding。
+- [x] 支持状态、pending approval、pending question、stop、resume 和 model switch。
+- [x] 远程客户端只能控制已有授权 Run。
+- [x] 任何远程操作不得绕过身份、ACL、ToolPlan 和 Sandbox。
+
+实现记录（2026-08-05）：
+
+- 新增统一 Gateway session binding、不可变 Run binding 和追加式控制审计事实。QQ、Web 与 Agent Link
+  都从 canonical 消息合同生成同一类型化 admission，并在 Run Ledger、AgentRun 和 Durable Task 接纳事务内
+  原子写入；未来 IM 只需复用相同合同，渠道 Adapter 不直接写内部表。客户端伪造字符串元数据、伪造
+  `gateway.source`、私聊 Runtime user 与受信 principal 不一致或 admission／Runtime session 不一致都会
+  失败关闭，类型化内部标记在 Trace 接纳后立即移除，不进入 Prompt、持久元数据或模型上下文。
+- Gateway 状态只以 Run Ledger 为权威来源，并用 Durable Task 表示真实停止请求；状态投影包含 terminal、
+  pending approval、pending question、stop 和 resume 能力。控制主体必须精确匹配不可变 Run binding 的
+  owner、transport 与 Runtime session，只有已通过管理令牌认证的管理员可显式越过渠道范围；不存在绑定、
+  Ledger 缺失或事实不一致均拒绝控制。stop、resume 和 model switch 使用按主体隔离的请求 Hash、指纹冲突
+  检查和追加式审计，支持并发安全的幂等重放。
+- Agent Link 将 status、stop、resume 和 model switch 作为逐项可协商能力，服务端只广告客户端声明且
+  Composition Root 已注入的能力。控制身份完全来自已认证 peer；协议错误返回 `session.error`，不关闭合法
+  连接。resume 只为终态或等待人工交互的 Run 授权渠道续接，并要求已同步工具快照和完整标准 chat 对象；
+  授权后重新进入既有 `chat.submit` 路径，因此继续执行消息身份、ToolPlan、工具权限和 Sandbox 门禁，而不
+  伪造 checkpoint replay 或建立旁路执行器。
+- 模型切换只接受当前已验证 reply Route 中的 Profile，公开描述不包含凭据、Base URL 或 Codex 账号 ID。
+  会话投影使用 generation CAS 保存“下一 Run 生效”的 pending Profile；新 Run 接纳时才将其提升为 active，
+  当前 Run 的候选链保持冻结。模型 Profile 解析通过框架无关 Port 由 Composition Root 注入，Gateway 核心和
+  管理 API 不依赖 KT；KT 仅保留候选验证与 Route 投影 Adapter，`bridge.py` 仍低于冻结体积上限。
+- 新增管理员 Gateway 状态／停止／续接授权／模型切换 API，以及 Agent Link 与真实消息 Adapter／RunTracer
+  的端到端回归。OpenAPI、Behavior、Release／Verification Golden、决策规则、Task SLO 和架构边界均通过；
+  65 项 Gateway 联合回归及 293 项契约、Golden、Prompt Runtime 回归通过。本阶段未改变 `enriched_query`、
+  历史注入、conversation、工具输出或 Prompt Runtime 输入合同；检查 canonical `chat`、`tasks`、`tools`
+  模板、变量注册和模板注册表后无需修改模板。
+- 最终完整 `python -m pytest tests/ -v` 在清除代理变量并使用 Linux `/var/tmp` basetemp 后为
+  6783 passed、12 skipped、0 failed，耗时 631.29 秒；全仓致命 Ruff 规则、本轮变更文件完整 Ruff、Python
+  编译和 `git diff --check` 均通过。全仓普通 Ruff 另报告 8 个既有未使用导入，均位于本阶段未修改的基线
+  文件，按严格守界约定未顺手改动，也不影响本阶段 0 failure 验收。
 
 #### 9.2 主动能力和 Sentinel 收敛
 

@@ -103,6 +103,13 @@ def bind_agent_runtime(bridge: object) -> None:
         SqlAlchemyAgentLinkCollaborationAdapter,
     )
     from core.agent_link.runtime import get_agent_link_runtime
+    from core.gateway_control.agent_link import (
+        SqlAlchemyAgentLinkSessionControlAdapter,
+    )
+    from core.gateway_control.model_profiles import (
+        bind_gateway_model_profile_port,
+        clear_gateway_model_profile_port,
+    )
     from core.agent_runtime.gateway import bind_agent_runtime as _bind
     from core.agent_runtime.gateway import (
         clear_agent_runtime_bindings as _clear,
@@ -117,6 +124,9 @@ def bind_agent_runtime(bridge: object) -> None:
     )
     from nanobot_kt.agent_link_adapter import KtAgentLinkChatAdapter
     from nanobot_kt.bridge import NanobotBridge
+    from nanobot_kt.gateway_model_profile_adapter import (
+        KtGatewayModelProfileAdapter,
+    )
     from bootstrap.research_runtime import build_research_runtime_factory
     from nanobot_kt.media_preprocess_adapter import KtImagePrecacheAdapter
     from nanobot_kt.scheduled_workflow_adapter import (
@@ -144,12 +154,21 @@ def bind_agent_runtime(bridge: object) -> None:
                 session_factory=database.SessionLocal,
             )
         )
+        model_profile_port = KtGatewayModelProfileAdapter()
+        bind_gateway_model_profile_port(model_profile_port)
         agent_link_runtime = get_agent_link_runtime()
         agent_link_runtime.bind_chat_port(KtAgentLinkChatAdapter(bridge))
         agent_link_runtime.bind_collaboration_port(
             SqlAlchemyAgentLinkCollaborationAdapter(database.SessionLocal)
         )
+        agent_link_runtime.bind_session_control_port(
+            SqlAlchemyAgentLinkSessionControlAdapter(
+                database.SessionLocal,
+                model_profile_port,
+            )
+        )
     except BaseException:
+        clear_gateway_model_profile_port()
         clear_scheduled_workflow_callbacks()
         clear_image_precache_port()
         _clear()
@@ -164,11 +183,17 @@ def clear_agent_runtime_bindings() -> None:
         clear_scheduled_workflow_callbacks,
     )
     from core.media_preprocess_runtime import clear_image_precache_port
+    from core.gateway_control.model_profiles import (
+        clear_gateway_model_profile_port,
+    )
     from core.agent_link.runtime import get_agent_link_runtime
 
     clear_scheduled_workflow_callbacks()
     clear_image_precache_port()
-    get_agent_link_runtime().bind_collaboration_port(None)
+    clear_gateway_model_profile_port()
+    agent_link_runtime = get_agent_link_runtime()
+    agent_link_runtime.bind_collaboration_port(None)
+    agent_link_runtime.bind_session_control_port(None)
     _clear()
 
 

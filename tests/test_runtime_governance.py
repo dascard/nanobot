@@ -702,6 +702,7 @@ async def test_session_grant_is_exact_replayable_ledgered_and_revocable(db_sessi
 def test_permission_grant_schema_migration_is_idempotent_and_indexed():
     from core.schema_migrations import (
         _AGENT_COLLABORATION_V1_VERSION,
+        _GATEWAY_SESSION_CONTROL_V1_VERSION,
         _AGENT_ORCHESTRATION_GOVERNANCE_V1_VERSION,
         MIGRATIONS,
         _RUNTIME_PERMISSION_GOVERNANCE_V1_VERSION,
@@ -742,4 +743,6 @@ def test_permission_grant_schema_migration_is_idempotent_and_indexed():
         _AGENT_ORCHESTRATION_GOVERNANCE_V1_VERSION
     ) < migration_versions.index(
         _AGENT_COLLABORATION_V1_VERSION
+    ) < migration_versions.index(
+        _GATEWAY_SESSION_CONTROL_V1_VERSION
     )

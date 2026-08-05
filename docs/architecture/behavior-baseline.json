@@ -233,7 +233,7 @@
       "stage": "Agent Harness 阶段 6.1"
     }
   ],
-  "baseline_git_commit": "73b9da60f092110f869db0f5e9213fa2cc0e9c12",
+  "baseline_git_commit": "cdbdb9cd59977316714b4e2ec9a51ac1fee481d5",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"

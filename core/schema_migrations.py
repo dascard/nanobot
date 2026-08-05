@@ -123,6 +123,7 @@ _AGENT_ORCHESTRATION_GOVERNANCE_V1_VERSION = (
     "20260805_agent_orchestration_governance_v1"
 )
 _AGENT_COLLABORATION_V1_VERSION = "20260805_agent_collaboration_v1"
+_GATEWAY_SESSION_CONTROL_V1_VERSION = "20260805_gateway_session_control_v1"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -4030,6 +4031,43 @@ def _agent_collaboration_v1(
         ))
 
 
+def _gateway_session_control_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建统一 Gateway session binding 与追加式远程控制审计。"""
+
+    from core.db.models.gateway_control import (
+        GatewayControlEventRow,
+        GatewayRunBindingRow,
+        GatewaySessionBindingRow,
+    )
+
+    for model in (
+        GatewaySessionBindingRow,
+        GatewayRunBindingRow,
+        GatewayControlEventRow,
+    ):
+        model.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    for table_name in (
+        "gateway_run_bindings",
+        "gateway_control_events",
+    ):
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_update "
+            f"BEFORE UPDATE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_append_only'); END"
+        ))
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_delete "
+            f"BEFORE DELETE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_append_only'); END"
+        ))
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -5312,6 +5350,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _AGENT_COLLABORATION_V1_VERSION,
         "agent collaboration frozen plan boards and append only handoffs",
         _agent_collaboration_v1,
+    ),
+    (
+        _GATEWAY_SESSION_CONTROL_V1_VERSION,
+        "gateway session bindings and remote run control audit",
+        _gateway_session_control_v1,
     ),
 ]
 

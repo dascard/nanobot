@@ -796,6 +796,26 @@ class RunTracer:
         trace_id = trace_id or new_trace_id()
         accepted_at = datetime.now().astimezone()
         normalized_meta = dict(meta or {})
+        from core.gateway_control import (
+            gateway_run_admission_from_metadata,
+        )
+
+        gateway_admission = gateway_run_admission_from_metadata(
+            metadata=normalized_meta,
+            runtime_session_id=str(session_id or ""),
+        )
+        normalized_meta.pop("_gateway_run_admission", None)
+        if gateway_admission is not None:
+            normalized_meta.update({
+                "gateway_binding_id": gateway_admission.binding_id,
+                "gateway_transport": gateway_admission.transport,
+                "principal_owner_type": (
+                    gateway_admission.principal.owner_type.value
+                ),
+                "principal_owner_id": gateway_admission.principal.owner_id,
+                "chat_stream_id": gateway_admission.chat_stream_id,
+                "message_contract_version": 1,
+            })
         from core.durable_tasks import (
             DEFAULT_RUN_TASK_TIMEOUT_SECONDS,
             SqlAlchemyRunTaskService,
@@ -891,6 +911,16 @@ class RunTracer:
                         meta_json=_json_dumps(normalized_meta, max_chars=3000),
                         started_at=to_db_naive(accepted_at),
                     ))
+                    db.flush()
+                    if gateway_admission is not None:
+                        from core.gateway_control import admit_gateway_run
+
+                        admit_gateway_run(
+                            db,
+                            run_id=run_id,
+                            admission=gateway_admission,
+                            admitted_at=accepted_at,
+                        )
                     receipt_digest = hashlib.sha256(
                         idempotency_key.encode("utf-8")
                     ).hexdigest()
