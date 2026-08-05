@@ -225,7 +225,7 @@
       "stage": "Agent Harness 阶段 5.4"
     },
     {
-      "after_sha256": "b22fd30e2070859fc65835513498d7818f6e3cb018ab8b8c6430072ded2d124b",
+      "after_sha256": "7a3b03d3e418c061aaded2c6a9d8515670641cbe4b5acf8b0aa22a0055736cb4",
       "before_sha256": "ce3a26119eb761eb9f4635fb017f668aab162096a298d7da27fc277350dc2cc9",
       "id": "agent_harness_managed_skills_registry",
       "reason": "把 skill 从 KT 隐藏框架入口迁移为 Nanobot active 工具；只有服务端冻结可见版本锁后才动态启用。",
@@ -233,7 +233,7 @@
       "stage": "Agent Harness 阶段 6.1"
     }
   ],
-  "baseline_git_commit": "da9b59dfd49d893c5c8c309fbc1884e62d0d85c6",
+  "baseline_git_commit": "73b9da60f092110f869db0f5e9213fa2cc0e9c12",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -294,7 +294,7 @@
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "b22fd30e2070859fc65835513498d7818f6e3cb018ab8b8c6430072ded2d124b"
+      "sha256": "7a3b03d3e418c061aaded2c6a9d8515670641cbe4b5acf8b0aa22a0055736cb4"
     },
     {
       "classification": "security_invariant",

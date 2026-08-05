@@ -1,10 +1,10 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`da9b59dfd49d893c5c8c309fbc1884e62d0d85c6`
-- 规则总数：8340
+- 源提交：`73b9da60f092110f869db0f5e9213fa2cc0e9c12`
+- 规则总数：8384
 - 扫描错误：0
-- 人工复核队列：721
+- 人工复核队列：722
 - 完整逐项记录：`decision-rule-inventory.json`
 
 ## 分类汇总
@@ -12,18 +12,18 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1615 |
-| `data_consistency` | 478 |
+| `configurable_policy` | 1627 |
+| `data_consistency` | 482 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4405 |
-| `security_invariant` | 1668 |
+| `protocol_syntax` | 4429 |
+| `security_invariant` | 1672 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `core/schema_migrations.py` | 243 |
+| `core/schema_migrations.py` | 244 |
 | `scripts/manage-sandbox-production.sh` | 179 |
 | `core/scheduled_workflow.py` | 133 |
 | `webui/src/App.jsx` | 128 |
@@ -97,6 +97,7 @@
 | `core/mcp/contracts.py` | 29 |
 | `api/admin/rag_benchmark_routes.py` | 28 |
 | `app/memory_digest/jobs.py` | 28 |
+| `core/agent_link/runtime.py` | 28 |
 | `core/group_memory.py` | 28 |
 | `core/runtime_tool_service.py` | 28 |
 | `core/sandbox/profile_catalog.py` | 28 |
@@ -117,7 +118,6 @@
 | `sandboxd/process_manager.py` | 25 |
 | `api/admin/eval_routes.py` | 24 |
 | `core/outbound_transport.py` | 24 |
-| `core/agent_link/runtime.py` | 23 |
 | `core/model_provider/preset_config.py` | 23 |
 | `core/outbound/run_claims.py` | 23 |
 | `core/outbound_delivery_service.py` | 23 |
@@ -261,6 +261,7 @@
 | `nanobot_kt/tools/ai_daily.py` | 11 |
 | `sandboxd/quota.py` | 11 |
 | `webui/src/features/rag/RagBenchmarkPage.jsx` | 11 |
+| `api/admin/collaboration_routes.py` | 10 |
 | `api/admin/scheduled_task_routes.py` | 10 |
 | `api/chat_persistence.py` | 10 |
 | `app/group_learning/review_service.py` | 10 |
@@ -307,7 +308,10 @@
 | `api/admin/skill_routes.py` | 8 |
 | `api/chat_content_helpers.py` | 8 |
 | `api/session_goal_routes.py` | 8 |
+| `app/group_ingress/collaboration_commands.py` | 8 |
 | `app/group_ingress/service.py` | 8 |
+| `core/agent_collaboration/contracts.py` | 8 |
+| `core/agent_collaboration/service.py` | 8 |
 | `core/agent_runtime/governance.py` | 8 |
 | `core/agent_runtime/governance_contracts.py` | 8 |
 | `core/jobs/policies.py` | 8 |
@@ -434,6 +438,7 @@
 | `app/group_memory/query_service.py` | 4 |
 | `app/prompt_runtime/preview_service.py` | 4 |
 | `clients/mcp.py` | 4 |
+| `core/agent_collaboration/agent_link.py` | 4 |
 | `core/agent_manifest/values.py` | 4 |
 | `core/agent_runtime/recovery.py` | 4 |
 | `core/json_utils.py` | 4 |
@@ -972,6 +977,9 @@
 | `decision.bfb268e779387baaf4c7` | `app/group_analysis/render.py:187` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 7A–7D | `reviewed` |
 |  | 摘要："topics" in selected_aspects |  |  |  |  |  |
 |  | 原因：人工复核：报告按已校验 Aspect 集合决定固定区块可见性，属于结构化渲染协议 |  |  |  |  |  |
+| `decision.eb262f3261a75de7e428` | `app/group_ingress/collaboration_commands.py:36` | `python.regex_call` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+|  | 摘要：re.compile(rf"^@agent\s+状态\s+{_BOARD}$") |  |  |  |  |  |
+|  | 原因：人工复核：群聊协作命令采用完整匹配的固定协议语法，非自然语言语义分类规则 |  |  |  |  |  |
 | `decision.7514aa89280d2bc2b2f8` | `app/group_learning/migration_audit.py:70` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：row.human_action in { "accept", "edit_accept", "create", "legacy_accept", "legacy_reject", } |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
@@ -1203,28 +1211,28 @@
 | `decision.ec7febdaf357dde829ce` | `core/config_registry.py:116` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：default_kind == "kt" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b285bea2e346029ab3bb` | `core/config_registry.py:1995` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b285bea2e346029ab3bb` | `core/config_registry.py:2008` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_route_descriptor.inherits_from != "reply" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b311d9dcf2b5deda403e` | `core/config_registry.py:2049` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b311d9dcf2b5deda403e` | `core/config_registry.py:2062` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.2bb496715819bdcd3bc9` | `core/config_registry.py:2060` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.2bb496715819bdcd3bc9` | `core/config_registry.py:2073` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.dae06bbee217953780ff` | `core/config_registry.py:2061` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.dae06bbee217953780ff` | `core/config_registry.py:2074` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "timeout" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.671ba1803851f9f59377` | `core/config_registry.py:2063` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.671ba1803851f9f59377` | `core/config_registry.py:2076` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "temperature" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b80da902b1dcbf99117e` | `core/config_registry.py:2064` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b80da902b1dcbf99117e` | `core/config_registry.py:2077` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_field == "timeout" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.5f13cbd491b0243fead7` | `core/config_registry.py:2080` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.5f13cbd491b0243fead7` | `core/config_registry.py:2093` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：_route_descriptor.inherits_from == "reply" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
-| `decision.b79aa7ab1e709629e053` | `core/config_registry.py:2111` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.b79aa7ab1e709629e053` | `core/config_registry.py:2124` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：descriptor.route_type != "controller" |  |  |  |  |  |
 |  | 原因：人工复核：受管设置的枚举和值格式校验属于类型化配置合同 |  |  |  |  |  |
 | `decision.98636769c55b8c6ac665` | `core/content_rules/adapters.py:23` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
@@ -1986,13 +1994,13 @@
 | `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:924` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:729` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:730` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:729` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:730` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2468` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2469` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |

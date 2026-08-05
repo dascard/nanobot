@@ -16,6 +16,10 @@ from core.db.models.agent_orchestration import (
     AgentOrchestrationPlanEventRow,
     AgentOrchestrationPlanRevisionRow,
 )
+from core.db.models.agent_collaboration import (
+    AgentCollaborationBoardRow,
+    AgentCollaborationEventRow,
+)
 from core.db.models.chat import ChatLog, ConversationTurn, SensitiveData, User
 from core.db.models.durable_task import RunTaskControl
 from core.db.models.evaluation import (
@@ -146,6 +150,8 @@ __all__ = [
     "AdminAuditLog",
     "AdminIdempotencyRecord",
     "AgentRun",
+    "AgentCollaborationBoardRow",
+    "AgentCollaborationEventRow",
     "AgentOrchestrationCheckpointRow",
     "AgentOrchestrationPlanEventRow",
     "AgentOrchestrationPlanRevisionRow",

@@ -1,6 +1,40 @@
 {
   "components": {
     "schemas": {
+      "ActorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_type": {
+            "enum": [
+              "user",
+              "agent",
+              "tool",
+              "system",
+              "adapter"
+            ],
+            "title": "Actor Type",
+            "type": "string"
+          },
+          "parent_actor_id": {
+            "default": "",
+            "maxLength": 160,
+            "title": "Parent Actor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor_type",
+          "actor_id"
+        ],
+        "title": "ActorBody",
+        "type": "object"
+      },
       "AdminCellMetaResponse": {
         "properties": {
           "full_length": {
@@ -1304,6 +1338,52 @@
         "title": "BlockRuleUpdate",
         "type": "object"
       },
+      "BoardCreateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/IdentityBody"
+          },
+          "plan_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "plan_revision": {
+            "minimum": 1.0,
+            "title": "Plan Revision",
+            "type": "integer"
+          },
+          "root_input": {
+            "additionalProperties": true,
+            "title": "Root Input",
+            "type": "object"
+          },
+          "source_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "identity",
+          "plan_id",
+          "plan_revision",
+          "root_input",
+          "source_type",
+          "source_id"
+        ],
+        "title": "BoardCreateBody",
+        "type": "object"
+      },
       "CancelRequest": {
         "properties": {
           "reason": {
@@ -2165,6 +2245,47 @@
           "reason"
         ],
         "title": "ControlTransitionRequest",
+        "type": "object"
+      },
+      "DeliveryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "attempt_no": {
+            "minimum": 1.0,
+            "title": "Attempt No",
+            "type": "integer"
+          },
+          "lease_generation": {
+            "minimum": 1.0,
+            "title": "Lease Generation",
+            "type": "integer"
+          },
+          "lease_token": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Lease Token",
+            "type": "string"
+          },
+          "output": {
+            "additionalProperties": true,
+            "title": "Output",
+            "type": "object"
+          }
+        },
+        "required": [
+          "actor_id",
+          "lease_token",
+          "lease_generation",
+          "attempt_no",
+          "output"
+        ],
+        "title": "DeliveryBody",
         "type": "object"
       },
       "EffectivePromptPreviewRequest": {
@@ -5057,6 +5178,44 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IdentityBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/ActorBody"
+          },
+          "correlation_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/OwnerBody"
+          },
+          "run_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "turn_id",
+          "correlation_id",
+          "actor",
+          "owner"
+        ],
+        "title": "IdentityBody",
+        "type": "object"
+      },
       "LabelRequest": {
         "properties": {
           "expected": {
@@ -6040,6 +6199,40 @@
         "title": "NearDuplicateAction",
         "type": "object"
       },
+      "OwnerBody": {
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "owner_type": {
+            "enum": [
+              "user",
+              "group",
+              "project",
+              "system"
+            ],
+            "title": "Owner Type",
+            "type": "string"
+          },
+          "platform": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Platform",
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform",
+          "owner_type",
+          "owner_id"
+        ],
+        "title": "OwnerBody",
+        "type": "object"
+      },
       "PersonaExtractRequest": {
         "properties": {
           "instructions": {
@@ -6180,6 +6373,95 @@
           }
         },
         "title": "PersonaInjectionPreviewRequest",
+        "type": "object"
+      },
+      "PlanApproveBody": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_event_sequence": {
+            "minimum": 1.0,
+            "title": "Expected Event Sequence",
+            "type": "integer"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/OwnerBody"
+          },
+          "plan_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "plan_sha256",
+          "expected_event_sequence"
+        ],
+        "title": "PlanApproveBody",
+        "type": "object"
+      },
+      "PlanFreezeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "expected_event_sequence": {
+            "minimum": 1.0,
+            "title": "Expected Event Sequence",
+            "type": "integer"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/OwnerBody"
+          },
+          "plan_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "plan_sha256",
+          "expected_event_sequence",
+          "approval_id"
+        ],
+        "title": "PlanFreezeBody",
+        "type": "object"
+      },
+      "PlanPreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/IdentityBody"
+          },
+          "plan": {
+            "additionalProperties": true,
+            "title": "Plan",
+            "type": "object"
+          },
+          "proposed_by": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Proposed By",
+            "type": "string"
+          },
+          "repair_reason_code": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Repair Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "identity",
+          "plan",
+          "proposed_by"
+        ],
+        "title": "PlanPreviewBody",
         "type": "object"
       },
       "PresetResolveBody": {
@@ -7129,6 +7411,36 @@
           }
         },
         "title": "RetryPolicyBody",
+        "type": "object"
+      },
+      "ReviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "expected_delivery_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Delivery Sha256",
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/OwnerBody"
+          },
+          "reason_code": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "expected_delivery_sha256",
+          "approved"
+        ],
+        "title": "ReviewBody",
         "type": "object"
       },
       "RollingSummaryEnqueueRequest": {
@@ -9022,6 +9334,22 @@
           }
         },
         "title": "StickerUpdate",
+        "type": "object"
+      },
+      "TaskClaimBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor_id"
+        ],
+        "title": "TaskClaimBody",
         "type": "object"
       },
       "TimingGateStabilityRequest": {
@@ -11036,6 +11364,786 @@
         "summary": "List Chat Streams",
         "tags": [
           "admin-chat-config"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/collaboration/boards": {
+      "post": {
+        "operationId": "post_api_v1_admin_collaboration_boards",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BoardCreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Create Board",
+        "tags": [
+          "admin-agent-collaboration"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/collaboration/boards/{board_id}": {
+      "get": {
+        "operationId": "get_api_v1_admin_collaboration_boards_board_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_platform",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Owner Platform",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_type",
+            "required": true,
+            "schema": {
+              "title": "Owner Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_id",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Owner Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Board",
+        "tags": [
+          "admin-agent-collaboration"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/collaboration/boards/{board_id}/deliveries/{delivery_id}/review": {
+      "post": {
+        "operationId": "post_api_v1_admin_collaboration_boards_board_id_deliveries_delivery_id_review",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "title": "Delivery Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Review Delivery",
+        "tags": [
+          "admin-agent-collaboration"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/collaboration/boards/{board_id}/tasks/{task_id}/claim": {
+      "post": {
+        "operationId": "post_api_v1_admin_collaboration_boards_board_id_tasks_task_id_claim",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskClaimBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Claim Task",
+        "tags": [
+          "admin-agent-collaboration"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/collaboration/boards/{board_id}/tasks/{task_id}/deliver": {
+      "post": {
+        "operationId": "post_api_v1_admin_collaboration_boards_board_id_tasks_task_id_deliver",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "board_id",
+            "required": true,
+            "schema": {
+              "title": "Board Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliveryBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Deliver Task",
+        "tags": [
+          "admin-agent-collaboration"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/collaboration/plans/preview": {
+      "post": {
+        "operationId": "post_api_v1_admin_collaboration_plans_preview",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanPreviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Preview Plan",
+        "tags": [
+          "admin-agent-collaboration"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/collaboration/plans/{plan_id}/revisions/{revision}": {
+      "get": {
+        "operationId": "get_api_v1_admin_collaboration_plans_plan_id_revisions_revision",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_platform",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Owner Platform",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_type",
+            "required": true,
+            "schema": {
+              "title": "Owner Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_id",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Owner Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Plan Revision",
+        "tags": [
+          "admin-agent-collaboration"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/collaboration/plans/{plan_id}/revisions/{revision}/approve": {
+      "post": {
+        "operationId": "post_api_v1_admin_collaboration_plans_plan_id_revisions_revision_approve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanApproveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Approve Plan",
+        "tags": [
+          "admin-agent-collaboration"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/collaboration/plans/{plan_id}/revisions/{revision}/freeze": {
+      "post": {
+        "operationId": "post_api_v1_admin_collaboration_plans_plan_id_revisions_revision_freeze",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanFreezeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Freeze Plan",
+        "tags": [
+          "admin-agent-collaboration"
         ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"

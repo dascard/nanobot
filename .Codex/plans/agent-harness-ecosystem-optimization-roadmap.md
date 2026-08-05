@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 8.3 已完成，准备阶段 8.4）
+> 状态：执行中（阶段 8.4 已完成，准备阶段 9.1）
 >
 > 建立日期：2026-08-03
 >
@@ -1252,12 +1252,38 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 8.4 人机与多 Agent 协作入口
 
-- [ ] 先复用群聊、Agent Link 和现有任务表。
-- [ ] 支持 `@agent`、任务认领、交付物和人工审批。
-- [ ] 评估 room、pod、task board 和 handoff 数据模型。
-- [ ] 本阶段不复制 Commonly、LobeHub 或 Orca 的完整 UI。
+- [x] 先复用群聊、Agent Link 和现有任务表。
+- [x] 支持 `@agent`、任务认领、交付物和人工审批。
+- [x] 评估 room、pod、task board 和 handoff 数据模型。
+- [x] 本阶段不复制 Commonly、LobeHub 或 Orca 的完整 UI。
 
 验收条件：多 Agent 运行有确定预算、权限、结束条件、恢复点和责任归属；关闭多 Agent 后不影响现有单 Agent 行为。
+
+实现记录（2026-08-05）：
+
+- 新增不可变协作任务板和追加式 Hash 链事件。任务板绑定 owner、已批准并冻结的计划版本、Runtime 身份、
+  根输入、来源和截止时间；任务认领直接复用现有 `RunTaskControl` 的 lease、fencing、状态与恢复语义，未另建
+  调度器。认领、交付、批准和拒绝均记录稳定责任主体、任务、交付物摘要与审计事件，原始 lease token 不进入
+  事件或状态投影；每个 task barrier 继续使用阶段 8.3 的持久 checkpoint，支持幂等恢复和局部修复。
+- 新增真实 Agent Link 协作端口。只有握手时声明并获准协作能力的连接才能查询、认领和交付；服务端从受信
+  平台及设备身份派生 actor，忽略客户端伪造身份，并在异步 WebSocket 主循环之外执行数据库事务。过期邀请、
+  未声明能力、跨 owner、失效 lease 和旧 fencing 均失败关闭，且协议错误不会断开其他合法会话能力。
+- 群聊入口新增严格、确定性的 `@agent` 命令语法，支持分派、状态、带交付物摘要的批准和拒绝。命令只允许
+  超级用户使用，owner 从 canonical 消息 principal 获取而不是信任群别名；匹配成功后绕过模型但仍复用既有
+  消息持久化和恢复路径。人工批准已经提交但 checkpoint 推进暂时失败时，接口明确返回
+  `checkpoint_pending`，不会谎报回滚，可由相同请求幂等恢复。
+- 新增受管理员令牌保护的计划 preview／approve／freeze、任务板、认领、交付和人工审查 API。协作能力由
+  `agent.multi_agent.enabled` 控制，默认关闭且只能从环境或默认配置读取；关闭时 Agent Link 不广告能力，
+  非严格群聊文本继续进入原单 Agent Timing／Bridge 主链路，管理协作接口拒绝执行，因此现有单 Agent 行为
+  保持不变。
+- 数据模型评估结论为：现有 owner／source 已能表达 room 边界，冻结角色与 DAG 已能表达 pod，新增不可变
+  task board 负责责任和执行投影，追加式事件链负责 handoff 与审批证据。本阶段因此没有增加 room／pod 表，
+  也没有复制 Commonly、LobeHub 或 Orca 的完整 UI；控制面保持为群聊、Agent Link 和管理 API。
+- 本阶段没有改变 `enriched_query`、历史注入、conversation、工具输出或 Prompt Runtime 输入合同；检查
+  canonical `chat`、`tasks`、`tools` 模板及变量注册后无需修改模板。新增协作、Agent Link、群聊与治理路径
+  已完成定向和联合回归；最终完整 `python -m pytest tests/ -v` 为 6765 passed、12 skipped、0 failed，
+  耗时 614.18 秒。OpenAPI、行为基线、Release／Verification Golden、决策规则、Task SLO、架构边界、
+  Ruff、Python 编译和 `git diff --check` 均作为本模块提交前门禁执行。
 
 ### 阶段 9：Gateway、主动能力和 Provider 治理
 

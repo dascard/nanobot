@@ -1681,6 +1681,21 @@
   "settings": [
     {
       "category": "agent",
+      "dangerous": true,
+      "default": false,
+      "env_name": "NANOBOT_MULTI_AGENT_ENABLED",
+      "key": "agent.multi_agent.enabled",
+      "owner_module": "core.agent_collaboration",
+      "restart_required": true,
+      "safety_class": "invariant",
+      "source_precedence": [
+        "environment",
+        "default"
+      ],
+      "value_type": "bool"
+    },
+    {
+      "category": "agent",
       "dangerous": false,
       "default": "native",
       "env_name": "NANOBOT_AGENT_RUNTIME_DEFAULT",

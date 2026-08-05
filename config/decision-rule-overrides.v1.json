@@ -1707,6 +1707,12 @@
       "disposition": "model_signal_only",
       "review_status": "reviewed",
       "reason": "人工复核：群学习正则匹配只能生成 candidate/evidence 信号，不能自动激活正式记忆"
+    },
+    "decision.eb262f3261a75de7e428": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：群聊协作命令采用完整匹配的固定协议语法，非自然语言语义分类规则"
     }
   }
 }

@@ -99,6 +99,9 @@ def bind_agent_runtime(bridge: object) -> None:
     """把双 Runtime Bridge 绑定到框架无关 Gateway Port。"""
 
     from core import database
+    from core.agent_collaboration.agent_link import (
+        SqlAlchemyAgentLinkCollaborationAdapter,
+    )
     from core.agent_link.runtime import get_agent_link_runtime
     from core.agent_runtime.gateway import bind_agent_runtime as _bind
     from core.agent_runtime.gateway import (
@@ -141,8 +144,10 @@ def bind_agent_runtime(bridge: object) -> None:
                 session_factory=database.SessionLocal,
             )
         )
-        get_agent_link_runtime().bind_chat_port(
-            KtAgentLinkChatAdapter(bridge)
+        agent_link_runtime = get_agent_link_runtime()
+        agent_link_runtime.bind_chat_port(KtAgentLinkChatAdapter(bridge))
+        agent_link_runtime.bind_collaboration_port(
+            SqlAlchemyAgentLinkCollaborationAdapter(database.SessionLocal)
         )
     except BaseException:
         clear_scheduled_workflow_callbacks()
@@ -159,9 +164,11 @@ def clear_agent_runtime_bindings() -> None:
         clear_scheduled_workflow_callbacks,
     )
     from core.media_preprocess_runtime import clear_image_precache_port
+    from core.agent_link.runtime import get_agent_link_runtime
 
     clear_scheduled_workflow_callbacks()
     clear_image_precache_port()
+    get_agent_link_runtime().bind_collaboration_port(None)
     _clear()
 
 

@@ -418,6 +418,17 @@ class GroupIngressService:
         if preparation.early_result is not None:
             return preparation.early_result
 
+        collaboration_result = await self._maybe_handle_collaboration_command(
+            req,
+            message_text=message_text,
+            group_user_id=group_user_id,
+            preparation=preparation,
+            claim_key=claim_key,
+            request_sha256=request_sha256,
+        )
+        if collaboration_result is not None:
+            return collaboration_result
+
         reason = preparation.reason
         logger.info("[GroupMsg] trigger=%s enter_timing=true", reason)
         runtime = get_group_runtime()
@@ -486,6 +497,250 @@ class GroupIngressService:
             claim_owner=claim_owner,
             request_sha256=request_sha256,
         )
+
+    async def _maybe_handle_collaboration_command(
+        self,
+        req: Any,
+        *,
+        message_text: str,
+        group_user_id: str,
+        preparation: _GroupTimingPreparation,
+        claim_key: InboundClaimKey | None,
+        request_sha256: str,
+    ) -> GroupIngressResult | None:
+        """处理严格协作命令；关闭开关或非完整命令时不改变原群聊路径。"""
+
+        from app.group_ingress.collaboration_commands import (
+            GroupCollaborationCommandKind,
+            parse_group_collaboration_command,
+        )
+        from core.agent_collaboration import (
+            AgentCollaborationError,
+            is_agent_collaboration_requested,
+        )
+
+        if not is_agent_collaboration_requested():
+            return None
+        command = parse_group_collaboration_command(message_text)
+        if command is None:
+            return None
+        message_contract = getattr(req, "_message_contract", None)
+        principal = getattr(message_contract, "principal", None)
+        platform = (
+            str(getattr(principal, "platform", "") or preparation.platform)
+            .strip()
+            .lower()
+            or "qq"
+        )
+        owner_id = str(
+            getattr(principal, "owner_id", "") or req.group_id
+        ).strip()
+        reviewer_id = f"{platform}:user:{req.sender_id}"
+        reply = ""
+        peer = None
+        checkpoint_sequence = 0
+        checkpoint_pending = False
+        if not is_super_user_id(req.sender_id):
+            reply = "协作操作未执行：仅配置的超级用户可以分派或审批任务。"
+        elif not str(req.message_id or "").strip():
+            reply = "协作操作未执行：消息缺少可用于幂等恢复的 message_id。"
+        else:
+            from core.agent_link.runtime import (
+                collaboration_actor_id,
+                get_agent_link_runtime,
+            )
+
+            if command.kind is GroupCollaborationCommandKind.INVITE:
+                peer = await get_agent_link_runtime().unique_collaboration_peer(
+                    command.client_id
+                )
+                if peer is None:
+                    reply = (
+                        "协作操作未执行：目标 Agent Link 客户端不在线、"
+                        "未声明协作能力或存在多个同名实例。"
+                    )
+            try:
+                if not reply:
+                    from core.agent_collaboration.service import (
+                        SqlAlchemyAgentCollaborationService,
+                    )
+                    from core.agent_runtime import (
+                        RuntimeOwnerType,
+                        RuntimePrincipal,
+                    )
+                    from core.lifecycle import FeatureScope
+
+                    owner = RuntimePrincipal(
+                        platform,
+                        RuntimeOwnerType.GROUP,
+                        owner_id,
+                    )
+                    idempotency_key = (
+                        f"group-collaboration:{platform}:{req.group_id}:"
+                        f"{req.message_id}"
+                    )
+
+                    def operation() -> dict[str, object]:
+                        db = self._current_db()
+                        service = SqlAlchemyAgentCollaborationService(
+                            db,
+                            session_factory=self._phase_session_factory,
+                        )
+                        try:
+                            if command.kind is GroupCollaborationCommandKind.INVITE:
+                                assert peer is not None
+                                result = service.invite_agent(
+                                    board_id=command.board_id,
+                                    task_id=command.task_id,
+                                    owner=owner,
+                                    invited_by=reviewer_id,
+                                    target_actor_id=collaboration_actor_id(peer),
+                                    idempotency_key=idempotency_key,
+                                    scope=FeatureScope.GROUP_SESSION,
+                                )
+                            elif command.kind is GroupCollaborationCommandKind.STATUS:
+                                result = service.board_view(
+                                    board_id=command.board_id,
+                                    owner=owner,
+                                    scope=FeatureScope.GROUP_SESSION,
+                                )
+                            else:
+                                result = service.review_delivery(
+                                    board_id=command.board_id,
+                                    delivery_id=command.delivery_id,
+                                    expected_delivery_sha256=(
+                                        command.delivery_sha256
+                                    ),
+                                    owner=owner,
+                                    reviewer_id=reviewer_id,
+                                    approved=(
+                                        command.kind
+                                        is GroupCollaborationCommandKind.APPROVE
+                                    ),
+                                    reason_code=command.reason_code,
+                                    idempotency_key=idempotency_key,
+                                    scope=FeatureScope.GROUP_SESSION,
+                                )
+                            db.commit()
+                            return result
+                        except BaseException:
+                            db.rollback()
+                            raise
+
+                    result = await self._run_db_phase(operation)
+                    if command.kind is GroupCollaborationCommandKind.INVITE:
+                        assert peer is not None
+                        from core.agent_link.protocol import make_agent_link_frame
+
+                        try:
+                            await peer.send(make_agent_link_frame(
+                                "collaboration.mention",
+                                result,
+                                session_id=peer.key.session_id,
+                            ))
+                            reply = (
+                                f"已向 {command.client_id} 分派任务 "
+                                f"{command.task_id}；等待 Agent 显式认领。"
+                            )
+                        except Exception:
+                            reply = (
+                                "邀请已持久化，但实时通知发送失败；"
+                                "目标 Agent 可重连后查询任务板状态。"
+                            )
+                    elif command.kind is GroupCollaborationCommandKind.STATUS:
+                        tasks = result.get("tasks")
+                        task_lines = []
+                        if isinstance(tasks, list):
+                            task_lines = [
+                                f"{item.get('task_id')}={item.get('state')}"
+                                for item in tasks
+                                if isinstance(item, dict)
+                            ]
+                        reply = (
+                            f"任务板 {command.board_id}：{result.get('status')}"
+                            + ("；" + "，".join(task_lines) if task_lines else "")
+                        )
+                    else:
+                        if command.kind is GroupCollaborationCommandKind.APPROVE:
+                            try:
+                                checkpoint_db = self._phase_session_factory()
+                                try:
+                                    checkpoint_service = (
+                                        SqlAlchemyAgentCollaborationService(
+                                            checkpoint_db,
+                                            session_factory=(
+                                                self._phase_session_factory
+                                            ),
+                                        )
+                                    )
+                                    checkpoint = await (
+                                        checkpoint_service.advance_checkpoints(
+                                            board_id=command.board_id,
+                                            owner=owner,
+                                        )
+                                    )
+                                    if checkpoint is not None:
+                                        checkpoint_sequence = checkpoint.sequence
+                                finally:
+                                    checkpoint_db.close()
+                            except Exception:
+                                checkpoint_pending = True
+                                logger.exception(
+                                    "[GroupMsg] collaboration checkpoint advance failed"
+                                )
+                        action = (
+                            "已批准"
+                            if command.kind is GroupCollaborationCommandKind.APPROVE
+                            else "已拒绝"
+                        )
+                        reply = f"{action}交付物 {command.delivery_id}。"
+                        if checkpoint_sequence:
+                            reply += f" checkpoint 已推进到 {checkpoint_sequence}。"
+                        elif checkpoint_pending:
+                            reply += " checkpoint 暂未推进，可从任务板幂等恢复。"
+            except AgentCollaborationError as exc:
+                reply = f"协作操作未执行：{exc.safe_message}（{exc.code}）"
+            except (TypeError, ValueError) as exc:
+                logger.warning("[GroupMsg] invalid collaboration command: %s", exc)
+                reply = "协作操作未执行：命令参数无效。"
+            except Exception:
+                logger.exception("[GroupMsg] collaboration command failed")
+                reply = "协作操作未执行：任务板服务暂时不可用。"
+
+        business_result = self._business_result(
+            req,
+            outcome="respond",
+            reply=reply,
+            generation=0,
+            reason="agent_collaboration_command",
+        )
+        assert business_result.completion is not None
+        await self._run_db_phase(
+            lambda: h.persist_group_bridge_reply(
+                self._current_db(),
+                group_user_id=group_user_id,
+                sender_name=req.sender_name,
+                session_name=req.session_name or "",
+                query=message_text,
+                answer=reply,
+                bot_name=(
+                    (preparation.ambient_meta or {}).get("bot", {}).get(
+                        "bot_name",
+                        "",
+                    )
+                    or "nanobot"
+                ),
+                message_id=req.message_id,
+                source_message_ids=[req.message_id] if req.message_id else [],
+                claim_key=claim_key,
+                request_sha256=request_sha256,
+                completion=business_result.completion,
+            )
+        )
+        from core.timing_runtime import get_group_runtime
+
+        get_group_runtime().note_bot_replied(req.group_id)
+        return business_result
 
     def _prepare_timing_phase(
         self,

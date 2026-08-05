@@ -408,6 +408,12 @@ def _task_output(value: object, name: str) -> AgentTaskOutput:
     )
 
 
+def agent_task_output_from_dict(value: object) -> AgentTaskOutput:
+    """从外部协作交付重建严格任务输出，拒绝未知字段。"""
+
+    return _task_output(value, "agent task output")
+
+
 def _receipt(value: object, name: str) -> AgentTaskExecutionReceipt:
     payload = _exact(
         value,
@@ -589,6 +595,7 @@ def decode_agent_orchestration_checkpoint(
 __all__ = [
     "agent_orchestration_checkpoint_from_dict",
     "agent_orchestration_plan_from_dict",
+    "agent_task_output_from_dict",
     "decode_agent_orchestration_checkpoint",
     "decode_agent_orchestration_plan",
     "encode_agent_orchestration_checkpoint",

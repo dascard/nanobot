@@ -30,7 +30,26 @@ def _hello(
     *,
     token: str = "secret",
     client_id: str = "meapet",
+    collaboration: bool = False,
 ) -> dict:
+    capabilities = {
+        "chat": {
+            "submit": True,
+            "streaming": True,
+            "cancel": True,
+        },
+        "tools": {
+            "dynamic": True,
+            "call": True,
+            "cancel": True,
+            "list_changed": True,
+        },
+    }
+    if collaboration:
+        capabilities["collaboration"] = {
+            "claim": True,
+            "deliver": True,
+        }
     return make_agent_link_frame(
         "control.hello",
         {
@@ -42,19 +61,7 @@ def _hello(
             "device": {"id": "device-test"},
             "auth": {"scheme": "bearer", "token": token},
             "resume": {"session_id": "session-test"},
-            "capabilities": {
-                "chat": {
-                    "submit": True,
-                    "streaming": True,
-                    "cancel": True,
-                },
-                "tools": {
-                    "dynamic": True,
-                    "call": True,
-                    "cancel": True,
-                    "list_changed": True,
-                },
-            },
+            "capabilities": capabilities,
             "required_extensions": [],
         },
         message_id="hello-test",
@@ -187,6 +194,30 @@ def test_agent_link_client_cannot_select_internal_prompt_policy(
         "platform_id": "internal",
         "policy_profile": "external_private",
         "chat_type": "private",
+    }
+
+
+def test_agent_link_advertises_optional_collaboration_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AgentLinkRuntime()
+    app = _test_app(monkeypatch, runtime=runtime)
+    monkeypatch.setattr(
+        "core.agent_collaboration.is_agent_collaboration_requested",
+        lambda: True,
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/agent-link") as websocket:
+            websocket.send_json(_hello(collaboration=True))
+            response = websocket.receive_json()
+
+    assert response["type"] == "control.ready"
+    assert response["payload"]["capabilities"]["collaboration"] == {
+        "status": True,
+        "claim": True,
+        "deliver": True,
+        "human_review_required": True,
     }
 
 
@@ -442,6 +473,135 @@ async def test_agent_link_connection_auto_registers_client_identity() -> None:
 
     await runtime.detach(peer)
     assert await runtime.registered_client("custom_desktop") is None
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agent_link_collaboration_frames_use_trusted_peer_actor() -> None:
+    runtime = AgentLinkRuntime()
+    sent_frames: list[dict] = []
+    calls: list[dict[str, object]] = []
+
+    class Port:
+        async def handle_collaboration(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {
+                "board_id": kwargs["payload"]["board_id"],
+                "accepted": True,
+            }
+
+    async def send_frame(frame) -> None:
+        sent_frames.append(dict(frame))
+
+    async def close_transport(_code: int, _reason: str) -> None:
+        return None
+
+    peer = AgentLinkPeer(
+        key=AgentLinkSessionKey("device-collaboration", "session-collaboration"),
+        send_frame=send_frame,
+        close_transport=close_transport,
+        client=AgentLinkClientIdentity("meapet", "MeaPet", "1.0.0"),
+        collaboration_claim=True,
+        collaboration_deliver=True,
+    )
+    runtime.bind_collaboration_port(Port())
+    await runtime.attach(peer)
+    assert await runtime.unique_collaboration_peer("meapet") is peer
+
+    frame = AgentLinkFrame.parse(make_agent_link_frame(
+        "collaboration.claim",
+        {
+            "board_id": "board-one",
+            "task_id": "research",
+            "actor_id": "伪造主体",
+        },
+        message_id="claim-one",
+        session_id=peer.key.session_id,
+    ))
+    await runtime.handle_frame(peer, frame)
+
+    assert calls[0]["actor_id"].startswith("agent_link:meapet:")
+    assert calls[0]["actor_id"].count(":") == 2
+    assert calls[0]["actor_id"] != "伪造主体"
+    assert calls[0]["request_id"] == "claim-one"
+    assert sent_frames[0]["type"] == "collaboration.claimed"
+    assert sent_frames[0]["reply_to"] == "claim-one"
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agent_link_status_accepts_either_collaboration_capability() -> None:
+    runtime = AgentLinkRuntime()
+    sent_frames: list[dict] = []
+    calls: list[str] = []
+
+    class Port:
+        async def handle_collaboration(self, **kwargs):
+            calls.append(str(kwargs["message_type"]))
+            return {"board_id": "board-one", "status": "active"}
+
+    async def send_frame(frame) -> None:
+        sent_frames.append(dict(frame))
+
+    async def close_transport(_code: int, _reason: str) -> None:
+        return None
+
+    peer = AgentLinkPeer(
+        key=AgentLinkSessionKey("device-status", "session-status"),
+        send_frame=send_frame,
+        close_transport=close_transport,
+        collaboration_deliver=True,
+    )
+    runtime.bind_collaboration_port(Port())
+    await runtime.attach(peer)
+    await runtime.handle_frame(
+        peer,
+        AgentLinkFrame.parse(make_agent_link_frame(
+            "collaboration.status",
+            {"board_id": "board-one"},
+            message_id="status-with-deliver",
+            session_id=peer.key.session_id,
+        )),
+    )
+
+    assert calls == ["collaboration.status"]
+    assert sent_frames[0]["type"] == "collaboration.status"
+    assert sent_frames[0]["payload"]["status"] == "active"
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agent_link_rejects_undeclared_collaboration_frame_without_closing() -> None:
+    runtime = AgentLinkRuntime()
+    sent_frames: list[dict] = []
+
+    async def send_frame(frame) -> None:
+        sent_frames.append(dict(frame))
+
+    async def close_transport(_code: int, _reason: str) -> None:
+        return None
+
+    peer = AgentLinkPeer(
+        key=AgentLinkSessionKey("device-no-collab", "session-no-collab"),
+        send_frame=send_frame,
+        close_transport=close_transport,
+    )
+    await runtime.attach(peer)
+    await runtime.handle_frame(
+        peer,
+        AgentLinkFrame.parse(make_agent_link_frame(
+            "collaboration.status",
+            {"board_id": "board-one"},
+            message_id="status-one",
+            session_id=peer.key.session_id,
+        )),
+    )
+
+    assert sent_frames[0]["type"] == "collaboration.error"
+    assert sent_frames[0]["payload"]["code"] == (
+        "COLLABORATION_CAPABILITY_REQUIRED"
+    )
+    assert peer.online is True
     await runtime.shutdown()
 
 

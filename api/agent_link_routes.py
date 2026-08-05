@@ -272,6 +272,29 @@ def _validate_client_capabilities(frame: AgentLinkFrame) -> None:
         )
 
 
+def _client_collaboration_capabilities(
+    frame: AgentLinkFrame,
+) -> tuple[bool, bool]:
+    capabilities = frame.payload.get("capabilities")
+    capabilities = capabilities if isinstance(capabilities, Mapping) else {}
+    raw = capabilities.get("collaboration")
+    if raw is None:
+        return False, False
+    if not isinstance(raw, Mapping):
+        raise AgentLinkProtocolError(
+            "INVALID_HANDSHAKE",
+            "control.hello collaboration capability 必须是对象",
+        )
+    claim = raw.get("claim", False)
+    deliver = raw.get("deliver", False)
+    if type(claim) is not bool or type(deliver) is not bool:
+        raise AgentLinkProtocolError(
+            "INVALID_HANDSHAKE",
+            "collaboration claim/deliver capability 必须是 bool",
+        )
+    return claim, deliver
+
+
 def _authenticate_hello(frame: AgentLinkFrame) -> None:
     configured = str(NANOBOT_AGENT_LINK_TOKEN or "")
     if not configured:
@@ -360,6 +383,9 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
             )
         _authenticate_hello(hello)
         _validate_client_capabilities(hello)
+        collaboration_claim, collaboration_deliver = (
+            _client_collaboration_capabilities(hello)
+        )
         client_identity = _client_identity(hello)
         policy_profile = await _preflight_prompt_policy(client_identity)
         device_id = _safe_device_id(hello)
@@ -372,8 +398,31 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
             close_transport=channel.close,
             client=client_identity,
             policy_profile=policy_profile,
+            collaboration_claim=collaboration_claim,
+            collaboration_deliver=collaboration_deliver,
         )
         await runtime.attach(peer)
+        server_capabilities: dict[str, object] = {
+            "chat": {
+                "submit": True,
+                "streaming": False,
+                "cancel": True,
+            },
+            "tools": {
+                "dynamic": True,
+                "call": True,
+                "cancel": True,
+            },
+        }
+        from core.agent_collaboration import is_agent_collaboration_requested
+
+        if is_agent_collaboration_requested():
+            server_capabilities["collaboration"] = {
+                "status": collaboration_claim or collaboration_deliver,
+                "claim": collaboration_claim,
+                "deliver": collaboration_deliver,
+                "human_review_required": True,
+            }
         await peer.send(
             make_agent_link_frame(
                 "control.ready",
@@ -387,18 +436,7 @@ async def agent_link_websocket(websocket: WebSocket) -> None:
                         "policy_profile": policy_profile,
                         "chat_type": "private",
                     },
-                    "capabilities": {
-                        "chat": {
-                            "submit": True,
-                            "streaming": False,
-                            "cancel": True,
-                        },
-                        "tools": {
-                            "dynamic": True,
-                            "call": True,
-                            "cancel": True,
-                        },
-                    },
+                    "capabilities": server_capabilities,
                     "required_extensions": [],
                 },
                 session_id=hello.session_id,

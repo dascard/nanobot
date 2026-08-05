@@ -122,6 +122,7 @@ _RUNTIME_PERMISSION_GOVERNANCE_V1_VERSION = (
 _AGENT_ORCHESTRATION_GOVERNANCE_V1_VERSION = (
     "20260805_agent_orchestration_governance_v1"
 )
+_AGENT_COLLABORATION_V1_VERSION = "20260805_agent_collaboration_v1"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -3994,6 +3995,41 @@ def _agent_orchestration_governance_v1(
         ))
 
 
+def _agent_collaboration_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建冻结计划任务板与追加式协作 handoff 事件。"""
+
+    from core.db.models.agent_collaboration import (
+        AgentCollaborationBoardRow,
+        AgentCollaborationEventRow,
+    )
+
+    for model in (
+        AgentCollaborationBoardRow,
+        AgentCollaborationEventRow,
+    ):
+        model.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    for table_name in (
+        "agent_collaboration_boards",
+        "agent_collaboration_events",
+    ):
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_update "
+            f"BEFORE UPDATE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_append_only'); END"
+        ))
+        conn.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_{table_name}_no_delete "
+            f"BEFORE DELETE ON {table_name} BEGIN "
+            f"SELECT RAISE(ABORT, '{table_name}_append_only'); END"
+        ))
+
+
 def _group_learning_stage7a_schema(
     conn: Any,
     _engine: Any,
@@ -5271,6 +5307,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _AGENT_ORCHESTRATION_GOVERNANCE_V1_VERSION,
         "agent orchestration immutable plan revisions events and checkpoints",
         _agent_orchestration_governance_v1,
+    ),
+    (
+        _AGENT_COLLABORATION_V1_VERSION,
+        "agent collaboration frozen plan boards and append only handoffs",
+        _agent_collaboration_v1,
     ),
 ]
 

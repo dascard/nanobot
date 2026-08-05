@@ -287,6 +287,20 @@ class AgentLinkChatPort(Protocol):
         ...
 
 
+class AgentLinkCollaborationPort(Protocol):
+    """Agent Link 协作帧到持久任务板的应用层 Port。"""
+
+    async def handle_collaboration(
+        self,
+        *,
+        actor_id: str,
+        message_type: str,
+        request_id: str,
+        payload: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        ...
+
+
 @dataclass(slots=True)
 class AgentLinkPeer:
     """一条已完成握手的 WebSocket 连接。"""
@@ -296,6 +310,8 @@ class AgentLinkPeer:
     close_transport: CloseTransport = field(repr=False)
     client: AgentLinkClientIdentity = _DEFAULT_CLIENT_IDENTITY
     policy_profile: str = DEFAULT_EXTERNAL_POLICY_PROFILE
+    collaboration_claim: bool = False
+    collaboration_deliver: bool = False
     online: bool = True
     snapshot_revision: int | None = None
     _tools: dict[str, AgentLinkToolDefinition] = field(
@@ -444,6 +460,13 @@ class AgentLinkPeer:
             if not future.done():
                 future.set_exception(failure)
         self._pending_tools.clear()
+
+
+def collaboration_actor_id(peer: AgentLinkPeer) -> str:
+    """从握手后的受信 peer 派生稳定协作主体，不接受客户端覆盖。"""
+
+    device_subject = peer.key.bridge_user_id.removeprefix("agent_link:")
+    return f"agent_link:{peer.client.platform_id}:{device_subject}"[:160]
 
 
 @dataclass(slots=True)
@@ -599,6 +622,7 @@ class AgentLinkRuntime:
         self._lock = asyncio.Lock()
         self._closed = False
         self._chat_port: AgentLinkChatPort | None = None
+        self._collaboration_port: AgentLinkCollaborationPort | None = None
 
     def bind_chat_port(self, port: AgentLinkChatPort) -> None:
         """由 Composition Root 注入具体 Agent Adapter。"""
@@ -606,6 +630,16 @@ class AgentLinkRuntime:
         if self._closed:
             raise RuntimeError("Agent Link Runtime 已关闭")
         self._chat_port = port
+
+    def bind_collaboration_port(
+        self,
+        port: AgentLinkCollaborationPort | None,
+    ) -> None:
+        """由 Composition Root 注入可选协作应用服务。"""
+
+        if self._closed:
+            raise RuntimeError("Agent Link Runtime 已关闭")
+        self._collaboration_port = port
 
     async def attach(self, peer: AgentLinkPeer) -> None:
         old: AgentLinkPeer | None = None
@@ -707,6 +741,24 @@ class AgentLinkRuntime:
                 return None
             return matches[0]
 
+    async def unique_collaboration_peer(
+        self,
+        platform_id: str,
+    ) -> AgentLinkPeer | None:
+        """精确解析唯一在线且声明 claim/deliver 的客户端实例。"""
+
+        normalized = normalize_platform_id(platform_id)
+        async with self._lock:
+            matches = [
+                peer
+                for peer in self._connections.values()
+                if peer.online
+                and peer.client.platform_id == normalized
+                and peer.collaboration_claim
+                and peer.collaboration_deliver
+            ]
+            return matches[0] if len(matches) == 1 else None
+
     async def call_tool(
         self,
         key: AgentLinkSessionKey,
@@ -757,6 +809,13 @@ class AgentLinkRuntime:
         if frame.type == "chat.cancel":
             await self._cancel_chat(peer, frame)
             return
+        if frame.type in {
+            "collaboration.status",
+            "collaboration.claim",
+            "collaboration.deliver",
+        }:
+            await self._handle_collaboration(peer, frame)
+            return
         if frame.type in {"tool.accepted", "tool.result", "tool.error"}:
             peer.resolve_tool_frame(frame)
             return
@@ -786,6 +845,76 @@ class AgentLinkRuntime:
                     reply_to=frame.id,
                 )
             )
+
+    async def _handle_collaboration(
+        self,
+        peer: AgentLinkPeer,
+        frame: AgentLinkFrame,
+    ) -> None:
+        if frame.type == "collaboration.deliver":
+            required_capability = peer.collaboration_deliver
+        elif frame.type == "collaboration.claim":
+            required_capability = peer.collaboration_claim
+        else:
+            required_capability = (
+                peer.collaboration_claim or peer.collaboration_deliver
+            )
+        if not required_capability:
+            error = AgentLinkProtocolError(
+                "COLLABORATION_CAPABILITY_REQUIRED",
+                "客户端握手未声明对应的协作能力",
+            )
+            await peer.send(self._collaboration_error_frame(peer, frame, error))
+            return
+        port = self._collaboration_port
+        if port is None:
+            error = AgentLinkProtocolError(
+                "COLLABORATION_UNAVAILABLE",
+                "Nanobot 当前没有可用的协作任务板服务",
+            )
+            await peer.send(self._collaboration_error_frame(peer, frame, error))
+            return
+        try:
+            result = await port.handle_collaboration(
+                actor_id=collaboration_actor_id(peer),
+                message_type=frame.type,
+                request_id=frame.id,
+                payload=frame.payload,
+            )
+        except AgentLinkProtocolError as exc:
+            await peer.send(self._collaboration_error_frame(peer, frame, exc))
+            return
+        response_type = {
+            "collaboration.status": "collaboration.status",
+            "collaboration.claim": "collaboration.claimed",
+            "collaboration.deliver": "collaboration.delivered",
+        }[frame.type]
+        await peer.send(make_agent_link_frame(
+            response_type,
+            dict(result),
+            session_id=peer.key.session_id,
+            reply_to=frame.id,
+        ))
+
+    @staticmethod
+    def _collaboration_error_frame(
+        peer: AgentLinkPeer,
+        frame: AgentLinkFrame,
+        error: AgentLinkProtocolError,
+    ) -> dict[str, Any]:
+        return make_agent_link_frame(
+            "collaboration.error",
+            {
+                "code": error.code,
+                "safe_message": error.safe_message,
+                "retryable": error.code in {
+                    "collaboration_concurrency_exhausted",
+                    "collaboration_task_claim_conflict",
+                },
+            },
+            session_id=peer.key.session_id,
+            reply_to=frame.id,
+        )
 
     def _replace_tool_snapshot(
         self,
@@ -1150,6 +1279,8 @@ class AgentLinkRuntime:
             peers = tuple(self._connections.values())
             self._connections.clear()
             self._registered_clients.clear()
+            self._chat_port = None
+            self._collaboration_port = None
             tasks = tuple(
                 state.task
                 for state in self._chat_states.values()
