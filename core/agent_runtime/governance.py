@@ -142,7 +142,7 @@ class RuntimeBudgetAccount:
         self._subagent = _UsageState(started_monotonic=started)
         self._decision_sequence = 0
         self._reservation_sequence = 0
-        self._reservations: set[str] = set()
+        self._reservations: dict[str, RuntimeBudgetReservation] = {}
         self._emit(
             identity,
             RuntimeBudgetScope.RUN,
@@ -172,6 +172,14 @@ class RuntimeBudgetAccount:
     @property
     def run_id(self) -> str:
         return self._identity.run_id
+
+    @property
+    def identity(self) -> RuntimeRunIdentity:
+        return self._identity
+
+    @property
+    def governance(self) -> RuntimeGovernanceEnvelope:
+        return self._governance
 
     def bind(
         self,
@@ -359,6 +367,45 @@ class RuntimeBudgetAccount:
             elapsed = current - state.started_monotonic
             remaining.append(max(0.001, limit.time_limit_ms / 1000 - elapsed))
         return min(remaining)
+
+    def _check_subagent_time(
+        self,
+        identity: RuntimeRunIdentity,
+        *,
+        operation: str,
+        resource: str,
+    ) -> None:
+        state = self._state(RuntimeBudgetScope.SUBAGENT)
+        limit = self._limit(RuntimeBudgetScope.SUBAGENT)
+        elapsed_ms = max(
+            0,
+            int((self._monotonic() - state.started_monotonic) * 1000),
+        )
+        if limit.time_limit_ms == 0 or elapsed_ms >= limit.time_limit_ms:
+            self._deny(
+                identity,
+                RuntimeBudgetScope.SUBAGENT,
+                operation,
+                "time_limit_exhausted",
+                resource,
+                state,
+                limit,
+            )
+
+    def subagent_remaining_time_seconds(self) -> float:
+        self._check_time(self._identity)
+        self._check_subagent_time(
+            self._identity,
+            operation="subagent_time_check",
+            resource="clock",
+        )
+        state = self._state(RuntimeBudgetScope.SUBAGENT)
+        limit = self._limit(RuntimeBudgetScope.SUBAGENT)
+        elapsed = self._monotonic() - state.started_monotonic
+        return min(
+            self.remaining_time_seconds(),
+            max(0.001, limit.time_limit_ms / 1000 - elapsed),
+        )
 
     @staticmethod
     def _would_exceed(
@@ -564,25 +611,41 @@ class RuntimeBudgetAccount:
                 state,
                 self._limit(scope),
             )
-        self._reservations.add(reservation_id)
-        return RuntimeBudgetReservation(
+        reservation = RuntimeBudgetReservation(
             reservation_id,
             RuntimeBudgetScope.TOOL,
             identity.turn_id,
         )
+        self._reservations[reservation_id] = reservation
+        return reservation
 
     def release(self, reservation: RuntimeBudgetReservation) -> None:
-        if reservation.reservation_id not in self._reservations:
+        existing = self._reservations.get(reservation.reservation_id)
+        if existing is None:
             raise ValueError("budget reservation 不存在或已释放")
-        self._reservations.remove(reservation.reservation_id)
-        for scope in (
-            RuntimeBudgetScope.RUN,
-            RuntimeBudgetScope.TURN,
-            RuntimeBudgetScope.TOOL,
-        ):
-            state = self._state(scope)
-            if state.concurrency <= 0:
-                raise RuntimeError("budget concurrency 计数失衡")
+        if existing != reservation:
+            raise ValueError("budget reservation 内容不匹配")
+        if reservation.turn_id != self._identity.turn_id:
+            raise ValueError("budget reservation 不属于当前 Turn")
+        if reservation.scope is RuntimeBudgetScope.TOOL:
+            scopes = (
+                RuntimeBudgetScope.RUN,
+                RuntimeBudgetScope.TURN,
+                RuntimeBudgetScope.TOOL,
+            )
+        elif reservation.scope is RuntimeBudgetScope.SUBAGENT:
+            scopes = (
+                RuntimeBudgetScope.RUN,
+                RuntimeBudgetScope.TURN,
+                RuntimeBudgetScope.SUBAGENT,
+            )
+        else:
+            raise ValueError("budget reservation scope 不支持释放")
+        states = tuple(self._state(scope) for scope in scopes)
+        if any(state.concurrency <= 0 for state in states):
+            raise RuntimeError("budget concurrency 计数失衡")
+        self._reservations.pop(reservation.reservation_id)
+        for state in states:
             state.concurrency -= 1
 
     def tool_timeout_seconds(self) -> float:
@@ -618,7 +681,105 @@ class RuntimeBudgetAccount:
                     state,
                     limit,
                 )
-        raise RuntimeError("subagent 预算启用后必须由阶段 8 调度器接管")
+        self._check_subagent_time(
+            identity,
+            operation="subagent_reservation",
+            resource=normalized,
+        )
+        self._reservation_sequence += 1
+        reservation_id = (
+            f"budget-reservation:{identity.run_id}:{self._reservation_sequence}"
+        )
+        for scope in (
+            RuntimeBudgetScope.RUN,
+            RuntimeBudgetScope.TURN,
+            RuntimeBudgetScope.SUBAGENT,
+        ):
+            state = self._state(scope)
+            self._consume(state, steps=1, concurrency=1)
+            self._emit(
+                identity,
+                scope,
+                "subagent_reservation",
+                RuntimeBudgetDecisionOutcome.ALLOW,
+                "within_limit",
+                normalized,
+                state,
+                self._limit(scope),
+            )
+        reservation = RuntimeBudgetReservation(
+            reservation_id,
+            RuntimeBudgetScope.SUBAGENT,
+            identity.turn_id,
+        )
+        self._reservations[reservation_id] = reservation
+        return reservation
+
+    def record_subagent_usage(
+        self,
+        usage: RuntimeUsage,
+        *,
+        model_calls: int,
+    ) -> None:
+        """把结构化 Worker 用量计入父 Run、Turn 与 Subagent 总预算。"""
+
+        if not isinstance(usage, RuntimeUsage):
+            raise TypeError("subagent usage 必须是 RuntimeUsage")
+        if type(model_calls) is not int or model_calls < 0:
+            raise ValueError("subagent model_calls 必须是非负整数")
+        identity = self._identity
+        self._check_time(identity)
+        self._check_subagent_time(
+            identity,
+            operation="subagent_usage_recorded",
+            resource="subagent_usage",
+        )
+        for scope in (
+            RuntimeBudgetScope.RUN,
+            RuntimeBudgetScope.TURN,
+            RuntimeBudgetScope.SUBAGENT,
+        ):
+            state = self._state(scope)
+            limit = self._limit(scope)
+            exceeded = self._would_exceed(
+                state,
+                limit,
+                model_calls=model_calls,
+                tokens=usage.total_tokens,
+                cost_microunits=usage.cost_microunits,
+            )
+            if exceeded:
+                self._deny(
+                    identity,
+                    scope,
+                    "subagent_usage_recorded",
+                    exceeded,
+                    "subagent_usage",
+                    state,
+                    limit,
+                )
+        for scope in (
+            RuntimeBudgetScope.RUN,
+            RuntimeBudgetScope.TURN,
+            RuntimeBudgetScope.SUBAGENT,
+        ):
+            state = self._state(scope)
+            self._consume(
+                state,
+                model_calls=model_calls,
+                tokens=usage.total_tokens,
+                cost_microunits=usage.cost_microunits,
+            )
+            self._emit(
+                identity,
+                scope,
+                "subagent_usage_recorded",
+                RuntimeBudgetDecisionOutcome.ALLOW,
+                "within_limit",
+                "subagent_usage",
+                state,
+                self._limit(scope),
+            )
 
 
 class RuntimeBudgetManager:

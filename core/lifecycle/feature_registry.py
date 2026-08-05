@@ -273,6 +273,32 @@ def _semantic_feature_descriptors(
 ) -> tuple[FeatureLifecycleDescriptor, ...]:
     return (
         FeatureLifecycleDescriptor(
+            feature_id="multi_agent_orchestration_v1",
+            state=FeatureLifecycleState.EXPERIMENTAL,
+            owner_module="core.agent_orchestration",
+            default_enabled=False,
+            supported_scopes=(
+                FeatureScope.PRIVATE_SESSION,
+                FeatureScope.GROUP_SESSION,
+                FeatureScope.ADMIN,
+            ),
+            data_migrations=(),
+            rollback_behavior=(
+                FeatureRollbackBehavior.DISABLE_PRESERVE_DATA
+            ),
+            enablement_gates=(
+                "explicit_operator_enablement",
+                "approved_frozen_plan",
+                "runtime_governance_ready",
+                "checkpoint_store_ready",
+                "event_ledger_ready",
+            ),
+            removal_conditions=(
+                "active_orchestrations_settled",
+                "checkpoint_and_receipt_facts_preserved",
+            ),
+        ),
+        FeatureLifecycleDescriptor(
             feature_id="interoperability.acp_v1",
             state=FeatureLifecycleState.EXPERIMENTAL,
             owner_module="core.interoperability.acp",

@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`5b5389380bf2b6e8b15907f517aa314779259948`
-- 规则总数：8223
+- 源提交：`9509371b25c66c590678162de08df8ba7965bd17`
+- 规则总数：8259
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1548 |
+| `configurable_policy` | 1576 |
 | `data_consistency` | 478 |
 | `natural_language_semantic` | 31 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4372 |
-| `security_invariant` | 1651 |
+| `protocol_syntax` | 4376 |
+| `security_invariant` | 1655 |
 
 ## 文件汇总
 
@@ -109,6 +109,7 @@
 | `sandboxd/environment_manager.py` | 26 |
 | `webui/src/api/generated/adminClient.ts` | 26 |
 | `api/admin/runtime_routes.py` | 25 |
+| `core/agent_orchestration/contracts.py` | 25 |
 | `core/prompts/manager.py` | 25 |
 | `core/run_ledger/projection.py` | 25 |
 | `core/timing_score.py` | 25 |
@@ -324,6 +325,7 @@
 | `api/admin/web_search_routes.py` | 7 |
 | `api/memory_routes.py` | 7 |
 | `core/agent_link/protocol.py` | 7 |
+| `core/agent_runtime/governance.py` | 7 |
 | `core/artifact_port.py` | 7 |
 | `core/client_meta.py` | 7 |
 | `core/evolution.py` | 7 |
@@ -391,7 +393,7 @@
 | `app/tool_services/image_summary.py` | 5 |
 | `clients/provider_adapter.py` | 5 |
 | `clients/task_runtime_adapter.py` | 5 |
-| `core/agent_runtime/governance.py` | 5 |
+| `core/agent_orchestration/scheduler.py` | 5 |
 | `core/agent_runtime/selection.py` | 5 |
 | `core/compaction.py` | 5 |
 | `core/durable_tasks/contracts.py` | 5 |
@@ -473,6 +475,7 @@
 | `app/tool_services/knowledge_query.py` | 3 |
 | `bootstrap/prompt_runtime.py` | 3 |
 | `core/agent_manifest/compiler.py` | 3 |
+| `core/agent_orchestration/checkpoint_store.py` | 3 |
 | `core/build_info.py` | 3 |
 | `core/db/group_memory_adapter.py` | 3 |
 | `core/durable_tasks/owner.py` | 3 |
@@ -577,6 +580,7 @@
 | `clients/provider_catalog.py` | 1 |
 | `core/agent_manifest/canonical.py` | 1 |
 | `core/agent_manifest/contracts.py` | 1 |
+| `core/agent_orchestration/scope.py` | 1 |
 | `core/agent_step.py` | 1 |
 | `core/data_clean.py` | 1 |
 | `core/group_learning/reserved_terms.py` | 1 |

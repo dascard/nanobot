@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 7.4 已完成，准备阶段 8.1）
+> 状态：执行中（阶段 8.1 已完成，准备阶段 8.2）
 >
 > 建立日期：2026-08-03
 >
@@ -1164,11 +1164,31 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 8.1 显式 DAG 编排
 
-- [ ] 定义角色、任务、依赖、输入、输出合同和完成条件。
-- [ ] 定义预算、并发、审批、取消、汇总和 checkpoint。
-- [ ] Worker 不直接 peer-to-peer。
-- [ ] 服务端拒绝无限递归和无预算 spawn。
-- [ ] 单 Agent 主链路继续作为默认模式。
+- [x] 定义角色、任务、依赖、输入、输出合同和完成条件。
+- [x] 定义预算、并发、审批、取消、汇总和 checkpoint。
+- [x] Worker 不直接 peer-to-peer。
+- [x] 服务端拒绝无限递归和无预算 spawn。
+- [x] 单 Agent 主链路继续作为默认模式。
+
+实现记录（2026-08-05）：
+
+- 新增框架无关且不可变的多 Agent 合同，显式声明 coordinator、worker、reviewer、aggregator 角色，
+  任务依赖、窄 JSON 输入／输出、完成条件、聚合节点、计划版本和内容 Hash。计划构造时拒绝重复节点、
+  未知依赖、循环、未绑定字段、缺失聚合来源和修改后仍复用旧审批；执行批次按依赖与 `task_id` 确定生成。
+- 新增真实 `AgentTaskExecutor` 调用路径和有界 DAG 调度器。Worker 只接收协调者解析后的输入、依赖回执与
+  固定的 `status`、`summary`、`next_actions`、`artifacts`、`data` 输出合同，不持有 peer send 或调度器；
+  请求级深度绑定同时禁止 Worker 再次 spawn，因而不是只记录计划而不执行任务的 Shadow 路径。
+- 计划预算显式覆盖任务数、并发、模型调用、token、成本、时间、输出、checkpoint 和单层 spawn；实际
+  Worker 用量计入父 Run、Turn 与 Subagent 账户。预约绑定 scope 和 Turn，身份必须与预算账户的 Run、
+  Turn、owner 完全一致；无父预算、剩余预算不足、超时、取消未确认、输出合同不满足或检查点保存失败均
+  关闭式终止，且失败依赖不会触发聚合，也不会发生隐式重试。
+- 每个任务终态生成不可变 receipt 与单调 checkpoint，内存 Store 明确仅供测试；生产启用仍必须满足持久
+  checkpoint 和事件账本门禁。`multi_agent_orchestration_v1` 保持 experimental、默认关闭，因此当前生产
+  单 Agent 主链路不变；后续 8.2～8.4 再接入最小权限子 Runtime、持久恢复和人机入口。
+- 新增 14 项专项测试，并完成 Runtime／KT／生命周期联合回归。架构边界、OpenAPI、Behavior、Release、
+  Verification、决策规则、Task SLO、Ruff、Python 编译和 `git diff --check` 均通过；最终完整
+  `python -m pytest tests/ -v` 在 Linux `/var/tmp` basetemp 下为 6713 passed、12 skipped、0 failed，
+  耗时 603.80 秒。
 
 #### 8.2 子 Agent 权限和模型分工
 
