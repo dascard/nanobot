@@ -1572,11 +1572,12 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
   流程／失败模式和必需产物；生成器不能兼任评测器。候选质量必须严格优于基线，安全门禁必须通过，费用
   不得超过显式预算，且基线费用非零时增幅上限为 20%。人工批准再次确认精确 candidate／gate hash、
   当前 binding generation 和有限 TTL；明文令牌只返回一次，持久层和审计只保存摘要，令牌单次消费。
-- 发布不是 shadow：`publish_candidate_to_skill_registry()` 真实调用既有 `SkillLifecycleService` 和
-  `SkillGovernanceService`。新 Skill 首发只允许显式 `user` scope，门禁和人工批准通过后成为正式 active
+- 发布不是 shadow：事务化发布入口真实调用既有 `SkillLifecycleService` 和 `SkillGovernanceService`。
+  新 Skill 首发只允许显式 `user` scope，门禁和人工批准通过后成为正式 active
   binding，并返回可直接调用现有 uninstall API 的精确回滚请求；已有 Skill 必须基于仍未漂移的 active
   bundle 和 generation，且新 SemVer 更高，只写入正式不可变版本库而不自动切换运行版本。正式评测行
-  记录 gate report hash，令牌重放、宽作用域自动激活、基线漂移和同版本来源冲突均被拒绝。
+  记录 gate report hash；approval 只能绑定一个权威发布意图，相同请求幂等返回同一回执，令牌换绑、宽作用域
+  自动激活、基线漂移和同版本来源冲突均被拒绝。
 - 新增 `python -m evals.skill_candidates catalog|extract|gate|get|state` 离线 CLI，以及管理员认证的
   catalog、提取、评测、查询、人工批准、正式发布和状态 API。Admin 全链路测试使用真实持久化 Run 提取，
   最终能从既有 `/api/v1/admin/skills` 查询到正式 active Skill；审计不保存明文批准令牌或来源正文。
@@ -1717,9 +1718,20 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
   Recovery Checkpoint 同步保存价格合同，旧版无价格快照只按显式免费路由兼容。架构、OpenAPI、Release／
   Verification Golden、决策清单、Task SLO、行为 Golden、Ruff 和 `git diff --check` 均通过；相关定向回归
   为 164 passed，最终完整 `python -m pytest tests/ -v` 为 6927 passed、12 skipped、0 failed。
-- [ ] **Skill Candidate × 跨存储发布：** 消除正式 Skill 数据库提交先于 publication receipt／approval
+- [x] **Skill Candidate × 跨存储发布：** 消除正式 Skill 数据库提交先于 publication receipt／approval
   consumption 文件的窗口；以同事务 publication intent／outbox 和幂等 reconcile 表达
   pending／ambiguous／finalized，确保 API 报错时不会留下无记录的已生效 Skill 或可重放批准令牌。
+
+  实现证据（2026-08-09）：新增受不可变 trigger 保护的 `skill_candidate_publication_intents`，正式 Skill
+  package／binding、评测事实、approval token 摘要与完整回执在同一数据库事务提交；提交异常先 rollback，
+  再按 approval read-back 区分确定失败和提交结果未知。文件回执与 approval 索引改为可幂等重建的投影，磁盘
+  中断保留 `pending`，内容冲突进入 `ambiguous`，两者都不会重复安装 Skill 或重复写评测；同一 token 重试
+  返回同一 publication。启动期在 schema 就绪后重放 pending 意图，旧版文件回执也会在核对正式数据库事实后
+  纳入 outbox。管理端状态仅公开意图状态、重试次数和非敏感标识，不公开 token 摘要。投影中断、冲突、提交
+  失败、提交不确定、reconcile、旧回执采用与 Admin 全链路定向回归为 15 passed；数据库迁移、启动编排和
+  相关联合回归为 185 passed。架构、OpenAPI、Release／Verification Golden、Task SLO、行为 Golden、
+  决策清单、致命 Ruff 和 `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 为
+  6935 passed、12 skipped、0 failed。
 - [ ] **治理操作 × Admin Audit：** 高风险管理操作的业务事实与审计事实使用同一事务或事务型 outbox，
   不再由吞异常的独立 commit 提供 fail-open 假保证；失败路径必须 rollback，并覆盖 Skill、Evolution、MCP
   等治理写操作。

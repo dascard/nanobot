@@ -159,7 +159,11 @@ python -m evals.skill_candidates --root <候选目录> state
 
 新 Skill 只允许显式 `user` scope 首发。发布回执会给出正式 package、binding、评测 ID 和精确 uninstall
 请求；应先保存并演练该回滚请求。已有 Skill 候选只进入正式版本库，当前 active 版本保持不变，后续升级
-仍使用既有 Skill 人工升级入口。
+仍使用既有 Skill 人工升级入口。正式 Skill 变更、评测事实和 approval 消费意图在同一数据库事务内提交；
+文件回执是可重建投影。发布接口因磁盘或响应不确定而返回“待重试”时，应使用同一 candidate、approval 和
+token 重试，不能申请第二次批准。服务启动时会自动重放 `pending` 投影；`ambiguous` 表示不可变文件与权威
+意图冲突，必须先保留现场并人工核对，不得覆盖文件消除告警。管理端 `/skills/candidates/state` 只公开脱敏
+的意图状态和重试次数，不返回 token 摘要。
 
 ## 6. 故障处理
 
@@ -170,6 +174,8 @@ python -m evals.skill_candidates --root <候选目录> state
 | 外部副作用结果未知 | 将 Run 收敛为 `ambiguous`，核对上游幂等回执后再人工处置 |
 | Harness Registry 漂移 | 废弃旧 gate，使用当前 Registry 和冻结数据重新评测 |
 | 进化或 Skill 基线漂移 | 重新生成候选和批准；不要复用旧令牌或跳过 generation 校验 |
+| Skill 发布意图为 `pending` | 保持正式 Skill 不变，使用同一批准重试或重启触发 reconcile；不要重复安装 |
+| Skill 发布意图为 `ambiguous` | 停止自动发布，核对 DB 回执摘要与不可变文件冲突后人工处置 |
 | Sandbox readiness 失败 | 保持硬开关关闭，修复宿主条件后重新运行完整六组矩阵 |
 | KT Adapter 失败 | 将 KT 灰度设为 0，恢复 Native；不要在失败请求内跨 Runtime 重试 |
 

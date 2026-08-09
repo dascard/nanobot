@@ -356,8 +356,75 @@ class SkillEvaluationRow(Base):
     )
 
 
+class SkillCandidatePublicationIntentRow(Base):
+    """候选发布的权威事务意图；文件回执只是可重建投影。"""
+
+    __tablename__ = "skill_candidate_publication_intents"
+    __table_args__ = (
+        UniqueConstraint(
+            "approval_id",
+            name="uq_skill_candidate_publication_approval",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'ambiguous', 'finalized')",
+            name="ck_skill_candidate_publication_status",
+        ),
+        CheckConstraint(
+            "reconcile_attempts >= 0",
+            name="ck_skill_candidate_publication_attempts",
+        ),
+        Index(
+            "ix_skill_candidate_publication_status_time",
+            "status",
+            "updated_at",
+        ),
+    )
+
+    publication_id = Column(String(80), primary_key=True)
+    approval_id = Column(String(128), nullable=False)
+    candidate_sha256 = Column(String(64), nullable=False, index=True)
+    gate_report_sha256 = Column(String(64), nullable=False)
+    approval_token_sha256 = Column(String(64), nullable=False)
+    publication_sha256 = Column(String(64), nullable=False)
+    package_id = Column(
+        String(80),
+        ForeignKey("skill_packages.package_id"),
+        nullable=False,
+    )
+    binding_id = Column(
+        String(80),
+        ForeignKey("skill_bindings.binding_id"),
+        nullable=False,
+    )
+    evaluation_id = Column(
+        String(80),
+        ForeignKey("skill_evaluations.evaluation_id"),
+        nullable=False,
+    )
+    receipt_json = Column(Text, nullable=False)
+    status = Column(String(16), nullable=False, default="pending")
+    reconcile_attempts = Column(Integer, nullable=False, default=0)
+    last_error_code = Column(
+        String(128), nullable=False, default="", server_default=text("''")
+    )
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    finalized_at = Column(DateTime, nullable=True)
+
+
 __all__ = [
     "SkillBindingRow",
+    "SkillCandidatePublicationIntentRow",
     "SkillEvaluationRow",
     "SkillInvocationRow",
     "SkillLifecycleEventRow",

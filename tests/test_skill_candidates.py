@@ -8,7 +8,8 @@ import json
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.exc import IntegrityError
 
 from core.db.models.observability import AgentRun
 from core.db.models.skill import SkillEvaluationRow
@@ -24,7 +25,6 @@ from core.skill_candidates import (
     SkillExperienceCandidate,
     evaluate_skill_candidate,
     extract_skill_candidate,
-    publish_candidate_to_skill_registry,
     sanitize_experience_text,
     skill_candidate_catalog_payload,
 )
@@ -268,6 +268,21 @@ def _approve(
         expected_binding_generation=generation,
         expires_in_seconds=3600,
         current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
+    )
+
+
+def _publish(
+    store: SkillCandidateStore,
+    candidate: SkillExperienceCandidate,
+    approval: dict[str, object],
+    db_session,
+) -> dict[str, object]:
+    return store.publish(
+        candidate_sha256=candidate.candidate_sha256,
+        approval_id=str(approval["approval_id"]),
+        approval_token=str(approval["approval_token"]),
+        current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
+        db=db_session,
     )
 
 
@@ -535,7 +550,7 @@ def test_approval_token_plaintext_is_returned_once_and_never_persisted(tmp_path)
     )
 
 
-def test_expired_approval_cannot_publish(tmp_path):
+def test_expired_approval_cannot_publish(tmp_path, db_session):
     now = datetime(2026, 8, 9, tzinfo=timezone.utc)
     candidate = _candidate()
     store, report = _stored_gate(tmp_path, candidate, clock=lambda: now)
@@ -550,7 +565,7 @@ def test_expired_approval_cannot_publish(tmp_path):
             approval_id=str(approval["approval_id"]),
             approval_token=str(approval["approval_token"]),
             current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
-            publisher=lambda *_args: {},
+            db=db_session,
         )
 
 
@@ -561,18 +576,7 @@ def test_new_skill_publication_is_real_registry_install_with_evaluation_and_rece
     candidate = _candidate()
     store, report = _stored_gate(tmp_path, candidate)
     approval = _approve(store, candidate, report, generation=0)
-    receipt = store.publish(
-        candidate_sha256=candidate.candidate_sha256,
-        approval_id=str(approval["approval_id"]),
-        approval_token=str(approval["approval_token"]),
-        current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
-        publisher=lambda item, gate, human: publish_candidate_to_skill_registry(
-            db_session,
-            item,
-            gate,
-            human,
-        ),
-    )
+    receipt = _publish(store, candidate, approval, db_session)
     binding = next(
         item
         for item in SkillLifecycleService(db_session).list_bindings(
@@ -655,18 +659,7 @@ def test_existing_skill_publication_stages_version_without_runtime_activation(
     ))
     store, report = _stored_gate(tmp_path, candidate)
     approval = _approve(store, candidate, report, generation=before.generation)
-    receipt = store.publish(
-        candidate_sha256=candidate.candidate_sha256,
-        approval_id=str(approval["approval_id"]),
-        approval_token=str(approval["approval_token"]),
-        current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
-        publisher=lambda item, gate, human: publish_candidate_to_skill_registry(
-            db_session,
-            item,
-            gate,
-            human,
-        ),
-    )
+    receipt = _publish(store, candidate, approval, db_session)
     after = next(
         item
         for item in SkillLifecycleService(db_session).list_bindings(target=target)
@@ -705,20 +698,7 @@ def test_publication_rejects_baseline_drift_and_does_not_consume_token(
     store, report = _stored_gate(tmp_path, candidate)
     approval = _approve(store, candidate, report, generation=before.generation)
     with pytest.raises(SkillCandidateContractError, match="基线"):
-        store.publish(
-            candidate_sha256=candidate.candidate_sha256,
-            approval_id=str(approval["approval_id"]),
-            approval_token=str(approval["approval_token"]),
-            current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
-            publisher=lambda item, gate, human: (
-                publish_candidate_to_skill_registry(
-                    db_session,
-                    item,
-                    gate,
-                    human,
-                )
-            ),
-        )
+        _publish(store, candidate, approval, db_session)
     assert store.state()["publication_ids"] == []
 
 
@@ -731,18 +711,243 @@ def test_publication_token_is_single_use(tmp_path, db_session):
         "approval_id": str(approval["approval_id"]),
         "approval_token": str(approval["approval_token"]),
         "current_harness_registry_sha256": EVAL_HARNESS_REGISTRY.sha256,
-        "publisher": lambda item, gate, human: (
-            publish_candidate_to_skill_registry(
-                db_session,
-                item,
-                gate,
-                human,
-            )
-        ),
+        "db": db_session,
     }
-    store.publish(**kwargs)
-    with pytest.raises(SkillCandidateContractError, match="已用于发布"):
-        store.publish(**kwargs)
+    first = store.publish(**kwargs)
+    second = store.publish(**kwargs)
+    assert second == first
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_candidate_publication_intents "
+        "WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).scalar_one() == 1
+
+
+@pytest.mark.parametrize(
+    ("failed_directory", "receipt_exists_after_failure"),
+    (("publications", False), ("publication_by_approval", True)),
+)
+def test_publication_file_crash_keeps_db_intent_and_retry_finalizes_once(
+    tmp_path,
+    db_session,
+    monkeypatch,
+    failed_directory,
+    receipt_exists_after_failure,
+):
+    candidate = _candidate(spec=_spec(target_key=f"qq:user:{failed_directory}"))
+    store, report = _stored_gate(tmp_path, candidate)
+    approval = _approve(store, candidate, report, generation=0)
+    original_write = store._write_immutable
+
+    def fail_projection(path, value):
+        if path.parent.name == failed_directory:
+            raise OSError("simulated publication projection crash")
+        return original_write(path, value)
+
+    monkeypatch.setattr(store, "_write_immutable", fail_projection)
+    with pytest.raises(SkillCandidateContractError, match="待重试"):
+        _publish(store, candidate, approval, db_session)
+
+    intent = db_session.execute(text(
+        "SELECT publication_id, status FROM "
+        "skill_candidate_publication_intents WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).mappings().one()
+    assert intent["status"] == "pending"
+    assert (
+        store.root / "publications" / f"{intent['publication_id']}.json"
+    ).exists() is receipt_exists_after_failure
+    assert next(
+        item
+        for item in SkillLifecycleService(db_session).list_bindings(
+            target=candidate.target
+        )
+        if item.skill_name == candidate.parsed_bundle.name
+    ).status == "active"
+
+    monkeypatch.setattr(store, "_write_immutable", original_write)
+    receipt = _publish(store, candidate, approval, db_session)
+    replay = _publish(store, candidate, approval, db_session)
+    assert replay == receipt
+    assert db_session.execute(text(
+        "SELECT status FROM skill_candidate_publication_intents "
+        "WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).scalar_one() == "finalized"
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_packages WHERE source_label = :source"
+    ), {
+        "source": f"experience-candidate:{candidate.candidate_sha256}",
+    }).scalar_one() == 1
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_evaluations "
+        "WHERE evidence_sha256 = :evidence"
+    ), {"evidence": report["gate_report_sha256"]}).scalar_one() == 1
+
+
+def test_publication_projection_conflict_marks_intent_ambiguous(
+    tmp_path,
+    db_session,
+    monkeypatch,
+):
+    candidate = _candidate(spec=_spec(target_key="qq:user:projection-conflict"))
+    store, report = _stored_gate(tmp_path, candidate)
+    approval = _approve(store, candidate, report, generation=0)
+    original_write = store._write_immutable
+
+    def fail_receipt(path, value):
+        if path.parent.name == "publications":
+            raise OSError("simulated initial projection failure")
+        return original_write(path, value)
+
+    monkeypatch.setattr(store, "_write_immutable", fail_receipt)
+    with pytest.raises(SkillCandidateContractError, match="待重试"):
+        _publish(store, candidate, approval, db_session)
+    intent = db_session.execute(text(
+        "SELECT publication_id FROM skill_candidate_publication_intents "
+        "WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).mappings().one()
+    conflict_path = (
+        store.root / "publications" / f"{intent['publication_id']}.json"
+    )
+    conflict_path.write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(store, "_write_immutable", original_write)
+    with pytest.raises(SkillCandidateContractError, match="人工处置"):
+        _publish(store, candidate, approval, db_session)
+    state = db_session.execute(text(
+        "SELECT status, last_error_code FROM "
+        "skill_candidate_publication_intents WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).mappings().one()
+    assert state == {
+        "status": "ambiguous",
+        "last_error_code": "projection_conflict",
+    }
+
+
+def test_pending_publication_is_replayed_by_reconciler(
+    tmp_path,
+    db_session,
+    monkeypatch,
+):
+    candidate = _candidate(spec=_spec(target_key="qq:user:startup-reconcile"))
+    store, report = _stored_gate(tmp_path, candidate)
+    approval = _approve(store, candidate, report, generation=0)
+    original_write = store._write_immutable
+
+    def fail_receipt(path, value):
+        if path.parent.name == "publications":
+            raise OSError("simulated process crash")
+        return original_write(path, value)
+
+    monkeypatch.setattr(store, "_write_immutable", fail_receipt)
+    with pytest.raises(SkillCandidateContractError, match="待重试"):
+        _publish(store, candidate, approval, db_session)
+    monkeypatch.setattr(store, "_write_immutable", original_write)
+
+    assert store.reconcile_publications(db_session) == {
+        "finalized": 1,
+        "pending": 0,
+        "ambiguous": 0,
+    }
+    intent = db_session.execute(text(
+        "SELECT publication_id, status FROM "
+        "skill_candidate_publication_intents WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).mappings().one()
+    assert intent["status"] == "finalized"
+    assert (
+        store.root / "publications" / f"{intent['publication_id']}.json"
+    ).is_file()
+
+
+def test_legacy_file_publication_is_adopted_without_repeating_skill_effect(
+    tmp_path,
+    db_session,
+):
+    candidate = _candidate(spec=_spec(target_key="qq:user:legacy-adoption"))
+    store, report = _stored_gate(tmp_path, candidate)
+    approval = _approve(store, candidate, report, generation=0)
+    first = _publish(store, candidate, approval, db_session)
+    db_session.execute(text(
+        "DELETE FROM skill_candidate_publication_intents "
+        "WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]})
+    db_session.commit()
+
+    adopted = _publish(store, candidate, approval, db_session)
+    assert adopted == first
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_packages WHERE source_label = :source"
+    ), {
+        "source": f"experience-candidate:{candidate.candidate_sha256}",
+    }).scalar_one() == 1
+    assert db_session.execute(text(
+        "SELECT status FROM skill_candidate_publication_intents "
+        "WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).scalar_one() == "finalized"
+
+
+def test_publication_db_commit_failure_rolls_back_skill_and_consumption(
+    tmp_path,
+    db_session,
+    monkeypatch,
+):
+    candidate = _candidate(spec=_spec(target_key="qq:user:commit-failure"))
+    store, report = _stored_gate(tmp_path, candidate)
+    approval = _approve(store, candidate, report, generation=0)
+    original_commit = db_session.commit
+
+    def fail_commit():
+        raise RuntimeError("simulated transaction failure")
+
+    monkeypatch.setattr(db_session, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="transaction failure"):
+        _publish(store, candidate, approval, db_session)
+    monkeypatch.setattr(db_session, "commit", original_commit)
+
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_packages WHERE source_label = :source"
+    ), {
+        "source": f"experience-candidate:{candidate.candidate_sha256}",
+    }).scalar_one() == 0
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_candidate_publication_intents "
+        "WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).scalar_one() == 0
+    assert _publish(store, candidate, approval, db_session)[
+        "publication_mode"
+    ] == "installed_active"
+
+
+def test_publication_commit_uncertainty_reads_back_without_duplicate_effect(
+    tmp_path,
+    db_session,
+    monkeypatch,
+):
+    candidate = _candidate(spec=_spec(target_key="qq:user:commit-uncertain"))
+    store, report = _stored_gate(tmp_path, candidate)
+    approval = _approve(store, candidate, report, generation=0)
+    original_commit = db_session.commit
+    call_count = 0
+
+    def uncertain_commit():
+        nonlocal call_count
+        call_count += 1
+        original_commit()
+        if call_count == 1:
+            raise RuntimeError("simulated uncertain commit")
+
+    monkeypatch.setattr(db_session, "commit", uncertain_commit)
+    receipt = _publish(store, candidate, approval, db_session)
+    monkeypatch.setattr(db_session, "commit", original_commit)
+
+    assert receipt["publication_mode"] == "installed_active"
+    assert db_session.execute(text(
+        "SELECT status FROM skill_candidate_publication_intents "
+        "WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).scalar_one() == "finalized"
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_packages WHERE source_label = :source"
+    ), {
+        "source": f"experience-candidate:{candidate.candidate_sha256}",
+    }).scalar_one() == 1
 
 
 def test_offline_cli_extracts_deduplicates_and_gates(tmp_path, capsys):
@@ -819,20 +1024,49 @@ def test_new_skill_publication_rejects_broad_scope_auto_activation(
     store, report = _stored_gate(tmp_path, candidate)
     approval = _approve(store, candidate, report, generation=0)
     with pytest.raises(SkillCandidateContractError, match="user scope"):
-        store.publish(
-            candidate_sha256=candidate.candidate_sha256,
-            approval_id=str(approval["approval_id"]),
-            approval_token=str(approval["approval_token"]),
-            current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
-            publisher=lambda item, gate, human: (
-                publish_candidate_to_skill_registry(
-                    db_session,
-                    item,
-                    gate,
-                    human,
-                )
-            ),
-        )
+        _publish(store, candidate, approval, db_session)
+
+
+def test_skill_candidate_publication_outbox_migration_is_registered_and_guarded():
+    from core.schema_migrations import (
+        MIGRATIONS,
+        _SKILL_CANDIDATE_PUBLICATION_OUTBOX_V1_VERSION,
+        _agent_skills_governance_v2,
+        _agent_skills_lifecycle_v1,
+        _skill_candidate_publication_outbox_v1,
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _agent_skills_lifecycle_v1(connection, engine, None)
+        _agent_skills_governance_v2(connection, engine, None)
+        _skill_candidate_publication_outbox_v1(connection, engine, None)
+    assert "skill_candidate_publication_intents" in inspect(engine).get_table_names()
+    assert _SKILL_CANDIDATE_PUBLICATION_OUTBOX_V1_VERSION in {
+        version for version, _name, _migration in MIGRATIONS
+    }
+    with pytest.raises(IntegrityError, match="publication_intent_immutable"):
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO skill_candidate_publication_intents("
+                "publication_id, approval_id, candidate_sha256, "
+                "gate_report_sha256, approval_token_sha256, publication_sha256, "
+                "package_id, binding_id, evaluation_id, receipt_json, status, "
+                "reconcile_attempts) VALUES ("
+                "'skillpub_test', 'skillapproval_test', :candidate, :gate, "
+                ":token, :publication, 'skillpkg_test', 'skillbind_test', "
+                "'skilleval_test', '{}', 'pending', 0)"
+            ), {
+                "candidate": "a" * 64,
+                "gate": "b" * 64,
+                "token": "c" * 64,
+                "publication": "d" * 64,
+            })
+            connection.execute(text(
+                "UPDATE skill_candidate_publication_intents "
+                "SET candidate_sha256 = :changed "
+                "WHERE publication_id = 'skillpub_test'"
+            ), {"changed": "e" * 64})
 
 
 def test_persisted_run_repository_builds_redacted_view_from_real_agent_run(
@@ -970,6 +1204,15 @@ def test_admin_api_executes_extract_gate_approval_and_real_publication(
     )
     assert state.status_code == 200
     assert receipt["publication_id"] in state.json()["publication_ids"]
+    assert state.json()["publication_intents"] == [{
+        "publication_id": receipt["publication_id"],
+        "approval_id": approval["approval_id"],
+        "candidate_sha256": candidate_sha,
+        "status": "finalized",
+        "reconcile_attempts": 1,
+        "last_error_code": "",
+    }]
+    assert "approval_token_sha256" not in state.text
 
     audit_text = "\n".join(
         row.detail_json

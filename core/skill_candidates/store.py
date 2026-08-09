@@ -16,6 +16,8 @@ import stat
 from typing import Any
 import uuid
 
+from sqlalchemy.orm import Session
+
 from core.evolution_control.contracts import canonical_json, sha256_json
 
 from .contracts import (
@@ -24,6 +26,15 @@ from .contracts import (
     SkillExperienceCandidate,
 )
 from .gates import evaluate_skill_candidate
+from .publishing import (
+    SkillCandidatePublicationIntent,
+    commit_candidate_publication_intent,
+    list_candidate_publication_intents,
+    load_candidate_publication_intent,
+    set_candidate_publication_projection_state,
+    stage_candidate_to_skill_registry,
+    validate_candidate_publication_receipt,
+)
 
 
 MAX_APPROVAL_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -435,16 +446,9 @@ class SkillCandidateStore:
         approval_id: str,
         approval_token: str,
         current_harness_registry_sha256: str,
-        publisher: Callable[
-            [
-                SkillExperienceCandidate,
-                Mapping[str, Any],
-                Mapping[str, Any],
-            ],
-            Mapping[str, Any],
-        ],
+        db: Session,
     ) -> dict[str, object]:
-        """在跨进程锁内消费人工批准，并调用正式 Skill 生命周期发布。"""
+        """原子提交正式 Skill 与发布意图，再物化可重建文件回执。"""
 
         candidate_digest = _sha256(candidate_sha256, "candidate_sha256")
         normalized_approval_id = _text(
@@ -455,16 +459,14 @@ class SkillCandidateStore:
         token = str(approval_token or "")
         if not token or len(token) > 512:
             raise SkillCandidateContractError("approval_token 无效")
-        if not callable(publisher):
-            raise TypeError("publisher 必须可调用")
+        if not isinstance(db, Session):
+            raise TypeError("db 必须是 SQLAlchemy Session")
         with self._exclusive_lock():
             pointer_path = (
                 self.root
                 / "publication_by_approval"
                 / f"{normalized_approval_id}.json"
             )
-            if pointer_path.exists():
-                raise SkillCandidateContractError("人工批准令牌已用于发布")
             approval = self._read_json(
                 self.root / "approvals" / f"{normalized_approval_id}.json"
             )
@@ -474,95 +476,315 @@ class SkillCandidateStore:
             actual_token_sha = hashlib.sha256(token.encode("utf-8")).hexdigest()
             if not compare_digest(expected_token_sha, actual_token_sha):
                 raise SkillCandidateContractError("人工批准令牌无效")
+            candidate = self.get_candidate(candidate_digest)
+            existing_intent = load_candidate_publication_intent(
+                db,
+                approval_id=normalized_approval_id,
+            )
+            if existing_intent is not None:
+                self._validate_existing_intent(
+                    existing_intent,
+                    candidate=candidate,
+                    approval=approval,
+                    approval_token_sha256=actual_token_sha,
+                )
+                return self._materialize_publication_intent(
+                    db,
+                    existing_intent,
+                )
+            legacy_receipt = self._legacy_receipt_for_approval(
+                normalized_approval_id,
+                pointer_path=pointer_path,
+            )
+            if legacy_receipt is not None:
+                self._validate_legacy_receipt(
+                    db,
+                    receipt=legacy_receipt,
+                    candidate=candidate,
+                    approval=approval,
+                )
+                adopted = commit_candidate_publication_intent(
+                    db,
+                    approval_token_sha256=actual_token_sha,
+                    receipt=legacy_receipt,
+                )
+                return self._materialize_publication_intent(db, adopted)
             try:
                 expires_at = datetime.fromisoformat(str(approval["expires_at"]))
             except (KeyError, ValueError) as exc:
                 raise SkillCandidateContractError("人工批准时间已损坏") from exc
             if self._now() >= expires_at.astimezone(timezone.utc):
                 raise SkillCandidateContractError("人工批准已过期")
-            candidate = self.get_candidate(candidate_digest)
             report = self.get_gate_report(
                 str(approval.get("gate_report_sha256") or ""),
                 current_harness_registry_sha256=current_harness_registry_sha256,
             )
             if report.get("passed") is not True:
                 raise SkillCandidateContractError("门禁不再有效，拒绝发布")
-            result = self._validate_publication_result(
-                publisher(candidate, report, _public_approval(approval)),
-                candidate=candidate,
-            )
-            now = self._now()
             publication_id = f"skillpub_{uuid.uuid4().hex}"
-            if result["rollback_action"] == "skill.uninstall":
-                rollback: dict[str, object] = {
-                    "required_for_runtime_revert": True,
-                    "method": "POST",
-                    "path": "/api/v1/admin/skills/uninstall",
-                    "body": {
-                        "scope": candidate.target_scope,
-                        "scope_key": candidate.target_scope_key,
-                        "skill_name": candidate.parsed_bundle.name,
-                        "expected_generation": result["binding_generation"],
-                    },
-                }
-            else:
-                rollback = {
-                    "required_for_runtime_revert": False,
-                    "method": "",
-                    "path": "",
-                    "body": {},
-                    "reason": "候选版本仅暂存，运行时仍使用原激活版本",
-                }
-            receipt_payload: dict[str, object] = {
-                "schema_version": 1,
-                "publication_id": publication_id,
-                "candidate_sha256": candidate.candidate_sha256,
-                "candidate_id": candidate.candidate_id,
-                "gate_report_sha256": str(report["gate_report_sha256"]),
-                "approval_id": normalized_approval_id,
-                "reviewer": approval["reviewer"],
-                "reviewer_kind": "human",
-                "target_scope": candidate.target_scope,
-                "target_scope_key": candidate.target_scope_key,
-                "skill_name": candidate.parsed_bundle.name,
-                "version": candidate.parsed_bundle.version,
-                "source_run_ids": [item.run_id for item in candidate.source_runs],
-                "source_trajectory_sha256s": list(
-                    candidate.source_trajectory_sha256s
-                ),
-                "baseline_bundle_sha256": candidate.baseline_bundle_sha256,
-                "dataset_sha256": report["dataset_sha256"],
-                "baseline_score_micros": report["baseline_score_micros"],
-                "candidate_score_micros": report["candidate_score_micros"],
-                "quality_delta_micros": report["quality_delta_micros"],
-                "baseline_cost_microunits": report[
-                    "baseline_cost_microunits"
-                ],
-                "candidate_cost_microunits": report[
-                    "candidate_cost_microunits"
-                ],
-                "approved_cost_microunits": report[
-                    "approved_cost_microunits"
-                ],
-                "published_at": _iso(now),
-                "repository_operations": "forbidden",
-                "rollback": rollback,
-                **result,
-            }
-            receipt = {
-                **receipt_payload,
-                "publication_sha256": sha256_json(receipt_payload),
-            }
-            self._write_immutable(
-                self.root / "publications" / f"{publication_id}.json",
-                receipt,
+            try:
+                result = self._validate_publication_result(
+                    stage_candidate_to_skill_registry(
+                        db,
+                        candidate,
+                        report,
+                        _public_approval(approval),
+                    ),
+                    candidate=candidate,
+                )
+                receipt = self._build_publication_receipt(
+                    publication_id=publication_id,
+                    approval_id=normalized_approval_id,
+                    candidate=candidate,
+                    report=report,
+                    approval=approval,
+                    result=result,
+                )
+                intent = commit_candidate_publication_intent(
+                    db,
+                    approval_token_sha256=actual_token_sha,
+                    receipt=receipt,
+                )
+            except BaseException:
+                db.rollback()
+                raise
+            return self._materialize_publication_intent(db, intent)
+
+    @staticmethod
+    def _validate_existing_intent(
+        intent: SkillCandidatePublicationIntent,
+        *,
+        candidate: SkillExperienceCandidate,
+        approval: Mapping[str, Any],
+        approval_token_sha256: str,
+    ) -> None:
+        if (
+            intent.candidate_sha256 != candidate.candidate_sha256
+            or intent.gate_report_sha256
+            != str(approval.get("gate_report_sha256") or "")
+            or not compare_digest(
+                intent.approval_token_sha256,
+                approval_token_sha256,
             )
-            self._write_immutable(pointer_path, {
-                "approval_id": normalized_approval_id,
-                "publication_id": publication_id,
-                "publication_sha256": receipt["publication_sha256"],
-            })
+        ):
+            raise SkillCandidateContractError("人工批准已绑定不同的发布意图")
+
+    def _legacy_receipt_for_approval(
+        self,
+        approval_id: str,
+        *,
+        pointer_path: Path,
+    ) -> dict[str, object] | None:
+        if pointer_path.exists():
+            pointer = self._read_json(pointer_path)
+            if str(pointer.get("approval_id") or "") != approval_id:
+                raise SkillCandidateContractError("旧发布索引与人工批准不一致")
+            publication_id = _text(
+                pointer.get("publication_id"),
+                "publication_id",
+                maximum=128,
+            )
+            receipt = self.get_publication(publication_id)
+            if str(pointer.get("publication_sha256") or "") != str(
+                receipt.get("publication_sha256") or ""
+            ):
+                raise SkillCandidateContractError("旧发布索引摘要不一致")
             return receipt
+        matches: list[dict[str, object]] = []
+        for path in sorted((self.root / "publications").glob("*.json")):
+            value = self.get_publication(path.stem)
+            if str(value.get("approval_id") or "") == approval_id:
+                matches.append(value)
+        if len(matches) > 1:
+            raise SkillCandidateContractError("人工批准存在多个旧发布回执")
+        return matches[0] if matches else None
+
+    def _validate_legacy_receipt(
+        self,
+        db: Session,
+        *,
+        receipt: Mapping[str, object],
+        candidate: SkillExperienceCandidate,
+        approval: Mapping[str, Any],
+    ) -> None:
+        if (
+            str(receipt.get("candidate_sha256") or "")
+            != candidate.candidate_sha256
+            or str(receipt.get("gate_report_sha256") or "")
+            != str(approval.get("gate_report_sha256") or "")
+            or str(receipt.get("approval_id") or "")
+            != str(approval.get("approval_id") or "")
+        ):
+            raise SkillCandidateContractError("旧发布回执与人工批准不一致")
+        required = {
+            name: receipt.get(name)
+            for name in (
+                "package_id",
+                "binding_id",
+                "binding_generation",
+                "active_package_id",
+                "active_version",
+                "bundle_sha256",
+                "publication_mode",
+                "previous_active_package_id",
+                "previous_active_version",
+                "rollback_action",
+                "evaluation_id",
+            )
+        }
+        self._validate_publication_result(required, candidate=candidate)
+        validate_candidate_publication_receipt(
+            db,
+            candidate=candidate,
+            receipt=receipt,
+        )
+
+    def _build_publication_receipt(
+        self,
+        *,
+        publication_id: str,
+        approval_id: str,
+        candidate: SkillExperienceCandidate,
+        report: Mapping[str, Any],
+        approval: Mapping[str, Any],
+        result: Mapping[str, object],
+    ) -> dict[str, object]:
+        if result["rollback_action"] == "skill.uninstall":
+            rollback: dict[str, object] = {
+                "required_for_runtime_revert": True,
+                "method": "POST",
+                "path": "/api/v1/admin/skills/uninstall",
+                "body": {
+                    "scope": candidate.target_scope,
+                    "scope_key": candidate.target_scope_key,
+                    "skill_name": candidate.parsed_bundle.name,
+                    "expected_generation": result["binding_generation"],
+                },
+            }
+        else:
+            rollback = {
+                "required_for_runtime_revert": False,
+                "method": "",
+                "path": "",
+                "body": {},
+                "reason": "候选版本仅暂存，运行时仍使用原激活版本",
+            }
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "publication_id": publication_id,
+            "candidate_sha256": candidate.candidate_sha256,
+            "candidate_id": candidate.candidate_id,
+            "gate_report_sha256": str(report["gate_report_sha256"]),
+            "approval_id": approval_id,
+            "reviewer": approval["reviewer"],
+            "reviewer_kind": "human",
+            "target_scope": candidate.target_scope,
+            "target_scope_key": candidate.target_scope_key,
+            "skill_name": candidate.parsed_bundle.name,
+            "version": candidate.parsed_bundle.version,
+            "source_run_ids": [item.run_id for item in candidate.source_runs],
+            "source_trajectory_sha256s": list(
+                candidate.source_trajectory_sha256s
+            ),
+            "baseline_bundle_sha256": candidate.baseline_bundle_sha256,
+            "dataset_sha256": report["dataset_sha256"],
+            "baseline_score_micros": report["baseline_score_micros"],
+            "candidate_score_micros": report["candidate_score_micros"],
+            "quality_delta_micros": report["quality_delta_micros"],
+            "baseline_cost_microunits": report["baseline_cost_microunits"],
+            "candidate_cost_microunits": report["candidate_cost_microunits"],
+            "approved_cost_microunits": report["approved_cost_microunits"],
+            "published_at": _iso(self._now()),
+            "repository_operations": "forbidden",
+            "rollback": rollback,
+            **result,
+        }
+        return {**payload, "publication_sha256": sha256_json(payload)}
+
+    def _materialize_publication_intent(
+        self,
+        db: Session,
+        intent: SkillCandidatePublicationIntent,
+    ) -> dict[str, object]:
+        try:
+            self._write_immutable(
+                self.root
+                / "publications"
+                / f"{intent.publication_id}.json",
+                intent.receipt,
+            )
+            self._write_immutable(
+                self.root
+                / "publication_by_approval"
+                / f"{intent.approval_id}.json",
+                {
+                    "approval_id": intent.approval_id,
+                    "publication_id": intent.publication_id,
+                    "publication_sha256": intent.publication_sha256,
+                },
+            )
+        except Exception as exc:
+            ambiguous = (
+                intent.status == "ambiguous"
+                or isinstance(exc, SkillCandidateContractError)
+            )
+            try:
+                set_candidate_publication_projection_state(
+                    db,
+                    intent=intent,
+                    status="ambiguous" if ambiguous else "pending",
+                    error_code=(
+                        "projection_conflict"
+                        if ambiguous
+                        else "projection_write_failed"
+                    ),
+                )
+            except Exception:
+                db.rollback()
+            if ambiguous:
+                raise SkillCandidateContractError(
+                    "Skill 发布投影冲突，需人工处置"
+                ) from exc
+            raise SkillCandidateContractError(
+                "Skill 发布投影尚未完成，已保留事务意图，待重试"
+            ) from exc
+        try:
+            finalized = set_candidate_publication_projection_state(
+                db,
+                intent=intent,
+                status="finalized",
+            )
+        except Exception as exc:
+            db.rollback()
+            raise SkillCandidateContractError(
+                "Skill 发布回执已落盘但确认尚未完成，待重试"
+            ) from exc
+        return dict(finalized.receipt)
+
+    def reconcile_publications(self, db: Session) -> dict[str, int]:
+        """重放 pending 文件投影；冲突只标记 ambiguous，不改写事实。"""
+
+        if not isinstance(db, Session):
+            raise TypeError("db 必须是 SQLAlchemy Session")
+        counts = {"finalized": 0, "pending": 0, "ambiguous": 0}
+        with self._exclusive_lock():
+            intents = list_candidate_publication_intents(
+                db,
+                statuses=frozenset({"pending"}),
+            )
+            for intent in intents:
+                try:
+                    self._materialize_publication_intent(db, intent)
+                except SkillCandidateContractError:
+                    current = load_candidate_publication_intent(
+                        db,
+                        approval_id=intent.approval_id,
+                    )
+                    status = current.status if current is not None else "pending"
+                    counts[status] += 1
+                else:
+                    counts["finalized"] += 1
+        return counts
 
     def get_publication(self, publication_id: str) -> dict[str, object]:
         normalized = _text(publication_id, "publication_id", maximum=128)
@@ -582,19 +804,32 @@ class SkillCandidateStore:
             raise SkillCandidateContractError("Skill 发布回执已被篡改")
         return value
 
-    def state(self) -> dict[str, object]:
+    def state(self, db: Session | None = None) -> dict[str, object]:
         self._ensure_root()
 
         def names(directory: str) -> list[str]:
             return sorted(path.stem for path in (self.root / directory).glob("*.json"))
 
-        return {
+        result: dict[str, object] = {
             "candidate_sha256s": names("candidates"),
             "gate_report_sha256s": names("gate_reports"),
             "approval_ids": names("approvals"),
             "publication_ids": names("publications"),
             "token_material_exposed": False,
         }
+        if db is not None:
+            result["publication_intents"] = [
+                {
+                    "publication_id": item.publication_id,
+                    "approval_id": item.approval_id,
+                    "candidate_sha256": item.candidate_sha256,
+                    "status": item.status,
+                    "reconcile_attempts": item.reconcile_attempts,
+                    "last_error_code": item.last_error_code,
+                }
+                for item in list_candidate_publication_intents(db)
+            ]
+        return result
 
 
 __all__ = [

@@ -17,7 +17,6 @@ from .extraction import (
     sanitize_experience_text,
 )
 from .gates import evaluate_skill_candidate
-from .publishing import publish_candidate_to_skill_registry
 from .store import SkillCandidateStore
 
 __all__ = [
@@ -33,7 +32,6 @@ __all__ = [
     "SourceRunEvidence",
     "evaluate_skill_candidate",
     "extract_skill_candidate",
-    "publish_candidate_to_skill_registry",
     "sanitize_experience_text",
     "skill_candidate_catalog_payload",
 ]

@@ -121,6 +121,9 @@ _AGENT_SKILLS_LIFECYCLE_V1_VERSION = (
 _AGENT_SKILLS_GOVERNANCE_V2_VERSION = (
     "20260804_agent_skills_governance_v2"
 )
+_SKILL_CANDIDATE_PUBLICATION_OUTBOX_V1_VERSION = (
+    "20260809_skill_candidate_publication_outbox_v1"
+)
 _MCP_CONTROL_PLANE_V1_VERSION = "20260804_mcp_control_plane_v1"
 _RUNTIME_PERMISSION_GOVERNANCE_V1_VERSION = (
     "20260804_runtime_permission_governance_v1"
@@ -3991,6 +3994,46 @@ def _agent_skills_governance_v2(
         ))
 
 
+def _skill_candidate_publication_outbox_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """创建与正式 Skill 变更同事务提交的候选发布意图。"""
+
+    from core.db.models.skill import SkillCandidatePublicationIntentRow
+
+    SkillCandidatePublicationIntentRow.__table__.create(
+        bind=conn,
+        checkfirst=True,
+    )
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS "
+        "trg_skill_candidate_publication_intent_immutable "
+        "BEFORE UPDATE ON skill_candidate_publication_intents "
+        "WHEN NEW.publication_id IS NOT OLD.publication_id "
+        "OR NEW.approval_id IS NOT OLD.approval_id "
+        "OR NEW.candidate_sha256 IS NOT OLD.candidate_sha256 "
+        "OR NEW.gate_report_sha256 IS NOT OLD.gate_report_sha256 "
+        "OR NEW.approval_token_sha256 IS NOT OLD.approval_token_sha256 "
+        "OR NEW.publication_sha256 IS NOT OLD.publication_sha256 "
+        "OR NEW.package_id IS NOT OLD.package_id "
+        "OR NEW.binding_id IS NOT OLD.binding_id "
+        "OR NEW.evaluation_id IS NOT OLD.evaluation_id "
+        "OR NEW.receipt_json IS NOT OLD.receipt_json "
+        "OR NEW.created_at IS NOT OLD.created_at "
+        "BEGIN SELECT RAISE(ABORT, 'publication_intent_immutable'); END"
+    ))
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS "
+        "trg_skill_candidate_publication_intent_no_delete "
+        "BEFORE DELETE ON skill_candidate_publication_intents BEGIN "
+        "SELECT RAISE(ABORT, 'publication_intent_immutable'); END"
+    ))
+
+
 def _mcp_control_plane_v1(
     conn: Any,
     _engine: Any,
@@ -5410,6 +5453,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _AGENT_SKILLS_GOVERNANCE_V2_VERSION,
         "agent skills registry retrieval usage cost and evaluations",
         _agent_skills_governance_v2,
+    ),
+    (
+        _SKILL_CANDIDATE_PUBLICATION_OUTBOX_V1_VERSION,
+        "skill candidate transactional publication outbox",
+        _skill_candidate_publication_outbox_v1,
     ),
     (
         _MCP_CONTROL_PLANE_V1_VERSION,

@@ -235,6 +235,30 @@ def validate_sandbox_asset_token_config() -> None:
         db.close()
 
 
+def reconcile_skill_candidate_publications(testing: bool) -> None:
+    """Schema 就绪后重放已提交但尚未物化的 Skill 发布回执。"""
+
+    if testing:
+        return
+    from core import database
+    from core.runtime_paths import RUNTIME_PATHS
+    from core.skill_candidates import SkillCandidateStore
+
+    db = database.SessionLocal()
+    try:
+        result = SkillCandidateStore(
+            RUNTIME_PATHS.skill_candidate_dir
+        ).reconcile_publications(db)
+    finally:
+        db.close()
+    unresolved = int(result["pending"]) + int(result["ambiguous"])
+    if unresolved:
+        logging.getLogger("nanobot.skill_candidates").warning(
+            "Skill 候选发布投影仍有 %s 个未完成意图",
+            unresolved,
+        )
+
+
 def stop_schedulers(handles: object | None) -> None:
     """停止当前 delivery 模块持有的调度器集合。"""
 
@@ -255,6 +279,9 @@ def _application_module_dependencies() -> ApplicationModuleDependencies:
 
     return ApplicationModuleDependencies(
         init_db=init_db,
+        reconcile_skill_candidate_publications=(
+            reconcile_skill_candidate_publications
+        ),
         start_sqlite_maintenance=start_sqlite_maintenance,
         stop_sqlite_maintenance=stop_sqlite_maintenance,
         start_retrieval_runtime=start_retrieval_runtime,

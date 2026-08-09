@@ -33,6 +33,7 @@ class ApplicationModuleDependencies:
     """九个内建模块使用的显式启动依赖。"""
 
     init_db: SyncAction
+    reconcile_skill_candidate_publications: Callable[[bool], None]
     start_sqlite_maintenance: StartResource
     stop_sqlite_maintenance: StopResource
     start_retrieval_runtime: StartResource
@@ -190,6 +191,9 @@ class _MemoryRuntimeModule(_BuiltinModule):
         self._application.state.job_lease_adapters = registry
         try:
             self._dependencies.init_db()
+            self._dependencies.reconcile_skill_candidate_publications(
+                runtime_context.testing
+            )
             self._sqlite_maintenance = (
                 self._dependencies.start_sqlite_maintenance()
             )

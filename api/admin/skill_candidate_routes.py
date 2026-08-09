@@ -19,7 +19,6 @@ from core.skill_candidates import (
     SkillCandidateStore,
     SkillDraftSpec,
     extract_skill_candidate,
-    publish_candidate_to_skill_registry,
     skill_candidate_catalog_payload,
 )
 from core.skill_candidates.store import MAX_APPROVAL_TTL_SECONDS
@@ -306,14 +305,7 @@ def publish_candidate(
             approval_id=body.approval_id,
             approval_token=body.approval_token.get_secret_value(),
             current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
-            publisher=lambda candidate, report, approval: (
-                publish_candidate_to_skill_registry(
-                    db,
-                    candidate,
-                    report,
-                    approval,
-                )
-            ),
+            db=db,
         )
     except (SkillCandidateContractError, ValueError, RuntimeError) as exc:
         db.rollback()
@@ -346,8 +338,10 @@ def get_candidate_publication(publication_id: str) -> dict[str, object]:
 
 
 @router.get("/state")
-def skill_candidate_state() -> dict[str, object]:
-    return _store().state()
+def skill_candidate_state(
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    return _store().state(db)
 
 
 __all__ = [

@@ -26,6 +26,9 @@ class _FakeCallbacks:
     def init_db(self) -> None:
         self._record("init_db")
 
+    def reconcile_skill_candidate_publications(self, testing: bool) -> None:
+        self._record(f"reconcile_skill_candidates:{testing}")
+
     def start_sqlite_maintenance(self) -> object:
         self._record("start_sqlite")
         return self.maintenance
@@ -135,6 +138,9 @@ def _dependencies(fake: _FakeCallbacks):
 
     return ApplicationModuleDependencies(
         init_db=fake.init_db,
+        reconcile_skill_candidate_publications=(
+            fake.reconcile_skill_candidate_publications
+        ),
         start_sqlite_maintenance=fake.start_sqlite_maintenance,
         stop_sqlite_maintenance=fake.stop_sqlite_maintenance,
         start_retrieval_runtime=fake.start_retrieval_runtime,
@@ -301,6 +307,7 @@ async def test_builtin_modules_start_and_stop_owned_resources():
     assert app.state.telemetry_runtime is fake.telemetry_runtime
     assert fake.calls == [
         "init_db",
+        "reconcile_skill_candidates:False",
         "start_sqlite",
         "start_retrieval",
         "start_proactive",
@@ -361,6 +368,7 @@ async def test_testing_mode_skips_network_and_bridge_but_keeps_other_modules():
     assert "network_check" not in fake.calls
     assert "init_bridge" not in fake.calls
     assert "stop_bridge" not in fake.calls
+    assert "reconcile_skill_candidates:True" in fake.calls
     assert "start_schedulers:True" in fake.calls
     assert app.state.bridge is None
     assert app.state.new_api_session is None
@@ -392,6 +400,7 @@ async def test_memory_module_rolls_back_internal_partial_start():
 
     assert fake.calls == [
         "init_db",
+        "reconcile_skill_candidates:False",
         "start_sqlite",
         "start_retrieval",
         "start_proactive",
