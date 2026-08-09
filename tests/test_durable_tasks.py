@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -228,18 +229,35 @@ def test_reconcile_timeout_writes_authoritative_terminal_fact(db_session):
     assert row.status == "timed_out"
 
 
-def test_reconcile_unknown_side_effect_is_ambiguous(db_session):
-    from core.database import RunSideEffectReceipt
+@pytest.mark.parametrize(
+    ("termination_request", "receipt_state"),
+    (
+        ("cancel", "prepared"),
+        ("timeout", "prepared"),
+        ("cancel", "ambiguous"),
+        ("timeout", "ambiguous"),
+    ),
+)
+def test_reconcile_cancel_or_timeout_preserves_unknown_side_effect_as_ambiguous(
+    db_session,
+    termination_request,
+    receipt_state,
+):
+    from core.database import RunRecoveryOperation, RunSideEffectReceipt
     from core.durable_tasks import (
         RunTaskKind,
         RunTaskStatus,
         SqlAlchemyRunTaskService,
         reconcile_expired_run_tasks,
     )
+    from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+    from core.run_ledger.read_model import load_authoritative_run_view
 
     now = _now()
-    row = _admit_ledger_run(db_session, "run-task-ambiguous", now=now)
-    SqlAlchemyRunTaskService(db_session).admit_running(
+    run_id = f"run-task-{termination_request}-{receipt_state}"
+    row = _admit_ledger_run(db_session, run_id, now=now)
+    service = SqlAlchemyRunTaskService(db_session)
+    service.admit_running(
         run_id=row.run_id,
         task_kind=RunTaskKind.BACKGROUND,
         source_type="agent_run",
@@ -247,42 +265,95 @@ def test_reconcile_unknown_side_effect_is_ambiguous(db_session):
         request_id=row.run_id,
         idempotency_key=row.run_id,
         owner="worker-a",
-        lease_seconds=1,
-        timeout_seconds=120,
+        lease_seconds=1 if termination_request == "cancel" else 120,
+        timeout_seconds=1 if termination_request == "timeout" else 120,
         now=now,
     )
     db_session.add(RunSideEffectReceipt(
-        receipt_id="receipt-ambiguous",
+        receipt_id=f"receipt-{termination_request}-{receipt_state}",
         run_id=row.run_id,
-        tool_call_id="tool-1",
+        tool_call_id=f"tool-{termination_request}-{receipt_state}",
         tool_name="external_tool",
         execution_port_id="tool:test",
         effect_class="external",
-        state="prepared",
+        state=receipt_state,
         idempotency_key_sha256="1" * 64,
         request_sha256="2" * 64,
         result_sha256="",
         result_size_bytes=0,
-        error_code="",
+        error_code=(
+            "tool_result_unknown" if receipt_state == "ambiguous" else ""
+        ),
         checkpoint_before_id="checkpoint-before",
         checkpoint_after_id="",
         file_proofs_json="[]",
         artifact_proofs_json="[]",
         prepared_ledger_sequence=2,
-        terminal_ledger_sequence=None,
+        terminal_ledger_sequence=(2 if receipt_state == "ambiguous" else None),
         prepared_at=now.replace(tzinfo=None),
-        settled_at=None,
+        settled_at=(
+            now.replace(tzinfo=None) if receipt_state == "ambiguous" else None
+        ),
     ))
+    recovery = RunRecoveryOperation(
+        operation_id=f"recovery-{termination_request}-{receipt_state}",
+        request_id_sha256=hashlib.sha256(
+            f"request:{run_id}".encode("utf-8")
+        ).hexdigest(),
+        request_fingerprint_sha256=hashlib.sha256(
+            f"fingerprint:{run_id}".encode("utf-8")
+        ).hexdigest(),
+        operation_kind="resume",
+        run_id=row.run_id,
+        restored_checkpoint_id="checkpoint-before",
+        source_run_id_sha256="3" * 64,
+        source_checkpoint_id_sha256="4" * 64,
+        source_checkpoint_sha256="5" * 64,
+        source_head_sequence=2,
+        source_head_sha256="6" * 64,
+        owner_platform="qq",
+        owner_type="user",
+        owner_id="10001",
+        status="running",
+        prepared_at=now.replace(tzinfo=None),
+        updated_at=now.replace(tzinfo=None),
+    )
+    db_session.add(recovery)
+    if termination_request == "cancel":
+        service.request_cancel(
+            row.run_id,
+            reason="管理员取消",
+            now=now + timedelta(seconds=1),
+        )
     db_session.commit()
 
     assert reconcile_expired_run_tasks(
         db_session,
         now=now + timedelta(seconds=2),
     ) == 1
-    view = SqlAlchemyRunTaskService(db_session).get(row.run_id)
+    view = service.get(row.run_id)
     assert view is not None
     assert view.status is RunTaskStatus.AMBIGUOUS
     assert view.terminal_reason == "lease_expired_with_unknown_effect"
+
+    authoritative = load_authoritative_run_view(
+        SqlAlchemyRunEventLedger(db_session),
+        row.run_id,
+    )
+    assert authoritative is not None
+    assert authoritative.projection.status == "ambiguous"
+    assert authoritative.records[-1].event_type == "run.terminated"
+    assert authoritative.records[-1].event.status == "ambiguous"
+
+    db_session.refresh(row)
+    assert row.status == "ambiguous"
+    assert row.error == "lease_expired_with_unknown_effect"
+    assert row.finished_at is not None
+
+    db_session.refresh(recovery)
+    assert recovery.status == "ambiguous"
+    assert recovery.error_code == "lease_expired_with_unknown_effect"
+    assert recovery.finished_at is not None
 
 
 def test_prepared_run_can_only_be_claimed_once_and_cancel_reconciles(db_session):

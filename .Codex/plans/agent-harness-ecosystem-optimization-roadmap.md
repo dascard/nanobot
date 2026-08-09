@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：全部实施与验收项已完成；阶段 11.3 的真实 Sandbox 宿主隔离矩阵已通过
+> 状态：生产级验收整改进行中；阶段 11.3 的真实 Sandbox 宿主隔离矩阵仍已通过
 >
 > 建立日期：2026-08-03
 >
@@ -1696,6 +1696,34 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
   `docs/superpowers/research/agent-harness-ecosystem/2026-08-09-sandbox-real-host-acceptance.md`。
 - 本阶段没有改变 `enriched_query`、历史注入、conversation、工具输出合同或 Prompt Runtime 输入。
   canonical 默认／运行时模板、变量表和注册表仍与阶段 10.5 的 500 项 Prompt 回归一致，无需修改。
+
+#### 11.4 生产级验收整改
+
+2026-08-09 对 `95ea1bc2991516b8f20b30ba261a95e5f9c2a418..a15b8facb792ba15736fe349e0fb4e85965353b9`
+的 33 个提交逐项复核后，确认主架构有真实执行链和测试承载，但系统边界仍有下列生产级缺口。该批整改按
+风险与依赖顺序独立验收、提交和推送；历史阶段的验收事实保持不变，不用旧证据代替本批回归。
+
+- [x] **Durable Task × Side Effect：** 未知副作用优先于 cancel／timeout。协调器先检查 `prepared` 或
+  `ambiguous` receipt，再决定普通取消、超时或租约失败；新增 `cancel/timeout × prepared/ambiguous`
+  四组交叉回归，并同时校验 Durable Task、权威 Ledger、Legacy Run 和 Recovery 投影均终结为
+  `AMBIGUOUS`。定向回归为 4 passed，Durable Task 模块回归为 11 passed。
+- [ ] **Runtime Budget × Provider Billing：** 模型调用前保守预留 input/output token 与费用，按剩余额度
+  收紧 `max_tokens`，成功后依真实 usage 结算并退还差额；超时或结果未知的 Provider attempt 保留保守计费
+  或显式 `charged_unknown`，使 token／cost 与 step／model-call 一样具有真正的调用前硬上限。
+- [ ] **Skill Candidate × 跨存储发布：** 消除正式 Skill 数据库提交先于 publication receipt／approval
+  consumption 文件的窗口；以同事务 publication intent／outbox 和幂等 reconcile 表达
+  pending／ambiguous／finalized，确保 API 报错时不会留下无记录的已生效 Skill 或可重放批准令牌。
+- [ ] **治理操作 × Admin Audit：** 高风险管理操作的业务事实与审计事实使用同一事务或事务型 outbox，
+  不再由吞异常的独立 commit 提供 fail-open 假保证；失败路径必须 rollback，并覆盖 Skill、Evolution、MCP
+  等治理写操作。
+- [ ] **Session Goal × 认证身份：** 认证层返回 typed principal，owner／actor／approver 从认证上下文或已验证
+  Gateway binding 推导，不再接受任意请求体身份；管理员模拟作为显式、带 scope 且可审计的能力处理。
+- [ ] **Evolution Canary × 文件控制面：** 为 release、approval consumption、active index 与 rollback 引入
+  可恢复 journal／状态机，补齐崩溃点重试和启动 reconcile，避免“未激活但令牌已永久消费”或响应不确定。
+- [ ] **A2A × DNS/网络边界：** 在连接时验证并固定实际解析地址，持续拒绝 private、loopback、link-local、
+  metadata 等目的地，同时保持正确 TLS SNI／Host；不能只做一次 DNS 预检后交给客户端再次解析。
+- [ ] **Proactive × 上海业务日：** 使用 `ZoneInfo("Asia/Shanghai")` 明确计算业务日期和 UTC 查询边界，
+  使每日主动外呼配额不依赖宿主机本地时区；最后重新执行完整测试和生产验收收口。
 
 ## 6. KT 清理专项验收清单
 

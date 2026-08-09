@@ -30,10 +30,6 @@ def _expired_status(
     *,
     now: datetime,
 ) -> tuple[RunTaskStatus, str]:
-    if row.cancel_requested_at is not None:
-        return RunTaskStatus.CANCELLED, "cancel_requested"
-    if row.timeout_at is not None and row.timeout_at <= now:
-        return RunTaskStatus.TIMED_OUT, "execution_timeout"
     unsafe_receipt = (
         db.query(RunSideEffectReceipt.receipt_id)
         .filter(
@@ -44,6 +40,10 @@ def _expired_status(
     )
     if unsafe_receipt is not None:
         return RunTaskStatus.AMBIGUOUS, "lease_expired_with_unknown_effect"
+    if row.cancel_requested_at is not None:
+        return RunTaskStatus.CANCELLED, "cancel_requested"
+    if row.timeout_at is not None and row.timeout_at <= now:
+        return RunTaskStatus.TIMED_OUT, "execution_timeout"
     return RunTaskStatus.FAILED, "lease_expired"
 
 
