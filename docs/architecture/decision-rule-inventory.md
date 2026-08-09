@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`f6315da87117d61bb7d4da56a1f77c107f71dc57`
-- 规则总数：8856
+- 源提交：`01f0312bf98324e852fec5595371aa51207bd498`
+- 规则总数：8891
 - 扫描错误：0
 - 人工复核队列：723
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -13,11 +13,11 @@
 |---|---:|
 | `compatibility` | 138 |
 | `configurable_policy` | 1736 |
-| `data_consistency` | 509 |
+| `data_consistency` | 521 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4699 |
-| `security_invariant` | 1739 |
+| `protocol_syntax` | 4716 |
+| `security_invariant` | 1745 |
 
 ## 文件汇总
 
@@ -32,6 +32,7 @@
 | `core/scheduled_task_contract.py` | 79 |
 | `api/admin/model_routes.py` | 77 |
 | `sandboxd/filesystem.py` | 77 |
+| `core/evolution_control/store.py` | 76 |
 | `api/admin/sandbox_routes.py` | 75 |
 | `sandboxd/app.py` | 72 |
 | `core/skills/contracts.py` | 69 |
@@ -63,7 +64,6 @@
 | `api/admin/tool_routes.py` | 44 |
 | `core/observability/run_view.py` | 43 |
 | `app/memory_digest/builder.py` | 42 |
-| `core/evolution_control/store.py` | 41 |
 | `core/persona_preprocess.py` | 41 |
 | `sandboxd/network_policy.py` | 41 |
 | `core/agent_orchestration/contracts.py` | 40 |

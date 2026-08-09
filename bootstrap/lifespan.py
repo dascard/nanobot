@@ -235,8 +235,19 @@ def validate_sandbox_asset_token_config() -> None:
         db.close()
 
 
+def reconcile_evolution_control_operations() -> dict[str, int]:
+    """重放文件型进化控制面的未完成操作。"""
+
+    from core.evolution_control import EvolutionControlStore
+    from core.runtime_paths import RUNTIME_PATHS
+
+    return EvolutionControlStore(
+        RUNTIME_PATHS.evolution_control_dir
+    ).reconcile_operations()
+
+
 def reconcile_skill_candidate_publications(testing: bool) -> None:
-    """Schema 就绪后收敛治理审计意图并重放 Skill 发布回执。"""
+    """Schema 就绪后收敛治理审计、Skill 发布和进化控制操作。"""
 
     if testing:
         return
@@ -251,6 +262,7 @@ def reconcile_skill_candidate_publications(testing: bool) -> None:
         result = SkillCandidateStore(
             RUNTIME_PATHS.skill_candidate_dir
         ).reconcile_publications(db)
+        evolution_result = reconcile_evolution_control_operations()
     finally:
         db.close()
     unresolved = int(result["pending"]) + int(result["ambiguous"])
@@ -263,6 +275,14 @@ def reconcile_skill_candidate_publications(testing: bool) -> None:
         logging.getLogger("nanobot.admin.audit").warning(
             "启动时发现 %s 个结果未知的治理审计意图",
             ambiguous_audits,
+        )
+    unresolved_evolution = int(evolution_result["pending"]) + int(
+        evolution_result["ambiguous"]
+    )
+    if unresolved_evolution:
+        logging.getLogger("nanobot.evolution_control").warning(
+            "进化控制面仍有 %s 个未收敛操作",
+            unresolved_evolution,
         )
 
 

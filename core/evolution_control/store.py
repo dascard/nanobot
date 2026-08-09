@@ -37,6 +37,24 @@ MAX_CANARY_BASIS_POINTS = 2_000
 MAX_APPROVAL_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_CANARY_DURATION_SECONDS = 24 * 60 * 60
 _MAX_JSON_BYTES = 2 * 1024 * 1024
+_OPERATION_SCHEMA_VERSION = 1
+_OPERATION_KINDS = frozenset({"activate_canary", "rollback_canary"})
+_OPERATION_STATUSES = frozenset({"pending", "ambiguous", "finalized"})
+_OPERATION_PHASES = {
+    "activate_canary": (
+        "prepared",
+        "release_written",
+        "approval_consumed",
+        "active_committed",
+        "finalized",
+    ),
+    "rollback_canary": (
+        "prepared",
+        "receipt_written",
+        "active_committed",
+        "finalized",
+    ),
+}
 
 
 def _utc_now() -> datetime:
@@ -66,12 +84,14 @@ class EvolutionControlStore:
         *,
         clock: Callable[[], datetime] | None = None,
         token_factory: Callable[[], str] | None = None,
+        failure_injector: Callable[[str], None] | None = None,
     ) -> None:
         self.root = Path(root).resolve(strict=False)
         self._clock = clock or _utc_now
         self._token_factory = token_factory or (
             lambda: secrets.token_urlsafe(32)
         )
+        self._failure_injector = failure_injector
 
     def _now(self) -> datetime:
         now = self._clock()
@@ -81,14 +101,25 @@ class EvolutionControlStore:
             raise EvolutionContractError("clock 必须返回含时区的 datetime")
         return now.astimezone(timezone.utc)
 
+    def _checkpoint(self, point: str) -> None:
+        if self._failure_injector is not None:
+            self._failure_injector(point)
+
     @property
     def _active_path(self) -> Path:
         return self.root / "active" / "index.json"
 
+    @property
+    def _operations_dir(self) -> Path:
+        return self.root / "operations"
+
     def _ensure_root(self) -> None:
+        root_existed = self.root.exists()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.root.is_symlink() or not self.root.is_dir():
             raise EvolutionContractError("进化控制根目录必须是普通目录")
+        if not root_existed:
+            self._fsync_directory(self.root.parent)
         for name in (
             "datasets",
             "candidates",
@@ -98,11 +129,15 @@ class EvolutionControlStore:
             "releases",
             "rollbacks",
             "active",
+            "operations",
         ):
             path = self.root / name
+            path_existed = path.exists()
             path.mkdir(exist_ok=True, mode=0o700)
             if path.is_symlink() or not path.is_dir():
                 raise EvolutionContractError(f"进化控制目录无效: {name}")
+            if not path_existed:
+                self._fsync_directory(self.root)
 
     @contextmanager
     def _exclusive_lock(self) -> Iterator[None]:
@@ -161,6 +196,7 @@ class EvolutionControlStore:
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
+            self._fsync_directory(path.parent)
         except BaseException:
             try:
                 path.unlink()
@@ -184,11 +220,23 @@ class EvolutionControlStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp_path, path)
+            self._fsync_directory(path.parent)
         finally:
             try:
                 temp_path.unlink()
             except FileNotFoundError:
                 pass
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            flags |= os.O_DIRECTORY
+        descriptor = os.open(path, flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def put_dataset(self, manifest: FrozenDatasetManifest) -> dict[str, object]:
         if not isinstance(manifest, FrozenDatasetManifest):
@@ -426,6 +474,400 @@ class EvolutionControlStore:
             raise EvolutionContractError("release Artifact 摘要不匹配")
         return release
 
+    @staticmethod
+    def _operation_id(kind: str, identity: str) -> str:
+        if kind not in _OPERATION_KINDS:
+            raise EvolutionContractError("进化操作 kind 无效")
+        return f"evoop_{sha256_json({'kind': kind, 'identity': identity})}"
+
+    def _operation_path(self, operation_id: str) -> Path:
+        identifier = _identifier(operation_id, "operation_id")
+        return self._operations_dir / f"{identifier}.json"
+
+    @staticmethod
+    def _verify_embedded_artifact(
+        value: object,
+        *,
+        digest_field: str,
+        name: str,
+    ) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise EvolutionContractError(f"{name} 必须是 JSON 对象")
+        declared = _sha256(value.get(digest_field), f"{name}.{digest_field}")
+        content = {key: item for key, item in value.items() if key != digest_field}
+        if sha256_json(content) != declared:
+            raise EvolutionContractError(f"{name} 摘要不匹配")
+        return dict(value)
+
+    def _validate_operation(
+        self,
+        value: object,
+        *,
+        expected_operation_id: str,
+    ) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise EvolutionContractError("进化操作 journal 必须是 JSON 对象")
+        declared = _sha256(
+            value.get("operation_sha256"),
+            "operation.operation_sha256",
+        )
+        content = {
+            key: item for key, item in value.items() if key != "operation_sha256"
+        }
+        if sha256_json(content) != declared:
+            raise EvolutionContractError("进化操作 journal 摘要不匹配")
+        if value.get("schema_version") != _OPERATION_SCHEMA_VERSION:
+            raise EvolutionContractError("进化操作 journal schema 无效")
+        operation_id = _identifier(value.get("operation_id"), "operation_id")
+        if operation_id != expected_operation_id:
+            raise EvolutionContractError("进化操作 journal 标识不匹配")
+        kind = str(value.get("kind") or "")
+        if kind not in _OPERATION_KINDS:
+            raise EvolutionContractError("进化操作 journal kind 无效")
+        identity_field = "approval_id" if kind == "activate_canary" else "release_id"
+        identity = _identifier(value.get(identity_field), identity_field)
+        if operation_id != self._operation_id(kind, identity):
+            raise EvolutionContractError("进化操作 journal 绑定不一致")
+        _sha256(value.get("request_sha256"), "operation.request_sha256")
+        status = str(value.get("status") or "")
+        phase = str(value.get("phase") or "")
+        if status not in _OPERATION_STATUSES:
+            raise EvolutionContractError("进化操作 journal 状态无效")
+        if phase not in _OPERATION_PHASES[kind]:
+            raise EvolutionContractError("进化操作 journal 阶段无效")
+        if status == "finalized" and phase != "finalized":
+            raise EvolutionContractError("已完成进化操作的 journal 阶段无效")
+        if status == "ambiguous":
+            _required_text(
+                value.get("ambiguity_reason"),
+                "operation.ambiguity_reason",
+                maximum=512,
+            )
+        _aware_timestamp(value.get("prepared_at"), "operation.prepared_at")
+        _aware_timestamp(value.get("updated_at"), "operation.updated_at")
+
+        target_key = _required_text(
+            value.get("target_key"),
+            "operation.target_key",
+            maximum=512,
+        )
+        expected_active = str(value.get("expected_active_release_id") or "")
+        desired_active = str(value.get("desired_active_release_id") or "")
+        if expected_active:
+            _identifier(expected_active, "expected_active_release_id")
+        if desired_active:
+            _identifier(desired_active, "desired_active_release_id")
+
+        if kind == "activate_canary":
+            release = self._verify_embedded_artifact(
+                value.get("release"),
+                digest_field="release_sha256",
+                name="operation.release",
+            )
+            release_id = _identifier(release.get("release_id"), "release_id")
+            if (
+                release.get("approval_id") != identity
+                or release.get("target_key") != target_key
+                or desired_active != release_id
+                or expected_active != str(release.get("previous_release_id") or "")
+            ):
+                raise EvolutionContractError("激活 journal 的 release 绑定不一致")
+            consumption = self._verify_embedded_artifact(
+                value.get("consumption"),
+                digest_field="consumption_sha256",
+                name="operation.consumption",
+            )
+            if (
+                consumption.get("approval_id") != identity
+                or consumption.get("release_id") != release_id
+                or _sha256(
+                    consumption.get("token_sha256"),
+                    "consumption.token_sha256",
+                )
+                != _sha256(
+                    value.get("approval_token_sha256"),
+                    "operation.approval_token_sha256",
+                )
+            ):
+                raise EvolutionContractError("激活 journal 的批准消费绑定不一致")
+        else:
+            receipt = self._verify_embedded_artifact(
+                value.get("receipt"),
+                digest_field="rollback_sha256",
+                name="operation.receipt",
+            )
+            rollback_id = _identifier(
+                receipt.get("rollback_id"),
+                "rollback_id",
+            )
+            if (
+                receipt.get("release_id") != identity
+                or receipt.get("target_key") != target_key
+                or expected_active != identity
+                or desired_active != str(receipt.get("restored_release_id") or "")
+                or value.get("rollback_id") != rollback_id
+            ):
+                raise EvolutionContractError("回滚 journal 的 receipt 绑定不一致")
+        return dict(value)
+
+    def _read_operation(self, path: Path) -> dict[str, Any]:
+        operation_id = _identifier(path.stem, "operation_id")
+        return self._validate_operation(
+            self._read_json(path),
+            expected_operation_id=operation_id,
+        )
+
+    def _write_operation(
+        self,
+        value: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        content = {
+            key: item for key, item in value.items() if key != "operation_sha256"
+        }
+        sealed = {
+            **content,
+            "operation_sha256": sha256_json(content),
+        }
+        operation_id = _identifier(sealed.get("operation_id"), "operation_id")
+        validated = self._validate_operation(
+            sealed,
+            expected_operation_id=operation_id,
+        )
+        self._replace_json(self._operation_path(operation_id), validated)
+        return validated
+
+    def _update_operation(
+        self,
+        operation: Mapping[str, Any],
+        **changes: object,
+    ) -> dict[str, Any]:
+        content = {
+            key: item for key, item in operation.items() if key != "operation_sha256"
+        }
+        content.update(changes)
+        content["updated_at"] = _iso(self._now())
+        return self._write_operation(content)
+
+    def _advance_operation(
+        self,
+        operation: dict[str, Any],
+        phase: str,
+    ) -> dict[str, Any]:
+        phases = _OPERATION_PHASES[str(operation["kind"])]
+        if phases.index(str(operation["phase"])) >= phases.index(phase):
+            return operation
+        return self._update_operation(operation, phase=phase)
+
+    def _mark_operation_ambiguous(
+        self,
+        operation: dict[str, Any],
+        reason: str,
+    ) -> dict[str, Any]:
+        return self._update_operation(
+            operation,
+            status="ambiguous",
+            ambiguity_reason=_required_text(
+                reason,
+                "ambiguity_reason",
+                maximum=512,
+            ),
+        )
+
+    @staticmethod
+    def _activation_request_sha256(
+        *,
+        candidate_sha256: str,
+        approval_id: str,
+        approval_token_sha256: str,
+        basis_points: int,
+        subject_allowlist: tuple[str, ...],
+        duration_seconds: int,
+        operator: str,
+        harness_registry_sha256: str,
+    ) -> str:
+        return sha256_json(
+            {
+                "kind": "activate_canary",
+                "candidate_sha256": candidate_sha256,
+                "approval_id": approval_id,
+                "approval_token_sha256": approval_token_sha256,
+                "basis_points": basis_points,
+                "subject_allowlist": list(subject_allowlist),
+                "duration_seconds": duration_seconds,
+                "operator": operator,
+                "harness_registry_sha256": harness_registry_sha256,
+            }
+        )
+
+    @staticmethod
+    def _rollback_request_sha256(
+        *,
+        release_id: str,
+        operator: str,
+        reason: str,
+    ) -> str:
+        return sha256_json(
+            {
+                "kind": "rollback_canary",
+                "release_id": release_id,
+                "operator": operator,
+                "reason": reason,
+            }
+        )
+
+    def _apply_activation_operation_locked(
+        self,
+        operation: dict[str, Any],
+        *,
+        inject_failures: bool,
+    ) -> dict[str, Any]:
+        if operation["status"] != "pending":
+            return operation
+        release = dict(operation["release"])
+        release_id = _identifier(release["release_id"], "release_id")
+        release_path = self.root / "releases" / f"{release_id}.json"
+        if release_path.exists():
+            if canonical_json(self._read_json(release_path)) != canonical_json(release):
+                return self._mark_operation_ambiguous(
+                    operation,
+                    "release Artifact 与 journal 冲突",
+                )
+        else:
+            self._write_immutable(release_path, release)
+            if inject_failures:
+                self._checkpoint("activation_after_release_written")
+        operation = self._advance_operation(operation, "release_written")
+
+        consumption = dict(operation["consumption"])
+        approval_id = _identifier(operation["approval_id"], "approval_id")
+        consumed_path = self.root / "approval_consumptions" / f"{approval_id}.json"
+        if consumed_path.exists():
+            if canonical_json(self._read_json(consumed_path)) != canonical_json(
+                consumption
+            ):
+                return self._mark_operation_ambiguous(
+                    operation,
+                    "approval consumption 与 journal 冲突",
+                )
+        else:
+            self._write_immutable(consumed_path, consumption)
+            if inject_failures:
+                self._checkpoint("activation_after_approval_consumed")
+        operation = self._advance_operation(operation, "approval_consumed")
+
+        active = self._active_index()
+        target_key = str(operation["target_key"])
+        expected = str(operation["expected_active_release_id"] or "")
+        desired = str(operation["desired_active_release_id"] or "")
+        current = str(active.get(target_key) or "")
+        if current not in {expected, desired}:
+            return self._mark_operation_ambiguous(
+                operation,
+                "active index 已被其他发布修改",
+            )
+        if current != desired:
+            active[target_key] = desired
+            self._write_active_index(active)
+            if inject_failures:
+                self._checkpoint("activation_after_active_committed")
+        operation = self._advance_operation(operation, "active_committed")
+        operation = self._update_operation(
+            operation,
+            phase="finalized",
+            status="finalized",
+        )
+        if inject_failures:
+            self._checkpoint("activation_after_finalized")
+        return operation
+
+    def _apply_rollback_operation_locked(
+        self,
+        operation: dict[str, Any],
+        *,
+        inject_failures: bool,
+    ) -> dict[str, Any]:
+        if operation["status"] != "pending":
+            return operation
+        receipt = dict(operation["receipt"])
+        rollback_id = _identifier(receipt["rollback_id"], "rollback_id")
+        receipt_path = self.root / "rollbacks" / f"{rollback_id}.json"
+        if receipt_path.exists():
+            if canonical_json(self._read_json(receipt_path)) != canonical_json(receipt):
+                return self._mark_operation_ambiguous(
+                    operation,
+                    "rollback receipt 与 journal 冲突",
+                )
+        else:
+            self._write_immutable(receipt_path, receipt)
+            if inject_failures:
+                self._checkpoint("rollback_after_receipt_written")
+        operation = self._advance_operation(operation, "receipt_written")
+
+        active = self._active_index()
+        target_key = str(operation["target_key"])
+        expected = str(operation["expected_active_release_id"] or "")
+        desired = str(operation["desired_active_release_id"] or "")
+        current = str(active.get(target_key) or "")
+        if current not in {expected, desired}:
+            return self._mark_operation_ambiguous(
+                operation,
+                "active index 已被其他发布修改",
+            )
+        if current != desired:
+            if desired:
+                active[target_key] = desired
+            else:
+                active.pop(target_key, None)
+            self._write_active_index(active)
+            if inject_failures:
+                self._checkpoint("rollback_after_active_committed")
+        operation = self._advance_operation(operation, "active_committed")
+        operation = self._update_operation(
+            operation,
+            phase="finalized",
+            status="finalized",
+        )
+        if inject_failures:
+            self._checkpoint("rollback_after_finalized")
+        return operation
+
+    def _reconcile_operations_locked(self) -> dict[str, int]:
+        self._ensure_root()
+        operations: list[dict[str, Any]] = []
+        for path in sorted(self._operations_dir.glob("*.json")):
+            operation = self._read_operation(path)
+            if operation["status"] == "pending":
+                if operation["kind"] == "activate_canary":
+                    operation = self._apply_activation_operation_locked(
+                        operation,
+                        inject_failures=False,
+                    )
+                else:
+                    operation = self._apply_rollback_operation_locked(
+                        operation,
+                        inject_failures=False,
+                    )
+            operations.append(operation)
+        return {
+            status: sum(item["status"] == status for item in operations)
+            for status in ("pending", "ambiguous", "finalized")
+        }
+
+    def reconcile_operations(self) -> dict[str, int]:
+        """在全局文件锁内完成可安全重放的进化控制操作。"""
+
+        with self._exclusive_lock():
+            return self._reconcile_operations_locked()
+
+    def _reconciled_active_index(
+        self,
+    ) -> tuple[dict[str, str], dict[str, int]]:
+        with self._exclusive_lock():
+            recovery = self._reconcile_operations_locked()
+            if recovery["ambiguous"]:
+                raise EvolutionContractError("存在未处置的进化控制歧义操作")
+            return self._active_index(), recovery
+
     def activate_canary(
         self,
         *,
@@ -467,9 +909,46 @@ class EvolutionControlStore:
         token = str(approval_token or "")
         if not token:
             raise EvolutionContractError("approval_token 不能为空")
+        actual_token_sha = sha256_json({"token": token})
+        request_sha256 = self._activation_request_sha256(
+            candidate_sha256=candidate.candidate_sha256,
+            approval_id=approval_identifier,
+            approval_token_sha256=actual_token_sha,
+            basis_points=rollout,
+            subject_allowlist=allowlist,
+            duration_seconds=duration,
+            operator=normalized_operator,
+            harness_registry_sha256=current_registry,
+        )
+        operation_id = self._operation_id(
+            "activate_canary",
+            approval_identifier,
+        )
 
         with self._exclusive_lock():
+            recovery = self._reconcile_operations_locked()
             approval = self.get_approval(approval_identifier)
+            expected_token_sha = str(approval.get("token_sha256") or "")
+            if not compare_digest(actual_token_sha, expected_token_sha):
+                raise EvolutionContractError("approval_token 无效")
+            operation_path = self._operation_path(operation_id)
+            if operation_path.exists():
+                operation = self._read_operation(operation_path)
+                if operation["request_sha256"] != request_sha256:
+                    raise EvolutionContractError("人工批准已绑定其他灰度请求")
+                if operation["status"] == "ambiguous":
+                    raise EvolutionContractError("灰度激活结果存在歧义，必须人工处置")
+                if operation["status"] != "finalized":
+                    operation = self._apply_activation_operation_locked(
+                        operation,
+                        inject_failures=True,
+                    )
+                if operation["status"] != "finalized":
+                    raise EvolutionContractError("灰度激活结果存在歧义，必须人工处置")
+                return dict(operation["release"])
+            if recovery["ambiguous"]:
+                raise EvolutionContractError("存在未处置的进化控制歧义操作")
+
             now = self._now()
             expires_at = _aware_timestamp(
                 approval.get("expires_at"),
@@ -491,10 +970,6 @@ class EvolutionControlStore:
                 raise EvolutionContractError("灰度比例超过人工批准范围")
             if now + timedelta(seconds=duration) > expires_at:
                 raise EvolutionContractError("灰度有效期不能超过人工批准有效期")
-            expected_token_sha = str(approval.get("token_sha256") or "")
-            actual_token_sha = sha256_json({"token": token})
-            if not compare_digest(actual_token_sha, expected_token_sha):
-                raise EvolutionContractError("approval_token 无效")
             consumed_path = (
                 self.root
                 / "approval_consumptions"
@@ -527,23 +1002,45 @@ class EvolutionControlStore:
                 "repository_operations": "forbidden",
             }
             release = {**content, "release_sha256": sha256_json(content)}
-            self._write_immutable(
-                self.root / "releases" / f"{release_id}.json",
-                release,
-            )
-            self._write_immutable(
-                consumed_path,
+            consumption_content = {
+                "schema_version": EVOLUTION_SCHEMA_VERSION,
+                "approval_id": approval_identifier,
+                "release_id": release_id,
+                "consumed_at": _iso(now),
+                "token_sha256": expected_token_sha,
+            }
+            consumption = {
+                **consumption_content,
+                "consumption_sha256": sha256_json(consumption_content),
+            }
+            prepared_at = _iso(now)
+            operation = self._write_operation(
                 {
-                    "schema_version": EVOLUTION_SCHEMA_VERSION,
+                    "schema_version": _OPERATION_SCHEMA_VERSION,
+                    "operation_id": operation_id,
+                    "kind": "activate_canary",
                     "approval_id": approval_identifier,
-                    "release_id": release_id,
-                    "consumed_at": _iso(now),
-                    "token_sha256": expected_token_sha,
-                },
+                    "approval_token_sha256": expected_token_sha,
+                    "request_sha256": request_sha256,
+                    "status": "pending",
+                    "phase": "prepared",
+                    "prepared_at": prepared_at,
+                    "updated_at": prepared_at,
+                    "target_key": target_key,
+                    "expected_active_release_id": previous_release_id,
+                    "desired_active_release_id": release_id,
+                    "release": release,
+                    "consumption": consumption,
+                }
             )
-            active[target_key] = release_id
-            self._write_active_index(active)
-            return release
+            self._checkpoint("activation_after_journal_prepared")
+            operation = self._apply_activation_operation_locked(
+                operation,
+                inject_failures=True,
+            )
+            if operation["status"] != "finalized":
+                raise EvolutionContractError("灰度激活结果存在歧义，必须人工处置")
+            return dict(operation["release"])
 
     @staticmethod
     def _rollout_bucket(release_id: str, subject_id: str) -> int:
@@ -571,7 +1068,7 @@ class EvolutionControlStore:
             "current_harness_registry_sha256",
         )
         target_key = f"{kind.value}:{resource}"
-        active = self._active_index()
+        active, _ = self._reconciled_active_index()
         release_id = active.get(target_key, "")
         if not release_id:
             return {
@@ -645,7 +1142,35 @@ class EvolutionControlStore:
         release_identifier = _identifier(release_id, "release_id")
         normalized_operator = _required_text(operator, "operator", maximum=128)
         normalized_reason = _required_text(reason, "reason", maximum=2_000)
+        request_sha256 = self._rollback_request_sha256(
+            release_id=release_identifier,
+            operator=normalized_operator,
+            reason=normalized_reason,
+        )
+        operation_id = self._operation_id(
+            "rollback_canary",
+            release_identifier,
+        )
         with self._exclusive_lock():
+            recovery = self._reconcile_operations_locked()
+            operation_path = self._operation_path(operation_id)
+            if operation_path.exists():
+                operation = self._read_operation(operation_path)
+                if operation["request_sha256"] != request_sha256:
+                    raise EvolutionContractError("发布已绑定其他回滚请求")
+                if operation["status"] == "ambiguous":
+                    raise EvolutionContractError("灰度回滚结果存在歧义，必须人工处置")
+                if operation["status"] != "finalized":
+                    operation = self._apply_rollback_operation_locked(
+                        operation,
+                        inject_failures=True,
+                    )
+                if operation["status"] != "finalized":
+                    raise EvolutionContractError("灰度回滚结果存在歧义，必须人工处置")
+                return dict(operation["receipt"])
+            if recovery["ambiguous"]:
+                raise EvolutionContractError("存在未处置的进化控制歧义操作")
+
             release = self.get_release(release_identifier)
             active = self._active_index()
             target_key = str(release["target_key"])
@@ -666,12 +1191,7 @@ class EvolutionControlStore:
                     previous.get("expires_at"),
                     "previous_release.expires_at",
                 ):
-                    active[target_key] = previous_id
                     restored_id = previous_id
-                else:
-                    active.pop(target_key, None)
-            else:
-                active.pop(target_key, None)
             rollback_id = f"evorollback_{uuid.uuid4().hex}"
             now = self._now()
             content = {
@@ -688,15 +1208,36 @@ class EvolutionControlStore:
                 "repository_operations": "forbidden",
             }
             receipt = {**content, "rollback_sha256": sha256_json(content)}
-            self._write_immutable(
-                self.root / "rollbacks" / f"{rollback_id}.json",
-                receipt,
+            prepared_at = _iso(now)
+            operation = self._write_operation(
+                {
+                    "schema_version": _OPERATION_SCHEMA_VERSION,
+                    "operation_id": operation_id,
+                    "kind": "rollback_canary",
+                    "release_id": release_identifier,
+                    "rollback_id": rollback_id,
+                    "request_sha256": request_sha256,
+                    "status": "pending",
+                    "phase": "prepared",
+                    "prepared_at": prepared_at,
+                    "updated_at": prepared_at,
+                    "target_key": target_key,
+                    "expected_active_release_id": release_identifier,
+                    "desired_active_release_id": restored_id,
+                    "receipt": receipt,
+                }
             )
-            self._write_active_index(active)
-            return receipt
+            self._checkpoint("rollback_after_journal_prepared")
+            operation = self._apply_rollback_operation_locked(
+                operation,
+                inject_failures=True,
+            )
+            if operation["status"] != "finalized":
+                raise EvolutionContractError("灰度回滚结果存在歧义，必须人工处置")
+            return dict(operation["receipt"])
 
     def state(self) -> dict[str, object]:
-        active = self._active_index()
+        active, recovery = self._reconciled_active_index()
         releases = []
         for target_key, release_id in sorted(active.items()):
             release = self.get_release(release_id)
@@ -713,6 +1254,7 @@ class EvolutionControlStore:
             "schema_version": EVOLUTION_SCHEMA_VERSION,
             "environment": "canary",
             "active_releases": releases,
+            "operation_recovery": recovery,
             "repository_operations": "forbidden",
         }
 

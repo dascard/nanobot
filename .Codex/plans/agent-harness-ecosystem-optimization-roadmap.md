@@ -1759,8 +1759,19 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
   actor 漂移、独立 Admin 批准与审计失败回滚均有回归覆盖；Session Goal／API／OpenAPI 定向回归为
   112 passed。架构、OpenAPI、Release／Verification Golden、决策清单、Task SLO、行为 Golden、致命 Ruff
   和 `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 为 6949 passed、12 skipped、0 failed。
-- [ ] **Evolution Canary × 文件控制面：** 为 release、approval consumption、active index 与 rollback 引入
+- [x] **Evolution Canary × 文件控制面：** 为 release、approval consumption、active index 与 rollback 引入
   可恢复 journal／状态机，补齐崩溃点重试和启动 reconcile，避免“未激活但令牌已永久消费”或响应不确定。
+
+  实现证据（2026-08-09）：激活以 approval、回滚以 release 绑定确定性 operation ID，在任何 release、批准消费、
+  rollback receipt 或 active index 写入前先原子持久化带摘要的 `pending` journal；阶段推进使用原子 replace，所有
+  不可变文件和目录项均执行 `fsync`。恢复时核对 journal 内嵌 Artifact 摘要，并以预期 active release 与目标
+  release 做 compare-and-swap；第三方漂移只会转为 `ambiguous`，不会覆盖现状。相同请求和令牌可在响应丢失后
+  返回原 release／receipt，不同请求不能复用 approval 或 rollback；journal 只保存令牌摘要。生产启动在 Schema
+  就绪后自动重放未完成操作，运行时 resolve／state 也先收敛 pending journal。5 个激活崩溃点、4 个回滚崩溃点、
+  两类 active-index 冲突、启动恢复、令牌脱敏及 Admin API 双向幂等均有回归；Evolution 定向回归为 50 passed，
+  治理审计与启动联合回归为 82 passed。架构、OpenAPI、Release／Verification Golden、决策清单、Task SLO、
+  行为 Golden、致命 Ruff 和 `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 为
+  6961 passed、12 skipped、0 failed。
 - [ ] **A2A × DNS/网络边界：** 在连接时验证并固定实际解析地址，持续拒绝 private、loopback、link-local、
   metadata 等目的地，同时保持正确 TLS SNI／Host；不能只做一次 DNS 预检后交给客户端再次解析。
 - [ ] **Proactive × 上海业务日：** 使用 `ZoneInfo("Asia/Shanghai")` 明确计算业务日期和 UTC 查询边界，

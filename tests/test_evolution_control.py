@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import event
@@ -598,6 +599,23 @@ def _approve_and_activate(
     *,
     allowlist: tuple[str, ...] = ("user/allowlisted",),
 ):
+    report, approval, token, activation = _approved_activation_request(
+        store,
+        manifest,
+        candidate,
+        allowlist=allowlist,
+    )
+    release = store.activate_canary(**activation)
+    return report, approval, token, release
+
+
+def _approved_activation_request(
+    store: EvolutionControlStore,
+    manifest: FrozenDatasetManifest,
+    candidate: EvolutionCandidateBundle,
+    *,
+    allowlist: tuple[str, ...] = ("user/allowlisted",),
+):
     report = store.evaluate_gate(
         _evidence(candidate, manifest),
         current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
@@ -614,17 +632,17 @@ def _approve_and_activate(
         expires_in_seconds=3_600,
         current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
     )
-    release = store.activate_canary(
-        candidate_sha256=candidate.candidate_sha256,
-        approval_id=approval["approval_id"],
-        approval_token=token,
-        basis_points=100,
-        subject_allowlist=allowlist,
-        duration_seconds=1_800,
-        operator="operator-li",
-        current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
-    )
-    return report, approval, token, release
+    activation = {
+        "candidate_sha256": candidate.candidate_sha256,
+        "approval_id": approval["approval_id"],
+        "approval_token": token,
+        "basis_points": 100,
+        "subject_allowlist": allowlist,
+        "duration_seconds": 1_800,
+        "operator": "operator-li",
+        "current_harness_registry_sha256": EVAL_HARNESS_REGISTRY.sha256,
+    }
+    return report, approval, token, activation
 
 
 def test_canary_requires_one_time_approval_and_resolves_deterministically(tmp_path):
@@ -703,8 +721,251 @@ def test_canary_requires_one_time_approval_and_resolves_deterministically(tmp_pa
             current_harness_registry_sha256="9" * 64,
         )
 
-    with pytest.raises(EvolutionContractError, match="已使用"):
+    assert store.activate_canary(**activation) == release
+
+
+@pytest.mark.parametrize(
+    "checkpoint",
+    (
+        "activation_after_journal_prepared",
+        "activation_after_release_written",
+        "activation_after_approval_consumed",
+        "activation_after_active_committed",
+        "activation_after_finalized",
+    ),
+)
+def test_canary_activation_recovers_every_crash_boundary(tmp_path, checkpoint):
+    root = tmp_path / checkpoint
+    crashed: list[str] = []
+
+    def fail_once(point: str) -> None:
+        if point == checkpoint and not crashed:
+            crashed.append(point)
+            raise RuntimeError(f"模拟崩溃: {point}")
+
+    store = EvolutionControlStore(
+        root,
+        clock=lambda: FIXED_NOW,
+        failure_injector=fail_once,
+    )
+    manifest = _manifest()
+    candidate = _candidate(manifest)
+    store.put_dataset(manifest)
+    store.put_candidate(candidate)
+    _, approval, token, activation = _approved_activation_request(
+        store,
+        manifest,
+        candidate,
+    )
+
+    with pytest.raises(RuntimeError, match="模拟崩溃"):
         store.activate_canary(**activation)
+
+    restarted = EvolutionControlStore(root, clock=lambda: FIXED_NOW)
+    recovered = restarted.reconcile_operations()
+    release = restarted.activate_canary(**activation)
+
+    assert crashed == [checkpoint]
+    assert recovered["pending"] == 0
+    assert recovered["ambiguous"] == 0
+    assert release["approval_id"] == approval["approval_id"]
+    assert (
+        restarted.state()["active_releases"][0]["release_id"] == release["release_id"]
+    )
+    assert token not in "\n".join(
+        path.read_text(encoding="utf-8") for path in root.rglob("*.json")
+    )
+
+
+def test_canary_activation_rejects_request_drift_and_active_conflict(tmp_path):
+    root = tmp_path / "activation-conflict"
+
+    def stop_after_prepare(point: str) -> None:
+        if point == "activation_after_journal_prepared":
+            raise RuntimeError("模拟 prepared 后崩溃")
+
+    store = EvolutionControlStore(
+        root,
+        clock=lambda: FIXED_NOW,
+        failure_injector=stop_after_prepare,
+    )
+    manifest = _manifest()
+    candidate = _candidate(manifest)
+    store.put_dataset(manifest)
+    store.put_candidate(candidate)
+    _, _, _, activation = _approved_activation_request(
+        store,
+        manifest,
+        candidate,
+    )
+    with pytest.raises(RuntimeError, match="prepared 后崩溃"):
+        store.activate_canary(**activation)
+
+    restarted = EvolutionControlStore(root, clock=lambda: FIXED_NOW)
+    restarted._write_active_index(
+        {
+            candidate.target.target_key: "evorelease_external",
+        }
+    )
+    recovered = restarted.reconcile_operations()
+
+    assert recovered["ambiguous"] == 1
+    assert restarted._active_index()[candidate.target.target_key] == (
+        "evorelease_external"
+    )
+    with pytest.raises(EvolutionContractError, match="歧义"):
+        restarted.activate_canary(**activation)
+
+    clean_store, clean_manifest, clean_candidate = _stored_candidate(
+        tmp_path / "request-drift"
+    )
+    _, _, _, clean_activation = _approved_activation_request(
+        clean_store,
+        clean_manifest,
+        clean_candidate,
+    )
+    clean_store.activate_canary(**clean_activation)
+    with pytest.raises(EvolutionContractError, match="其他灰度请求"):
+        clean_store.activate_canary(**{**clean_activation, "basis_points": 101})
+
+
+def test_startup_reconciles_pending_canary_operation(tmp_path, monkeypatch):
+    from bootstrap.lifespan import reconcile_evolution_control_operations
+    from core import runtime_paths
+
+    root = tmp_path / "startup-reconcile"
+
+    def stop_after_consumption(point: str) -> None:
+        if point == "activation_after_approval_consumed":
+            raise RuntimeError("模拟消费批准后进程退出")
+
+    store = EvolutionControlStore(
+        root,
+        clock=lambda: FIXED_NOW,
+        failure_injector=stop_after_consumption,
+    )
+    manifest = _manifest()
+    candidate = _candidate(manifest)
+    store.put_dataset(manifest)
+    store.put_candidate(candidate)
+    _, _, _, activation = _approved_activation_request(
+        store,
+        manifest,
+        candidate,
+    )
+    with pytest.raises(RuntimeError, match="消费批准后进程退出"):
+        store.activate_canary(**activation)
+
+    monkeypatch.setattr(
+        runtime_paths,
+        "RUNTIME_PATHS",
+        SimpleNamespace(evolution_control_dir=root),
+    )
+    result = reconcile_evolution_control_operations()
+
+    assert result == {"pending": 0, "ambiguous": 0, "finalized": 1}
+    assert (
+        EvolutionControlStore(root).state()["active_releases"][0]["candidate_sha256"]
+        == candidate.candidate_sha256
+    )
+
+
+@pytest.mark.parametrize(
+    "checkpoint",
+    (
+        "rollback_after_journal_prepared",
+        "rollback_after_receipt_written",
+        "rollback_after_active_committed",
+        "rollback_after_finalized",
+    ),
+)
+def test_canary_rollback_recovers_every_crash_boundary(tmp_path, checkpoint):
+    root = tmp_path / checkpoint
+    setup_store = EvolutionControlStore(root, clock=lambda: FIXED_NOW)
+    manifest = _manifest()
+    candidate = _candidate(manifest)
+    setup_store.put_dataset(manifest)
+    setup_store.put_candidate(candidate)
+    _, _, _, release = _approve_and_activate(
+        setup_store,
+        manifest,
+        candidate,
+    )
+    crashed: list[str] = []
+
+    def fail_once(point: str) -> None:
+        if point == checkpoint and not crashed:
+            crashed.append(point)
+            raise RuntimeError(f"模拟崩溃: {point}")
+
+    rollback_store = EvolutionControlStore(
+        root,
+        clock=lambda: FIXED_NOW,
+        failure_injector=fail_once,
+    )
+    rollback_request = {
+        "release_id": release["release_id"],
+        "operator": "operator-li",
+        "reason": "灰度指标异常。",
+    }
+    with pytest.raises(RuntimeError, match="模拟崩溃"):
+        rollback_store.rollback_canary(**rollback_request)
+
+    restarted = EvolutionControlStore(root, clock=lambda: FIXED_NOW)
+    recovered = restarted.reconcile_operations()
+    receipt = restarted.rollback_canary(**rollback_request)
+
+    assert crashed == [checkpoint]
+    assert recovered["pending"] == 0
+    assert recovered["ambiguous"] == 0
+    assert receipt["release_id"] == release["release_id"]
+    assert restarted.state()["active_releases"] == []
+    with pytest.raises(EvolutionContractError, match="其他回滚请求"):
+        restarted.rollback_canary(**{**rollback_request, "reason": "另一个回滚理由。"})
+
+
+def test_canary_rollback_preserves_active_index_on_recovery_conflict(tmp_path):
+    root = tmp_path / "rollback-conflict"
+    setup_store = EvolutionControlStore(root, clock=lambda: FIXED_NOW)
+    manifest = _manifest()
+    candidate = _candidate(manifest)
+    setup_store.put_dataset(manifest)
+    setup_store.put_candidate(candidate)
+    _, _, _, release = _approve_and_activate(
+        setup_store,
+        manifest,
+        candidate,
+    )
+
+    def stop_after_prepare(point: str) -> None:
+        if point == "rollback_after_journal_prepared":
+            raise RuntimeError("模拟回滚 prepared 后崩溃")
+
+    rollback_store = EvolutionControlStore(
+        root,
+        clock=lambda: FIXED_NOW,
+        failure_injector=stop_after_prepare,
+    )
+    request = {
+        "release_id": release["release_id"],
+        "operator": "operator-li",
+        "reason": "灰度指标异常。",
+    }
+    with pytest.raises(RuntimeError, match="回滚 prepared 后崩溃"):
+        rollback_store.rollback_canary(**request)
+
+    restarted = EvolutionControlStore(root, clock=lambda: FIXED_NOW)
+    restarted._write_active_index({
+        candidate.target.target_key: "evorelease_external",
+    })
+    result = restarted.reconcile_operations()
+
+    assert result["ambiguous"] == 1
+    assert restarted._active_index()[candidate.target.target_key] == (
+        "evorelease_external"
+    )
+    with pytest.raises(EvolutionContractError, match="歧义"):
+        restarted.rollback_canary(**request)
 
 
 def test_canary_blocks_registry_drift_and_rolls_back_to_verified_release(tmp_path):
@@ -1086,7 +1347,8 @@ def test_admin_api_requires_auth_and_executes_complete_canary_lifecycle(
         headers=headers,
         json=activation_body,
     )
-    assert reused.status_code == 409
+    assert reused.status_code == 201
+    assert reused.json() == release
 
     rollback = client.post(
         f"/api/v1/admin/evals/evolution/canary/{release['release_id']}/rollback",
@@ -1095,6 +1357,13 @@ def test_admin_api_requires_auth_and_executes_complete_canary_lifecycle(
     )
     assert rollback.status_code == 200
     assert rollback.json()["restored_release_id"] == ""
+    repeated_rollback = client.post(
+        f"/api/v1/admin/evals/evolution/canary/{release['release_id']}/rollback",
+        headers=headers,
+        json={"operator": "operator-li", "reason": "完成链路验证。"},
+    )
+    assert repeated_rollback.status_code == 200
+    assert repeated_rollback.json() == rollback.json()
 
     state = client.get(
         "/api/v1/admin/evals/evolution/state",
@@ -1114,8 +1383,8 @@ def test_admin_api_requires_auth_and_executes_complete_canary_lifecycle(
         row.status
         for row in db_session.query(AdminAuditOutboxRow).all()
     ]
-    assert outbox_statuses.count("finalized") == 6
-    assert outbox_statuses.count("failed") == 1
+    assert outbox_statuses.count("finalized") == 8
+    assert outbox_statuses.count("failed") == 0
     assert not ({"prepared", "ambiguous"} & set(outbox_statuses))
 
 
