@@ -29,6 +29,7 @@ from .gates import evaluate_skill_candidate
 from .publishing import (
     SkillCandidatePublicationIntent,
     commit_candidate_publication_intent,
+    ensure_candidate_publication_audit,
     list_candidate_publication_intents,
     load_candidate_publication_intent,
     set_candidate_publication_projection_state,
@@ -447,6 +448,8 @@ class SkillCandidateStore:
         approval_token: str,
         current_harness_registry_sha256: str,
         db: Session,
+        audit_admin_user: str = "admin",
+        audit_ip_address: str = "",
     ) -> dict[str, object]:
         """原子提交正式 Skill 与发布意图，再物化可重建文件回执。"""
 
@@ -488,6 +491,12 @@ class SkillCandidateStore:
                     approval=approval,
                     approval_token_sha256=actual_token_sha,
                 )
+                ensure_candidate_publication_audit(
+                    db,
+                    receipt=existing_intent.receipt,
+                    admin_user=audit_admin_user,
+                    ip_address=audit_ip_address,
+                )
                 return self._materialize_publication_intent(
                     db,
                     existing_intent,
@@ -507,6 +516,8 @@ class SkillCandidateStore:
                     db,
                     approval_token_sha256=actual_token_sha,
                     receipt=legacy_receipt,
+                    audit_admin_user=audit_admin_user,
+                    audit_ip_address=audit_ip_address,
                 )
                 return self._materialize_publication_intent(db, adopted)
             try:
@@ -544,6 +555,8 @@ class SkillCandidateStore:
                     db,
                     approval_token_sha256=actual_token_sha,
                     receipt=receipt,
+                    audit_admin_user=audit_admin_user,
+                    audit_ip_address=audit_ip_address,
                 )
             except BaseException:
                 db.rollback()
@@ -768,6 +781,12 @@ class SkillCandidateStore:
             raise TypeError("db 必须是 SQLAlchemy Session")
         counts = {"finalized": 0, "pending": 0, "ambiguous": 0}
         with self._exclusive_lock():
+            for intent in list_candidate_publication_intents(db):
+                ensure_candidate_publication_audit(
+                    db,
+                    receipt=intent.receipt,
+                    admin_user="system-reconcile",
+                )
             intents = list_candidate_publication_intents(
                 db,
                 statuses=frozenset({"pending"}),

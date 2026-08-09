@@ -7,8 +7,9 @@ import json
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.tool_services.skill import execute_skill
 from core.agent_runtime import (
@@ -24,6 +25,7 @@ from core.agent_runtime import (
 )
 from core.agent_runtime.request_scope import runtime_context_scope
 from core.db.models.skill import SkillLifecycleEventRow
+from core.database import AdminAuditLog
 from core.skills import (
     BundledSkillCatalog,
     SkillBundleFile,
@@ -879,6 +881,51 @@ def test_skill_admin_api_has_literal_upload_and_full_reversible_lifecycle(
         headers=headers,
     )
     assert unsafe.status_code == 422
+
+
+def test_skill_install_audit_failure_rolls_back_business_rows(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "skill-token")
+    headers = {"Authorization": "Bearer skill-token"}
+
+    def fail_admin_audit(session, _flush_context, _instances):
+        if any(isinstance(item, AdminAuditLog) for item in session.new):
+            raise RuntimeError("simulated skill audit failure")
+
+    event.listen(Session, "before_flush", fail_admin_audit)
+    try:
+        response = client.post(
+            "/api/v1/admin/skills/install",
+            headers=headers,
+            json={
+                "scope": "user",
+                "scope_key": "qq:user:audit-failure",
+                "skill_md": _skill_md(
+                    "audit-failure-guide",
+                    "1.0.0",
+                ).decode("utf-8"),
+                "resources": [],
+                "source_label": "audit-failure-test",
+                "trusted_source": True,
+                "pin": True,
+            },
+        )
+    finally:
+        event.remove(Session, "before_flush", fail_admin_audit)
+        db_session.rollback()
+
+    assert response.status_code == 500
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_packages WHERE source_label = :source"
+    ), {"source": "audit-failure-test"}).scalar_one() == 0
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_bindings "
+        "WHERE scope_key = :scope_key"
+    ), {"scope_key": "qq:user:audit-failure"}).scalar_one() == 0
+    assert db_session.query(AdminAuditLog).count() == 0
 
 
 def test_skill_schema_migration_creates_immutable_version_tables():

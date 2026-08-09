@@ -171,6 +171,10 @@ def test_admin_table_view_registry_uses_shared_kernel():
     assert ADMIN_TABLE_VIEW_REGISTRY.namespace == "admin_table_view"
     assert ADMIN_TABLE_VIEW_REGISTRY.generation == 1
     assert ADMIN_TABLE_VIEW_REGISTRY.require("users").table_name == "users"
+    assert (
+        ADMIN_TABLE_VIEW_REGISTRY.require("admin_audit_outbox").table_name
+        == "admin_audit_outbox"
+    )
 
 
 def test_db_view_rejects_unknown_or_sensitive_view_with_stable_code(

@@ -10,6 +10,8 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from core.admin_audit import stage_admin_audit
+from core.db.models.admin import AdminAuditLog
 from core.db.models.skill import (
     SkillBindingRow,
     SkillCandidatePublicationIntentRow,
@@ -352,11 +354,92 @@ def _assert_intent_matches(
         raise SkillCandidateContractError("人工批准已绑定不同的发布意图")
 
 
+def _publication_audit_facts(
+    receipt: Mapping[str, object],
+) -> tuple[str, dict[str, object]]:
+    publication_id = str(receipt.get("publication_id") or "")
+    if not publication_id:
+        raise SkillCandidateContractError("发布回执缺少 publication_id")
+    return f"skill_candidate.publish:{publication_id}", {
+        "candidate_sha256": receipt.get("candidate_sha256"),
+        "gate_report_sha256": receipt.get("gate_report_sha256"),
+        "approval_id": receipt.get("approval_id"),
+        "package_id": receipt.get("package_id"),
+        "publication_mode": receipt.get("publication_mode"),
+        "rollback_action": receipt.get("rollback_action"),
+        "approval_token_recorded": False,
+    }
+
+
+def stage_candidate_publication_audit(
+    db: Session,
+    *,
+    receipt: Mapping[str, object],
+    admin_user: str = "admin",
+    ip_address: str = "",
+) -> None:
+    """将正式 Skill 发布审计加入发布意图所在事务。"""
+
+    event_id, detail = _publication_audit_facts(receipt)
+    stage_admin_audit(
+        db,
+        event_id=event_id,
+        admin_user=admin_user,
+        action="skill_candidate.publish",
+        target_type="skill_candidate_publication",
+        target_id=str(receipt.get("publication_id") or ""),
+        detail=detail,
+        ip_address=ip_address,
+    )
+
+
+def ensure_candidate_publication_audit(
+    db: Session,
+    *,
+    receipt: Mapping[str, object],
+    admin_user: str = "admin",
+    ip_address: str = "",
+) -> None:
+    """从持久发布意图幂等补齐旧版本缺失的正式审计行。"""
+
+    event_id, _detail = _publication_audit_facts(receipt)
+    existing = db.execute(
+        select(AdminAuditLog).where(AdminAuditLog.event_id == event_id)
+    ).scalar_one_or_none()
+    if existing is not None:
+        admin_user = str(existing.admin_user or "admin")
+        ip_address = str(existing.ip_address or "")
+    stage_candidate_publication_audit(
+        db,
+        receipt=receipt,
+        admin_user=admin_user,
+        ip_address=ip_address,
+    )
+    try:
+        db.commit()
+    except BaseException:
+        db.rollback()
+        recovered = db.execute(
+            select(AdminAuditLog).where(AdminAuditLog.event_id == event_id)
+        ).scalar_one_or_none()
+        if recovered is None:
+            raise
+        stage_candidate_publication_audit(
+            db,
+            receipt=receipt,
+            admin_user=str(recovered.admin_user or "admin"),
+            ip_address=str(recovered.ip_address or ""),
+        )
+        db.rollback()
+
+
 def commit_candidate_publication_intent(
     db: Session,
     *,
     approval_token_sha256: str,
     receipt: Mapping[str, object],
+    audit_admin_user: str = "admin",
+    audit_ip_address: str = "",
 ) -> SkillCandidatePublicationIntent:
     """将正式 Skill 变更和 approval 消费意图作为一个事务提交。"""
 
@@ -380,6 +463,12 @@ def commit_candidate_publication_intent(
         updated_at=_db_now(),
     )
     db.add(row)
+    stage_candidate_publication_audit(
+        db,
+        receipt=receipt_copy,
+        admin_user=audit_admin_user,
+        ip_address=audit_ip_address,
+    )
     try:
         db.commit()
     except BaseException:
@@ -497,9 +586,11 @@ def validate_candidate_publication_receipt(
 __all__ = [
     "SkillCandidatePublicationIntent",
     "commit_candidate_publication_intent",
+    "ensure_candidate_publication_audit",
     "list_candidate_publication_intents",
     "load_candidate_publication_intent",
     "set_candidate_publication_projection_state",
+    "stage_candidate_publication_audit",
     "stage_candidate_to_skill_registry",
     "validate_candidate_publication_receipt",
 ]

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy.orm import Session
 
-from api.admin.common import audit_request, verify_admin
+from api.admin.common import audited_external_action, verify_admin
 from core.database import get_db
 from core.evolution_control import (
     EvolutionCandidateBundle,
@@ -130,24 +130,30 @@ def evolution_import_dataset(
 ) -> dict[str, object]:
     try:
         manifest = FrozenDatasetManifest.from_dict(body.artifact)
-        result = _store().put_dataset(manifest)
+        result = audited_external_action(
+            db,
+            request,
+            action="import_evolution_dataset",
+            target_type="evolution_dataset",
+            target_id=manifest.dataset_sha256,
+            request_detail={
+                "dataset_id": manifest.dataset_id,
+                "revision": manifest.revision,
+                "source_revision": manifest.source_revision,
+            },
+            operation=lambda: _store().put_dataset(manifest),
+            result_target_id=lambda _result: manifest.dataset_sha256,
+            result_detail=lambda _result: {
+                "dataset_id": manifest.dataset_id,
+                "revision": manifest.revision,
+                "source_revision": manifest.source_revision,
+                "split_counts": {
+                    item.role: item.expected_count for item in manifest.splits
+                },
+            },
+        )
     except EvolutionContractError as exc:
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "import_evolution_dataset",
-        "evolution_dataset",
-        manifest.dataset_sha256,
-        {
-            "dataset_id": manifest.dataset_id,
-            "revision": manifest.revision,
-            "source_revision": manifest.source_revision,
-            "split_counts": {
-                item.role: item.expected_count for item in manifest.splits
-            },
-        },
-    )
     return result
 
 
@@ -159,23 +165,30 @@ def evolution_import_candidate(
 ) -> dict[str, object]:
     try:
         candidate = EvolutionCandidateBundle.from_dict(body.artifact)
-        result = _store().put_candidate(candidate)
+        result = audited_external_action(
+            db,
+            request,
+            action="import_evolution_candidate",
+            target_type="evolution_candidate",
+            target_id=candidate.candidate_sha256,
+            request_detail={
+                "candidate_id": candidate.candidate_id,
+                "dataset_sha256": candidate.dataset_sha256,
+                "target_kind": candidate.target.kind.value,
+                "resource_id": candidate.target.resource_id,
+            },
+            operation=lambda: _store().put_candidate(candidate),
+            result_target_id=lambda _result: candidate.candidate_sha256,
+            result_detail=lambda _result: {
+                "candidate_id": candidate.candidate_id,
+                "dataset_sha256": candidate.dataset_sha256,
+                "target_kind": candidate.target.kind.value,
+                "resource_id": candidate.target.resource_id,
+                "repository_operations": candidate.repository_operations,
+            },
+        )
     except EvolutionContractError as exc:
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "import_evolution_candidate",
-        "evolution_candidate",
-        candidate.candidate_sha256,
-        {
-            "candidate_id": candidate.candidate_id,
-            "dataset_sha256": candidate.dataset_sha256,
-            "target_kind": candidate.target.kind.value,
-            "resource_id": candidate.target.resource_id,
-            "repository_operations": candidate.repository_operations,
-        },
-    )
     return result
 
 
@@ -195,30 +208,40 @@ def evolution_gate_candidate(
 ) -> dict[str, object]:
     try:
         evidence = EvolutionGateEvidence.from_dict(body.evidence)
-        report = _store().evaluate_gate(
-            evidence,
-            current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
+        report = audited_external_action(
+            db,
+            request,
+            action="evaluate_evolution_candidate",
+            target_type="evolution_gate",
+            target_id=evidence.candidate_sha256,
+            request_detail={
+                "candidate_sha256": evidence.candidate_sha256,
+                "dataset_sha256": evidence.dataset_sha256,
+                "evaluator_id": evidence.evaluator_id,
+            },
+            operation=lambda: _store().evaluate_gate(
+                evidence,
+                current_harness_registry_sha256=(
+                    EVAL_HARNESS_REGISTRY.sha256
+                ),
+            ),
+            result_target_id=lambda result: str(
+                result["gate_report_sha256"]
+            ),
+            result_detail=lambda result: {
+                "candidate_sha256": result["candidate_sha256"],
+                "dataset_sha256": result["dataset_sha256"],
+                "passed": result["passed"],
+                "error_codes": [
+                    item["code"] for item in result.get("errors", [])
+                ],
+                "harness_registry_sha256": result[
+                    "harness_registry_sha256"
+                ],
+            },
         )
     except EvolutionContractError as exc:
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "evaluate_evolution_candidate",
-        "evolution_gate",
-        str(report["gate_report_sha256"]),
-        {
-            "candidate_sha256": report["candidate_sha256"],
-            "dataset_sha256": report["dataset_sha256"],
-            "passed": report["passed"],
-            "error_codes": [
-                item["code"] for item in report.get("errors", [])
-            ],
-            "harness_registry_sha256": report[
-                "harness_registry_sha256"
-            ],
-        },
-    )
     return report
 
 
@@ -229,37 +252,49 @@ def evolution_approve_candidate(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     try:
-        approval, token = _store().approve(
-            candidate_sha256=body.candidate_sha256,
-            gate_report_sha256=body.gate_report_sha256,
-            confirm_candidate_sha256=body.confirm_candidate_sha256,
-            reviewer=body.reviewer,
-            reviewer_kind=body.reviewer_kind,
-            reason=body.reason,
-            risk_scope=tuple(body.risk_scope),
-            max_basis_points=body.max_basis_points,
-            expires_in_seconds=body.expires_in_seconds,
-            current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
+        approval, token = audited_external_action(
+            db,
+            request,
+            action="approve_evolution_canary",
+            target_type="evolution_approval",
+            target_id=body.candidate_sha256,
+            request_detail={
+                "candidate_sha256": body.candidate_sha256,
+                "gate_report_sha256": body.gate_report_sha256,
+                "reviewer": body.reviewer,
+                "reviewer_kind": body.reviewer_kind,
+                "risk_scope": body.risk_scope,
+                "max_basis_points": body.max_basis_points,
+            },
+            operation=lambda: _store().approve(
+                candidate_sha256=body.candidate_sha256,
+                gate_report_sha256=body.gate_report_sha256,
+                confirm_candidate_sha256=body.confirm_candidate_sha256,
+                reviewer=body.reviewer,
+                reviewer_kind=body.reviewer_kind,
+                reason=body.reason,
+                risk_scope=tuple(body.risk_scope),
+                max_basis_points=body.max_basis_points,
+                expires_in_seconds=body.expires_in_seconds,
+                current_harness_registry_sha256=(
+                    EVAL_HARNESS_REGISTRY.sha256
+                ),
+            ),
+            result_target_id=lambda result: str(result[0]["approval_id"]),
+            result_detail=lambda result: {
+                "approval_sha256": result[0]["approval_sha256"],
+                "candidate_sha256": result[0]["candidate_sha256"],
+                "gate_report_sha256": result[0]["gate_report_sha256"],
+                "reviewer": result[0]["reviewer"],
+                "reviewer_kind": result[0]["reviewer_kind"],
+                "risk_scope": result[0]["risk_scope"],
+                "max_basis_points": result[0]["max_basis_points"],
+                "expires_at": result[0]["expires_at"],
+                "approval_token_recorded": False,
+            },
         )
     except EvolutionContractError as exc:
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "approve_evolution_canary",
-        "evolution_approval",
-        str(approval["approval_id"]),
-        {
-            "approval_sha256": approval["approval_sha256"],
-            "candidate_sha256": approval["candidate_sha256"],
-            "gate_report_sha256": approval["gate_report_sha256"],
-            "reviewer": approval["reviewer"],
-            "reviewer_kind": approval["reviewer_kind"],
-            "risk_scope": approval["risk_scope"],
-            "max_basis_points": approval["max_basis_points"],
-            "expires_at": approval["expires_at"],
-        },
-    )
     return {
         "approval": approval,
         "approval_token": token,
@@ -274,34 +309,47 @@ def evolution_activate_canary(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     try:
-        release = _store().activate_canary(
-            candidate_sha256=body.candidate_sha256,
-            approval_id=body.approval_id,
-            approval_token=body.approval_token.get_secret_value(),
-            basis_points=body.basis_points,
-            subject_allowlist=tuple(body.subject_allowlist),
-            duration_seconds=body.duration_seconds,
-            operator=body.operator,
-            current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
+        release = audited_external_action(
+            db,
+            request,
+            action="activate_evolution_canary",
+            target_type="evolution_release",
+            target_id=body.approval_id,
+            request_detail={
+                "candidate_sha256": body.candidate_sha256,
+                "approval_id": body.approval_id,
+                "basis_points": body.basis_points,
+                "subject_allowlist_count": len(body.subject_allowlist),
+                "duration_seconds": body.duration_seconds,
+                "operator": body.operator,
+                "approval_token_recorded": False,
+            },
+            operation=lambda: _store().activate_canary(
+                candidate_sha256=body.candidate_sha256,
+                approval_id=body.approval_id,
+                approval_token=body.approval_token.get_secret_value(),
+                basis_points=body.basis_points,
+                subject_allowlist=tuple(body.subject_allowlist),
+                duration_seconds=body.duration_seconds,
+                operator=body.operator,
+                current_harness_registry_sha256=(
+                    EVAL_HARNESS_REGISTRY.sha256
+                ),
+            ),
+            result_target_id=lambda result: str(result["release_id"]),
+            result_detail=lambda result: {
+                "release_sha256": result["release_sha256"],
+                "candidate_sha256": result["candidate_sha256"],
+                "approval_id": result["approval_id"],
+                "target_key": result["target_key"],
+                "basis_points": result["basis_points"],
+                "subject_allowlist_count": len(result["subject_allowlist"]),
+                "expires_at": result["expires_at"],
+                "approval_token_recorded": False,
+            },
         )
     except EvolutionContractError as exc:
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "activate_evolution_canary",
-        "evolution_release",
-        str(release["release_id"]),
-        {
-            "release_sha256": release["release_sha256"],
-            "candidate_sha256": release["candidate_sha256"],
-            "approval_id": release["approval_id"],
-            "target_key": release["target_key"],
-            "basis_points": release["basis_points"],
-            "subject_allowlist_count": len(release["subject_allowlist"]),
-            "expires_at": release["expires_at"],
-        },
-    )
     return release
 
 
@@ -330,28 +378,34 @@ def evolution_rollback_canary(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     try:
-        receipt = _store().rollback_canary(
-            release_id=release_id,
-            operator=body.operator,
-            reason=body.reason,
+        receipt = audited_external_action(
+            db,
+            request,
+            action="rollback_evolution_canary",
+            target_type="evolution_rollback",
+            target_id=release_id,
+            request_detail={
+                "release_id": release_id,
+                "operator": body.operator,
+                "reason": body.reason,
+            },
+            operation=lambda: _store().rollback_canary(
+                release_id=release_id,
+                operator=body.operator,
+                reason=body.reason,
+            ),
+            result_target_id=lambda result: str(result["rollback_id"]),
+            result_detail=lambda result: {
+                "rollback_sha256": result["rollback_sha256"],
+                "release_id": result["release_id"],
+                "target_key": result["target_key"],
+                "restored_release_id": result["restored_release_id"],
+                "operator": result["operator"],
+                "reason": result["reason"],
+            },
         )
     except EvolutionContractError as exc:
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "rollback_evolution_canary",
-        "evolution_rollback",
-        str(receipt["rollback_id"]),
-        {
-            "rollback_sha256": receipt["rollback_sha256"],
-            "release_id": receipt["release_id"],
-            "target_key": receipt["target_key"],
-            "restored_release_id": receipt["restored_release_id"],
-            "operator": receipt["operator"],
-            "reason": receipt["reason"],
-        },
-    )
     return receipt
 
 

@@ -124,6 +124,7 @@ _AGENT_SKILLS_GOVERNANCE_V2_VERSION = (
 _SKILL_CANDIDATE_PUBLICATION_OUTBOX_V1_VERSION = (
     "20260809_skill_candidate_publication_outbox_v1"
 )
+_ADMIN_AUDIT_OUTBOX_V1_VERSION = "20260809_admin_audit_outbox_v1"
 _MCP_CONTROL_PLANE_V1_VERSION = "20260804_mcp_control_plane_v1"
 _RUNTIME_PERMISSION_GOVERNANCE_V1_VERSION = (
     "20260804_runtime_permission_governance_v1"
@@ -4034,6 +4035,49 @@ def _skill_candidate_publication_outbox_v1(
     ))
 
 
+def _admin_audit_outbox_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """为跨存储治理操作创建持久审计意图与幂等事件键。"""
+
+    from core.db.models.admin import AdminAuditLog, AdminAuditOutboxRow
+
+    tables = _table_names(conn)
+    if "admin_audit_logs" not in tables:
+        AdminAuditLog.__table__.create(bind=conn, checkfirst=True)
+    elif "event_id" not in _columns(conn, "admin_audit_logs"):
+        conn.execute(text(
+            "ALTER TABLE admin_audit_logs ADD COLUMN event_id VARCHAR(96)"
+        ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_admin_audit_logs_event_id "
+        "ON admin_audit_logs(event_id)"
+    ))
+    AdminAuditOutboxRow.__table__.create(bind=conn, checkfirst=True)
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        return
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS trg_admin_audit_outbox_identity_immutable "
+        "BEFORE UPDATE ON admin_audit_outbox "
+        "WHEN NEW.event_id IS NOT OLD.event_id "
+        "OR NEW.admin_user IS NOT OLD.admin_user "
+        "OR NEW.action IS NOT OLD.action "
+        "OR NEW.target_type IS NOT OLD.target_type "
+        "OR NEW.target_id IS NOT OLD.target_id "
+        "OR NEW.request_detail_json IS NOT OLD.request_detail_json "
+        "OR NEW.ip_address IS NOT OLD.ip_address "
+        "OR NEW.created_at IS NOT OLD.created_at "
+        "BEGIN SELECT RAISE(ABORT, 'admin_audit_outbox_identity_immutable'); END"
+    ))
+    conn.execute(text(
+        "CREATE TRIGGER IF NOT EXISTS trg_admin_audit_outbox_no_delete "
+        "BEFORE DELETE ON admin_audit_outbox BEGIN "
+        "SELECT RAISE(ABORT, 'admin_audit_outbox_append_only'); END"
+    ))
+
+
 def _mcp_control_plane_v1(
     conn: Any,
     _engine: Any,
@@ -5458,6 +5502,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _SKILL_CANDIDATE_PUBLICATION_OUTBOX_V1_VERSION,
         "skill candidate transactional publication outbox",
         _skill_candidate_publication_outbox_v1,
+    ),
+    (
+        _ADMIN_AUDIT_OUTBOX_V1_VERSION,
+        "admin governance transactional audit outbox",
+        _admin_audit_outbox_v1,
     ),
     (
         _MCP_CONTROL_PLANE_V1_VERSION,

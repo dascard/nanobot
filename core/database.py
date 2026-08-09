@@ -10,6 +10,7 @@ from config import DATABASE_URL
 from core.db.base import Base
 from core.db.models import (
     AdminAuditLog,
+    AdminAuditOutboxRow,
     AdminIdempotencyRecord,
     AgentCollaborationBoardRow,
     AgentCollaborationEventRow,
@@ -169,6 +170,7 @@ def init_db() -> None:
 
 __all__ = [
     "AdminAuditLog",
+    "AdminAuditOutboxRow",
     "AdminIdempotencyRecord",
     "AgentCollaborationBoardRow",
     "AgentCollaborationEventRow",

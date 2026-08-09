@@ -11,6 +11,59 @@ _GROUP_MEMORY_CANONICAL_IDENTITY_VERSION = (
 )
 
 
+def test_admin_audit_outbox_migration_adds_idempotent_audit_events():
+    from core.schema_migrations import (
+        MIGRATIONS,
+        _ADMIN_AUDIT_OUTBOX_V1_VERSION,
+        _admin_audit_outbox_v1,
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE admin_audit_logs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "admin_user TEXT, action TEXT NOT NULL, target_type TEXT, "
+            "target_id TEXT, detail_json TEXT, ip_address TEXT, "
+            "created_at DATETIME)"
+        ))
+        _admin_audit_outbox_v1(conn, engine, None)
+        conn.execute(text(
+            "INSERT INTO admin_audit_logs(event_id, action) "
+            "VALUES ('audit-event-1', 'governance.action')"
+        ))
+        conn.execute(text(
+            "INSERT INTO admin_audit_outbox("
+            "event_id, admin_user, action, target_type, target_id, "
+            "request_detail_json, ip_address, status, result_target_id, "
+            "result_detail_json, last_error_code, created_at, updated_at"
+            ") VALUES ("
+            "'audit-intent-1', 'admin', 'governance.action', 'target', "
+            "'target-1', '{}', '', 'prepared', '', '{}', '', "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ))
+
+    assert "event_id" in {
+        column["name"] for column in inspect(engine).get_columns("admin_audit_logs")
+    }
+    assert "admin_audit_outbox" in inspect(engine).get_table_names()
+    assert _ADMIN_AUDIT_OUTBOX_V1_VERSION in {
+        version for version, _name, _migration in MIGRATIONS
+    }
+    with pytest.raises(IntegrityError):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO admin_audit_logs(event_id, action) "
+                "VALUES ('audit-event-1', 'governance.other')"
+            ))
+    with pytest.raises(IntegrityError):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE admin_audit_outbox SET action = 'tampered' "
+                "WHERE event_id = 'audit-intent-1'"
+            ))
+
+
 def _legacy_group_memory_engine(
     rows: list[dict],
     *,

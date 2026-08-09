@@ -10,8 +10,9 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from clients.mcp import McpSdkClient
 from core.agent_runtime import (
@@ -19,7 +20,7 @@ from core.agent_runtime import (
     RuntimeToolEffectClass,
     mcp_wire_tool_name,
 )
-from core.database import SessionLocal
+from core.database import AdminAuditLog, SessionLocal
 from core.db.models.mcp import McpDiagnosticRow, McpSecretRow
 from core.mcp import (
     McpCallResult,
@@ -626,6 +627,39 @@ def test_mcp_admin_configuration_and_secret_responses_never_echo_value(
     assert disabled.json()["revision"] == 2
     assert disabled.json()["servers"][0]["enabled"] is False
     assert secret not in json.dumps(disabled.json(), ensure_ascii=False)
+
+
+def test_mcp_secret_audit_failure_rolls_back_secret(
+    client,
+    db_session,
+    monkeypatch,
+):
+    import api.admin_routes as admin_routes
+
+    monkeypatch.setattr(admin_routes, "NANOBOT_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv(
+        "NANOBOT_MCP_CREDENTIAL_SECRET",
+        "mcp-audit-root-secret-0123456789abcdef",
+    )
+
+    def fail_admin_audit(session, _flush_context, _instances):
+        if any(isinstance(item, AdminAuditLog) for item in session.new):
+            raise RuntimeError("simulated mcp audit failure")
+
+    event.listen(Session, "before_flush", fail_admin_audit)
+    try:
+        response = client.put(
+            "/api/v1/admin/mcp/secrets/audit.token",
+            headers={"Authorization": "Bearer admin-token"},
+            json={"action": "replace", "value": "must-not-persist"},
+        )
+    finally:
+        event.remove(Session, "before_flush", fail_admin_audit)
+        db_session.rollback()
+
+    assert response.status_code == 500
+    assert db_session.get(McpSecretRow, "audit.token") is None
+    assert db_session.query(AdminAuditLog).count() == 0
 
 
 def test_mcp_schema_migration_creates_control_tables_and_append_only_diagnostics():

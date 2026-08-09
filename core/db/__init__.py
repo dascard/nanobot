@@ -96,6 +96,7 @@ from core.db.contracts import (
 from core.db.uow import UnitOfWork
 from core.db.models import (
     AdminAuditLog,
+    AdminAuditOutboxRow,
     AgentOrchestrationCheckpointRow,
     AgentOrchestrationPlanEventRow,
     AgentOrchestrationPlanRevisionRow,
@@ -190,6 +191,7 @@ from core.db.session import (
 
 __all__ = [
     "AdminAuditLog",
+    "AdminAuditOutboxRow",
     "AgentOrchestrationCheckpointRow",
     "AgentOrchestrationPlanEventRow",
     "AgentOrchestrationPlanRevisionRow",

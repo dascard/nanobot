@@ -21,6 +21,7 @@ from core.db.base import Base
 class AdminAuditLog(Base):
     __tablename__ = "admin_audit_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
+    event_id = Column(String(96), nullable=True, unique=True)
     admin_user = Column(String, default="admin")
     action = Column(String, nullable=False)
     target_type = Column(String, default="")
@@ -28,6 +29,44 @@ class AdminAuditLog(Base):
     detail_json = Column(Text, default="{}")
     ip_address = Column(String, default="")
     created_at = Column(DateTime, default=datetime.now)
+
+
+class AdminAuditOutboxRow(Base):
+    """跨存储治理操作的持久审计意图。"""
+
+    __tablename__ = "admin_audit_outbox"
+
+    event_id = Column(String(64), primary_key=True)
+    admin_user = Column(String(128), nullable=False, default="admin")
+    action = Column(String(128), nullable=False)
+    target_type = Column(String(128), nullable=False, default="")
+    target_id = Column(String(255), nullable=False, default="")
+    request_detail_json = Column(Text, nullable=False, default="{}")
+    ip_address = Column(String(45), nullable=False, default="")
+    status = Column(String(16), nullable=False, default="prepared")
+    result_target_id = Column(String(255), nullable=False, default="")
+    result_detail_json = Column(Text, nullable=False, default="{}")
+    last_error_code = Column(String(128), nullable=False, default="")
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+    )
+    finalized_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('prepared','finalized','failed','ambiguous')",
+            name="ck_admin_audit_outbox_status",
+        ),
+        Index(
+            "ix_admin_audit_outbox_status_time",
+            "status",
+            "updated_at",
+        ),
+    )
 
 
 class AdminIdempotencyRecord(Base):
@@ -197,6 +236,7 @@ class WebSearchProviderUsage(Base):
 
 __all__ = [
     "AdminAuditLog",
+    "AdminAuditOutboxRow",
     "AdminIdempotencyRecord",
     "ContentBlockRule",
     "MemoryCleanupRun",

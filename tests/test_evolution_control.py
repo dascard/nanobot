@@ -6,8 +6,10 @@ import json
 from pathlib import Path
 
 import pytest
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
-from core.database import AdminAuditLog
+from core.database import AdminAuditLog, AdminAuditOutboxRow
 from core.evolution_control import store as evolution_store
 from core.evolution_control import (
     EVOLUTION_SCHEMA_VERSION,
@@ -1108,6 +1110,123 @@ def test_admin_api_requires_auth_and_executes_complete_canary_lifecycle(
     assert "activate_evolution_canary" in {
         row.action for row in db_session.query(AdminAuditLog).all()
     }
+    outbox_statuses = [
+        row.status
+        for row in db_session.query(AdminAuditOutboxRow).all()
+    ]
+    assert outbox_statuses.count("finalized") == 6
+    assert outbox_statuses.count("failed") == 1
+    assert not ({"prepared", "ambiguous"} & set(outbox_statuses))
+
+
+def test_evolution_audit_prepare_failure_prevents_file_mutation(
+    client,
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    from api.admin import evolution_control_routes
+    from api import admin_routes
+
+    root = tmp_path / "audit-failure-evolution"
+    monkeypatch.setattr(evolution_control_routes, "EVOLUTION_CONTROL_ROOT", root)
+    monkeypatch.setattr(admin_routes, "NANOBOT_ADMIN_TOKEN", "test-token")
+    manifest = _manifest()
+
+    def fail_admin_audit(session, _flush_context, _instances):
+        if any(isinstance(item, AdminAuditLog) for item in session.new):
+            raise RuntimeError("simulated evolution audit failure")
+
+    event.listen(Session, "before_flush", fail_admin_audit)
+    try:
+        response = client.post(
+            "/api/v1/admin/evals/evolution/datasets/import",
+            headers={"Authorization": "Bearer test-token"},
+            json={"artifact": manifest.to_dict()},
+        )
+    finally:
+        event.remove(Session, "before_flush", fail_admin_audit)
+        db_session.rollback()
+
+    assert response.status_code == 503
+    assert not (
+        root / "datasets" / f"{manifest.dataset_sha256}.json"
+    ).exists()
+    assert db_session.query(AdminAuditLog).count() == 0
+
+
+def test_evolution_success_audit_failure_keeps_ambiguous_outbox(
+    client,
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    from api.admin import evolution_control_routes
+    from api import admin_routes
+
+    store, manifest, candidate = _stored_candidate(tmp_path)
+    report = store.evaluate_gate(
+        _evidence(candidate, manifest),
+        current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
+    )
+    approval, token = store.approve(
+        candidate_sha256=candidate.candidate_sha256,
+        gate_report_sha256=report["gate_report_sha256"],
+        confirm_candidate_sha256=candidate.candidate_sha256,
+        reviewer="operator-li",
+        reviewer_kind="human",
+        reason="验证成功审计失败后的歧义状态。",
+        risk_scope=("prompt_quality",),
+        max_basis_points=500,
+        expires_in_seconds=3_600,
+        current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
+    )
+    monkeypatch.setattr(evolution_control_routes, "_store", lambda: store)
+    monkeypatch.setattr(admin_routes, "NANOBOT_ADMIN_TOKEN", "test-token")
+
+    def fail_success_audit(session, _flush_context, _instances):
+        if any(
+            isinstance(item, AdminAuditLog)
+            and item.action == "activate_evolution_canary"
+            for item in session.new
+        ):
+            raise RuntimeError("simulated evolution success audit failure")
+
+    event.listen(Session, "before_flush", fail_success_audit)
+    try:
+        response = client.post(
+            "/api/v1/admin/evals/evolution/canary/activate",
+            headers={"Authorization": "Bearer test-token"},
+            json={
+                "candidate_sha256": candidate.candidate_sha256,
+                "approval_id": approval["approval_id"],
+                "approval_token": token,
+                "basis_points": 100,
+                "subject_allowlist": ["user/allowlisted"],
+                "duration_seconds": 1_800,
+                "operator": "operator-li",
+            },
+        )
+    finally:
+        event.remove(Session, "before_flush", fail_success_audit)
+        db_session.rollback()
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "治理操作结果不确定，审计意图待核对"
+    outbox = db_session.query(AdminAuditOutboxRow).filter_by(
+        action="activate_evolution_canary"
+    ).one()
+    assert outbox.status == "ambiguous"
+    assert outbox.last_error_code == "RuntimeError"
+    assert token not in outbox.request_detail_json
+    assert token not in outbox.result_detail_json
+    assert db_session.query(AdminAuditLog).filter_by(
+        action="activate_evolution_canary.prepared"
+    ).count() == 1
+    assert db_session.query(AdminAuditLog).filter_by(
+        action="activate_evolution_canary"
+    ).count() == 0
+    assert len(EvolutionControlStore(store.root).state()["active_releases"]) == 1
 
 
 def test_public_contract_does_not_expose_self_approval_or_repository_writes():

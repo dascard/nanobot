@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy.orm import Session
 
-from api.admin.common import audit_request, verify_admin
+from api.admin.common import stage_audit_request, verify_admin
 from core.database import get_db
 from core.mcp import (
     DEFAULT_MCP_CATALOG_CACHE,
@@ -173,24 +173,29 @@ def replace_mcp_configuration(
             expected_revision=body.expected_revision,
             actor_id="admin",
         )
+        stage_audit_request(
+            db,
+            request,
+            "replace_mcp_configuration",
+            "mcp_configuration",
+            str(snapshot.revision),
+            {
+                "server_count": len(snapshot.servers),
+                "enabled_count": sum(
+                    1 for item in snapshot.servers if item.enabled
+                ),
+                "registry_sha256": snapshot.sha256,
+            },
+        )
         db.commit()
     except (McpControlPlaneError, TypeError, ValueError) as exc:
         db.rollback()
         _raise(exc)
         raise AssertionError("unreachable")
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(500, "MCP 治理操作未提交") from exc
     DEFAULT_MCP_CATALOG_CACHE.clear()
-    audit_request(
-        db,
-        request,
-        "replace_mcp_configuration",
-        "mcp_configuration",
-        str(snapshot.revision),
-        {
-            "server_count": len(snapshot.servers),
-            "enabled_count": sum(1 for item in snapshot.servers if item.enabled),
-            "registry_sha256": snapshot.sha256,
-        },
-    )
     return _public_configuration(db)
 
 
@@ -208,20 +213,23 @@ def set_mcp_server_enabled(
             expected_revision=body.expected_revision,
             actor_id="admin",
         )
+        stage_audit_request(
+            db,
+            request,
+            "set_mcp_server_enabled",
+            "mcp_server",
+            server_id,
+            {"enabled": body.enabled, "revision": snapshot.revision},
+        )
         db.commit()
     except (McpControlPlaneError, TypeError, ValueError) as exc:
         db.rollback()
         _raise(exc)
         raise AssertionError("unreachable")
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(500, "MCP 治理操作未提交") from exc
     DEFAULT_MCP_CATALOG_CACHE.clear()
-    audit_request(
-        db,
-        request,
-        "set_mcp_server_enabled",
-        "mcp_server",
-        server_id,
-        {"enabled": body.enabled, "revision": snapshot.revision},
-    )
     return _public_configuration(db)
 
 
@@ -245,20 +253,23 @@ def write_mcp_secret(
                 raise McpControlPlaneError("clear 不能同时提交 secret value")
             service.clear(secret_id)
             configured = False
+        stage_audit_request(
+            db,
+            request,
+            "write_mcp_secret",
+            "mcp_secret_ref",
+            secret_id,
+            {"action": body.action},
+        )
         db.commit()
     except (McpControlPlaneError, TypeError, ValueError) as exc:
         db.rollback()
         _raise(exc)
         raise AssertionError("unreachable")
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(500, "MCP 治理操作未提交") from exc
     DEFAULT_MCP_CATALOG_CACHE.clear()
-    audit_request(
-        db,
-        request,
-        "write_mcp_secret",
-        "mcp_secret_ref",
-        secret_id,
-        {"action": body.action},
-    )
     return {"secret_id": secret_id, "configured": configured}
 
 

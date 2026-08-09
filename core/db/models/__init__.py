@@ -2,6 +2,7 @@
 
 from core.db.models.admin import (
     AdminAuditLog,
+    AdminAuditOutboxRow,
     AdminIdempotencyRecord,
     ContentBlockRule,
     MemoryCleanupRun,
@@ -154,6 +155,7 @@ from core.db.models.sandbox import (
 
 __all__ = [
     "AdminAuditLog",
+    "AdminAuditOutboxRow",
     "AdminIdempotencyRecord",
     "AgentRun",
     "AgentCollaborationBoardRow",

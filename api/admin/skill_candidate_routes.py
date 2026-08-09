@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy.orm import Session
 
-from api.admin.common import audit_request, verify_admin
+from api.admin.common import audited_external_action, client_ip, verify_admin
 from core.database import get_db
 from core.repositories.run_viewer import OfflineRunViewRepository
 from core.run_ledger.contracts import RunLedgerIntegrityError
@@ -165,7 +165,33 @@ def extract_candidate_from_runs(
                 for run_id, values in body.extra_evidence_by_run.items()
             },
         )
-        result = _store().put_candidate(candidate)
+        result = audited_external_action(
+            db,
+            request,
+            action="skill_candidate.extract",
+            target_type="skill_candidate",
+            target_id=candidate.candidate_sha256,
+            request_detail={
+                "skill_name": candidate.parsed_bundle.name,
+                "version": candidate.parsed_bundle.version,
+                "source_run_count": len(candidate.source_runs),
+                "raw_production_content_access": False,
+                "repository_operations": "forbidden",
+            },
+            operation=lambda: _store().put_candidate(candidate),
+            result_target_id=lambda _result: candidate.candidate_sha256,
+            result_detail=lambda result: {
+                "skill_name": candidate.parsed_bundle.name,
+                "version": candidate.parsed_bundle.version,
+                "source_run_count": len(candidate.source_runs),
+                "source_trajectory_sha256s": list(
+                    candidate.source_trajectory_sha256s
+                ),
+                "deduplicated": result["deduplicated"],
+                "raw_production_content_access": False,
+                "repository_operations": "forbidden",
+            },
+        )
     except (
         LookupError,
         RunLedgerIntegrityError,
@@ -173,24 +199,6 @@ def extract_candidate_from_runs(
         ValueError,
     ) as exc:
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "skill_candidate.extract",
-        "skill_candidate",
-        candidate.candidate_sha256,
-        {
-            "skill_name": candidate.parsed_bundle.name,
-            "version": candidate.parsed_bundle.version,
-            "source_run_count": len(candidate.source_runs),
-            "source_trajectory_sha256s": list(
-                candidate.source_trajectory_sha256s
-            ),
-            "deduplicated": result["deduplicated"],
-            "raw_production_content_access": False,
-            "repository_operations": "forbidden",
-        },
-    )
     return result
 
 
@@ -210,26 +218,40 @@ def evaluate_candidate(
 ) -> dict[str, object]:
     try:
         evidence = SkillCandidateEvaluationEvidence.from_dict(body.evidence)
-        report = _store().evaluate(
-            evidence,
-            current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
+        report = audited_external_action(
+            db,
+            request,
+            action="skill_candidate.evaluate",
+            target_type="skill_candidate_gate",
+            target_id=evidence.candidate_sha256,
+            request_detail={
+                "candidate_sha256": evidence.candidate_sha256,
+                "dataset_sha256": evidence.dataset_sha256,
+                "evaluator_id": evidence.evaluator_id,
+            },
+            operation=lambda: _store().evaluate(
+                evidence,
+                current_harness_registry_sha256=(
+                    EVAL_HARNESS_REGISTRY.sha256
+                ),
+            ),
+            result_target_id=lambda result: str(
+                result["gate_report_sha256"]
+            ),
+            result_detail=lambda result: {
+                "candidate_sha256": result["candidate_sha256"],
+                "passed": result["passed"],
+                "error_codes": [
+                    item["code"] for item in result["errors"]
+                ],
+                "dataset_sha256": result["dataset_sha256"],
+                "harness_registry_sha256": result[
+                    "harness_registry_sha256"
+                ],
+            },
         )
     except SkillCandidateContractError as exc:
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "skill_candidate.evaluate",
-        "skill_candidate_gate",
-        str(report["gate_report_sha256"]),
-        {
-            "candidate_sha256": report["candidate_sha256"],
-            "passed": report["passed"],
-            "error_codes": [item["code"] for item in report["errors"]],
-            "dataset_sha256": report["dataset_sha256"],
-            "harness_registry_sha256": report["harness_registry_sha256"],
-        },
-    )
     return report
 
 
@@ -252,36 +274,49 @@ def approve_candidate(
     admin_id: str = Depends(verify_admin),
 ) -> dict[str, object]:
     try:
-        approval = _store().approve(
-            candidate_sha256=body.candidate_sha256,
-            gate_report_sha256=body.gate_report_sha256,
-            confirm_candidate_sha256=body.confirm_candidate_sha256,
-            reviewer=admin_id,
-            reviewer_kind=body.reviewer_kind,
-            reason=body.reason,
-            expected_binding_generation=body.expected_binding_generation,
-            expires_in_seconds=body.expires_in_seconds,
-            current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
+        approval = audited_external_action(
+            db,
+            request,
+            action="skill_candidate.approve",
+            target_type="skill_candidate_approval",
+            target_id=body.candidate_sha256,
+            request_detail={
+                "candidate_sha256": body.candidate_sha256,
+                "gate_report_sha256": body.gate_report_sha256,
+                "reviewer": admin_id,
+                "reviewer_kind": body.reviewer_kind,
+                "expected_binding_generation": (
+                    body.expected_binding_generation
+                ),
+                "approval_token_recorded": False,
+            },
+            operation=lambda: _store().approve(
+                candidate_sha256=body.candidate_sha256,
+                gate_report_sha256=body.gate_report_sha256,
+                confirm_candidate_sha256=body.confirm_candidate_sha256,
+                reviewer=admin_id,
+                reviewer_kind=body.reviewer_kind,
+                reason=body.reason,
+                expected_binding_generation=body.expected_binding_generation,
+                expires_in_seconds=body.expires_in_seconds,
+                current_harness_registry_sha256=(
+                    EVAL_HARNESS_REGISTRY.sha256
+                ),
+            ),
+            result_target_id=lambda result: str(result["approval_id"]),
+            result_detail=lambda result: {
+                "candidate_sha256": result["candidate_sha256"],
+                "gate_report_sha256": result["gate_report_sha256"],
+                "reviewer": result["reviewer"],
+                "reviewer_kind": result["reviewer_kind"],
+                "expected_binding_generation": result[
+                    "expected_binding_generation"
+                ],
+                "approval_token_recorded": False,
+            },
         )
     except SkillCandidateContractError as exc:
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "skill_candidate.approve",
-        "skill_candidate_approval",
-        str(approval["approval_id"]),
-        {
-            "candidate_sha256": approval["candidate_sha256"],
-            "gate_report_sha256": approval["gate_report_sha256"],
-            "reviewer": approval["reviewer"],
-            "reviewer_kind": approval["reviewer_kind"],
-            "expected_binding_generation": approval[
-                "expected_binding_generation"
-            ],
-            "approval_token_recorded": False,
-        },
-    )
     return approval
 
 
@@ -298,6 +333,7 @@ def publish_candidate(
     body: SkillCandidatePublishBody,
     request: Request,
     db: Session = Depends(get_db),
+    admin_id: str = Depends(verify_admin),
 ) -> dict[str, object]:
     try:
         receipt = _store().publish(
@@ -306,26 +342,15 @@ def publish_candidate(
             approval_token=body.approval_token.get_secret_value(),
             current_harness_registry_sha256=EVAL_HARNESS_REGISTRY.sha256,
             db=db,
+            audit_admin_user=admin_id,
+            audit_ip_address=client_ip(request),
         )
-    except (SkillCandidateContractError, ValueError, RuntimeError) as exc:
+    except (SkillCandidateContractError, ValueError) as exc:
         db.rollback()
         raise _contract_error(exc) from exc
-    audit_request(
-        db,
-        request,
-        "skill_candidate.publish",
-        "skill_candidate_publication",
-        str(receipt["publication_id"]),
-        {
-            "candidate_sha256": receipt["candidate_sha256"],
-            "gate_report_sha256": receipt["gate_report_sha256"],
-            "approval_id": receipt["approval_id"],
-            "package_id": receipt["package_id"],
-            "publication_mode": receipt["publication_mode"],
-            "rollback_action": receipt["rollback_action"],
-            "approval_token_recorded": False,
-        },
-    )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(500, "Skill 候选发布未提交") from exc
     return receipt
 
 

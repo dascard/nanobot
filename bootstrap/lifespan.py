@@ -236,16 +236,18 @@ def validate_sandbox_asset_token_config() -> None:
 
 
 def reconcile_skill_candidate_publications(testing: bool) -> None:
-    """Schema 就绪后重放已提交但尚未物化的 Skill 发布回执。"""
+    """Schema 就绪后收敛治理审计意图并重放 Skill 发布回执。"""
 
     if testing:
         return
     from core import database
+    from core.admin_audit import reconcile_prepared_admin_audit_intents
     from core.runtime_paths import RUNTIME_PATHS
     from core.skill_candidates import SkillCandidateStore
 
     db = database.SessionLocal()
     try:
+        ambiguous_audits = reconcile_prepared_admin_audit_intents(db)
         result = SkillCandidateStore(
             RUNTIME_PATHS.skill_candidate_dir
         ).reconcile_publications(db)
@@ -256,6 +258,11 @@ def reconcile_skill_candidate_publications(testing: bool) -> None:
         logging.getLogger("nanobot.skill_candidates").warning(
             "Skill 候选发布投影仍有 %s 个未完成意图",
             unresolved,
+        )
+    if ambiguous_audits:
+        logging.getLogger("nanobot.admin.audit").warning(
+            "启动时发现 %s 个结果未知的治理审计意图",
+            ambiguous_audits,
         )
 
 

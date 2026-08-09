@@ -1732,9 +1732,20 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
   相关联合回归为 185 passed。架构、OpenAPI、Release／Verification Golden、Task SLO、行为 Golden、
   决策清单、致命 Ruff 和 `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 为
   6935 passed、12 skipped、0 failed。
-- [ ] **治理操作 × Admin Audit：** 高风险管理操作的业务事实与审计事实使用同一事务或事务型 outbox，
+- [x] **治理操作 × Admin Audit：** 高风险管理操作的业务事实与审计事实使用同一事务或事务型 outbox，
   不再由吞异常的独立 commit 提供 fail-open 假保证；失败路径必须 rollback，并覆盖 Skill、Evolution、MCP
   等治理写操作。
+
+  实现证据（2026-08-09）：Skill 与 MCP 的数据库治理写操作现在把业务变更和稳定 `event_id` 审计事实放入
+  同一事务，审计插入或提交失败会回滚业务状态；Evolution 与文件型 Skill Candidate 操作先持久化
+  `prepared` outbox 和准备审计，再执行文件副作用，成功后原子收敛为 `finalized`，失败记为 `failed`，
+  外部效果成功但审计收尾失败或进程重启发现遗留准备态时保留为 `ambiguous`，不伪造成功或安全重放。
+  Skill Candidate 正式发布的 Skill 版本、binding、评测、发布意图与审计事实共享一个数据库事务，旧发布意图
+  由启动 reconcile 补齐并核验。审计失败回滚、提交不确定 read-back、重启 reconcile、令牌脱敏、迁移和只读
+  管理视图均有回归覆盖；相关联合回归为 182 passed，架构、OpenAPI、Release／Verification Golden、
+  Task SLO、行为 Golden、决策清单、致命 Ruff 和 `git diff --check` 均通过；最终完整
+  `python -m pytest tests/ -v` 为 6944 passed、12 skipped、0 failed。
+
 - [ ] **Session Goal × 认证身份：** 认证层返回 typed principal，owner／actor／approver 从认证上下文或已验证
   Gateway binding 推导，不再接受任意请求体身份；管理员模拟作为显式、带 scope 且可审计的能力处理。
 - [ ] **Evolution Canary × 文件控制面：** 为 release、approval consumption、active index 与 rollback 引入

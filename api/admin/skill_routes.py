@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from api.admin.common import audit_request, verify_admin
+from api.admin.common import stage_audit_request, verify_admin
 from core.database import get_db
 from core.skills import (
     SkillBundleFile,
@@ -183,8 +183,7 @@ def record_skill_evaluation(
             evidence_sha256=body.evidence_sha256,
             actor_id="admin",
         )
-        db.commit()
-        audit_request(
+        stage_audit_request(
             db,
             request,
             "skill.evaluate",
@@ -200,6 +199,7 @@ def record_skill_evaluation(
                 "evidence_sha256": body.evidence_sha256,
             },
         )
+        db.commit()
         return {
             "evaluation_id": evaluation_id,
             "package_id": entry.package_id,
@@ -210,6 +210,9 @@ def record_skill_evaluation(
         db.rollback()
         _raise_api_error(exc)
         raise AssertionError("unreachable")
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(500, "Skill 治理操作未提交") from exc
 
 
 @router.post("/install")
@@ -232,8 +235,7 @@ def install_skill(
             pin=body.pin,
             expected_generation=body.expected_generation,
         )
-        db.commit()
-        audit_request(
+        stage_audit_request(
             db,
             request,
             "skill.install",
@@ -247,11 +249,15 @@ def install_skill(
                 "bundle_sha256": bundle.bundle_sha256,
             },
         )
+        db.commit()
         return snapshot.to_dict()
     except (SkillContractError, SkillLifecycleError) as exc:
         db.rollback()
         _raise_api_error(exc)
         raise AssertionError("unreachable")
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(500, "Skill 治理操作未提交") from exc
 
 
 def _action_result(
@@ -268,8 +274,7 @@ def _action_result(
             expected_generation=body.expected_generation,
             actor_id="admin",
         )
-        db.commit()
-        audit_request(
+        stage_audit_request(
             db,
             request,
             f"skill.{action}",
@@ -282,11 +287,15 @@ def _action_result(
                 "generation": snapshot.generation,
             },
         )
+        db.commit()
         return snapshot.to_dict()
     except (SkillContractError, SkillLifecycleError) as exc:
         db.rollback()
         _raise_api_error(exc)
         raise AssertionError("unreachable")
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(500, "Skill 治理操作未提交") from exc
 
 
 @router.post("/pin")

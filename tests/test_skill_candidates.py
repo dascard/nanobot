@@ -8,8 +8,9 @@ import json
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from core.db.models.observability import AgentRun
 from core.db.models.skill import SkillEvaluationRow
@@ -610,6 +611,14 @@ def test_new_skill_publication_is_real_registry_install_with_evaluation_and_rece
     assert receipt["quality_delta_micros"] == 100_000
     assert receipt["candidate_cost_microunits"] == 110
     assert store.get_publication(str(receipt["publication_id"])) == receipt
+    publication_audit = db_session.query(AdminAuditLog).filter_by(
+        action="skill_candidate.publish",
+        target_id=receipt["publication_id"],
+    ).one()
+    assert publication_audit.event_id == (
+        f"skill_candidate.publish:{receipt['publication_id']}"
+    )
+    assert str(approval["approval_token"]) not in publication_audit.detail_json
     rolled_back = SkillLifecycleService(db_session).uninstall(
         candidate.target,
         candidate.parsed_bundle.name,
@@ -720,6 +729,10 @@ def test_publication_token_is_single_use(tmp_path, db_session):
         "SELECT COUNT(*) FROM skill_candidate_publication_intents "
         "WHERE approval_id = :approval_id"
     ), {"approval_id": approval["approval_id"]}).scalar_one() == 1
+    assert db_session.query(AdminAuditLog).filter_by(
+        action="skill_candidate.publish",
+        target_id=first["publication_id"],
+    ).count() == 1
 
 
 @pytest.mark.parametrize(
@@ -914,6 +927,38 @@ def test_publication_db_commit_failure_rolls_back_skill_and_consumption(
     assert _publish(store, candidate, approval, db_session)[
         "publication_mode"
     ] == "installed_active"
+
+
+def test_publication_audit_failure_rolls_back_skill_and_consumption(
+    tmp_path,
+    db_session,
+):
+    candidate = _candidate(spec=_spec(target_key="qq:user:audit-failure"))
+    store, report = _stored_gate(tmp_path, candidate)
+    approval = _approve(store, candidate, report, generation=0)
+
+    def fail_admin_audit(session, _flush_context, _instances):
+        if any(isinstance(item, AdminAuditLog) for item in session.new):
+            raise RuntimeError("simulated publication audit failure")
+
+    event.listen(Session, "before_flush", fail_admin_audit)
+    try:
+        with pytest.raises(RuntimeError, match="publication audit failure"):
+            _publish(store, candidate, approval, db_session)
+    finally:
+        event.remove(Session, "before_flush", fail_admin_audit)
+        db_session.rollback()
+
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_packages WHERE source_label = :source"
+    ), {
+        "source": f"experience-candidate:{candidate.candidate_sha256}",
+    }).scalar_one() == 0
+    assert db_session.execute(text(
+        "SELECT COUNT(*) FROM skill_candidate_publication_intents "
+        "WHERE approval_id = :approval_id"
+    ), {"approval_id": approval["approval_id"]}).scalar_one() == 0
+    assert db_session.query(AdminAuditLog).count() == 0
 
 
 def test_publication_commit_uncertainty_reads_back_without_duplicate_effect(

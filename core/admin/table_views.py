@@ -566,6 +566,17 @@ _VIEW_SEEDS = (
     _seed(
         "rules",
         "配置与规则",
+        "core.admin",
+        "admin_audit_outbox",
+        "跨存储治理操作的持久审计意图。",
+        preview_only_columns=(
+            "request_detail_json",
+            "result_detail_json",
+        ),
+    ),
+    _seed(
+        "rules",
+        "配置与规则",
         "core.policy",
         "user_block_rules",
         "用户屏蔽规则。",
