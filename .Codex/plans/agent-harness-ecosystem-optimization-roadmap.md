@@ -1785,8 +1785,18 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
   定向回归为 20 passed，ACP／A2A／Headless 互操作模块为 40 passed。架构、OpenAPI、Release／Verification
   Golden、决策清单、Task SLO、行为 Golden、致命 Ruff 和 `git diff --check` 均通过；最终完整
   `python -m pytest tests/ -v` 为 6977 passed、12 skipped、0 failed。
-- [ ] **Proactive × 上海业务日：** 使用 `ZoneInfo("Asia/Shanghai")` 明确计算业务日期和 UTC 查询边界，
+- [x] **Proactive × 上海业务日：** 使用 `ZoneInfo("Asia/Shanghai")` 明确计算业务日期和 UTC 查询边界，
   使每日主动外呼配额不依赖宿主机本地时区；最后重新执行完整测试和生产验收收口。
+
+  实现证据（2026-08-09）：主动外呼业务时钟现在显式归一到 `Asia/Shanghai`，无参数后台调度和手动
+  run-once 不再读取宿主机本地时区；带时区输入先转换为上海墙钟，兼容 naive 输入仍按原有上海墙钟合同
+  解释。每日配额先形成上海业务日对应的半开 UTC 区间，再投影到 `proactive_outreach_log.created_at`
+  既有的上海墙钟 naive 存储域查询，避免直接用 UTC naive 错查历史记录；返回的下次重置时间使用明确的
+  UTC offset。上海午夜前后、UTC 输入和默认时钟均有回归，Trigger Runtime 定向回归为 9 passed，主动
+  外呼、调度、投递与管理端联合回归为 202 passed。架构、OpenAPI、Release／Verification Golden、
+  决策清单、Task SLO、行为 Golden、跟踪文件致命 Ruff、Python 编译、Compose 开发／生产配置、前端
+  lint／build 和 `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 为 6979 passed、
+  12 skipped、0 failed。
 
 ## 6. KT 清理专项验收清单
 

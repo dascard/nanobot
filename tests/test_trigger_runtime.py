@@ -313,3 +313,74 @@ async def test_proactive_daily_quota_blocks_before_judge(db_session):
     assert result["status"] == "skipped_daily_quota"
     assert result["daily_delivery_count"] == 2
     assert db_session.query(AgentRun).count() == run_count_before + 1
+
+
+def test_proactive_daily_quota_uses_shanghai_business_day_boundaries(db_session):
+    from core.proactive.orchestrator import _daily_quota_gate
+
+    db_session.add_all([
+        ProactiveOutreachLog(
+            user_id="quota-boundary-user",
+            idempotency_key="quota-before-1",
+            status="sent",
+            created_at=datetime(2026, 8, 5, 22, 0, 0),
+        ),
+        ProactiveOutreachLog(
+            user_id="quota-boundary-user",
+            idempotency_key="quota-before-2",
+            status="sent",
+            created_at=datetime(2026, 8, 5, 23, 59, 59),
+        ),
+        ProactiveOutreachLog(
+            user_id="quota-boundary-user",
+            idempotency_key="quota-after",
+            status="sent",
+            created_at=datetime(2026, 8, 6, 0, 0, 0),
+        ),
+    ])
+    db_session.commit()
+
+    before_midnight = _daily_quota_gate(
+        db_session,
+        user_id="quota-boundary-user",
+        now=datetime(2026, 8, 5, 15, 59, 59, tzinfo=timezone.utc),
+        quota=2,
+    )
+    after_midnight = _daily_quota_gate(
+        db_session,
+        user_id="quota-boundary-user",
+        now=datetime(2026, 8, 5, 16, 0, 0, tzinfo=timezone.utc),
+        quota=2,
+    )
+
+    assert before_midnight == {
+        "status": "skipped_daily_quota",
+        "daily_delivery_quota": 2,
+        "daily_delivery_count": 2,
+        "next_check_at": "2026-08-05T16:00:00+00:00",
+    }
+    assert after_midnight is None
+
+
+def test_proactive_business_clock_uses_explicit_shanghai_timezone(monkeypatch):
+    from core.proactive import runtime_support
+
+    observed_timezones = []
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            observed_timezones.append(tz)
+            return cls(2026, 8, 6, 0, 30, 0, tzinfo=tz)
+
+    monkeypatch.setattr(runtime_support, "datetime", FrozenDateTime)
+
+    assert runtime_support._outreach_local_naive() == datetime(
+        2026,
+        8,
+        6,
+        0,
+        30,
+        0,
+    )
+    assert observed_timezones == [runtime_support.OUTREACH_LOCAL_TIMEZONE]

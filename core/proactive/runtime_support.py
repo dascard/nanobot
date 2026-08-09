@@ -6,7 +6,7 @@ import math
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -72,6 +72,32 @@ def _utc_naive(value: datetime | None = None) -> datetime:
     if current.tzinfo is None:
         return current
     return current.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _outreach_local_naive(value: datetime | None = None) -> datetime:
+    """返回主动外呼使用的上海本地 naive 业务时间。"""
+
+    current = value or datetime.now(OUTREACH_LOCAL_TIMEZONE)
+    if current.tzinfo is None or current.utcoffset() is None:
+        # 兼容现有调用合同：显式传入的 naive 时间表示上海墙钟时间。
+        return current.replace(tzinfo=None)
+    return current.astimezone(OUTREACH_LOCAL_TIMEZONE).replace(tzinfo=None)
+
+
+def _outreach_business_day_utc_bounds(
+    value: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """返回指定时刻所属上海业务日的 UTC naive 起止边界。"""
+
+    local_now = _outreach_local_naive(value).replace(
+        tzinfo=OUTREACH_LOCAL_TIMEZONE,
+    )
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_end = local_start + timedelta(days=1)
+    return (
+        local_start.astimezone(timezone.utc).replace(tzinfo=None),
+        local_end.astimezone(timezone.utc).replace(tzinfo=None),
+    )
 
 
 def _outbound_occurrence_utc(value: datetime | None = None) -> datetime:

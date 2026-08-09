@@ -1,7 +1,7 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`38ed6ab54d3336057a210117b7db273936c71cbf`
+- 源提交：`57f62781d671df0aaefc7feb145d747a8c351843`
 - 规则总数：8891
 - 扫描错误：0
 - 人工复核队列：723
@@ -1958,10 +1958,10 @@
 | `decision.6c43c766f99b505f85ec` | `core/proactive/model_service.py:141` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：topic_type == "status_check" |  |  |  |  |  |
 |  | 原因：人工复核：状态检查只能映射已核验行动，属于服务端事实合同 |  |  |  |  |  |
-| `decision.03885a80753f3086107d` | `core/proactive/orchestrator.py:383` | `python.numeric_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.03885a80753f3086107d` | `core/proactive/orchestrator.py:392` | `python.numeric_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：retired != 1 |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.b373e07199e739e0b6b5` | `core/proactive/orchestrator.py:476` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／7D | `reviewed` |
+| `decision.b373e07199e739e0b6b5` | `core/proactive/orchestrator.py:485` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／7D | `reviewed` |
 |  | 摘要：retired != 1 |  |  |  |  |  |
 |  | 原因：人工复核：遗留强制候选的单行状态迁移必须满足 CAS，属于数据一致性合同 |  |  |  |  |  |
 | `decision.87cc29573490f0f1a615` | `core/proactive/schedule_repository.py:176` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |

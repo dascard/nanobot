@@ -31,7 +31,10 @@ from core.proactive.repository import (
     latest_next_check_at as _latest_next_check_at,
     latest_outreach_row as _latest_outreach_row,
 )
-from core.proactive.runtime_support import session_scope as _session_scope
+from core.proactive.runtime_support import (
+    _outreach_local_naive,
+    session_scope as _session_scope,
+)
 from core.proactive.serialization import json_object
 from core.proactive.topic_policy import generation_input_grounding
 from core.proactive_candidate import evaluate_outreach_due_gate
@@ -81,7 +84,7 @@ async def run_outreach_due_once(
 ) -> dict[str, Any]:
     """执行一次到期外呼检查；安静时段直接跳过。"""
 
-    current = now or datetime.now()
+    current = _outreach_local_naive(now)
     hours = active_hours(user_id, db=db)
     effective_max_silence_min = (
         max_silence_min if max_silence_min is not None else DEFAULT_MAX_SILENCE_MIN

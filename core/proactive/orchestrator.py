@@ -58,6 +58,8 @@ from core.proactive.repository import (
     latest_outreach_row as _latest_outreach_row,
 )
 from core.proactive.runtime_support import (
+    _outreach_business_day_utc_bounds,
+    _outreach_local_naive,
     _outbound_occurrence_utc,
     _outreach_endpoint_revision,
     _outreach_session_factory,
@@ -113,8 +115,15 @@ def _daily_quota_gate(
             "daily_delivery_quota": 0,
             "daily_delivery_count": 0,
         }
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_end = day_start + timedelta(days=1)
+    day_start_utc, day_end_utc = _outreach_business_day_utc_bounds(now)
+    day_start = _outreach_local_naive(
+        day_start_utc.replace(tzinfo=timezone.utc),
+    )
+    day_end = _outreach_local_naive(
+        day_end_utc.replace(tzinfo=timezone.utc),
+    )
+    # proactive_outreach_log.created_at 沿用上海墙钟 naive；不能拿 UTC naive
+    # 直接查询旧记录。业务日先形成明确 UTC 边界，再在既有存储域内计数。
     used = (
         session.query(ProactiveOutreachLog.id)
         .filter(
@@ -131,7 +140,7 @@ def _daily_quota_gate(
         "status": "skipped_daily_quota",
         "daily_delivery_quota": normalized_quota,
         "daily_delivery_count": int(used),
-        "next_check_at": day_end.isoformat(),
+        "next_check_at": day_end_utc.replace(tzinfo=timezone.utc).isoformat(),
     }
 
 
@@ -223,7 +232,7 @@ async def _run_outreach_once_acquired(
 ) -> dict[str, Any]:
     """执行一次主动外呼检查；超过最长沉默窗口时强制重新评估。"""
 
-    current = now or datetime.now()
+    current = _outreach_local_naive(now)
     generation_at = evaluation_generation_at or current
     outbound_generation_at = _outbound_occurrence_utc(generation_at)
     with _session_scope(db) as session:
@@ -811,7 +820,7 @@ async def run_outreach_once(
 ) -> dict[str, Any]:
     """获取按用户评估租约后执行一次主动外呼检查。"""
 
-    current = now or datetime.now()
+    current = _outreach_local_naive(now)
     occurred_at = trigger_occurred_at or datetime.now(timezone.utc)
     if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
         occurred_at = occurred_at.replace(tzinfo=timezone.utc)
