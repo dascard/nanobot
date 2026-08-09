@@ -652,6 +652,13 @@ class _A2ATransport:
         return self.result_factory(request)
 
 
+def _static_a2a_resolver(*addresses: str):
+    async def resolve(_hostname: str, _port: int):
+        return addresses
+
+    return resolve
+
+
 @pytest.mark.asyncio
 async def test_a2a_client_dispatches_fixed_v1_request_and_parses_task_artifacts():
     interface = A2AInterface(
@@ -863,11 +870,12 @@ async def test_https_a2a_transport_sends_auth_once_without_leaking_it():
         url="https://agent.example/rpc",
         allowed_origins=("https://agent.example",),
     )
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_transport = httpx.MockTransport(handler)
     transport = HttpsA2AJsonRpcTransport(
         interface=interface,
         authorization_provider=lambda: "Bearer top-secret-token",
-        client=client,
+        http_transport=http_transport,
+        address_resolver=_static_a2a_resolver("8.8.8.8"),
     )
     response = await transport.send(
         {"jsonrpc": "2.0", "id": "rpc-1", "method": "SendMessage"}
@@ -876,7 +884,7 @@ async def test_https_a2a_transport_sends_auth_once_without_leaking_it():
     assert len(calls) == 1
     assert calls[0].headers["a2a-version"] == "1.0"
     assert calls[0].headers["authorization"] == "Bearer top-secret-token"
-    await client.aclose()
+    await transport.close()
 
 
 @pytest.mark.asyncio
@@ -895,18 +903,19 @@ async def test_https_a2a_transport_forbids_redirect_and_never_retries():
         url="https://agent.example/rpc",
         allowed_origins=("https://agent.example",),
     )
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_transport = httpx.MockTransport(handler)
     transport = HttpsA2AJsonRpcTransport(
         interface=interface,
         authorization_provider=lambda: "Bearer do-not-leak",
-        client=client,
+        http_transport=http_transport,
+        address_resolver=_static_a2a_resolver("8.8.8.8"),
     )
     with pytest.raises(A2ATransportError) as error:
         await transport.send({"jsonrpc": "2.0", "id": "1"})
     assert error.value.code == "REDIRECT_FORBIDDEN"
     assert "do-not-leak" not in str(error.value)
     assert calls == 1
-    await client.aclose()
+    await transport.close()
 
 
 @pytest.mark.asyncio
@@ -925,18 +934,19 @@ async def test_https_a2a_transport_sanitizes_credential_provider_failure():
         url="https://agent.example/rpc",
         allowed_origins=("https://agent.example",),
     )
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_transport = httpx.MockTransport(handler)
     transport = HttpsA2AJsonRpcTransport(
         interface=interface,
         authorization_provider=credential_provider,
-        client=client,
+        http_transport=http_transport,
+        address_resolver=_static_a2a_resolver("8.8.8.8"),
     )
     with pytest.raises(A2ATransportError) as error:
         await transport.send({"jsonrpc": "2.0", "id": "1"})
     assert error.value.code == "CREDENTIAL_UNAVAILABLE"
     assert "secret-provider-token" not in str(error.value)
     assert calls == 0
-    await client.aclose()
+    await transport.close()
 
 
 @pytest.mark.asyncio
@@ -957,11 +967,12 @@ async def test_https_a2a_transport_rejects_duplicate_json_and_bounded_response()
         url="https://agent.example/rpc",
         allowed_origins=("https://agent.example",),
     )
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_transport = httpx.MockTransport(handler)
     transport = HttpsA2AJsonRpcTransport(
         interface=interface,
         limits=A2ATransportLimits(max_response_bytes=64),
-        client=client,
+        http_transport=http_transport,
+        address_resolver=_static_a2a_resolver("8.8.8.8"),
     )
     with pytest.raises(A2ATransportError) as duplicate:
         await transport.send({"jsonrpc": "2.0", "id": "1"})
@@ -969,7 +980,180 @@ async def test_https_a2a_transport_rejects_duplicate_json_and_bounded_response()
     with pytest.raises(A2ATransportError) as oversized:
         await transport.send({"jsonrpc": "2.0", "id": "2"})
     assert oversized.value.code == "RESPONSE_TOO_LARGE"
-    await client.aclose()
+    await transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("address", "expected_raw_host"),
+    [
+        ("8.8.8.8", b"8.8.8.8"),
+        ("2606:4700:4700::1111", b"2606:4700:4700::1111"),
+    ],
+)
+async def test_https_a2a_transport_pins_public_ip_and_preserves_host_and_sni(
+    address,
+    expected_raw_host,
+):
+    calls: list[httpx.Request] = []
+    resolutions: list[tuple[str, int]] = []
+
+    async def resolver(hostname: str, port: int):
+        resolutions.append((hostname, port))
+        return (address,)
+
+    async def handler(request: httpx.Request):
+        calls.append(request)
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            json={"jsonrpc": "2.0", "id": "1", "result": {}},
+        )
+
+    interface = A2AInterface(
+        url="https://agent.example:8443/rpc",
+        allowed_origins=("https://agent.example:8443",),
+    )
+    http_transport = httpx.MockTransport(handler)
+    transport = HttpsA2AJsonRpcTransport(
+        interface=interface,
+        http_transport=http_transport,
+        address_resolver=resolver,
+    )
+
+    await transport.send({"jsonrpc": "2.0", "id": "1"})
+
+    assert resolutions == [("agent.example", 8443)]
+    assert len(calls) == 1
+    assert calls[0].url.raw_host == expected_raw_host
+    assert calls[0].headers["host"] == "agent.example:8443"
+    assert calls[0].extensions["sni_hostname"] == "agent.example"
+    await transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "addresses",
+    [
+        ("0.0.0.0",),
+        ("127.0.0.1",),
+        ("10.0.0.1",),
+        ("100.100.100.200",),
+        ("169.254.169.254",),
+        ("::1",),
+        ("fe80::1",),
+        ("fd00:ec2::254",),
+        ("::ffff:169.254.169.254",),
+        ("2002:a9fe:a9fe::",),
+        ("64:ff9b::a9fe:a9fe",),
+        ("8.8.8.8", "10.0.0.1"),
+    ],
+)
+async def test_https_a2a_transport_rejects_non_public_dns_destinations(addresses):
+    calls = 0
+    credential_calls = 0
+
+    async def handler(_request: httpx.Request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={})
+
+    def credential_provider():
+        nonlocal credential_calls
+        credential_calls += 1
+        return "Bearer must-not-be-sent"
+
+    interface = A2AInterface(
+        url="https://agent.example/rpc",
+        allowed_origins=("https://agent.example",),
+    )
+    http_transport = httpx.MockTransport(handler)
+    transport = HttpsA2AJsonRpcTransport(
+        interface=interface,
+        authorization_provider=credential_provider,
+        http_transport=http_transport,
+        address_resolver=_static_a2a_resolver(*addresses),
+    )
+
+    with pytest.raises(A2ATransportError) as error:
+        await transport.send({"jsonrpc": "2.0", "id": "1"})
+
+    assert error.value.code == "DESTINATION_FORBIDDEN"
+    assert error.value.ambiguous is False
+    assert all(address not in str(error.value) for address in addresses)
+    assert credential_calls == 0
+    assert calls == 0
+    await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_https_a2a_transport_resolves_every_connection_target_and_blocks_rebinding():
+    answers = iter([("8.8.8.8",), ("169.254.169.254",)])
+    calls: list[httpx.Request] = []
+
+    async def resolver(_hostname: str, _port: int):
+        return next(answers)
+
+    async def handler(request: httpx.Request):
+        calls.append(request)
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            json={"jsonrpc": "2.0", "id": "1", "result": {}},
+        )
+
+    interface = A2AInterface(
+        url="https://agent.example/rpc",
+        allowed_origins=("https://agent.example",),
+    )
+    http_transport = httpx.MockTransport(handler)
+    transport = HttpsA2AJsonRpcTransport(
+        interface=interface,
+        http_transport=http_transport,
+        address_resolver=resolver,
+    )
+
+    await transport.send({"jsonrpc": "2.0", "id": "1"})
+    with pytest.raises(A2ATransportError) as error:
+        await transport.send({"jsonrpc": "2.0", "id": "2"})
+
+    assert error.value.code == "DESTINATION_FORBIDDEN"
+    assert len(calls) == 1
+    assert calls[0].url.raw_host == b"8.8.8.8"
+    await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_https_a2a_transport_sanitizes_dns_resolution_failure():
+    calls = 0
+
+    async def resolver(_hostname: str, _port: int):
+        raise OSError("dns-token=resolver-secret")
+
+    async def handler(_request: httpx.Request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={})
+
+    interface = A2AInterface(
+        url="https://agent.example/rpc",
+        allowed_origins=("https://agent.example",),
+    )
+    http_transport = httpx.MockTransport(handler)
+    transport = HttpsA2AJsonRpcTransport(
+        interface=interface,
+        http_transport=http_transport,
+        address_resolver=resolver,
+    )
+
+    with pytest.raises(A2ATransportError) as error:
+        await transport.send({"jsonrpc": "2.0", "id": "1"})
+
+    assert error.value.code == "CONNECT_FAILED"
+    assert error.value.ambiguous is False
+    assert "resolver-secret" not in str(error.value)
+    assert calls == 0
+    await transport.close()
 
 
 @pytest.mark.asyncio

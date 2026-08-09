@@ -1772,8 +1772,19 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
   治理审计与启动联合回归为 82 passed。架构、OpenAPI、Release／Verification Golden、决策清单、Task SLO、
   行为 Golden、致命 Ruff 和 `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 为
   6961 passed、12 skipped、0 failed。
-- [ ] **A2A × DNS/网络边界：** 在连接时验证并固定实际解析地址，持续拒绝 private、loopback、link-local、
+- [x] **A2A × DNS/网络边界：** 在连接时验证并固定实际解析地址，持续拒绝 private、loopback、link-local、
   metadata 等目的地，同时保持正确 TLS SNI／Host；不能只做一次 DNS 预检后交给客户端再次解析。
+
+  实现证据（2026-08-09）：每次 A2A 发送在读取 Authorization 前以有界异步解析器取得全部目标地址，任一
+  private、loopback、link-local、shared、unspecified、IPv4-mapped、6to4、NAT64 metadata 或混合不安全
+  答案都会 fail closed，解析失败和拒绝错误均不公开 hostname、IP 或 resolver 异常正文。通过校验后，请求
+  URL 改写为选定的数值 IPv4／IPv6，TCP 层不再解析原域名；原始 authority 固定写入 `Host`，原始 IDNA 域名
+  通过 HTTPX `sni_hostname` 扩展交给锁定的 httpcore 做 TLS SNI 与证书校验。每个 AgentInterface 独占
+  `AsyncClient`，只允许注入底层测试 transport，避免不同域名共用同一 IP 时跨 SNI 复用连接。公网地址固定、
+  非公网与 metadata、混合答案、二次解析重绑定、Host／SNI、凭据前置阻断和错误脱敏均有回归；A2A transport
+  定向回归为 20 passed，ACP／A2A／Headless 互操作模块为 40 passed。架构、OpenAPI、Release／Verification
+  Golden、决策清单、Task SLO、行为 Golden、致命 Ruff 和 `git diff --check` 均通过；最终完整
+  `python -m pytest tests/ -v` 为 6977 passed、12 skipped、0 failed。
 - [ ] **Proactive × 上海业务日：** 使用 `ZoneInfo("Asia/Shanghai")` 明确计算业务日期和 UTC 查询边界，
   使每日主动外呼配额不依赖宿主机本地时区；最后重新执行完整测试和生产验收收口。
 

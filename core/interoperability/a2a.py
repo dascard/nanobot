@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ import inspect
 import ipaddress
 import json
 import math
+import socket
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlsplit
@@ -36,6 +38,9 @@ A2A_PROTOCOL_VERSION = "1.0"
 A2A_PROTOCOL_BINDING = "JSONRPC"
 _JSONRPC_VERSION = "2.0"
 _MAX_IDENTIFIER_CHARS = 256
+_MAX_RESOLVED_ADDRESSES = 64
+_NAT64_WELL_KNOWN_NETWORK = ipaddress.IPv6Network("64:ff9b::/96")
+_NAT64_LOCAL_USE_NETWORK = ipaddress.IPv6Network("64:ff9b:1::/48")
 
 
 class A2AProtocolError(InteroperabilityError):
@@ -175,6 +180,42 @@ class A2ATransportLimits:
 
 
 AuthorizationProvider = Callable[[], str | Awaitable[str]]
+AddressResolver = Callable[[str, int], Awaitable[Sequence[str]]]
+
+
+async def _system_address_resolver(hostname: str, port: int) -> tuple[str, ...]:
+    loop = asyncio.get_running_loop()
+    records = await loop.getaddrinfo(
+        hostname,
+        port,
+        family=socket.AF_UNSPEC,
+        type=socket.SOCK_STREAM,
+        proto=socket.IPPROTO_TCP,
+    )
+    return tuple(
+        str(sockaddr[0])
+        for family, _type, _proto, _canonical_name, sockaddr in records
+        if family in {socket.AF_INET, socket.AF_INET6}
+    )
+
+
+def _public_ip_address(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError("解析地址格式非法")
+    address = ipaddress.ip_address(value)
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.scope_id is not None:
+            raise ValueError("解析地址不得包含作用域")
+        embedded_ipv4 = address.ipv4_mapped or address.sixtofour
+        if address in _NAT64_WELL_KNOWN_NETWORK:
+            embedded_ipv4 = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+        if address in _NAT64_LOCAL_USE_NETWORK:
+            raise PermissionError("解析地址属于本地 NAT64 网络")
+        if embedded_ipv4 is not None and not embedded_ipv4.is_global:
+            raise PermissionError("解析地址嵌入非公网 IPv4")
+    if not address.is_global:
+        raise PermissionError("解析地址不是公网地址")
+    return str(address)
 
 
 @runtime_checkable
@@ -220,7 +261,7 @@ def _validate_json_shape(
 
 
 class HttpsA2AJsonRpcTransport:
-    """禁用环境代理、重定向和重试的实际 HTTPS transport。"""
+    """固定实际公网地址并禁用环境代理、重定向和重试的 HTTPS transport。"""
 
     def __init__(
         self,
@@ -228,7 +269,8 @@ class HttpsA2AJsonRpcTransport:
         interface: A2AInterface,
         authorization_provider: AuthorizationProvider | None = None,
         limits: A2ATransportLimits = A2ATransportLimits(),
-        client: httpx.AsyncClient | None = None,
+        http_transport: httpx.AsyncBaseTransport | None = None,
+        address_resolver: AddressResolver = _system_address_resolver,
     ) -> None:
         if not isinstance(interface, A2AInterface):
             raise TypeError("interface 必须是 A2AInterface")
@@ -236,18 +278,76 @@ class HttpsA2AJsonRpcTransport:
             raise TypeError("authorization_provider 必须可调用")
         if not isinstance(limits, A2ATransportLimits):
             raise TypeError("limits 必须是 A2ATransportLimits")
+        if not callable(address_resolver):
+            raise TypeError("address_resolver 必须可调用")
         self._interface = interface
         self._authorization_provider = authorization_provider
         self._limits = limits
-        self._client = client or httpx.AsyncClient(
+        self._address_resolver = address_resolver
+        self._client = httpx.AsyncClient(
             follow_redirects=False,
             trust_env=False,
+            transport=http_transport,
         )
-        self._owns_client = client is None
 
     @property
     def interface(self) -> A2AInterface:
         return self._interface
+
+    async def _resolve_pinned_target(self) -> tuple[httpx.URL, str, str]:
+        original_url = httpx.URL(self._interface.url)
+        hostname = original_url.raw_host.decode("ascii")
+        port = original_url.port or 443
+        try:
+            literal = ipaddress.ip_address(hostname)
+        except ValueError:
+            literal = None
+
+        if literal is None:
+            try:
+                resolved = await asyncio.wait_for(
+                    self._address_resolver(hostname, port),
+                    timeout=self._limits.timeout_seconds,
+                )
+                if isinstance(resolved, (str, bytes, bytearray)):
+                    raise TypeError("解析结果必须是地址序列")
+                candidates = tuple(resolved)
+            except Exception as exc:
+                raise A2ATransportError(
+                    "CONNECT_FAILED",
+                    "A2A endpoint 地址解析失败",
+                    ambiguous=False,
+                ) from exc
+        else:
+            candidates = (str(literal),)
+
+        if not candidates or len(candidates) > _MAX_RESOLVED_ADDRESSES:
+            raise A2ATransportError(
+                "CONNECT_FAILED",
+                "A2A endpoint 地址解析失败",
+                ambiguous=False,
+            )
+        pinned_addresses: list[str] = []
+        try:
+            for candidate in candidates:
+                pinned_addresses.append(_public_ip_address(candidate))
+        except PermissionError as exc:
+            raise A2ATransportError(
+                "DESTINATION_FORBIDDEN",
+                "A2A endpoint 目的地址被拒绝",
+                ambiguous=False,
+            ) from exc
+        except ValueError as exc:
+            raise A2ATransportError(
+                "CONNECT_FAILED",
+                "A2A endpoint 地址解析失败",
+                ambiguous=False,
+            ) from exc
+
+        # URL 使用数值地址，TCP 层不会再次解析域名；Host 和 TLS SNI 仍使用
+        # 原始受信域名。HTTPX 0.28.1 会把 sni_hostname 原样传给 httpcore 1.0.9。
+        pinned_url = original_url.copy_with(host=pinned_addresses[0])
+        return pinned_url, original_url.netloc.decode("ascii"), hostname
 
     async def send(
         self,
@@ -272,11 +372,13 @@ class HttpsA2AJsonRpcTransport:
                 "A2A 请求超过大小上限",
                 ambiguous=False,
             )
+        pinned_url, host_header, sni_hostname = await self._resolve_pinned_target()
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, application/a2a+json",
             "A2A-Version": self._interface.protocol_version,
             "User-Agent": "Nanobot-A2A-Adapter/1.0",
+            "Host": host_header,
         }
         if self._authorization_provider is not None:
             try:
@@ -305,11 +407,12 @@ class HttpsA2AJsonRpcTransport:
         try:
             async with self._client.stream(
                 "POST",
-                self._interface.url,
+                pinned_url,
                 headers=headers,
                 content=body,
                 timeout=self._limits.timeout_seconds,
                 follow_redirects=False,
+                extensions={"sni_hostname": sni_hostname},
             ) as response:
                 if 300 <= response.status_code < 400:
                     raise A2ATransportError(
@@ -384,8 +487,7 @@ class HttpsA2AJsonRpcTransport:
         return payload
 
     async def close(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        await self._client.aclose()
 
 
 @dataclass(frozen=True, slots=True)
