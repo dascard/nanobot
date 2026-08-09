@@ -72,6 +72,19 @@ def resolve_reply_route_plans(
         if provider.driver_type != "codex" and not provider.base_url:
             unavailable.append(f"{identity}: Base URL 未配置")
             continue
+        provider_descriptor = getattr(provider, "descriptor", None)
+        if provider_descriptor is None:
+            from core.model_provider.provider_config import (
+                provider_descriptor_for_driver,
+            )
+
+            provider_descriptor = provider_descriptor_for_driver(
+                provider.driver_type,
+                provider_id=provider.id,
+                display_name=str(
+                    getattr(provider, "display_name", "") or provider.id
+                ),
+            )
         plan = ReplyRoutePlan(
             provider_id=provider.id,
             registry_provider=provider.registry_provider or provider.id,
@@ -79,6 +92,8 @@ def resolve_reply_route_plans(
             api_key=provider.api_key,
             timeout=preset.timeout,
             driver_type=provider.driver_type,
+            request_protocol=provider_descriptor.request_protocol.value,
+            request_path=provider_descriptor.request_path,
             profile_id=preset.id,
             model=preset.model,
             temperature=preset.temperature,
@@ -94,6 +109,11 @@ def resolve_reply_route_plans(
             service_tier=preset.service_tier,
             enable_thinking=preset.enable_thinking,
             capabilities=dict(preset.capabilities),
+            capability_evidence={
+                key: "operator_model_config"
+                for key in preset.capabilities
+            },
+            routing_evidence="operator_model_config",
             extra_headers=dict(preset.extra_headers),
             extra_body=dict(preset.extra_body),
             retry_policy=dict(preset.retry_policy),
@@ -213,6 +233,45 @@ def _resolve_legacy_reply_route_plan(
     route = resolve_model_route("reply")
     ensure_model_route_enabled("reply", route)
     provider_id = str(route.get("provider_id", "") or "")
+    from clients.model_registry import normalize_model_capability_fields, registry
+    from core.model_provider.provider_config import provider_descriptor_for_driver
+
+    model_id = str(route.get("model") or "")
+    model_info = registry.get_model_info(model_id) if model_id else None
+    if model_info is not None:
+        normalized_model = normalize_model_capability_fields(model_info)
+        capabilities = {
+            key: bool(normalized_model.get(key))
+            for key in (
+                "supports_stream",
+                "supports_tools",
+                "supports_image",
+            )
+        }
+        capability_evidence = dict(
+            normalized_model.get("capability_evidence") or {}
+        )
+        routing_evidence = str(
+            normalized_model.get("routing_evidence")
+            or "explicit_model_descriptor"
+        )
+    else:
+        capabilities = {
+            "supports_stream": True,
+            "supports_tools": True,
+            "supports_image": False,
+        }
+        capability_evidence = {
+            key: "legacy_operator_route"
+            for key in capabilities
+        }
+        routing_evidence = "legacy_operator_route"
+    driver_type = str(route.get("driver_type") or "openai")
+    descriptor = provider_descriptor_for_driver(
+        driver_type,
+        provider_id=provider_id or "legacy_provider",
+        display_name=provider_id or "Legacy Provider",
+    )
     max_tokens_raw = route.get("max_tokens")
     max_tokens = int(max_tokens_raw) if max_tokens_raw else None
     if max_tokens is not None and max_tokens <= 0:
@@ -225,16 +284,16 @@ def _resolve_legacy_reply_route_plan(
         api_key=str(route.get("api_key", "") or "") or default_api_key,
         timeout=float(route.get("timeout") or 120.0),
         driver_type=str(route.get("driver_type") or "openai"),
-        model=str(route.get("model") or ""),
+        request_protocol=descriptor.request_protocol.value,
+        request_path=descriptor.request_path,
+        model=model_id,
         temperature=route.get("temperature"),
         max_tokens=max_tokens,
         max_context=int(route.get("max_context") or 128000),
         enable_thinking=route.get("enable_thinking", "auto"),
-        capabilities={
-            "supports_stream": True,
-            "supports_tools": True,
-            "supports_image": True,
-        },
+        capabilities=capabilities,
+        capability_evidence=capability_evidence,
+        routing_evidence=routing_evidence,
         provider_name=provider_id,
     )
 
@@ -325,6 +384,8 @@ class PresetRouteClient:
                 "input_modalities": list(plan.input_modalities),
                 "output_modalities": list(plan.output_modalities),
                 **capabilities,
+                "capability_evidence": dict(plan.capability_evidence),
+                "routing_evidence": plan.routing_evidence,
                 "_route_plan": plan,
                 "_preset_id": plan.profile_id,
                 "_configured_index": index,

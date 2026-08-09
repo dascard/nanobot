@@ -611,6 +611,7 @@ def resolve_model_preset_api(
 def _runtime_plan(preset: object, provider: object):
     from core.model_provider.route_plan import ReplyRoutePlan
 
+    descriptor = provider.descriptor
     return ReplyRoutePlan(
         provider_id=provider.id,
         registry_provider=provider.registry_provider or provider.id,
@@ -618,6 +619,8 @@ def _runtime_plan(preset: object, provider: object):
         api_key=provider.api_key,
         timeout=preset.timeout,
         driver_type=provider.driver_type,
+        request_protocol=descriptor.request_protocol.value,
+        request_path=descriptor.request_path,
         profile_id=preset.id,
         model=preset.model,
         temperature=preset.temperature,
@@ -633,6 +636,11 @@ def _runtime_plan(preset: object, provider: object):
         service_tier=preset.service_tier,
         enable_thinking=preset.enable_thinking,
         capabilities=dict(preset.capabilities),
+        capability_evidence={
+            key: "operator_model_config"
+            for key in preset.capabilities
+        },
+        routing_evidence="operator_model_config",
         extra_headers=dict(preset.extra_headers),
         extra_body=dict(preset.extra_body),
         retry_policy=dict(preset.retry_policy),

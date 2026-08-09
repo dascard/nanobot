@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 9.2 已完成，准备阶段 9.3）
+> 状态：执行中（阶段 9.3 已完成，准备阶段 10.1）
 >
 > 建立日期：2026-08-03
 >
@@ -1360,12 +1360,34 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 9.3 Provider 诊断和成本治理
 
-- [ ] 在现有模型目录、能力过滤、排序和熔断上增加连接诊断。
-- [ ] 描述请求协议、stream、tool、image、reasoning 和 cache 能力。
-- [ ] 记录首 token 延迟、总延迟、token、缓存、成本和错误类别。
-- [ ] 路由只依据可验证 Descriptor 和运行证据，不依据模型名猜测。
+- [x] 在现有模型目录、能力过滤、排序和熔断上增加连接诊断。
+- [x] 描述请求协议、stream、tool、image、reasoning 和 cache 能力。
+- [x] 记录首 token 延迟、总延迟、token、缓存、成本和错误类别。
+- [x] 路由只依据可验证 Descriptor 和运行证据，不依据模型名猜测。
 
 验收条件：不同入口共享同一 Run 语义；Provider 能力、费用和故障均可观测、可验证、可回退。
+
+实现记录（2026-08-09）：
+
+- 扩展不可变 `ProviderDescriptor`，固定 Provider 的实际请求协议、请求路径以及 chat、stream、tool、image、
+  reasoning 和 cache 能力与证据来源；模型目录规范化仅接受目录显式字段、受控覆盖、Provider API 和成功运行
+  Trace 等可审计来源。排序、首选模型和熔断后的候选过滤统一消费该证据，删除依据模型名称推断能力的路径；未
+  观测到能力保持 unknown，不会被误判为不支持或被当作可路由事实。
+- 新增只读 Provider Doctor，按配置、DNS、TCP、TLS、鉴权、目录、模型、最小 completion 以及可选 stream、
+  tool、image 探测分层返回状态、耗时、阻断层、稳定错误类别和是否可重试。探测固定超时和 1 MiB 响应上限，
+  显式禁用环境代理，不返回凭据、上游正文或隐藏推理；不支持的请求协议透明报告 unsupported，不伪造成功。
+- 将 LLM Trace 的错误归一为稳定类别，并补齐首 token 延迟、总延迟、输入／输出 token、缓存命中／未命中／
+  写入 token、成本和成本来源。新增数据库迁移、Provider 近 30 天脱敏运行证据汇总及 Admin API／WebUI 展示；
+  成功 Trace 只提供正向能力证据，请求和响应正文不会进入汇总结果。SQLAlchemy 持久化汇总适配器位于
+  `clients/`，框架无关 Provider 合同与诊断层继续通过无 SQLAlchemy／FastAPI／KT／具体 SDK 的架构门禁。
+- 管理端模型连接页展示 Descriptor、分层 Doctor 与运行证据，模型目录展示能力证据，LLM 日志页支持错误类别、
+  延迟、缓存和成本聚合；OpenAPI 和正式 WebUI 发布资产同步更新。前端 lint、17 项测试和生产构建通过；架构
+  边界、OpenAPI、Release Impact、Verification Plan、Task SLO、决策规则、行为基线、受控 Ruff、Python 编译
+  与 `git diff --check` 全部通过。
+- 本阶段未改变 `enriched_query`、历史注入、conversation、工具输出或 Prompt Runtime 输入合同；canonical
+  `chat`、`tasks`、`tools` 模板、变量和模板注册表经全量回归确认无需修改。最终完整
+  `python -m pytest tests/ -v` 在清除代理变量并使用 Linux `/var/tmp` basetemp 后为 6815 passed、
+  12 skipped、0 failed，耗时 679.22 秒。
 
 ### 阶段 10：可观察性、评测和受控自进化
 

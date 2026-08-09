@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`40998e01955cad6438f697913d91a90e39850911`
-- 规则总数：8454
+- 源提交：`63de2779d2631dcb56848ddd055eda1d3dbfea07`
+- 规则总数：8495
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,27 +12,27 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1644 |
-| `data_consistency` | 486 |
+| `configurable_policy` | 1660 |
+| `data_consistency` | 489 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4476 |
-| `security_invariant` | 1675 |
+| `protocol_syntax` | 4496 |
+| `security_invariant` | 1677 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `core/schema_migrations.py` | 245 |
+| `core/schema_migrations.py` | 249 |
 | `scripts/manage-sandbox-production.sh` | 179 |
 | `core/scheduled_workflow.py` | 143 |
 | `webui/src/App.jsx` | 128 |
 | `core/proactive_simulation.py` | 87 |
 | `core/proactive_research.py` | 82 |
 | `core/scheduled_task_contract.py` | 79 |
+| `api/admin/model_routes.py` | 77 |
 | `sandboxd/filesystem.py` | 77 |
 | `api/admin/sandbox_routes.py` | 75 |
-| `api/admin/model_routes.py` | 73 |
 | `sandboxd/app.py` | 72 |
 | `core/skills/contracts.py` | 69 |
 | `core/semantic/backfill.py` | 68 |
@@ -48,9 +48,9 @@
 | `core/chat_delivery_outbox_schema.py` | 53 |
 | `app/memory_digest/llm_builder.py` | 51 |
 | `core/proactive_outreach_schema.py` | 51 |
+| `clients/model_registry.py` | 50 |
 | `core/run_recovery/service.py` | 50 |
 | `api/admin/model_preset_routes.py` | 49 |
-| `clients/model_registry.py` | 49 |
 | `api/admin/reply_routes.py` | 48 |
 | `core/daily_digest.py` | 47 |
 | `core/sandbox/process_service.py` | 47 |
@@ -163,9 +163,11 @@
 | `core/trigger_runtime.py` | 18 |
 | `core/web_search/url_policy.py` | 18 |
 | `creatures/nanobot/prompts/skills/news_search/legacy_report.py` | 18 |
+| `api/admin/trace_routes.py` | 17 |
 | `api/admin_routes.py` | 17 |
 | `api/history_log_routes.py` | 17 |
 | `app/group_analysis/analyzer.py` | 17 |
+| `clients/reply_route_chat_completion_adapter.py` | 17 |
 | `core/agent_manifest/validation.py` | 17 |
 | `core/asset_tokens.py` | 17 |
 | `core/semantic/adapters.py` | 17 |
@@ -173,7 +175,6 @@
 | `core/skills/service.py` | 17 |
 | `scripts/migrate-sandbox-project-map.py` | 17 |
 | `workers/semantic_index_worker.py` | 17 |
-| `api/admin/trace_routes.py` | 16 |
 | `api/chat_recovery.py` | 16 |
 | `app/group_learning/pipeline_service.py` | 16 |
 | `core/proactive/model_policy.py` | 16 |
@@ -189,7 +190,6 @@
 | `api/admin/outbound_delivery_routes.py` | 15 |
 | `api/admin/session_memory_routes.py` | 15 |
 | `app/group_ingress/recovery.py` | 15 |
-| `clients/reply_route_chat_completion_adapter.py` | 15 |
 | `core/config_registry.py` | 15 |
 | `core/db/group_learning_legacy_adapter.py` | 15 |
 | `core/durable_tasks/service.py` | 15 |
@@ -277,6 +277,7 @@
 | `core/prompt_v2/template_resolution.py` | 10 |
 | `core/runtime/events.py` | 10 |
 | `core/sandbox/asset_service.py` | 10 |
+| `nanobot_kt/model_runtime.py` | 10 |
 | `scripts/build_semantic_task_baseline.py` | 10 |
 | `scripts/docker-build.sh` | 10 |
 | `scripts/sandbox-smoke-summary.py` | 10 |
@@ -284,11 +285,13 @@
 | `api/asset_routes.py` | 9 |
 | `api/routes.py` | 9 |
 | `app/group_learning/candidate_service.py` | 9 |
+| `clients/provider_doctor.py` | 9 |
 | `core/db/session.py` | 9 |
 | `core/group_learning/evidence.py` | 9 |
 | `core/jobs/contracts.py` | 9 |
 | `core/knowledge_rag.py` | 9 |
 | `core/mcp/config_service.py` | 9 |
+| `core/model_provider/contracts.py` | 9 |
 | `core/outbound/replay.py` | 9 |
 | `core/prompt_v2/contribution_registry.py` | 9 |
 | `core/runtime/plugin_lifecycle.py` | 9 |
@@ -298,7 +301,6 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/official.py` | 9 |
 | `foundation/identity/normalization.py` | 9 |
 | `foundation/llm/cache_shape.py` | 9 |
-| `nanobot_kt/model_runtime.py` | 9 |
 | `sandboxd/maintenance_probe.py` | 9 |
 | `scripts/build-sandbox-image.sh` | 9 |
 | `scripts/deploy_release.py` | 9 |
@@ -318,6 +320,7 @@
 | `core/eval_sampling/db_sampler.py` | 8 |
 | `core/gateway_control/service.py` | 8 |
 | `core/jobs/policies.py` | 8 |
+| `core/model_provider/diagnostics.py` | 8 |
 | `core/prompt_v2/template_loader.py` | 8 |
 | `core/sandbox/repositories.py` | 8 |
 | `core/semantic/fts.py` | 8 |
@@ -335,6 +338,7 @@
 | `scripts/render-sandbox-profile-manifest.py` | 8 |
 | `api/admin/web_search_routes.py` | 7 |
 | `api/memory_routes.py` | 7 |
+| `clients/provider_runtime_evidence.py` | 7 |
 | `core/agent_link/protocol.py` | 7 |
 | `core/artifact_port.py` | 7 |
 | `core/client_meta.py` | 7 |
@@ -413,7 +417,6 @@
 | `core/gateway_control/agent_link.py` | 5 |
 | `core/gateway_control/contracts.py` | 5 |
 | `core/group_learning/aspects.py` | 5 |
-| `core/model_provider/contracts.py` | 5 |
 | `core/run_ledger/governance_service.py` | 5 |
 | `core/run_recovery/coordinator.py` | 5 |
 | `core/sandbox/workspace_acl.py` | 5 |
@@ -729,10 +732,10 @@
 | `decision.fff58d5b81a7967d3aa8` | `api/admin/log_routes.py:195` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 3／4 | `reviewed` |
 |  | 摘要：str(level or "").upper() == "ERROR" |  |  |  |  |  |
 |  | 原因：人工复核：审计与日志路由、日志文件名和行格式判断是版本化协议与资源语法，不承担业务语义判断 |  |  |  |  |  |
-| `decision.7a543215b0b7c9150e02` | `api/admin/model_preset_routes.py:1013` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.7a543215b0b7c9150e02` | `api/admin/model_preset_routes.py:1021` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：model == "未指定" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.54225895d77b8fa254cc` | `api/admin/model_routes.py:139` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.54225895d77b8fa254cc` | `api/admin/model_routes.py:167` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：rk == "classifier_legacy" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.6ab1ad985dbf35c80593` | `api/admin/outbound_delivery_routes.py:450` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
@@ -1167,28 +1170,28 @@
 | `decision.a91a03bfaba448933166` | `clients/classifier_client.py:788` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：result[k] not in ("", "未指定", 30) |  |  |  |  |  |
 |  | 原因：人工复核：未指定值属于模型输出合同 |  |  |  |  |  |
-| `decision.43bf656b8781ca81f20e` | `clients/classifier_client.py:925` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.43bf656b8781ca81f20e` | `clients/classifier_client.py:937` | `python.string_control_flow` | `protocol_syntax` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：m == "未指定" |  |  |  |  |  |
 |  | 原因：人工复核：未指定标签属于模型输出合同 |  |  |  |  |  |
-| `decision.baaa5fe18b85e158d74c` | `clients/classifier_client.py:1120` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
+| `decision.baaa5fe18b85e158d74c` | `clients/classifier_client.py:1132` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
 |  | 摘要：stripped in ("是", "是，") |  |  |  |  |  |
 |  | 原因：人工复核：自由文本是标签属于待迁移的旧模型输出格式 |  |  |  |  |  |
-| `decision.72d7232428298b311379` | `clients/classifier_client.py:1122` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
+| `decision.72d7232428298b311379` | `clients/classifier_client.py:1134` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
 |  | 摘要：stripped in ("否", "否，") |  |  |  |  |  |
 |  | 原因：人工复核：自由文本否标签属于待迁移的旧模型输出格式 |  |  |  |  |  |
-| `decision.9e8edaf0af8157d0cefa` | `clients/classifier_client.py:1139` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
+| `decision.9e8edaf0af8157d0cefa` | `clients/classifier_client.py:1151` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
 |  | 摘要：type_str == "否" |  |  |  |  |  |
 |  | 原因：人工复核：自由文本类型标签属于待迁移的旧模型输出格式 |  |  |  |  |  |
-| `decision.215f3c0d2b679b98779a` | `clients/classifier_client.py:1175` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
+| `decision.215f3c0d2b679b98779a` | `clients/classifier_client.py:1187` | `python.string_control_flow` | `protocol_syntax` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
 |  | 摘要：type_str == "否" |  |  |  |  |  |
 |  | 原因：人工复核：自由文本类型标签属于待迁移的旧模型输出格式 |  |  |  |  |  |
-| `decision.2910f749265a970c43e7` | `clients/new_api_client.py:839` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.2910f749265a970c43e7` | `clients/new_api_client.py:888` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：hard_markers = ["设计", "证明", "推导", "架构", "审计", "优化", "debug", "reason", "analyze", "复杂", "proof"] |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.189018f10cc2f9c290bd` | `clients/new_api_client.py:844` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.189018f10cc2f9c290bd` | `clients/new_api_client.py:893` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：coding_markers = ["代码", "code", "python", "sql", "bug", "javascript", "typescript", "前端", "后端"] |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.11bc8ea3473806ae0a9d` | `clients/new_api_client.py:849` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.11bc8ea3473806ae0a9d` | `clients/new_api_client.py:898` | `python.literal_collection` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：easy_markers = ["翻译", "润色", "摘要", "改写", "hello", "hi", "你好", "解释一下"] |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.90a867d5c507b97f5f32` | `clients/task_runtime_adapter.py:93` | `python.numeric_control_flow` | `protocol_syntax` | `preserve` | 阶段 3／4 | `reviewed` |
@@ -1689,10 +1692,10 @@
 | `decision.69b5aef477f096f198ab` | `core/llm_request_linter.py:216` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 8 | `reviewed` |
 |  | 摘要：src["source"] == "legacy_runtime_tool_prompt" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.7c906ddab2af1566ebc6` | `core/model_provider/provider_config.py:496` | `python.literal_collection` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.7c906ddab2af1566ebc6` | `core/model_provider/provider_config.py:566` | `python.literal_collection` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：explicit_sources = { "database", "environment", "legacy_database", "legacy_settings", "settings", } |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.7d02bb991466f2c7da64` | `core/model_provider/provider_config.py:517` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.7d02bb991466f2c7da64` | `core/model_provider/provider_config.py:587` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：key_source not in { "database", "legacy_database", "environment", } |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.74f85ea7d0aa0c1bff47` | `core/model_route_health.py:160` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
@@ -1998,13 +2001,13 @@
 | `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:924` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:731` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:734` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:731` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:734` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2470` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2534` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |

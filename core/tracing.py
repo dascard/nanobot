@@ -9,6 +9,10 @@ from datetime import datetime
 from typing import Any
 
 from core.durable_tasks.contracts import RunTaskLease
+from core.model_provider.diagnostics import (
+    ProviderErrorCategory,
+    classify_provider_error,
+)
 from foundation.llm.cache_usage import (
     CACHE_STATUS_MISS,
     CACHE_STATUS_PENDING,
@@ -1430,6 +1434,7 @@ class LLMRequestTracer:
         status: str = "created",
         response_status: int = 0,
         error: str = "",
+        error_category: str = "",
     ) -> int:
         try:
             from core.database import LLMApiRequestLog
@@ -1472,6 +1477,17 @@ class LLMRequestTracer:
             db = _session()
             try:
                 def operation() -> int:
+                    initial_category = ProviderErrorCategory.NONE
+                    if error_category:
+                        try:
+                            initial_category = ProviderErrorCategory(error_category)
+                        except ValueError:
+                            initial_category = ProviderErrorCategory.UNKNOWN
+                    elif error:
+                        initial_category = classify_provider_error(
+                            error,
+                            http_status=response_status,
+                        )
                     log = LLMApiRequestLog(
                         trace_id=str(trace_id or "")[:64],
                         run_id=str(run_id or "")[:80],
@@ -1493,6 +1509,7 @@ class LLMRequestTracer:
                         ),
                         request_preview=_preview(request_payload, max_chars=4000),
                         status=str(status or "created")[:32],
+                        error_category=initial_category.value,
                         cache_status=CACHE_STATUS_PENDING,
                         cache_hit=None,
                         cache_hit_tokens=0,
@@ -1542,6 +1559,7 @@ class LLMRequestTracer:
         latency_ms: int = 0,
         phase: str | None = None,
         record_ledger_usage: bool = True,
+        error_category: str | None = None,
     ) -> None:
         if not log_id:
             return
@@ -1641,6 +1659,23 @@ class LLMRequestTracer:
                     )
                     log.response_status = int(response_status or 0)
                     log.status = normalized_status
+                    if successful:
+                        normalized_error_category = ProviderErrorCategory.NONE
+                    elif error_category:
+                        try:
+                            normalized_error_category = ProviderErrorCategory(
+                                error_category
+                            )
+                        except ValueError:
+                            normalized_error_category = (
+                                ProviderErrorCategory.UNKNOWN
+                            )
+                    else:
+                        normalized_error_category = classify_provider_error(
+                            error,
+                            http_status=response_status,
+                        )
+                    log.error_category = normalized_error_category.value
                     if phase is not None:
                         log.phase = str(phase or "")[:64]
                     log.error = safe_response_summary(error, max_chars=2000)

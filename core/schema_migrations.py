@@ -106,6 +106,9 @@ _ARTIFACT_LIFECYCLE_V1_VERSION = "20260804_artifact_lifecycle_v1"
 _LLM_PROVIDER_CACHE_PERFORMANCE_VERSION = (
     "20260804_llm_provider_cache_performance"
 )
+_LLM_PROVIDER_ERROR_CATEGORY_VERSION = (
+    "20260805_llm_provider_error_category"
+)
 _SESSION_GOAL_PLAN_MODE_V1_VERSION = (
     "20260804_session_goal_plan_mode_v1"
 )
@@ -1104,6 +1107,67 @@ def _llm_provider_cache_performance(
                 "first_token_latency_ms": first_token,
                 "cost_microusd": cost.cost_microusd,
                 "cost_source": cost.source,
+            })
+        conn.execute(statement, updates)
+        last_id = int(rows[-1]["id"])
+
+
+def _llm_provider_error_category(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """补齐稳定 Provider 错误类别并为聚合查询建立索引。"""
+
+    del engine, db_path
+    from core.model_provider.diagnostics import (
+        ProviderErrorCategory,
+        classify_provider_error,
+    )
+
+    _add_missing_columns(conn, "llm_api_request_logs", {
+        "error_category": "TEXT NOT NULL DEFAULT 'none'",
+    })
+    if "llm_api_request_logs" not in _table_names(conn):
+        return
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS "
+        "ix_llm_api_request_logs_error_category "
+        "ON llm_api_request_logs(error_category)",
+    ])
+    required = {"id", "status", "response_status", "error", "error_category"}
+    if not required <= _columns(conn, "llm_api_request_logs"):
+        return
+    statement = text(
+        "UPDATE llm_api_request_logs SET error_category=:error_category "
+        "WHERE id=:id"
+    )
+    last_id = -(2**63)
+    while True:
+        rows = conn.execute(text(
+            "SELECT id, status, response_status, error "
+            "FROM llm_api_request_logs WHERE id > :last_id "
+            "ORDER BY id LIMIT 500"
+        ), {"last_id": last_id}).mappings().all()
+        if not rows:
+            break
+        updates: list[dict[str, Any]] = []
+        for row in rows:
+            successful = str(row.get("status") or "") in {
+                "success",
+                "stream_success",
+            }
+            category = (
+                ProviderErrorCategory.NONE
+                if successful
+                else classify_provider_error(
+                    row.get("error"),
+                    http_status=int(row.get("response_status") or 0),
+                )
+            )
+            updates.append({
+                "id": row["id"],
+                "error_category": category.value,
             })
         conn.execute(statement, updates)
         last_id = int(rows[-1]["id"])
@@ -5355,6 +5419,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _GATEWAY_SESSION_CONTROL_V1_VERSION,
         "gateway session bindings and remote run control audit",
         _gateway_session_control_v1,
+    ),
+    (
+        _LLM_PROVIDER_ERROR_CATEGORY_VERSION,
+        "llm provider stable error category",
+        _llm_provider_error_category,
     ),
 ]
 

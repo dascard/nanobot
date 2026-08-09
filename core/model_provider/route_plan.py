@@ -14,6 +14,8 @@ class ReplyRoutePlan:
     api_key: str
     timeout: float
     driver_type: str = "openai"
+    request_protocol: str = "openai_chat_completions"
+    request_path: str = "/chat/completions"
     profile_id: str = ""
     model: str = ""
     temperature: object = None
@@ -29,6 +31,8 @@ class ReplyRoutePlan:
     service_tier: str = ""
     enable_thinking: object = "auto"
     capabilities: dict[str, bool] = field(default_factory=dict)
+    capability_evidence: dict[str, str] = field(default_factory=dict)
+    routing_evidence: str = ""
     extra_headers: dict[str, str] = field(default_factory=dict)
     extra_body: dict[str, Any] = field(default_factory=dict)
     retry_policy: dict[str, Any] = field(default_factory=dict)

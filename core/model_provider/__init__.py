@@ -8,6 +8,7 @@ from core.model_provider.contracts import (
     ProviderAvailability,
     ProviderCapability,
     ProviderDescriptor,
+    ProviderRequestProtocol,
     SyncModelCompletionPort,
 )
 from core.model_provider.chat_runtime import (
@@ -17,6 +18,14 @@ from core.model_provider.chat_runtime import (
     ChatCompletionRuntimeState,
     ChatCompletionRuntimeUnavailableError,
     RuntimeBoundChatCompletionPort,
+)
+from core.model_provider.diagnostics import (
+    ProviderDiagnosticCheck,
+    ProviderDiagnosticLayer,
+    ProviderDiagnosticReport,
+    ProviderDiagnosticStatus,
+    ProviderErrorCategory,
+    classify_provider_error,
 )
 from core.model_provider.catalog_runtime import (
     ModelCatalogRuntime,
@@ -86,9 +95,15 @@ __all__ = [
     "ModelRouteSloStatus",
     "OverridePolicy",
     "ProviderAvailability",
+    "ProviderDiagnosticCheck",
+    "ProviderDiagnosticLayer",
+    "ProviderDiagnosticReport",
+    "ProviderDiagnosticStatus",
+    "ProviderErrorCategory",
     "ProviderCapability",
     "ProviderCapabilityError",
     "ProviderDescriptor",
+    "ProviderRequestProtocol",
     "ProviderNotFoundError",
     "ProviderRegistryFrozenError",
     "ProviderUnavailableError",
@@ -102,4 +117,5 @@ __all__ = [
     "require_model_route_descriptor",
     "resolve_model_route_key",
     "validate_model_route_task_contracts",
+    "classify_provider_error",
 ]

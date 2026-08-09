@@ -6778,6 +6778,45 @@
         "title": "ProviderCreateBody",
         "type": "object"
       },
+      "ProviderDoctorBody": {
+        "properties": {
+          "live_completion": {
+            "default": true,
+            "title": "Live Completion",
+            "type": "boolean"
+          },
+          "model": {
+            "default": "",
+            "maxLength": 160,
+            "title": "Model",
+            "type": "string"
+          },
+          "probe_image": {
+            "default": false,
+            "title": "Probe Image",
+            "type": "boolean"
+          },
+          "probe_stream": {
+            "default": false,
+            "title": "Probe Stream",
+            "type": "boolean"
+          },
+          "probe_tools": {
+            "default": false,
+            "title": "Probe Tools",
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "default": 10.0,
+            "maximum": 60.0,
+            "minimum": 0.1,
+            "title": "Timeout Seconds",
+            "type": "number"
+          }
+        },
+        "title": "ProviderDoctorBody",
+        "type": "object"
+      },
       "ProviderPreviewRequest": {
         "properties": {
           "limit": {
@@ -17690,6 +17729,16 @@
           },
           {
             "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Provider",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "model",
             "required": false,
             "schema": {
@@ -17715,6 +17764,16 @@
             "schema": {
               "default": "",
               "title": "Cache Status",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_category",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Error Category",
               "type": "string"
             }
           },
@@ -21024,7 +21083,7 @@
     },
     "/api/v1/admin/models/providers/{provider_id}/test": {
       "post": {
-        "description": "通过模型目录端点测试单个 Provider 的认证与连通性。",
+        "description": "执行配置、DNS、传输、TLS、认证、目录和 live 请求分层诊断。",
         "operationId": "post_api_v1_admin_models_providers_provider_id_test",
         "parameters": [
           {
@@ -21047,6 +21106,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ProviderDoctorBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {

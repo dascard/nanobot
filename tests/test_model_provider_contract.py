@@ -22,6 +22,7 @@ from core.model_provider import (
     ProviderCapability,
     ProviderCapabilityError,
     ProviderDescriptor,
+    ProviderRequestProtocol,
     ProviderRegistryFrozenError,
     ProviderUnavailableError,
     SyncModelCompletionPort,
@@ -109,6 +110,33 @@ def test_registry_enforces_capability_and_availability():
             capabilities=frozenset({ProviderCapability.VISION}),
             require_available=False,
         )
+
+
+def test_provider_descriptor_exposes_protocol_and_frozen_capability_evidence():
+    descriptor = ProviderDescriptor(
+        id="provider_a",
+        display_name="Provider A",
+        capabilities=frozenset({
+            ProviderCapability.CHAT_COMPLETION,
+            ProviderCapability.CACHE_USAGE,
+        }),
+        request_protocol=ProviderRequestProtocol.ANTHROPIC_MESSAGES,
+        request_path="/messages",
+        capability_evidence={
+            ProviderCapability.CACHE_USAGE: "anthropic_adapter_contract",
+        },
+    )
+
+    metadata = descriptor.metadata()
+
+    assert metadata["request_protocol"] == "anthropic_messages"
+    assert metadata["request_path"] == "/messages"
+    assert metadata["capability_evidence"] == {
+        "cache_usage": "anthropic_adapter_contract",
+        "chat_completion": "adapter_contract",
+    }
+    with pytest.raises(TypeError):
+        descriptor.capability_evidence[ProviderCapability.VISION] = "forged"
 
 
 def test_config_catalog_rejects_alias_collision():

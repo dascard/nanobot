@@ -68,8 +68,8 @@ function draftFor(model, configured) {
     timeout: current.timeout || 120,
     enable_thinking: current.enable_thinking || 'auto',
     capabilities: {
-      supports_stream: current.capabilities?.supports_stream !== false,
-      supports_tools: current.capabilities?.supports_tools !== false,
+      supports_stream: Boolean(current.capabilities?.supports_stream),
+      supports_tools: Boolean(current.capabilities?.supports_tools),
       supports_image: Boolean(current.capabilities?.supports_image),
     },
     extra_headers: current.extra_headers || {},
@@ -218,7 +218,7 @@ export function ModelCatalogPanel({ providers, modelDefaults, onChanged }) {
   return (
     <section className="overflow-hidden rounded-lg border border-slate-800 bg-slate-900">
       <header className="flex flex-col gap-3 border-b border-slate-800 px-4 py-3 sm:flex-row sm:items-end sm:justify-between sm:px-5">
-        <div><h2 className="text-sm font-semibold text-slate-100">模型目录与默认配置</h2><p className="mt-1 text-[11px] text-slate-500">上游目录负责发现；选中模型后直接维护价格、能力和默认请求参数。</p></div>
+        <div><h2 className="text-sm font-semibold text-slate-100">模型目录与默认配置</h2><p className="mt-1 text-[11px] text-slate-500">上游目录只确认 Model ID 存在；价格、能力和路由资格必须由运营配置形成可验证证据。</p></div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end"><label htmlFor="model-catalog-query" className="block"><span className="text-[10px] text-slate-500">搜索模型</span><span className="relative mt-1 block"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-600" aria-hidden="true" /><input id="model-catalog-query" value={query} onChange={event => setQuery(event.target.value)} className={`${inputClass} min-w-52 pl-8`} /></span></label><label htmlFor="model-catalog-provider" className="block"><span className="text-[10px] text-slate-500">Provider</span><select id="model-catalog-provider" value={providerId} onChange={event => setProviderId(event.target.value)} className={`${inputClass} mt-1 min-w-48`}><option value="">全部 Provider</option>{providers.filter(item => item.model_discovery_supported).map(item => <option key={item.id} value={item.id}>{item.display_name || item.id}</option>)}</select></label><ActionButton tone="emerald" onClick={refresh} disabled={refreshing} className="gap-1.5"><RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />{refreshing ? '同步中...' : '同步目录'}</ActionButton></div>
       </header>
       {message && <div className="px-4 pt-4 sm:px-5"><InlineNotice tone={message.tone} role={message.tone === 'red' ? 'alert' : undefined}>{message.text}</InlineNotice></div>}
@@ -227,13 +227,18 @@ export function ModelCatalogPanel({ providers, modelDefaults, onChanged }) {
           <table className="min-w-[760px] w-full text-left text-xs"><thead className="border-b border-slate-800 text-[10px] uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-2">Model ID</th><th className="px-3 py-2">Provider</th><th className="px-3 py-2">默认价格</th><th className="px-3 py-2">状态</th><th className="px-3 py-2">路由</th><th className="px-3 py-2">更新时间</th></tr></thead><tbody>{loading && <tr><td colSpan="6" className="px-3 py-8 text-center text-slate-600">加载中...</td></tr>}{!loading && catalog.length === 0 && <tr><td colSpan="6" className="px-3 py-8 text-center text-slate-600">目录为空；请先同步 Provider。</td></tr>}{catalog.map(model => {
             const provider = providers.find(item => item.id === model.provider)
             const configured = defaultsByModel.get(modelKey(model.provider, model.model))
-            return <tr key={model.id} onClick={() => setSelectedKey(model.id)} className={`cursor-pointer border-b border-slate-800/70 transition-colors last:border-0 ${selected?.id === model.id ? 'bg-indigo-500/10' : 'hover:bg-slate-800/30'}`}><td className="px-3 py-2.5 font-mono text-slate-200">{model.model}</td><td className="px-3 py-2.5"><div className="flex items-center gap-2"><span className="text-slate-400">{model.provider}</span>{provider && <DriverBadge driver={provider.driver_type} />}</div></td><td className="px-3 py-2.5">{configured ? <PricingPills inputCost={configured.cost_input_1m} outputCost={configured.cost_output_1m} /> : <span className="text-amber-400/80">待配置</span>}</td><td className="px-3 py-2.5"><div className="flex flex-wrap gap-1">{model.stale ? <StatePill ok={false}>stale</StatePill> : <StatePill ok>verified</StatePill>}{configured?.fallback_only && <StatePill neutral>仅兜底</StatePill>}</div></td><td className="px-3 py-2.5 text-slate-500">{configured?.route_references?.join(', ') || '-'}</td><td className="px-3 py-2.5 text-[10px] text-slate-600">{formatTime(model.updated_at)}</td></tr>
+            return <tr key={model.id} onClick={() => setSelectedKey(model.id)} className={`cursor-pointer border-b border-slate-800/70 transition-colors last:border-0 ${selected?.id === model.id ? 'bg-indigo-500/10' : 'hover:bg-slate-800/30'}`}><td className="px-3 py-2.5 font-mono text-slate-200">{model.model}</td><td className="px-3 py-2.5"><div className="flex items-center gap-2"><span className="text-slate-400">{model.provider}</span>{provider && <DriverBadge driver={provider.driver_type} />}</div></td><td className="px-3 py-2.5">{configured ? <PricingPills inputCost={configured.cost_input_1m} outputCost={configured.cost_output_1m} /> : <span className="text-amber-400/80">待配置</span>}</td><td className="px-3 py-2.5"><div className="flex flex-wrap gap-1">{model.stale ? <StatePill ok={false}>目录过期</StatePill> : <StatePill ok>目录已确认</StatePill>}{model.routing_evidence?.verified ? <StatePill ok>路由已验证</StatePill> : <StatePill ok={false}>仅目录身份</StatePill>}{configured?.fallback_only && <StatePill neutral>仅兜底</StatePill>}</div></td><td className="px-3 py-2.5 text-slate-500">{configured?.route_references?.join(', ') || '-'}</td><td className="px-3 py-2.5 text-[10px] text-slate-600">{formatTime(model.updated_at)}</td></tr>
           })}</tbody></table>
         </div>
 
         <aside className="min-w-0 bg-slate-950/40 p-4 sm:p-5">
           {!draft ? <p className="text-xs text-slate-600">选择一个目录模型进行配置。</p> : <div className="space-y-4">
             <div><div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold text-slate-100">模型默认值</h3><StatePill ok={defaultsByModel.has(modelKey(draft.provider_id, draft.model))}> {defaultsByModel.has(modelKey(draft.provider_id, draft.model)) ? '已配置' : '新配置'} </StatePill></div><p className="mt-1 break-all font-mono text-[10px] text-slate-500">{draft.provider_id}/{draft.model}</p></div>
+            <InlineNotice tone={selected?.routing_evidence?.verified ? 'emerald' : 'amber'}>
+              {selected?.routing_evidence?.verified
+                ? `路由证据：${selected.routing_evidence.source || 'operator_model_config'}。能力标签来自显式模型配置。`
+                : '当前只有上游目录身份，不能据 Model ID 猜测能力，也不会直接进入运行候选；请核验后保存显式配置。'}
+            </InlineNotice>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
               <FormField id="model-default-name" label="显示名称"><input id="model-default-name" value={draft.display_name} onChange={event => setDraft(current => ({ ...current, display_name: event.target.value }))} className={inputClass} /></FormField>
               <FormField id="model-default-intelligence" label="智能度 0-15"><input id="model-default-intelligence" type="number" min="0" max="15" value={draft.intelligence} onChange={event => setDraft(current => ({ ...current, intelligence: event.target.value }))} className={inputClass} /></FormField>

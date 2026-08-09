@@ -30,9 +30,11 @@ export function LLMApiLogsPage() {
   const [runFilter, setRunFilter] = useState('')
   const [traceFilter, setTraceFilter] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
+  const [providerFilter, setProviderFilter] = useState('')
   const [modelFilter, setModelFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [cacheFilter, setCacheFilter] = useState('')
+  const [errorCategoryFilter, setErrorCategoryFilter] = useState('')
   const [openId, setOpenId] = useState(null)
   const [detailsById, setDetailsById] = useState({})
   const [loadingDetailId, setLoadingDetailId] = useState(null)
@@ -43,11 +45,13 @@ export function LLMApiLogsPage() {
     if (runFilter) params.run_id = runFilter
     if (traceFilter) params.trace_id = traceFilter
     if (sourceFilter) params.source = sourceFilter
+    if (providerFilter) params.provider = providerFilter
     if (modelFilter) params.model = modelFilter
     if (statusFilter) params.status = statusFilter
     if (cacheFilter) params.cache_status = cacheFilter
+    if (errorCategoryFilter) params.error_category = errorCategoryFilter
     api.get('/llm-api-logs', { params }).then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0); setStats(r.data.stats || null) }).catch(() => {})
-  }, [page, runFilter, traceFilter, sourceFilter, modelFilter, statusFilter, cacheFilter])
+  }, [page, runFilter, traceFilter, sourceFilter, providerFilter, modelFilter, statusFilter, cacheFilter, errorCategoryFilter])
   useEffect(() => { load() }, [load])
   const openLog = (logId) => {
     if (openId === logId) {
@@ -112,6 +116,10 @@ export function LLMApiLogsPage() {
           <input id="llm-log-source-filter" value={sourceFilter} onChange={e => { setSourceFilter(e.target.value); setPage(1) }}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
         </Field>
+        <Field id="llm-log-provider-filter" label="Provider" className="w-full sm:w-32">
+          <input id="llm-log-provider-filter" value={providerFilter} onChange={e => { setProviderFilter(e.target.value); setPage(1) }}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
+        </Field>
         <Field id="llm-log-model-filter" label="model" className="w-full sm:w-44">
           <input id="llm-log-model-filter" value={modelFilter} onChange={e => { setModelFilter(e.target.value); setPage(1) }}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
@@ -140,9 +148,16 @@ export function LLMApiLogsPage() {
             <option value="error">调用失败</option>
           </select>
         </Field>
+        <Field id="llm-log-error-category-filter" label="错误类别" className="w-full sm:w-40">
+          <select id="llm-log-error-category-filter" value={errorCategoryFilter} onChange={e => { setErrorCategoryFilter(e.target.value); setPage(1) }}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm">
+            <option value="">全部错误类别</option>
+            {['none', 'configuration', 'dns', 'connect', 'tls', 'authentication', 'not_found', 'rate_limit', 'invalid_request', 'capability', 'timeout', 'upstream', 'response_protocol', 'circuit_open', 'cancelled', 'unknown'].map(category => <option key={category} value={category}>{category}</option>)}
+          </select>
+        </Field>
         <ActionButton onClick={load} className="mb-0.5">刷新</ActionButton>
       </Toolbar>
-      <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-11">
+      <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-8 2xl:grid-cols-16">
         <MiniStat label={stats ? '筛选总数' : '当前页总数'} value={pageStats.total} />
         <MiniStat label="success" value={pageStats.success} tone="emerald" />
         <MiniStat label="failed/error" value={pageStats.failed_error ?? pageStats.failed} tone={(pageStats.failed_error ?? pageStats.failed) ? 'red' : 'slate'} />
@@ -153,13 +168,17 @@ export function LLMApiLogsPage() {
         <MiniStat label="未命中 tokens" value={pageStats.cache_miss_tokens ?? 0} tone={(pageStats.cache_miss_tokens ?? 0) ? 'amber' : 'slate'} />
         <MiniStat label="Token 命中率" value={pageStats.cache_hit_token_ratio == null ? '-' : `${(pageStats.cache_hit_token_ratio * 100).toFixed(1)}%`} tone={(pageStats.cache_hit_token_ratio ?? 0) >= 0.5 ? 'emerald' : 'amber'} />
         <MiniStat label="平均延迟" value={avgLatency ? `${avgLatency}ms` : '-'} />
+        <MiniStat label="首 token 延迟" value={pageStats.avg_first_token_latency_ms ? `${pageStats.avg_first_token_latency_ms}ms` : '-'} />
+        <MiniStat label="输入 tokens" value={pageStats.input_tokens ?? 0} />
+        <MiniStat label="输出 tokens" value={pageStats.output_tokens ?? 0} />
+        <MiniStat label="成本" value={`$${((pageStats.cost_microusd ?? 0) / 1_000_000).toFixed(6)}`} />
         <MiniStat label="未绑定 run" value={pageStats.unbound_run_count ?? pageStats.unbound} tone={(pageStats.unbound_run_count ?? pageStats.unbound) ? 'amber' : 'slate'} />
       </div>
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="viewport-scroll min-h-0 flex-1 overflow-auto">
-        <table className="min-w-[980px] w-full text-sm">
+        <table className="min-w-[1180px] w-full text-sm">
           <thead className="sticky top-0 z-10 bg-slate-900"><tr className="text-left text-slate-500 border-b border-slate-800">
-            <th className="py-2 px-3">状态</th><th className="py-2 px-3">缓存</th><th className="py-2 px-3">source</th><th className="py-2 px-3">model</th><th className="py-2 px-3">run</th><th className="py-2 px-3">耗时</th><th className="py-2 px-3">时间</th><th className="py-2 px-3">摘要</th>
+            <th className="py-2 px-3">状态</th><th className="py-2 px-3">错误类别</th><th className="py-2 px-3">缓存</th><th className="py-2 px-3">Provider</th><th className="py-2 px-3">source</th><th className="py-2 px-3">model</th><th className="py-2 px-3">run</th><th className="py-2 px-3">耗时</th><th className="py-2 px-3">时间</th><th className="py-2 px-3">摘要</th>
           </tr></thead>
           <tbody>
             {items.map(ll => {
@@ -176,7 +195,9 @@ export function LLMApiLogsPage() {
                 <tr className="border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/30"
                   onClick={() => openLog(ll.id)}>
                   <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${statusTone === 'emerald' ? 'bg-emerald-500/10 text-emerald-300' : statusTone === 'blue' ? 'bg-blue-500/10 text-blue-300' : statusTone === 'red' ? 'bg-red-500/10 text-red-300' : 'bg-slate-500/10 text-slate-400'}`}>{ll.status || '-'}</span></td>
+                  <td className="py-2 px-3"><span className={`whitespace-nowrap rounded px-1.5 py-0.5 font-mono text-[10px] ${ll.error_category && ll.error_category !== 'none' ? 'bg-red-500/10 text-red-300' : 'bg-slate-500/10 text-slate-500'}`}>{ll.error_category || 'none'}</span></td>
                   <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs whitespace-nowrap ${cacheMeta.className}`}>{cacheMeta.label}{ll.cache_status === 'hit' ? ` · ${ll.cache_hit_tokens || 0}` : ll.cache_status === 'miss' ? ` · ${ll.cache_miss_tokens || 0}` : ''}</span></td>
+                  <td className="py-2 px-3 font-mono text-xs text-slate-400">{ll.provider || '-'}</td>
                   <td className="py-2 px-3 text-slate-200">{ll.source || '-'}</td>
                   <td className="py-2 px-3 text-slate-400 max-w-40 truncate">{ll.model || '-'}</td>
                   <td className="py-2 px-3 text-xs text-slate-500 max-w-32 truncate font-mono">{ll.run_id ? ll.run_id.slice(0, 16) : <span className="text-amber-500">未绑定</span>}</td>
@@ -191,7 +212,7 @@ export function LLMApiLogsPage() {
                 </tr>
                 {openId === ll.id && (
                 <tr className="border-b border-slate-800/50 bg-slate-900/50">
-                  <td colSpan={8} className="p-4">
+                  <td colSpan={10} className="p-4">
                     {loadingDetailId === ll.id && (
                       <div className="py-8 text-center text-sm text-slate-500">
                         正在加载完整 request_json / response_json...

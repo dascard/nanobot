@@ -23,6 +23,7 @@ from config import (
     NEW_API_MODEL_SYNC_INTERVAL_MINUTES,
 )
 from clients.model_registry import (
+    CAPABILITY_FIELDS,
     ModelFailureTracker,
     registry,
     model_cost_value,
@@ -359,6 +360,7 @@ class NewAPIClient:
                 ProviderCapability.TOOL_CALLING,
                 ProviderCapability.VISION,
                 ProviderCapability.REASONING_CONTENT,
+                ProviderCapability.CACHE_USAGE,
             }),
             aliases=("new-api",),
             implementation="new_api_client",
@@ -521,9 +523,6 @@ class NewAPIClient:
             "tags": tags_list,
             "description": desc,
             "intelligence": intelligence,
-            "supports_image": "vision" in tags_list or "multimodal" in tags_list,
-            "supports_tools": True,
-            "supports_stream": True,
         }
 
     def _apply_model_override(self, model_id: str, base: dict[str, Any]) -> dict[str, Any]:
@@ -566,6 +565,30 @@ class NewAPIClient:
 
         merged = dict(base)
         merged.update(override)
+        evidence = dict(base.get("capability_evidence") or {})
+        nested_capabilities = override.get("capabilities")
+        nested_capabilities = (
+            nested_capabilities
+            if isinstance(nested_capabilities, dict)
+            else {}
+        )
+        for field in CAPABILITY_FIELDS:
+            short = field.removeprefix("supports_")
+            if (
+                isinstance(override.get(field), bool)
+                or isinstance(
+                    nested_capabilities.get(
+                        short,
+                        nested_capabilities.get(field),
+                    ),
+                    bool,
+                )
+            ):
+                evidence[field] = "curated_override"
+        merged["capability_evidence"] = evidence
+        if str(override.get("metadata_source") or "").strip():
+            merged["routing_verified"] = True
+            merged["routing_evidence"] = "curated_override"
         if "tags" in base and "tags" in override and isinstance(base["tags"], list) and isinstance(override["tags"], list):
             merged["tags"] = sorted(set([*base["tags"], *override["tags"]]))
         # Clean up contradictory free/paid tags and regenerate description
@@ -653,7 +676,33 @@ class NewAPIClient:
                             "tags": profile["tags"],
                             "description": api_desc or profile["description"],
                             "reasoning": api_owned_by or "Auto-discovered from new-api /models",
+                            "routing_verified": False,
+                            "routing_evidence": "catalog_identity_only",
                         }
+                        raw_capabilities = item.get("capabilities")
+                        raw_capabilities = (
+                            raw_capabilities
+                            if isinstance(raw_capabilities, dict)
+                            else {}
+                        )
+                        capability_evidence: dict[str, str] = {}
+                        for field in CAPABILITY_FIELDS:
+                            short = field.removeprefix("supports_")
+                            raw_capability = item.get(field)
+                            if not isinstance(raw_capability, bool):
+                                raw_capability = raw_capabilities.get(
+                                    short,
+                                    raw_capabilities.get(field),
+                                )
+                            if isinstance(raw_capability, bool):
+                                base_model[field] = raw_capability
+                                capability_evidence[field] = (
+                                    "provider_catalog"
+                                )
+                        if capability_evidence:
+                            base_model["capability_evidence"] = (
+                                capability_evidence
+                            )
                         models.append(self._apply_model_override(str(model_id), base_model))
 
                     tiers = {}
@@ -882,6 +931,8 @@ class NewAPIClient:
             if "unstable" in tags:
                 continue
             if m.get("enabled", True) is False:
+                continue
+            if m.get("routing_verified") is False:
                 continue
             if avoid_tags_set and any(at in tags for at in avoid_tags_set):
                 continue

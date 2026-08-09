@@ -28,6 +28,38 @@ import {
   inputClass,
 } from './modelConsoleUi'
 
+const CAPABILITY_LABELS = {
+  chat_completion: 'Chat',
+  streaming: 'Stream',
+  tool_calling: 'Tool',
+  vision: 'Image',
+  reasoning_content: 'Reasoning',
+  cache_usage: 'Cache',
+}
+
+const DIAGNOSTIC_LAYER_LABELS = {
+  configuration: '配置',
+  dns: 'DNS',
+  transport: 'TCP',
+  tls: 'TLS',
+  authentication: '认证',
+  catalog: '模型目录',
+  model: '模型确认',
+  completion: '最小生成',
+  stream: '流式',
+  tool: '工具调用',
+  image: '图像输入',
+}
+
+function formatPercent(value) {
+  return value == null ? '暂无' : `${(Number(value) * 100).toFixed(1)}%`
+}
+
+function formatCost(microusd) {
+  const value = Number(microusd || 0) / 1_000_000
+  return `$${value.toFixed(value >= 0.01 ? 4 : 6)}`
+}
+
 function emptyProvider() {
   return {
     id: '',
@@ -141,7 +173,9 @@ export function ProviderConnectionsPanel({ providers, driverTypes, nativeTools, 
       const endpoint = kind === 'catalog'
         ? `/models/providers/${encodeURIComponent(draft.id)}/catalog/refresh`
         : `/models/providers/${encodeURIComponent(draft.id)}/test`
-      const response = await api.post(endpoint)
+      const response = kind === 'catalog'
+        ? await api.post(endpoint)
+        : await api.post(endpoint, { live_completion: true })
       const ok = kind === 'catalog'
         ? response.data.results?.[0]?.ok !== false
         : response.data.ok
@@ -213,8 +247,8 @@ export function ProviderConnectionsPanel({ providers, driverTypes, nativeTools, 
               {!draft.creating && draft.driver_type === 'openai' && (
                 <ActionButton type="button" onClick={() => runOperation('catalog')} disabled={operation?.loading}>同步目录</ActionButton>
               )}
-              {!draft.creating && draft.driver_type === 'openai' && (
-                <ActionButton type="button" tone="blue" onClick={() => runOperation('test')} disabled={operation?.loading}>测试连接</ActionButton>
+              {!draft.creating && (
+                <ActionButton type="button" tone="blue" onClick={() => runOperation('test')} disabled={operation?.loading}>分层诊断</ActionButton>
               )}
               <ActionButton type="submit" tone="emerald" disabled={saving} className="gap-1.5"><Save className="h-3.5 w-3.5" aria-hidden="true" />{saving ? '保存中...' : '保存'}</ActionButton>
             </div>
@@ -311,9 +345,55 @@ export function ProviderConnectionsPanel({ providers, driverTypes, nativeTools, 
                 <div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">Driver</div><div className="mt-1 text-slate-200">{driverLabel(draft.driver_type)}</div><div className="mt-2 flex flex-wrap gap-1"><StatePill ok={currentDriver?.agent_runtime_supported && currentDriver?.runtime_available}>{currentDriver?.runtime_available ? 'KT Agent 就绪' : 'KT 依赖缺失'}</StatePill><StatePill ok={currentDriver?.route_completion_supported}>同步 Route</StatePill></div>{currentDriver?.runtime_unavailable_reason && <div className="mt-2 text-[10px] text-amber-300">{currentDriver.runtime_unavailable_reason}</div>}</div>
                 <div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">Credential</div><div className="mt-1 flex items-center gap-2 text-slate-300"><KeyRound className="h-3.5 w-3.5" aria-hidden="true" />{draft.credential_configured || draft.api_key_configured ? '已配置' : '未配置'}</div><div className="mt-1 text-[10px] text-slate-600">source: {draft.credential_source || 'none'}</div></div>
                 <div className="rounded-md border border-slate-800 bg-slate-950 p-3"><div className="text-[10px] text-slate-600">Catalog Snapshot</div><div className="mt-1 text-slate-300">{draft.catalog?.model_count || 0} 个模型</div><div className="mt-1 text-[10px] text-slate-600">更新：{formatTime(draft.catalog?.updated_at)}</div>{draft.catalog?.stale && <div className="mt-2 text-[10px] text-amber-300">上次同步失败，当前为旧快照</div>}</div>
+                <div className="rounded-md border border-slate-800 bg-slate-950 p-3">
+                  <div className="text-[10px] text-slate-600">Protocol Descriptor</div>
+                  <div className="mt-1 break-all font-mono text-[10px] text-slate-300">{draft.descriptor?.request_protocol || 'unknown'}</div>
+                  <div className="mt-1 break-all font-mono text-[10px] text-slate-500">{draft.descriptor?.request_path || '-'}</div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {(draft.descriptor?.capabilities || []).map(capability => (
+                      <span key={capability} title={draft.descriptor?.capability_evidence?.[capability] || ''} className="rounded border border-cyan-500/20 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] text-cyan-300">
+                        {CAPABILITY_LABELS[capability] || capability}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-2 text-[10px] leading-4 text-slate-600">能力来自实际 Adapter 合同，不根据 Model ID 猜测。</div>
+                </div>
+                <div className="rounded-md border border-slate-800 bg-slate-950 p-3">
+                  <div className="flex items-center justify-between gap-2"><div className="text-[10px] text-slate-600">Runtime Evidence</div><div className="text-[10px] text-slate-600">近 {draft.runtime_evidence?.window_days || 30} 天</div></div>
+                  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                    <span className="text-slate-500">请求 / 成功率</span><span className="text-right text-slate-300">{draft.runtime_evidence?.requests || 0} / {formatPercent(draft.runtime_evidence?.success_rate)}</span>
+                    <span className="text-slate-500">首 token / 总延迟</span><span className="text-right text-slate-300">{draft.runtime_evidence?.avg_first_token_latency_ms || 0} / {draft.runtime_evidence?.avg_total_latency_ms || 0} ms</span>
+                    <span className="text-slate-500">输入 / 输出 token</span><span className="text-right text-slate-300">{draft.runtime_evidence?.input_tokens || 0} / {draft.runtime_evidence?.output_tokens || 0}</span>
+                    <span className="text-slate-500">缓存 token 命中率</span><span className="text-right text-slate-300">{formatPercent(draft.runtime_evidence?.cache_hit_token_ratio)}</span>
+                    <span className="text-slate-500">累计成本</span><span className="text-right text-slate-300">{formatCost(draft.runtime_evidence?.cost_microusd)}</span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {(draft.runtime_evidence?.observed_capabilities || []).map(capability => (
+                      <span key={capability} className="rounded border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300" title="成功 LLM Trace 正向观测">
+                        已观测 {CAPABILITY_LABELS[capability] || capability}
+                      </span>
+                    ))}
+                    {!draft.runtime_evidence?.observed_capabilities?.length && <span className="text-[10px] text-slate-600">尚无成功 Trace；不据此判定能力缺失。</span>}
+                  </div>
+                  {Object.entries(draft.runtime_evidence?.by_error_category || {}).filter(([category, count]) => category !== 'none' && count > 0).length > 0 && (
+                    <div className="mt-2 text-[10px] leading-4 text-amber-300">错误：{Object.entries(draft.runtime_evidence.by_error_category).filter(([category, count]) => category !== 'none' && count > 0).map(([category, count]) => `${category} ${count}`).join(' · ')}</div>
+                  )}
+                </div>
               </div>
               {operation && !operation.loading && (
-                <div className="mt-3" aria-live="polite"><InlineNotice tone={operation.ok ? 'emerald' : 'red'}>{operation.ok ? (operation.kind === 'catalog' ? '模型目录同步完成' : `连接测试通过，${operation.data?.latency_ms || 0}ms`) : operation.error || operation.data?.error || '操作失败'}</InlineNotice></div>
+                <div className="mt-3 space-y-2" aria-live="polite">
+                  <InlineNotice tone={operation.ok ? 'emerald' : 'red'}>{operation.ok ? (operation.kind === 'catalog' ? '模型目录同步完成' : `分层诊断完成，状态 ${operation.data?.status || 'ready'}，累计 ${operation.data?.latency_ms || 0}ms`) : operation.error || operation.data?.error || '操作失败'}</InlineNotice>
+                  {operation.kind === 'test' && operation.data?.checks?.length > 0 && (
+                    <ol className="space-y-1 rounded-md border border-slate-800 bg-slate-950 p-2">
+                      {operation.data.checks.map(check => (
+                        <li key={check.layer} className="flex items-start justify-between gap-2 text-[10px]">
+                          <span className={check.status === 'failed' ? 'text-red-300' : check.status === 'passed' ? 'text-emerald-300' : 'text-slate-500'}>{DIAGNOSTIC_LAYER_LABELS[check.layer] || check.layer} · {check.status}</span>
+                          <span className="text-right text-slate-600">{check.latency_ms || 0}ms{check.category && check.category !== 'none' ? ` · ${check.category}` : ''}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
               )}
               {operation?.loading && <div className="mt-3 flex items-center gap-2 text-xs text-slate-500"><RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />{operation.kind === 'catalog' ? '同步中...' : '测试中...'}</div>}
               {!draft.enabled && <div className="mt-3"><InlineNotice tone="amber"><Unplug className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />此连接已停用，关联模型不会进入 Route Binding 运行候选。</InlineNotice></div>}

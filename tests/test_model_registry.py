@@ -91,7 +91,10 @@ class TestSelectModel:
         assert saved["cost_input_1m"] == 999.0
         assert saved["cost_output_1m"] == 999.0
 
-    def test_add_or_update_many_normalizes_capability_defaults(self, monkeypatch):
+    def test_add_or_update_many_does_not_guess_capabilities_from_model_name(
+        self,
+        monkeypatch,
+    ):
         r = _make_registry([])
         monkeypatch.setattr(r, "save_registry", lambda: None)
 
@@ -118,12 +121,35 @@ class TestSelectModel:
 
         vision = r.get_model_info("qwen/qwen-vl-plus")
         text = r.get_model_info("legacy/text-only")
-        assert vision["supports_image"] is True
-        assert vision["supports_tools"] is True
-        assert vision["supports_stream"] is True
+        assert vision["supports_image"] is False
+        assert vision["supports_tools"] is False
+        assert vision["supports_stream"] is False
         assert text["supports_image"] is False
-        assert text["supports_tools"] is True
-        assert text["supports_stream"] is True
+        assert text["supports_tools"] is False
+        assert text["supports_stream"] is False
+        assert set(vision["capability_evidence"].values()) == {"unknown"}
+
+    def test_explicit_capability_fields_create_verified_evidence(
+        self,
+        monkeypatch,
+    ):
+        r = _make_registry([])
+        monkeypatch.setattr(r, "save_registry", lambda: None)
+
+        r.add_or_update_model({
+            "id": "explicit-model",
+            "provider": "x",
+            "supports_image": True,
+            "supports_tools": False,
+            "supports_stream": True,
+        })
+
+        saved = r.get_model_info("explicit-model")
+        assert saved["capability_evidence"] == {
+            "supports_image": "explicit_descriptor",
+            "supports_tools": "explicit_descriptor",
+            "supports_stream": "explicit_descriptor",
+        }
 
     def test_replace_provider_models_replaces_snapshot_and_keeps_other_provider(
         self,

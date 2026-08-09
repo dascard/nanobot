@@ -271,6 +271,14 @@ class ModelPreset:
             "driver_type": driver_type,
             "provider_enabled": provider_enabled,
             "credential_configured": credential_configured,
+            "capability_evidence": {
+                key: "operator_model_config"
+                for key in sorted(self.capabilities)
+            },
+            "routing_evidence": {
+                "verified": True,
+                "source": "operator_model_config",
+            },
             "updated_at": self.updated_at,
         }
 

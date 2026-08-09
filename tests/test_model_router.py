@@ -879,6 +879,54 @@ class TestPriorityScore:
 
         assert [m["id"] for m in candidates] == ["fast-tool"]
 
+    def test_ordered_candidates_excludes_catalog_identity_without_routing_evidence(
+        self,
+        monkeypatch,
+    ):
+        from clients import new_api_client as module
+        from clients.new_api_client import NewAPIClient
+
+        class FakeRegistry:
+            def get_models_by_provider(self, provider):
+                assert provider == "x"
+                return [
+                    {
+                        "id": "name-looks-smart-vision",
+                        "provider": "x",
+                        "intelligence": 15,
+                        "cost_input_1m": 0,
+                        "routing_verified": False,
+                        "routing_evidence": "catalog_identity_only",
+                        "supports_image": True,
+                        "capability_evidence": {
+                            "supports_image": "provider_catalog"
+                        },
+                    },
+                    {
+                        "id": "curated-model",
+                        "provider": "x",
+                        "intelligence": 7,
+                        "cost_input_1m": 0.2,
+                        "routing_verified": True,
+                        "routing_evidence": "curated_override",
+                    },
+                ]
+
+        monkeypatch.setattr(module, "registry", FakeRegistry())
+        monkeypatch.setattr(NewAPIClient, "_failure_tracker", None)
+        monkeypatch.setattr(
+            NewAPIClient,
+            "_safe_get_failure_tracker",
+            lambda self: None,
+        )
+
+        client = NewAPIClient(api_key="test", base_url="http://test")
+
+        assert [
+            item["id"]
+            for item in client.get_ordered_candidates("x", intel_floor=1)
+        ] == ["curated-model"]
+
 
 class TestFailureTracker:
     def test_record_and_check(self):

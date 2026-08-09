@@ -106,6 +106,8 @@ def test_key_filters_have_labels_or_aria_labels():
     assert "id=\"llm-log-run-filter\"" in source
     assert "Field id=\"llm-log-status-filter\"" in source
     assert "Field id=\"llm-log-cache-filter\"" in source
+    assert "Field id=\"llm-log-provider-filter\"" in source
+    assert "Field id=\"llm-log-error-category-filter\"" in source
     assert "id=\"model-catalog-query\"" in source
     assert "htmlFor=\"model-catalog-provider\"" in source
     assert "Field id=\"session-config-platform-filter\"" in source
@@ -125,6 +127,11 @@ def test_llm_api_logs_expose_cache_result_and_token_counts():
     assert "ll.cache_miss_tokens" in page_source
     assert "cache_hit_token_ratio" in page_source
     assert "Token 命中率" in page_source
+    assert "params.provider = providerFilter" in page_source
+    assert "params.error_category = errorCategoryFilter" in page_source
+    assert "首 token 延迟" in page_source
+    assert "pageStats.cost_microusd" in page_source
+    assert "ll.error_category" in page_source
     assert "cache_details_json" in detail_source
     assert "缓存未命中 tokens" in detail_source
     assert "缓存写入 tokens" in detail_source
@@ -161,6 +168,10 @@ def test_model_provider_page_exposes_control_plane_lifecycle_and_key_actions():
     assert "api_key_configured" in source
     assert "route_completion_supported" in source
     assert "draft.catalog?.stale" in source
+    assert "Protocol Descriptor" in source
+    assert "Runtime Evidence" in source
+    assert "不根据 Model ID 猜测" in source
+    assert "operation.data?.checks" in source
 
 
 def test_model_console_exposes_catalog_defaults_bindings_and_operable_kt_workspace():
@@ -169,6 +180,8 @@ def test_model_console_exposes_catalog_defaults_bindings_and_operable_kt_workspa
     assert "Model Presets" not in source
     assert "模型预设" not in source
     assert "模型目录与默认配置" in source
+    assert "仅目录身份" in source
+    assert "不能据 Model ID 猜测能力" in source
     assert "api.put('/models/defaults'" in source
     assert "Route Binding" in source
     assert "provider_id" in source

@@ -2123,12 +2123,12 @@ class TestNanobotBridge:
         preferred_model = {
             "id": "override-model", "enabled": True, "provider": "new-api",
             "intelligence": 12, "cost_input_1m": 0.4, "tier": "smart",
-            "supports_stream": True,
+            "supports_stream": True, "supports_tools": True,
         }
         auto_model = {
             "id": "auto-model", "enabled": True, "provider": "new-api",
             "intelligence": 12, "cost_input_1m": 0.5, "tier": "smart",
-            "supports_stream": True,
+            "supports_stream": True, "supports_tools": True,
         }
         models = [auto_model]
         if preferred_known:
@@ -2668,7 +2668,12 @@ class TestNanobotBridge:
             record_success=AsyncMock(),
             record_failure=AsyncMock(),
         )
-        mock_registry.get_model_info.return_value = {"id": "manual-model", "enabled": True}
+        mock_registry.get_model_info.return_value = {
+            "id": "manual-model",
+            "enabled": True,
+            "supports_stream": True,
+            "supports_tools": True,
+        }
         mock_registry.get_models_by_provider.return_value = [{"id": "manual-model"}]
 
         mock_config = MagicMock()
@@ -2747,7 +2752,12 @@ class TestNanobotBridge:
             record_success=AsyncMock(),
             record_failure=AsyncMock(),
         )
-        mock_registry.get_model_info.return_value = {"id": "manual-model", "enabled": True}
+        mock_registry.get_model_info.return_value = {
+            "id": "manual-model",
+            "enabled": True,
+            "supports_stream": True,
+            "supports_tools": True,
+        }
         mock_registry.get_models_by_provider.return_value = [{"id": "manual-model"}]
 
         mock_config = MagicMock()

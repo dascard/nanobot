@@ -423,6 +423,7 @@ def test_admin_prompt_and_trace_endpoints(
         trace_id="trace-admin",
         run_id=run.run_id,
         source="replyer",
+        provider="newapi",
         model="model-a",
         request={"messages": [{"role": "user", "content": "输入"}]},
     )
@@ -438,6 +439,21 @@ def test_admin_prompt_and_trace_endpoints(
         response_status=200,
         status="success",
         latency_ms=7,
+    )
+    failed_llm_log_id = LLMRequestTracer.record_request(
+        trace_id="trace-provider-failure",
+        source="admin",
+        provider="newapi",
+        model="model-a",
+        request={"messages": [{"role": "user", "content": "失败输入"}]},
+    )
+    LLMRequestTracer.finish_request(
+        log_id=failed_llm_log_id,
+        response={"error": "上游正文不应进入列表"},
+        response_status=502,
+        status="failed",
+        error="HTTP 502 upstream failed",
+        latency_ms=11,
     )
     RunTracer.finish_run(run.run_id, status="error", error="boom", finished_at=_local_now())
 
@@ -596,13 +612,23 @@ def test_admin_prompt_and_trace_endpoints(
     assert llm_logs_resp.json()["stats"]["input_tokens"] == 20
     assert llm_logs_resp.json()["stats"]["output_tokens"] == 0
     assert llm_logs_resp.json()["stats"]["cost_microusd"] == 0
-    assert llm_logs_resp.json()["stats"]["by_provider"]["unknown"] == {
+    assert llm_logs_resp.json()["stats"]["by_error_category"] == {"none": 1}
+    assert llm_logs_resp.json()["stats"]["by_provider"]["newapi"] == {
         "requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "incomplete_requests": 0,
+        "success_rate": 1.0,
         "cache_hit_tokens": 16,
         "cache_miss_tokens": 4,
+        "cache_write_tokens": 0,
         "cache_hit_token_ratio": 0.8,
         "avg_first_token_latency_ms": 0,
+        "avg_total_latency_ms": 7,
+        "input_tokens": 20,
+        "output_tokens": 0,
         "cost_microusd": 0,
+        "by_error_category": {"none": 1},
     }
     llm_list_item = llm_logs_resp.json()["items"][0]
     assert llm_list_item["summary_only"] is True
@@ -613,6 +639,7 @@ def test_admin_prompt_and_trace_endpoints(
     assert llm_list_item["input_tokens"] == 20
     assert llm_list_item["first_token_latency_ms"] == 0
     assert llm_list_item["cost_source"] == "not_available"
+    assert llm_list_item["error_category"] == "none"
     assert "request_json" not in llm_list_item
     assert "response_json" not in llm_list_item
 
@@ -623,6 +650,20 @@ def test_admin_prompt_and_trace_endpoints(
     )
     assert cache_filtered_resp.status_code == 200
     assert cache_filtered_resp.json()["total"] == 1
+
+    provider_error_filtered = client.get(
+        "/api/v1/admin/llm-api-logs",
+        params={
+            "provider": "newapi",
+            "error_category": "upstream",
+        },
+        headers=auth_header,
+    )
+    assert provider_error_filtered.status_code == 200
+    assert provider_error_filtered.json()["total"] == 1
+    assert provider_error_filtered.json()["items"][0]["error_category"] == (
+        "upstream"
+    )
 
     llm_detail_resp = client.get(f"/api/v1/admin/llm-api-logs/{llm_log_id}", headers=auth_header)
     assert llm_detail_resp.status_code == 200, llm_detail_resp.text

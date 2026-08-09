@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from api.admin.common import verify_admin
@@ -459,9 +459,11 @@ def list_llm_api_logs(
     run_id: str = "",
     trace_id: str = "",
     source: str = "",
+    provider: str = "",
     model: str = "",
     status: str = "",
     cache_status: str = "",
+    error_category: str = "",
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
@@ -472,12 +474,16 @@ def list_llm_api_logs(
         q = q.filter(LLMApiRequestLog.trace_id == trace_id)
     if source:
         q = q.filter(LLMApiRequestLog.source == source)
+    if provider:
+        q = q.filter(LLMApiRequestLog.provider == provider)
     if model:
         q = q.filter(LLMApiRequestLog.model == model)
     if status:
         q = q.filter(LLMApiRequestLog.status == status)
     if cache_status:
         q = q.filter(LLMApiRequestLog.cache_status == cache_status)
+    if error_category:
+        q = q.filter(LLMApiRequestLog.error_category == error_category)
     total = q.count()
     by_status = {
         str(row[0] or "created"): int(row[1] or 0)
@@ -495,6 +501,15 @@ def list_llm_api_logs(
             func.count(LLMApiRequestLog.id),
         )
         .group_by(LLMApiRequestLog.cache_status)
+        .all()
+    }
+    by_error_category = {
+        str(row[0] or "none"): int(row[1] or 0)
+        for row in q.with_entities(
+            LLMApiRequestLog.error_category,
+            func.count(LLMApiRequestLog.id),
+        )
+        .group_by(LLMApiRequestLog.error_category)
         .all()
     }
     cache_token_totals = q.with_entities(
@@ -525,27 +540,75 @@ def list_llm_api_logs(
     provider_rows = q.with_entities(
         provider_name_expr,
         func.count(LLMApiRequestLog.id),
+        func.sum(case((LLMApiRequestLog.status.in_((
+            "success",
+            "stream_success",
+        )), 1), else_=0)),
+        func.sum(case((LLMApiRequestLog.status.in_((
+            "failed",
+            "error",
+            "stream_error",
+        )), 1), else_=0)),
         func.sum(LLMApiRequestLog.cache_hit_tokens),
         func.sum(LLMApiRequestLog.cache_miss_tokens),
+        func.sum(LLMApiRequestLog.cache_write_tokens),
         func.avg(func.nullif(LLMApiRequestLog.first_token_latency_ms, 0)),
+        func.avg(func.nullif(LLMApiRequestLog.latency_ms, 0)),
+        func.sum(LLMApiRequestLog.input_tokens),
+        func.sum(LLMApiRequestLog.output_tokens),
         func.sum(LLMApiRequestLog.cost_microusd),
     ).group_by(provider_name_expr).all()
+    provider_error_rows = q.with_entities(
+        provider_name_expr,
+        LLMApiRequestLog.error_category,
+        func.count(LLMApiRequestLog.id),
+    ).group_by(
+        provider_name_expr,
+        LLMApiRequestLog.error_category,
+    ).all()
+    provider_error_counts: dict[str, dict[str, int]] = {}
+    for provider_name, category, count in provider_error_rows:
+        provider_error_counts.setdefault(
+            str(provider_name or "unknown"),
+            {},
+        )[str(category or "none")] = int(count or 0)
     by_provider = {}
     for provider_row in provider_rows:
         provider_name = str(provider_row[0] or "unknown")
-        hit_tokens = int(provider_row[2] or 0)
-        miss_tokens = int(provider_row[3] or 0)
+        requests = int(provider_row[1] or 0)
+        successful_requests = int(provider_row[2] or 0)
+        failed_requests = int(provider_row[3] or 0)
+        hit_tokens = int(provider_row[4] or 0)
+        miss_tokens = int(provider_row[5] or 0)
         cache_tokens = hit_tokens + miss_tokens
         by_provider[provider_name] = {
-            "requests": int(provider_row[1] or 0),
+            "requests": requests,
+            "successful_requests": successful_requests,
+            "failed_requests": failed_requests,
+            "incomplete_requests": max(
+                0,
+                requests - successful_requests - failed_requests,
+            ),
+            "success_rate": (
+                round(successful_requests / requests, 6)
+                if requests > 0 else None
+            ),
             "cache_hit_tokens": hit_tokens,
             "cache_miss_tokens": miss_tokens,
+            "cache_write_tokens": int(provider_row[6] or 0),
             "cache_hit_token_ratio": (
                 round(hit_tokens / cache_tokens, 6)
                 if cache_tokens > 0 else None
             ),
-            "avg_first_token_latency_ms": int(provider_row[4] or 0),
-            "cost_microusd": int(provider_row[5] or 0),
+            "avg_first_token_latency_ms": int(provider_row[7] or 0),
+            "avg_total_latency_ms": int(provider_row[8] or 0),
+            "input_tokens": int(provider_row[9] or 0),
+            "output_tokens": int(provider_row[10] or 0),
+            "cost_microusd": int(provider_row[11] or 0),
+            "by_error_category": provider_error_counts.get(
+                provider_name,
+                {},
+            ),
         }
     unbound_run_count = q.filter(
         (LLMApiRequestLog.run_id.is_(None)) | (LLMApiRequestLog.run_id == "")
@@ -577,6 +640,7 @@ def list_llm_api_logs(
                 LLMApiRequestLog.response_preview,
                 LLMApiRequestLog.response_status,
                 LLMApiRequestLog.status,
+                LLMApiRequestLog.error_category,
                 LLMApiRequestLog.cache_status,
                 LLMApiRequestLog.cache_hit,
                 LLMApiRequestLog.cache_hit_tokens,
@@ -624,6 +688,7 @@ def list_llm_api_logs(
             "avg_first_token_latency_ms": int(avg_first_token_latency or 0),
             "unbound_run_count": unbound_run_count,
             "by_status": by_status,
+            "by_error_category": by_error_category,
             "cache_hit": by_cache_status.get("hit", 0),
             "cache_miss": by_cache_status.get("miss", 0),
             "cache_not_reported": by_cache_status.get("not_reported", 0),

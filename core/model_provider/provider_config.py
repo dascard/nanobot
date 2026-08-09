@@ -15,6 +15,11 @@ from types import MappingProxyType
 from typing import Any
 
 from core.db import system_setting_repository
+from core.model_provider.contracts import (
+    ProviderCapability,
+    ProviderDescriptor,
+    ProviderRequestProtocol,
+)
 from core.route_metadata import canonical_provider_id, is_deprecated_provider
 
 
@@ -151,6 +156,16 @@ class ProviderInstance:
     def credential_mode(self) -> str:
         return "oauth" if self.driver_type == "codex" else "api_key"
 
+    @property
+    def descriptor(self) -> ProviderDescriptor:
+        return provider_descriptor_for_driver(
+            self.driver_type,
+            provider_id=self.id,
+            display_name=self.display_name,
+            built_in=self.builtin,
+            aliases=self.aliases,
+        )
+
     def internal_view(self) -> dict[str, Any]:
         """供运行时使用的内部视图；调用方不得序列化到 API。"""
 
@@ -177,6 +192,7 @@ class ProviderInstance:
             "runtime_unavailable_reason": self.runtime_unavailable_reason,
             "model_discovery_supported": self.model_discovery_supported,
             "catalog": dict(self.catalog_status),
+            "descriptor": self.descriptor.metadata(),
         }
 
     def public_view(self) -> dict[str, Any]:
@@ -205,7 +221,61 @@ class ProviderInstance:
             "runtime_unavailable_reason": self.runtime_unavailable_reason,
             "model_discovery_supported": self.model_discovery_supported,
             "catalog": dict(self.catalog_status),
+            "descriptor": self.descriptor.metadata(),
         }
+
+
+def provider_descriptor_for_driver(
+    driver_type: str,
+    *,
+    provider_id: str,
+    display_name: str = "",
+    built_in: bool = False,
+    aliases: tuple[str, ...] = (),
+) -> ProviderDescriptor:
+    """从实际 Adapter 合同生成 Provider Descriptor，不读取模型名。"""
+
+    normalized = validate_driver_type(driver_type)
+    protocol, path, implementation = {
+        "openai": (
+            ProviderRequestProtocol.OPENAI_CHAT_COMPLETIONS,
+            "/chat/completions",
+            "openai_compatible",
+        ),
+        "anthropic": (
+            ProviderRequestProtocol.ANTHROPIC_MESSAGES,
+            "/messages",
+            "anthropic_native",
+        ),
+        "codex": (
+            ProviderRequestProtocol.OPENAI_RESPONSES,
+            "/responses",
+            "codex_oauth",
+        ),
+    }[normalized]
+    capabilities = frozenset({
+        ProviderCapability.CHAT_COMPLETION,
+        ProviderCapability.STREAMING,
+        ProviderCapability.TOOL_CALLING,
+        ProviderCapability.VISION,
+        ProviderCapability.REASONING_CONTENT,
+        ProviderCapability.CACHE_USAGE,
+    })
+    evidence = {
+        capability: f"{normalized}_adapter_contract"
+        for capability in capabilities
+    }
+    return ProviderDescriptor(
+        id=provider_id,
+        display_name=display_name or provider_id,
+        capabilities=capabilities,
+        aliases=aliases,
+        implementation=implementation,
+        built_in=built_in,
+        request_protocol=protocol,
+        request_path=path,
+        capability_evidence=evidence,
+    )
 
 
 def validate_provider_id(provider_id: str) -> str:
@@ -640,6 +710,16 @@ def provider_driver_catalog() -> list[dict[str, Any]]:
         available, reason = driver_runtime_status(item["id"])
         item["runtime_available"] = available
         item["runtime_unavailable_reason"] = reason
+        descriptor = provider_descriptor_for_driver(
+            item["id"],
+            provider_id=f"driver_{item['id']}",
+            display_name=str(item["label"]),
+        )
+        item["request_protocol"] = descriptor.request_protocol.value
+        item["request_path"] = descriptor.request_path
+        item["capabilities"] = sorted(
+            capability.value for capability in descriptor.capabilities
+        )
     return catalog
 
 
@@ -655,6 +735,7 @@ __all__ = [
     "provider_catalog_key",
     "provider_config_keys",
     "provider_driver_catalog",
+    "provider_descriptor_for_driver",
     "provider_setting_key",
     "validate_driver_type",
     "validate_provider_id",

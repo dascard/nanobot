@@ -14,6 +14,8 @@ from core.model_provider.preset_config import ResolvedModelPreset
 class KtPresetTransport(Protocol):
     provider_id: str
     driver_type: str
+    request_protocol: str
+    request_path: str
     profile_id: str
     model: str
     base_url: str
@@ -26,6 +28,8 @@ class KtPresetTransport(Protocol):
     service_tier: str
     enable_thinking: object
     capabilities: dict[str, bool]
+    capability_evidence: dict[str, str]
+    routing_evidence: str
     extra_headers: dict[str, str]
     extra_body: dict[str, Any]
     retry_policy: dict[str, Any]
@@ -94,6 +98,19 @@ def create_kt_provider(
     """根据解析后的 Preset 构建 KT OpenAI/Anthropic/Codex Provider。"""
 
     driver_type = str(transport.driver_type or "openai")
+    expected_protocol = {
+        "openai": "openai_chat_completions",
+        "anthropic": "anthropic_messages",
+        "codex": "openai_responses",
+    }.get(driver_type)
+    actual_protocol = str(
+        getattr(transport, "request_protocol", "") or expected_protocol or ""
+    )
+    if expected_protocol is None or actual_protocol != expected_protocol:
+        raise ValueError(
+            "Provider Driver 与冻结 request protocol 不一致: "
+            f"driver={driver_type} protocol={actual_protocol}"
+        )
     resolved_model = str(model_id or transport.model or "")
     retry_policy = dict(transport.retry_policy or {})
     max_retries = int(retry_policy.get("max_retries", 3))
@@ -296,6 +313,10 @@ def _transport_fingerprint(
     payload = {
         "provider_id": transport.provider_id,
         "driver_type": transport.driver_type,
+        "request_protocol": str(
+            getattr(transport, "request_protocol", "") or ""
+        ),
+        "request_path": str(getattr(transport, "request_path", "") or ""),
         "profile_id": transport.profile_id,
         "model": str(model_id or transport.model or ""),
         "base_url": transport.base_url,
@@ -310,6 +331,12 @@ def _transport_fingerprint(
         "service_tier": transport.service_tier,
         "enable_thinking": transport.enable_thinking,
         "capabilities": transport.capabilities,
+        "capability_evidence": dict(
+            getattr(transport, "capability_evidence", {}) or {}
+        ),
+        "routing_evidence": str(
+            getattr(transport, "routing_evidence", "") or ""
+        ),
         "extra_headers": transport.extra_headers,
         "extra_body": transport.extra_body,
         "retry_policy": transport.retry_policy,

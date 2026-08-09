@@ -109,6 +109,13 @@ class LLMApiRequestLog(Base):
     request_preview = Column(Text, default="")
     headers_json = Column(Text, default="{}")
     status = Column(String, index=True, default="created")
+    error_category = Column(
+        String(32),
+        nullable=False,
+        index=True,
+        default="none",
+        server_default=text("'none'"),
+    )
     cache_status = Column(
         String,
         nullable=False,

@@ -21,6 +21,15 @@ class ProviderCapability(StrEnum):
     TOOL_CALLING = "tool_calling"
     VISION = "vision"
     REASONING_CONTENT = "reasoning_content"
+    CACHE_USAGE = "cache_usage"
+
+
+class ProviderRequestProtocol(StrEnum):
+    """Provider Adapter 实际实现的请求协议。"""
+
+    OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
+    ANTHROPIC_MESSAGES = "anthropic_messages"
+    OPENAI_RESPONSES = "openai_responses"
 
 
 @dataclass(frozen=True)
@@ -34,6 +43,13 @@ class ProviderDescriptor:
     implementation: str = "openai_compatible"
     built_in: bool = False
     override_protected: bool = True
+    request_protocol: ProviderRequestProtocol = (
+        ProviderRequestProtocol.OPENAI_CHAT_COMPLETIONS
+    )
+    request_path: str = "/chat/completions"
+    capability_evidence: Mapping[ProviderCapability, str] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         if not _PROVIDER_ID_PATTERN.fullmatch(self.id):
@@ -42,6 +58,28 @@ class ProviderDescriptor:
             raise ValueError(f"provider {self.id} 必须声明 display_name")
         if not self.capabilities:
             raise ValueError(f"provider {self.id} 必须声明至少一项 capability")
+        capabilities = frozenset(ProviderCapability(item) for item in self.capabilities)
+        protocol = ProviderRequestProtocol(self.request_protocol)
+        request_path = str(self.request_path or "").strip()
+        if (
+            not request_path.startswith("/")
+            or "?" in request_path
+            or "#" in request_path
+        ):
+            raise ValueError(f"provider {self.id} request_path 无效")
+        raw_evidence = dict(self.capability_evidence)
+        evidence: dict[ProviderCapability, str] = {}
+        for capability in capabilities:
+            source = str(
+                raw_evidence.get(capability)
+                or raw_evidence.get(capability.value)
+                or "adapter_contract"
+            ).strip()
+            if not source or len(source) > 80:
+                raise ValueError(
+                    f"provider {self.id} capability evidence 无效: {capability.value}"
+                )
+            evidence[capability] = source
         normalized_aliases: list[str] = []
         for alias in self.aliases:
             if not _PROVIDER_ID_PATTERN.fullmatch(alias):
@@ -49,6 +87,14 @@ class ProviderDescriptor:
             if alias == self.id or alias in normalized_aliases:
                 raise ValueError(f"provider {self.id} 包含重复 alias: {alias!r}")
             normalized_aliases.append(alias)
+        object.__setattr__(self, "capabilities", capabilities)
+        object.__setattr__(self, "request_protocol", protocol)
+        object.__setattr__(self, "request_path", request_path)
+        object.__setattr__(
+            self,
+            "capability_evidence",
+            MappingProxyType(evidence),
+        )
 
     def supports(self, required: frozenset[ProviderCapability]) -> bool:
         return required.issubset(self.capabilities)
@@ -62,6 +108,15 @@ class ProviderDescriptor:
             "implementation": self.implementation,
             "built_in": self.built_in,
             "override_protected": self.override_protected,
+            "request_protocol": self.request_protocol.value,
+            "request_path": self.request_path,
+            "capability_evidence": {
+                capability.value: self.capability_evidence[capability]
+                for capability in sorted(
+                    self.capability_evidence,
+                    key=lambda item: item.value,
+                )
+            },
         }
 
     @property

@@ -17,6 +17,7 @@ _FAILURE_STATE_PATH = os.path.join(_DATA_DIR, "model_failures.json")
 _RUNTIME_STATE_PATH = os.path.join(_DATA_DIR, "runtime_state.json")
 UNKNOWN_MODEL_COST = 999.0
 CAPABILITY_FIELDS = ("supports_image", "supports_tools", "supports_stream")
+UNKNOWN_CAPABILITY_EVIDENCE = "unknown"
 
 
 def model_cost_value(value: Any, default: float = UNKNOWN_MODEL_COST) -> float:
@@ -121,14 +122,6 @@ def _model_tags(model: dict[str, Any]) -> list[str]:
     return [str(t).lower() for t in tags]
 
 
-def _infer_supports_image(model: dict[str, Any]) -> bool:
-    tags = set(_model_tags(model))
-    model_id = str(model.get("id") or "").lower()
-    if {"vision", "multimodal"} & tags:
-        return True
-    return any(marker in model_id for marker in ("vision", "vl", "omni"))
-
-
 def normalize_model_capability_fields(
     model: dict[str, Any],
     *,
@@ -137,19 +130,47 @@ def normalize_model_capability_fields(
     normalized = dict(model)
     nested = normalized.get("capabilities")
     nested_map = nested if isinstance(nested, dict) else {}
+    raw_evidence = normalized.get("capability_evidence")
+    evidence_map = raw_evidence if isinstance(raw_evidence, dict) else {}
+    fallback_evidence_raw = (
+        fallback.get("capability_evidence") if fallback is not None else {}
+    )
+    fallback_evidence = (
+        fallback_evidence_raw
+        if isinstance(fallback_evidence_raw, dict)
+        else {}
+    )
+    normalized_evidence: dict[str, str] = {}
 
     for field in CAPABILITY_FIELDS:
         short = field.removeprefix("supports_")
-        raw = normalized.get(field)
-        if raw is None:
+        direct = field in normalized and normalized.get(field) is not None
+        nested_present = (
+            short in nested_map or field in nested_map
+        ) and nested_map.get(short, nested_map.get(field)) is not None
+        raw = normalized.get(field) if direct else None
+        if raw is None and nested_present:
             raw = nested_map.get(short, nested_map.get(field))
+        used_fallback = False
         if raw is None and fallback is not None:
             raw = fallback.get(field)
+            used_fallback = raw is not None
 
         value = _coerce_optional_bool(raw)
         if value is None:
-            value = _infer_supports_image(normalized) if field == "supports_image" else True
+            value = False
         normalized[field] = value
+        if direct or nested_present:
+            source = str(evidence_map.get(field) or "explicit_descriptor")
+        elif used_fallback:
+            source = str(
+                fallback_evidence.get(field) or "inherited_descriptor"
+            )
+        else:
+            source = UNKNOWN_CAPABILITY_EVIDENCE
+        normalized_evidence[field] = source[:80]
+
+    normalized["capability_evidence"] = normalized_evidence
 
     return normalized
 
@@ -170,10 +191,14 @@ def model_supports_capabilities(
     if not required_capabilities:
         return True
     normalized = normalize_model_capability_fields(model)
+    evidence = normalized.get("capability_evidence") or {}
     for field, required in required_capabilities.items():
         if not required:
             continue
-        if normalized.get(field) is not True:
+        if (
+            normalized.get(field) is not True
+            or evidence.get(field) == UNKNOWN_CAPABILITY_EVIDENCE
+        ):
             return False
     return True
 
@@ -360,6 +385,27 @@ class ModelRegistry:
                     content = f.read()
                     if content.strip():
                         self.data = json.loads(content)
+                        source = (
+                            "checked_in_catalog"
+                            if load_path == MODEL_SEED_PATH
+                            else "runtime_catalog"
+                        )
+                        for model in self.data.get("models", []):
+                            if not isinstance(model, dict):
+                                continue
+                            if source == "checked_in_catalog":
+                                model.setdefault("routing_verified", True)
+                                model.setdefault(
+                                    "routing_evidence", source
+                                )
+                            elif "routing_verified" not in model:
+                                verified = bool(model.get("metadata_source"))
+                                model["routing_verified"] = verified
+                                model["routing_evidence"] = (
+                                    "curated_metadata"
+                                    if verified
+                                    else "legacy_unverified"
+                                )
                         self._log_all_models("loaded")
             else:
                 logger.warning(

@@ -1519,6 +1519,11 @@ class TestModelCatalog:
         data = r.json()
         assert "models" in data
         assert "last_updated" in data
+        if data["models"]:
+            model = data["models"][0]
+            assert "capability_evidence" in model
+            assert "routing_verified" in model
+            assert "routing_evidence" in model
 
     def test_patch_catalog_not_found(self, client, auth_header):
         r = client.patch("/api/v1/admin/model-catalog/nonexistent-model-xyz",
@@ -2460,6 +2465,14 @@ class TestModelProviderControlPlane:
             "urllib.request.build_opener",
             lambda *_args: FakeOpener(),
         )
+        monkeypatch.setattr(
+            "clients.provider_doctor._probe_dns",
+            lambda *_args: 1,
+        )
+        monkeypatch.setattr(
+            "clients.provider_doctor._probe_tcp",
+            lambda *_args: 1,
+        )
         created = client.post(
             "/api/v1/admin/models/providers",
             json={
@@ -2488,6 +2501,16 @@ class TestModelProviderControlPlane:
         result = refreshed.json()["results"][0]
         assert result["ok"] is True
         assert result["models"] == ["model-a", "model-b"]
+        catalog_entry = next(
+            item
+            for item in refreshed.json()["catalog"]
+            if item["model"] == "model-a"
+        )
+        assert catalog_entry["routing_evidence"] == {
+            "verified": False,
+            "source": "catalog_identity_only",
+        }
+        assert catalog_entry["capability_evidence"] == {}
         assert captured[-1][0] == "http://catalog-provider.test/v1/models"
         assert captured[-1][1]["Authorization"] == "Bearer catalog-secret"
 
@@ -2498,6 +2521,16 @@ class TestModelProviderControlPlane:
         provider = next(item for item in providers if item["id"] == "catalog_gateway")
         assert provider["catalog"]["model_count"] == 2
         assert provider["catalog"]["last_refresh_ok"] is True
+        assert provider["descriptor"]["request_protocol"] == (
+            "openai_chat_completions"
+        )
+        assert provider["descriptor"]["request_path"] == "/chat/completions"
+        assert provider["descriptor"]["capability_evidence"]["vision"] == (
+            "openai_adapter_contract"
+        )
+        assert provider["runtime_evidence"]["window_days"] == 30
+        assert provider["runtime_evidence"]["requests"] >= 0
+        assert "request_json" not in provider["runtime_evidence"]
 
     def test_disabled_provider_never_executes_network_probe(
         self,

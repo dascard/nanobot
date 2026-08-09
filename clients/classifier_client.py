@@ -870,15 +870,27 @@ def build_provider_catalog(db=None) -> list[dict]:
                     "verified": True,
                 }
                 if model_default is not None:
-                    entry["default_config"] = model_default.public_view()
+                    default_view = model_default.public_view()
+                    entry["default_config"] = default_view
                     entry["capabilities"] = [
                         name.removeprefix("supports_")
                         for name, enabled in model_default.capabilities.items()
                         if enabled
                     ]
+                    entry["capability_evidence"] = dict(
+                        default_view.get("capability_evidence") or {}
+                    )
+                    entry["routing_evidence"] = dict(
+                        default_view.get("routing_evidence") or {}
+                    )
                 else:
                     entry["default_config"] = None
                     entry["capabilities"] = []
+                    entry["capability_evidence"] = {}
+                    entry["routing_evidence"] = {
+                        "verified": False,
+                        "source": "catalog_identity_only",
+                    }
                 items.append(entry)
         return sorted(items, key=lambda x: x["model"])
     finally:

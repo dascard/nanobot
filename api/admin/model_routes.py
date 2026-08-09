@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Mapping
 import json
 import logging
-import time
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -40,6 +39,35 @@ def _setting_query(db: Session) -> SystemSettingQueryService:
 
 def _setting_command(db: Session) -> SystemSettingCommandService:
     return SystemSettingCommandService(system_setting_repository(db))
+
+
+def _provider_public_views(db: Session) -> list[dict[str, object]]:
+    """返回带近期运行证据的脱敏 Provider 视图。"""
+
+    from core.model_provider.provider_config import list_provider_instances
+    from clients.provider_runtime_evidence import (
+        summarize_provider_runtime_evidence,
+    )
+
+    providers = list_provider_instances(db)
+    runtime_evidence = summarize_provider_runtime_evidence(
+        db,
+        (provider.id for provider in providers),
+        aliases_by_provider={
+            provider.id: (
+                provider.id,
+                provider.registry_provider,
+                *provider.aliases,
+            )
+            for provider in providers
+        },
+    )
+    views: list[dict[str, object]] = []
+    for provider in providers:
+        view = provider.public_view()
+        view["runtime_evidence"] = runtime_evidence[provider.id]
+        views.append(view)
+    return views
 
 
 def _task_contract_views(
@@ -299,6 +327,12 @@ def get_model_catalog(_auth=Depends(verify_admin)):
             "description": m.get("description") or "",
             "enabled": bool(m.get("enabled", True)),
             "available": bool(m.get("available", True)),
+            "supports_stream": bool(m.get("supports_stream", False)),
+            "supports_tools": bool(m.get("supports_tools", False)),
+            "supports_image": bool(m.get("supports_image", False)),
+            "capability_evidence": dict(m.get("capability_evidence") or {}),
+            "routing_verified": bool(m.get("routing_verified", False)),
+            "routing_evidence": str(m.get("routing_evidence") or "unknown"),
         })
     return {"models": models, "last_updated": registry.data.get("last_updated", "never")}
 
@@ -312,16 +346,10 @@ def list_model_providers(
 ):
     """列出 Provider 实例和驱动能力（不返回原始凭据）。"""
 
-    from core.model_provider.provider_config import (
-        list_provider_instances,
-        provider_driver_catalog,
-    )
+    from core.model_provider.provider_config import provider_driver_catalog
 
     return {
-        "providers": [
-            provider.public_view()
-            for provider in list_provider_instances(db)
-        ],
+        "providers": _provider_public_views(db),
         "driver_types": provider_driver_catalog(),
     }
 
@@ -351,6 +379,15 @@ class ProviderUpdateBody(BaseModel):
     provider_name: str | None = Field(default=None, max_length=64)
     provider_native_tools: list[str] | None = Field(default=None, max_length=32)
     credential_action: Literal["keep", "replace", "clear"] = "keep"
+
+
+class ProviderDoctorBody(BaseModel):
+    model: str = Field(default="", max_length=160)
+    live_completion: bool = True
+    probe_stream: bool = False
+    probe_tools: bool = False
+    probe_image: bool = False
+    timeout_seconds: float = Field(default=10.0, ge=0.1, le=60)
 
 
 def _validated_provider_url(value: object) -> str:
@@ -838,56 +875,87 @@ def delete_model_provider(
 @router.post("/models/providers/{provider_id}/test")
 async def test_model_provider(
     provider_id: str,
+    body: ProviderDoctorBody | None = None,
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    """通过模型目录端点测试单个 Provider 的认证与连通性。"""
+    """执行配置、DNS、传输、TLS、认证、目录和 live 请求分层诊断。"""
 
-    from clients.provider_catalog import (
-        ProviderDiscoveryUnsupportedError,
-        discover_provider_models,
+    from clients.provider_doctor import (
+        ProviderDoctorOptions,
+        run_provider_doctor,
+    )
+    from core.model_provider.preset_config import (
+        list_model_defaults,
+        list_model_presets,
     )
     from core.model_provider.provider_config import get_provider_instance
-    from foundation.llm.safe_diagnostics import safe_response_summary
 
     provider = get_provider_instance(provider_id, db)
     if provider is None:
         raise HTTPException(404, f"unknown provider: {provider_id}")
+    request_body = body or ProviderDoctorBody()
+    managed_models = [
+        item
+        for item in (*list_model_defaults(db), *list_model_presets(db))
+        if item.provider_id == provider.id and item.enabled
+    ]
+    requested_model = str(request_body.model or "").strip()
+    selected = next(
+        (item for item in managed_models if item.model == requested_model),
+        None,
+    )
+    if not requested_model and managed_models:
+        selected = sorted(managed_models, key=lambda item: (item.model, item.id))[0]
+        requested_model = selected.model
+    model_capabilities = frozenset(
+        name
+        for name, enabled in dict(
+            getattr(selected, "capabilities", {}) or {}
+        ).items()
+        if enabled
+    )
+    report = await asyncio.to_thread(
+        run_provider_doctor,
+        provider,
+        ProviderDoctorOptions(
+            model=requested_model,
+            live_completion=request_body.live_completion,
+            probe_stream=request_body.probe_stream,
+            probe_tools=request_body.probe_tools,
+            probe_image=request_body.probe_image,
+            timeout_seconds=request_body.timeout_seconds,
+            model_capabilities=model_capabilities,
+        ),
+    )
+    payload = report.to_dict()
+    checks = payload["checks"]
+    failed = next(
+        (item for item in checks if item["status"] == "failed"),
+        None,
+    )
+    catalog = next(
+        (item for item in checks if item["layer"] == "catalog"),
+        {},
+    )
+    report_status = "ready" if report.ok else "failed"
     if not provider.enabled:
-        return {
-            "ok": False,
-            "provider_id": provider.id,
-            "status": "disabled",
-            "error": "Provider 已禁用",
-        }
-    started = time.monotonic()
-    try:
-        models = await asyncio.to_thread(
-            discover_provider_models,
-            provider.internal_view(),
-        )
-        return {
-            "ok": True,
-            "provider_id": provider.id,
-            "status": "ready",
-            "model_count": len(models),
-            "latency_ms": int((time.monotonic() - started) * 1000),
-        }
-    except ProviderDiscoveryUnsupportedError as exc:
-        return {
-            "ok": False,
-            "provider_id": provider.id,
-            "status": "unsupported",
-            "error": str(exc),
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "provider_id": provider.id,
-            "status": "failed",
-            "error": safe_response_summary(exc, max_chars=300),
-            "latency_ms": int((time.monotonic() - started) * 1000),
-        }
+        report_status = "disabled"
+    elif all(
+        item["status"] in {"passed", "skipped", "unsupported"}
+        for item in checks
+    ) and any(item["status"] == "unsupported" for item in checks):
+        report_status = "unsupported"
+    payload.update({
+        "status": report_status,
+        "error": str((failed or {}).get("summary") or ""),
+        "latency_ms": sum(int(item.get("latency_ms") or 0) for item in checks),
+        "model_count": int(
+            (catalog.get("metadata") or {}).get("model_count") or 0
+        ),
+        "model_descriptor_verified": selected is not None,
+    })
+    return payload
 
 
 # ── 模型目录 ──

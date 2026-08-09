@@ -11,6 +11,19 @@ from core.database import LLMApiRequestLog
 from core.tracing import _json_dumps
 
 
+def _stream_capable_candidate() -> dict:
+    """返回具有显式能力证据的流式路由测试候选。"""
+
+    return {
+        "id": "model-stream",
+        "intelligence": 7,
+        "supports_stream": True,
+        "capability_evidence": {
+            "supports_stream": "test_explicit_descriptor",
+        },
+    }
+
+
 def test_redact_authorization_header():
     text = _json_dumps({
         "Authorization": "Bearer abc123",
@@ -216,6 +229,7 @@ def test_finish_request_records_provider_cache_latency_and_cost(db_session):
     assert row.first_token_latency_ms == 72
     assert row.cost_microusd == 900
     assert row.cost_source == "pricing_estimate"
+    assert row.error_category == "none"
     details = json.loads(row.cache_details_json)
     assert details["cache_hit_ratio"] == 0.4
     assert details["cost"]["estimated"] is True
@@ -242,6 +256,7 @@ def test_finish_request_records_error_status(db_session):
 
     row = db_session.query(LLMApiRequestLog).filter_by(id=log_id).one()
     assert row.status == "error"
+    assert row.error_category == "upstream"
     assert row.response_status == 502
     assert row.error == "upstream failed"
     assert row.cache_status == "error"
@@ -1476,7 +1491,11 @@ def test_new_api_chat_completion_stream_finishes_request_on_success(monkeypatch)
     )
     monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
     monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
-    monkeypatch.setattr(NewAPIClient, "get_ordered_candidates", lambda self, **kwargs: [{"id": "model-stream", "intelligence": 7}])
+    monkeypatch.setattr(
+        NewAPIClient,
+        "get_ordered_candidates",
+        lambda self, **kwargs: [_stream_capable_candidate()],
+    )
     monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
 
     class _FakeContent:
@@ -1555,7 +1574,7 @@ def test_new_api_chat_completion_stream_requests_stream_capable_candidates(monke
 
     def fake_candidates(self, **kwargs):
         captured.update(kwargs)
-        return [{"id": "model-stream", "intelligence": 7}]
+        return [_stream_capable_candidate()]
 
     monkeypatch.setattr(NewAPIClient, "get_ordered_candidates", fake_candidates)
 
@@ -1623,7 +1642,11 @@ def test_new_api_client_uses_injected_session_for_chat_completion_stream(monkeyp
     )
     monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
     monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
-    monkeypatch.setattr(NewAPIClient, "get_ordered_candidates", lambda self, **kwargs: [{"id": "model-stream", "intelligence": 7}])
+    monkeypatch.setattr(
+        NewAPIClient,
+        "get_ordered_candidates",
+        lambda self, **kwargs: [_stream_capable_candidate()],
+    )
     monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
 
     class _FakeContent:
@@ -1702,7 +1725,11 @@ def test_new_api_chat_completion_stream_records_reasoning_metrics(monkeypatch):
     )
     monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
     monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
-    monkeypatch.setattr(NewAPIClient, "get_ordered_candidates", lambda self, **kwargs: [{"id": "model-stream", "intelligence": 7}])
+    monkeypatch.setattr(
+        NewAPIClient,
+        "get_ordered_candidates",
+        lambda self, **kwargs: [_stream_capable_candidate()],
+    )
     monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
 
     class _FakeContent:

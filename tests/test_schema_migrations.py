@@ -133,6 +133,7 @@ def test_schema_migrations_records_applied_versions():
         "first_token_latency_ms",
         "cost_microusd",
         "cost_source",
+        "error_category",
     } <= llm_log_columns
     reply_contract_columns = [col["name"] for col in inspector.get_columns("reply_contract_check_logs")]
     assert "reply_tool_call_count" in reply_contract_columns
@@ -696,6 +697,35 @@ def test_llm_provider_cache_performance_backfills_safe_metrics():
         "cost_microusd": 420,
         "cost_source": "provider_reported",
     }
+
+
+def test_llm_provider_error_category_migration_backfills_stable_categories():
+    from core.schema_migrations import _llm_provider_error_category
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE llm_api_request_logs ("
+            "id INTEGER PRIMARY KEY, status TEXT, response_status INTEGER, "
+            "error TEXT)"
+        ))
+        conn.execute(text(
+            "INSERT INTO llm_api_request_logs(id, status, response_status, error) "
+            "VALUES (1, 'error', 401, 'redacted'), "
+            "(2, 'stream_error', 429, 'redacted'), "
+            "(3, 'success', 200, '')"
+        ))
+
+        _llm_provider_error_category(conn, engine, None)
+        rows = conn.execute(text(
+            "SELECT id, error_category FROM llm_api_request_logs ORDER BY id"
+        )).mappings().all()
+
+    assert [dict(row) for row in rows] == [
+        {"id": 1, "error_category": "authentication"},
+        {"id": 2, "error_category": "rate_limit"},
+        {"id": 3, "error_category": "none"},
+    ]
 
 
 def test_block_session_memory_migration_adds_table_and_column():

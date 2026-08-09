@@ -139,6 +139,14 @@ def _validate_route(route: ReplyRoutePlan) -> None:
             f"Native Runtime 暂不支持 Reply Route Driver：{driver_type}；"
             "请将该会话灰度到 KT Runtime"
         )
+    if route.request_protocol != "openai_chat_completions":
+        raise ReplyRouteUnavailableError(
+            "Native Reply Route 只接受 openai_chat_completions Descriptor"
+        )
+    if route.request_path != "/chat/completions":
+        raise ReplyRouteUnavailableError(
+            "Native Reply Route request_path 与 Adapter 合同不一致"
+        )
     if not str(route.base_url or "").strip():
         raise ReplyRouteUnavailableError("Native Reply Route 缺少 Base URL")
     if route.profile_id and not str(route.model or "").strip():
