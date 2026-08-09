@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 10.5 已完成，准备阶段 11）
+> 状态：仓库内实施已完成；阶段 11.3 的真实 Sandbox 宿主隔离矩阵因外部条件阻塞（BLOCKED）
 >
 > 建立日期：2026-08-03
 >
@@ -540,10 +540,10 @@ Native Runtime 能独立提供主回复链路。从工作区移除的 submodule 
 
 - [x] 记录请求接纳、状态迁移、模型调用、工具调用、权限决定、usage、Artifact、交付和终止。
 - [x] 事件不可原地修改；纠正使用后续事件表达。
-- [ ] 会话、管理端、恢复和模型上下文通过投影生成。
+- [x] 会话、管理端、恢复和模型上下文通过投影生成。
 - [x] 事件 schema 带版本和迁移策略。
 
-阶段性实现证据（第三项仍需随恢复与 Context Engine 完成）：
+实现证据（第三项已随恢复、Durable Task 与 Context Engine 最终收口）：
 
 - 新增独立于可丢弃 Telemetry 的 `core/run_ledger/` 合同、SQLAlchemy Adapter 和
   `run_ledger_events`／`run_ledger_stream_heads` 迁移。事件按 Run 分配严格递增 sequence，
@@ -578,6 +578,11 @@ Native Runtime 能独立提供主回复链路。从工作区移除的 submodule 
   为 252 passed；最终完整 `python -m pytest tests/ -v` 为 6497 passed、12 skipped、0 failed。
   管理端漂移测试证明 legacy 状态和时间不能覆盖 Ledger；模型或工具入账失败不会触发第二次模型调用、
   Provider 健康度变更或普通工具错误归一化。
+- 最终收口复核（2026-08-09）：Durable Task 以只读投影恢复会话和执行 owner；管理端与离线 Run Viewer
+  只消费权威 Ledger 投影；Resume、Rewind、Fork 根据投影、Checkpoint 和 receipt 创建 child Run；模型
+  可见上下文由 Structured Context、Context Manifest 和 canonical Prompt Runtime 投影生成，Ledger 只保存
+  无正文的 Prompt／Context 固定点。Run Ledger、证据治理、恢复、Durable Task、Context Engine 和 Run
+  Viewer 联合回归为 54 passed，确认第三项不再停留在早期 shadow 切片。
 
 #### 4.2 隐私安全的运行证据
 
@@ -1591,28 +1596,54 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 11.1 明确延后或排除
 
-- [ ] 桌面/TUI 重做。
-- [ ] 通用低代码平台和完整 Agent 市场。
-- [ ] Orca 式代码 worktree fleet。
-- [ ] PostgreSQL 多租户迁移。
-- [ ] Kubernetes Sandbox、Computer Use 和全局知识图谱。
-- [ ] 只有出现明确需求和评测收益后，才为这些项目另立计划。
+- [x] 桌面/TUI 重做。
+- [x] 通用低代码平台和完整 Agent 市场。
+- [x] Orca 式代码 worktree fleet。
+- [x] PostgreSQL 多租户迁移。
+- [x] Kubernetes Sandbox、Computer Use 和全局知识图谱。
+- [x] 只有出现明确需求和评测收益后，才为这些项目另立计划。
+
+最终排除项复核（2026-08-09）：
+
+- 生产依赖、Compose、Dockerfile、`core/`、`app/`、`api/`、`nanobot_kt/` 和部署脚本均未引入
+  OpenSandbox、OpenShell、E2B、Kubernetes、Computer Use、知识图谱后端或 PostgreSQL 驱动；代码中的
+  PostgreSQL／Kubernetes 字样只存在于分类器样例、兼容 SQL 条件或测试夹具，不构成运行依赖。
+- 仓库没有 `.gitmodules` 和 KT vendor 跟踪文件；没有新增桌面/TUI、低代码市场、产品 worktree fleet
+  或相关运行入口。工作区中的 Agent 开发技能和用户未跟踪计划不属于产品交付，也未进入任何提交。
+- 上述方向继续保持明确排除。只有出现独立需求、威胁建模、成本预算和评测收益后，才另立计划；本轮没有
+  用“未来可能需要”扩大实现范围。
 
 #### 11.2 分波次交付
 
-1. **Wave A：** Runtime 合同、KT 升级与去妥协、Native Runtime、解除 submodule。
-2. **Wave B：** Event Ledger、Checkpoint、Artifact、Durable Task 和 Context Engine。
-3. **Wave C：** Skill、MCP、Hook、权限、身份、workspace 和记忆作用域。
-4. **Wave D：** 多 Agent、ACP/A2A 试验、Gateway 和主动能力收敛。
-5. **Wave E：** 评测驱动的经验提取和受控自进化。
+- [x] **Wave A：** Runtime 合同、KT 升级与去妥协、Native Runtime、解除 submodule。
+- [x] **Wave B：** Event Ledger、Checkpoint、Artifact、Durable Task 和 Context Engine。
+- [x] **Wave C：** Skill、MCP、Hook、权限、身份、workspace 和记忆作用域。
+- [x] **Wave D：** 多 Agent、ACP/A2A 试验、Gateway 和主动能力收敛。
+- [x] **Wave E：** 评测驱动的经验提取和受控自进化。
 
 每个 Wave 必须独立完成：
 
-- shadow 或只读验证；
-- 有限用户/会话灰度；
-- 明确回滚入口；
-- 删除无继续价值的临时兼容代码；
-- 同步对应测试和事实文档。
+- [x] shadow 或只读验证；
+- [x] 有限用户/会话灰度；
+- [x] 明确回滚入口；
+- [x] 删除无继续价值的临时兼容代码；
+- [x] 同步对应测试和事实文档。
+
+Wave 最终交付证据（2026-08-09）：
+
+| Wave | 已验证的真实数据面 | 有限启用与回滚 |
+| --- | --- | --- |
+| A | Native 是默认回复链；KT 只通过公开 Adapter 和固定可选锁进入同一 Runtime Port | 精确 session／稳定桶灰度；将 KT 开关、白名单和 rollout 清零即可回到 Native，不在失败请求内跨 Runtime 重试 |
+| B | Ledger 先行写入，Checkpoint／Durable Task／Artifact／Context 投影被管理端、恢复和模型请求实际消费 | child Run 保留源事实；取消、Rewind／Fork 和 ambiguous fail-closed 是正式入口，回滚不删除账本或资产 |
+| C | Skill／MCP／Hook Registry、Permission、owner ACL、Workspace 和分层记忆在真实工具选择与执行前生效 | binding／Server／grant 可分别停用或撤销；不可变版本、审计和 owner 数据保留 |
+| D | 冻结 DAG 会真实启动 child Runtime；Gateway stop／resume／model switch 与主动 Outbox 进入实际执行链 | Feature 默认关闭、精确会话启用；停止新调度并由 cancel／reconcile 收敛既有 Run |
+| E | 受控进化候选能改变真实模型候选排序；经验候选能安装正式 `user` Skill 或暂存已有 Skill 新版本 | 进化 release rollback、新 Skill uninstall、已有 Skill active 不变均有实际测试 |
+
+各 Wave 都先完成过 shadow／只读观察，再通过明确作用域进入真实数据面。最终交付不是把 shadow 分支改名：
+Wave A 的 Native 请求、Wave B 的恢复、Wave C 的权限执行、Wave D 的 child Runtime、Wave E 的模型路由和
+正式 Skill Registry 均有端到端生产接线与回滚测试。Run Ledger ORM 的早期 shadow 文案和一个误导性的
+KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因仍有真实迁移用途而保留，没有被当成临时代码
+盲目删除。
 
 #### 11.3 最终验证
 
@@ -1621,11 +1652,38 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 - [x] 运行 `python scripts/check_architecture.py`。
 - [x] 运行 `git diff --check` 和必要的 Python 编译检查。
 - [x] 验证依赖锁、Docker 镜像、Compose 配置和 CI。
-- [ ] 涉及 WebUI 时运行 lint、build 和相关静态测试。
-- [ ] 在真实部署宿主验证 Sandbox 隔离矩阵。
+- [x] 涉及 WebUI 时运行 lint、build 和相关静态测试。
+- [ ] 在真实部署宿主验证 Sandbox 隔离矩阵。（BLOCKED：当前宿主缺少 root、AppArmor 和 project quota）
 - [x] 验证未安装 KT 时 Native Runtime 和非 Agent 功能可正常启动。
-- [ ] 验证 KT/Native 行为基线、恢复幂等、缓存收益和权限闭环。
-- [ ] 所有能力成为运行事实后，再更新 README、运维和迁移文档。
+- [x] 验证 KT/Native 行为基线、恢复幂等、缓存收益和权限闭环。
+- [x] 已成为运行事实的能力更新 README、运维和迁移文档；Sandbox 未验收状态明确记录为 BLOCKED。
+
+阶段 11 仓库内收口证据（2026-08-09）：
+
+- WebUI `npm --prefix webui run lint` 为 exit 0；Vitest 为 5 files、19 tests 全部通过；Feature Manifest
+  检查和 Vite 生产构建通过，共转换 1838 个模块。构建仅报告既有大 chunk 性能建议，没有错误。
+- 最终阻断式 `python -m evals.harness_gate offline --all` 绑定 source revision
+  `92a657b22822fc0c03ac410a9fc8c8863c2cb9dd` 和 Registry
+  `593c46bed4b874c330074a74fda7169ec938e07f1ff0a6d4a4054cee2270818a`；报告摘要为
+  `7333b57bb9fca68276b8724e9ce7d34055fe19a882e8a4011dc48f0111723633`，5/5 suites、15/15 checks、
+  359/359 tests 全部通过，零 failure、error、skip 或 timeout，耗时 94.708 秒。该门禁实际覆盖 KT／Native
+  等价、恢复幂等、缓存与 Context、记忆／Skill／MCP、权限／成本／长任务及多 Agent 失败传播。
+- `tests/test_run_ledger.py`、治理、恢复、Durable Task、Context Engine 和 Run Viewer 联合回归为
+  54 passed；`tests/test_native_without_kt.py`、部署配置、Sandbox 镜像合同和原子发布回滚联合回归为
+  68 passed。无 KT 子进程真实导入 Server、启动 Native Bridge 并完成回复，不借用当前环境的 KT 安装。
+- README 已按运行事实删除 KT submodule／vendor／v1.3.0 指引，改为 Native 默认、KT 可选，并补充 Ledger、
+  恢复、治理、评测、受控进化、经验 Skill 候选及对应 Admin API。新增
+  `docs/agent-harness-operations.md` 和 `docs/agent-harness-migration.md`，记录默认状态、分 Wave 迁移、
+  人工门禁、回滚、隐私和 Sandbox 生产阻断；没有把外部项目调研列表或未实现能力写入 README。
+- 最终完整 `python -m pytest tests/ -v --basetemp=/var/tmp/nanobot-pytest-stage11-full` 在清除代理变量后为
+  6913 passed、12 skipped、0 failed，耗时 635.66 秒。12 个 skip 仍是需要真实外部环境的显式测试，
+  没有作为通过证据。
+- 当前 WSL2 开发宿主的 Docker Engine 29.1.3 只报告 builtin seccomp 和 cgroup namespace，不报告
+  AppArmor；当前会话没有免密 root。`scripts/sandbox-smoke-test.sh --preflight-only` 真实返回 exit 2 和
+  `result=blocked`、0 groups／0 tests，原因是必须以 root 运行；计划内服务器 `10.60.42.158:22` 的只读
+  SSH 探测超时。因此不能运行六组真实矩阵，唯一未完成项继续保持未勾选，Sandbox 硬开关必须保持关闭。
+- 本阶段没有改变 `enriched_query`、历史注入、conversation、工具输出合同或 Prompt Runtime 输入。
+  canonical 默认／运行时模板、变量表和注册表仍与阶段 10.5 的 500 项 Prompt 回归一致，无需修改。
 
 ## 6. KT 清理专项验收清单
 

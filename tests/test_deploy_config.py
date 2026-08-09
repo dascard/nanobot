@@ -389,7 +389,7 @@ def test_runtime_image_labels_the_exact_source_revision():
     assert 'LABEL org.opencontainers.image.revision="${GIT_FULL_COMMIT}"' in dockerfile
 
 
-def test_runtime_image_installs_unmodified_pinned_kt_source():
+def test_runtime_image_excludes_kt_source_and_local_patches():
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
     dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
 

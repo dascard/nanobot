@@ -1,6 +1,9 @@
 # Nanobot Server
 
-Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配器 / Web 客户端消息，运行 KohakuTerrarium Agent，维护聊天记忆、群聊运行状态、TimingGate 判定、RAG 语义索引、表情包数据、用户画像、主动外呼、代码执行沙箱、Prompt Runtime 模板和管理后台调试面板。
+Nanobot Server 是面向中文私聊、群聊和长期任务的自托管 Agent Harness 服务端。它以框架无关的
+`AgentRuntimePort` 组织模型、工具、记忆和运行策略，默认使用可独立启动的 Native Runtime；
+KohakuTerrarium（KT）只作为固定版本、显式安装和显式灰度的可选 Adapter。运行事实、恢复、权限、
+Context、Skill、MCP、多 Agent、评测和受控进化都由服务端合同治理，而不是依赖 Prompt 自律。
 
 ## 阅读导航
 
@@ -11,10 +14,18 @@ Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配�
 - [常用 API](#常用-api)
 - [Prompt Runtime 模板](#prompt-runtime-模板)
 - [测试](#测试)
+- [Agent Harness 运维与迁移](#agent-harness-运维与迁移)
 
 ## 主要能力
 
-- KT Agent 回复链路：基于 `vendor/KohakuTerrarium` 和 `creatures/nanobot` 配置运行。
+- Agent Runtime：Native Runtime 是默认主链；KT 通过 `nanobot_kt` 公共 API Adapter 可选接入，核心
+  生产依赖、默认镜像和构建流程不需要 KT 包或 Git submodule。
+- 运行可靠性：Append-only Run / Event Ledger、Checkpoint、Durable Task、lease 和副作用回执支持
+  权威投影、取消、Resume、Rewind、Fork、超时收敛及 ambiguous 失败关闭。
+- Context 与能力治理：canonical Prompt Runtime、分层 Context Engine、稳定前缀、Artifact、Skill、
+  MCP、Hook、Permission、Identity 和 Workspace ACL 共用冻结合同与可审计摘要。
+- Agent Harness 评测：离线阻断 gate、真实模型 benchmark 和线上只读采样严格分权；受控进化和经验
+  Skill 候选必须经过冻结数据、独立评测、成本门禁、人工精确 hash 批准及明确回滚。
 - Agent Link v1：MeaPet 等桌面端可主动建立一条双向 WebSocket，让 Nanobot
   在 Agent Loop 中直接看到并调用前端动态工具。
 - 模型控制面：Provider Connection 只管理连接与认证；模型目录维护价格、能力和默认请求参数；Route Binding 直接选择目录模型并保存业务特化配置。
@@ -33,25 +44,49 @@ Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配�
 - SQLite 并发保护：默认启用 `busy_timeout`、WAL，并在群入口与 reply contract tracing 中对写锁做 rollback / backoff 重试。
 - Admin WebUI：提供运行总览、群详情、TimingGate、表情包、RAG、Prompt、模型、日志、数据库和设置页面。
 
+## Agent Harness 运维与迁移
+
+- [Agent Harness 运维手册](docs/agent-harness-operations.md)：运行事实、默认状态、观测、恢复、评测、
+  人工发布和故障处理；
+- [Agent Harness 迁移指南](docs/agent-harness-migration.md)：从 KT 子模块和旧 Trace 迁移到双 Runtime、
+  Ledger、治理 Registry 与分 Wave 发布；
+- [KT 可选 Runtime 说明](docs/kt-runtime-compatibility.md)：安装固定可选锁、灰度、升级和回滚；
+- [Sandbox 运维手册](docs/sandbox-operations.md)：真实 Linux 宿主、AppArmor、project quota、固定镜像和
+  六组不得跳过的隔离矩阵。
+
+Sandbox 的代码与控制面不会因单元测试通过而自动启用。真实宿主缺少任一安全前置条件时，相关硬开关
+必须保持关闭，README 也不把该状态描述为生产验收完成。
+
 ## 架构概览
 
 ```mermaid
 graph TD
     Chat[Chat Adapter] -->|/api/v1/group/message| API[FastAPI API]
     WEB[WebUI] -->|/api/v1/admin/*| API
+    API --> APP[Application Orchestration]
+    APP --> RP[AgentRuntimePort]
+    RP --> Native[Native Runtime 默认]
+    RP --> KT[KT Adapter 可选]
+    APP --> Ledger[Run / Event Ledger]
+    Ledger --> Recovery[Checkpoint / Durable Task / Artifact]
+    Native --> Prompt[Prompt Runtime / Context Engine]
+    KT --> Prompt
+    Prompt --> Models[Model Router / Provider]
+    Native --> Tools[Tool / Skill / MCP / Hook]
+    KT --> Tools
+    Tools --> Permission[Permission / Workspace / Sandbox]
     API --> DB[(SQLite)]
     API --> RAG[RAG Services]
     RAG --> SI[(semantic_index_items / FTS)]
     API --> RT[Group Runtime / TimingGate]
-    RT -->|continue| Bridge[NanobotBridge]
+    RT -->|continue| APP
     RT -->|wait| Timer["/group_timing/timer"]
-    Bridge --> KT[KohakuTerrarium Agent]
     WEB --> ModelControl[Provider / Model Catalog / Route Binding]
     ModelControl --> DB
-    ModelControl -->|运行时配置| Bridge
-    KT --> Tools[Tools: reply / sticker_search / news / sql / image / group_analysis]
+    ModelControl -->|运行时配置| APP
     Tools --> DB
     Tools --> RAG
+    Native --> API
     KT --> API
     API -->|reply + reply_meta| Chat
     SummaryWorker[session-summary-worker] --> DB
@@ -70,30 +105,27 @@ graph TD
 | `api/admin_routes.py` | WebUI 管理 API |
 | `api/admin/` | RAG Debug、RAG Benchmark、模型、工具、画像、群记忆、Sandbox 等管理子路由 |
 | `app/` | 领域服务模块（session_memory、group_memory、persona、memory_digest、group_learning、group_ingress、prompt_runtime 等） |
-| `core/` | 数据库、群运行态、TimingGate、表情包、记忆、RAG、主动外呼、Prompt v2 和配置 |
+| `core/` | Runtime 合同、Ledger、恢复、Context、能力 Registry、权限、数据库和领域核心 |
 | `core/sandbox/` | Sandbox Server 侧（授权、Lease/Run 账本、管理操作，不接触 Docker） |
 | `sandboxd/` | Sandbox 独立控制面（唯一接触 Docker Socket 与 `/srv/nanobot`，经 UDS 提供服务） |
-| `evals/rag_benchmark/` | RAG benchmark case、adapter、runner、scoring 和报告生成 |
-| `nanobot_kt/` | KT Bridge、输出适配和工具实现 |
-| `creatures/nanobot/` | KT creature 配置、工具说明和运行记忆 |
+| `evals/` | RAG、Agent Harness、回放、受控进化和经验候选的离线评测入口 |
+| `nanobot_kt/` | 可选 KT Runtime Adapter 和必要类型映射，不承载核心业务语义 |
+| `creatures/nanobot/` | Agent profile、工具说明和运行记忆 |
 | `workers/` | Session summary 与语义索引异步 worker |
 | `webui/` | Admin WebUI 前端（React + Vite） |
-| `vendor/KohakuTerrarium/` | KT 框架子模块 |
 | `tests/` | pytest 测试 |
 
 ## 快速开始
 
-### 1. 拉取子模块
+### 1. 准备源码
 
 ```bash
-git submodule update --init --recursive
+git clone https://github.com/dascard/nanobot.git
+cd nanobot
 ```
 
-如果需要固定到发布版 KT：
-
-```bash
-git -C vendor/KohakuTerrarium checkout --detach v1.3.0
-```
+默认 Native Runtime 不需要任何 Git submodule。只有明确需要 KT 兼容 Runtime 时，才按
+[KT 可选 Runtime 说明](docs/kt-runtime-compatibility.md) 安装 `requirements-kt.lock`；安装本身不会启用 KT。
 
 ### 2. 准备配置
 
@@ -272,14 +304,14 @@ python -m workers.semantic_index_worker --loop --interval 10 --owner semantic-in
 
 不要同时运行内嵌和独立 session-summary worker。`semantic-index-worker` 始终按独立进程部署。
 
-如果服务器部署需要先更新代码和子模块：
+仅开发或兼容环境需要从工作树更新并现场构建时执行：
 
 ```bash
 git pull --ff-only
-git submodule sync --recursive
-git submodule update --init --recursive
 docker compose up -d --build
 ```
+
+生产环境继续使用前述不可变 ReleaseManifest 和 digest 部署流程，不从工作树构建。
 
 ## 模型目录与路由
 
@@ -433,6 +465,12 @@ Agent Link 的固定信封、握手、动态工具、幂等和离线字段约定
 | `GET /api/v1/admin/groups` | 群聊运行状态 |
 | `GET /api/v1/admin/timing-gate/events` | TimingGate 事件与统计 |
 | `GET /api/v1/admin/stickers` | 表情包管理 |
+| `GET /api/v1/admin/agent-runs/{run_id}` | 权威 Run Viewer、Context、恢复和 Artifact 投影 |
+| `GET /api/v1/admin/evals/harness/catalog` | 冻结 Agent Harness Registry 和证据权限 |
+| `POST /api/v1/admin/evals/replay/compare` | 在冻结 Event 上执行 Runtime / Prompt / 模型 / Skill / Context A/B 回放 |
+| `POST /api/v1/admin/evals/replay/fault-matrix` | 执行固定故障矩阵并验证无重复副作用 |
+| `GET /api/v1/admin/evals/evolution/catalog` | 受控进化数据集、候选、门禁和灰度合同 |
+| `GET /api/v1/admin/skills/candidates/catalog` | 脱敏经验 Skill 候选、人工批准和正式发布合同 |
 | `POST /api/v1/admin/rag/debug/query` | 单次 RAG Debug 查询 |
 | `GET /api/v1/admin/rag/debug/status` | RAG 索引与 reranker 状态 |
 | `POST /api/v1/admin/rag/debug/build-index` | 手动触发语义索引构建 |

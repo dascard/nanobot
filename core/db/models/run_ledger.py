@@ -1,4 +1,4 @@
-"""Run Event Ledger shadow 阶段的 ORM 持久模型。"""
+"""Run Event Ledger 权威运行事实的 ORM 持久模型。"""
 
 from __future__ import annotations
 
