@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 10.4 已完成，准备阶段 10.5）
+> 状态：执行中（阶段 10.5 已完成，准备阶段 11）
 >
 > 建立日期：2026-08-03
 >
@@ -1540,12 +1540,52 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 10.5 经验提取和 Skill 候选
 
-- [ ] 从成功和失败 trajectory 中离线提取流程、失败模式和 Skill 草案。
-- [ ] 去重、脱敏，并保留来源 Run 和评测证据。
-- [ ] 候选进入独立区域，不直接覆盖正式 Skill。
-- [ ] 通过独立评测和人工批准后才能发布新版本。
+- [x] 从成功和失败 trajectory 中离线提取流程、失败模式和 Skill 草案。
+- [x] 去重、脱敏，并保留来源 Run 和评测证据。
+- [x] 候选进入独立区域，不直接覆盖正式 Skill。
+- [x] 通过独立评测和人工批准后才能发布新版本。
 
 验收条件：任何自动优化都能回答“基于哪些数据、比哪个基线好、花费多少、谁批准、如何回滚”。
+
+阶段 10.5 实施证据（2026-08-09）：
+
+- 新增 `core/skill_candidates/` 经验候选合同、提取器、独立门禁、内容寻址存储和正式发布 Adapter。
+  提取入口只读取现有离线 Run Viewer 的脱敏投影，要求同一语料同时包含成功和终止失败 trajectory；
+  成功路径生成确定性流程步骤，失败路径生成失败模式，原始消息、Prompt、工具参数／结果、Sandbox 命令／
+  输出、隐藏推理和凭据都不能进入候选。Run Viewer 读取已收敛到 `OfflineRunViewRepository.build_persisted()`，
+  不依赖 API 私有函数，也不会调用模型、重放任务或写生产运行数据。
+- 二次脱敏覆盖凭据、Bearer Token、secret 赋值、邮箱、电话、IP、URL、长令牌、标签、双向控制字符和
+  控制字符，并对正文设置硬上限。候选保留精确来源 Run、成功／失败角色、trajectory hash、脱敏计数、
+  流程／失败模式 hash 和冻结语料 hash；正式 `SKILL.md` 不嵌入来源 Run ID。工具授权只能取自 trajectory
+  中真实观测到的工具，候选不能声明自动 Skill 依赖。候选身份和去重指纹均为内容寻址，同一内容即使生成
+  时间不同也只保留一份。
+- 候选文件位于 `data/evals/skill_candidates/` 独立区域，与正式 Skill 表和绑定完全分离。存储使用跨进程
+  文件锁、不可覆盖写入、`fsync`、0700／0600 权限和 2 MiB 产物上限；读取时重新构造候选、评测和门禁
+  摘要，发现篡改、来源漂移或当前 Harness Registry 漂移即失败关闭。`.dockerignore` 已确认继续排除
+  `data/`，没有把运行候选带入镜像构建上下文。
+- 独立评测证据绑定候选、冻结数据集、基线、来源 revision、当前 Harness Registry、全部来源 trajectory、
+  流程／失败模式和必需产物；生成器不能兼任评测器。候选质量必须严格优于基线，安全门禁必须通过，费用
+  不得超过显式预算，且基线费用非零时增幅上限为 20%。人工批准再次确认精确 candidate／gate hash、
+  当前 binding generation 和有限 TTL；明文令牌只返回一次，持久层和审计只保存摘要，令牌单次消费。
+- 发布不是 shadow：`publish_candidate_to_skill_registry()` 真实调用既有 `SkillLifecycleService` 和
+  `SkillGovernanceService`。新 Skill 首发只允许显式 `user` scope，门禁和人工批准通过后成为正式 active
+  binding，并返回可直接调用现有 uninstall API 的精确回滚请求；已有 Skill 必须基于仍未漂移的 active
+  bundle 和 generation，且新 SemVer 更高，只写入正式不可变版本库而不自动切换运行版本。正式评测行
+  记录 gate report hash，令牌重放、宽作用域自动激活、基线漂移和同版本来源冲突均被拒绝。
+- 新增 `python -m evals.skill_candidates catalog|extract|gate|get|state` 离线 CLI，以及管理员认证的
+  catalog、提取、评测、查询、人工批准、正式发布和状态 API。Admin 全链路测试使用真实持久化 Run 提取，
+  最终能从既有 `/api/v1/admin/skills` 查询到正式 active Skill；审计不保存明文批准令牌或来源正文。
+- 经验候选及拆分路由专项回归为 36 passed；与 Run Viewer、Skill 生命周期、受控进化及 Harness 的联合
+  回归为 104 passed；完整 Prompt Runtime 回归为 500 passed。最终阻断式 Harness Gate 实际执行
+  5/5 suites、15/15 checks、359/359 tests，零 failure、error、skip 或 timeout。
+- 架构边界、OpenAPI、决策规则、Release Impact、Verification Plan、Task SLO、行为基线、受控 Ruff、
+  Python 编译和 `git diff --check` 均通过。最终完整
+  `python -m pytest tests/ -v --basetemp=/var/tmp/nanobot-pytest-stage10-5-full` 在清除代理变量后执行
+  6925 个测试项并以 exit 0 结束（6913 passed、12 个既有真实环境 skipped、0 failed）；独立
+  collect-only 复核为 6925 tests collected。
+- 本阶段没有修改 `enriched_query`、历史注入、conversation、工具输出合同、Skill 选择运行输入或 Prompt
+  Runtime 变量。canonical `prompts.v2.default/chat/*`、`tasks/*`、`tools/*/usage.md`、变量定义和模板
+  注册表经 500 项 Prompt 回归核对仍准确，因此无需修改默认或 `data/prompts_v2/` 运行时模板。
 
 ### 阶段 11：波次交付、排除项复核和最终收口
 

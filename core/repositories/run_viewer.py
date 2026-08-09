@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from core.context_engine import ContextManifestError, validate_context_manifest
 from core.db.models.observability import (
+    AgentRun,
     LLMApiRequestLog,
     PromptRenderLog,
     RuntimeTelemetryEvent,
@@ -24,6 +25,9 @@ from core.db.models.run_recovery import (
 )
 from core.db.models.sandbox import Asset, SandboxRun, WorkspaceAsset
 from core.observability.run_view import RunViewSource, build_run_view
+from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+from core.run_ledger.read_model import load_authoritative_run_view
+from core.tracing import row_to_dict
 
 
 _MAX_ROWS_PER_SOURCE = 2_000
@@ -340,6 +344,100 @@ class OfflineRunViewRepository:
                 ledger_projection,
             ),
         ))
+
+    def build_persisted(self, run_id: str) -> dict[str, Any]:
+        """按 Run ID 读取完整脱敏 Viewer；不依赖 API 私有函数。"""
+
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id:
+            raise ValueError("run_id 不能为空")
+        legacy = self._db.query(AgentRun).filter(
+            AgentRun.run_id == normalized_run_id
+        ).first()
+        ledger_view = load_authoritative_run_view(
+            SqlAlchemyRunEventLedger(self._db),
+            normalized_run_id,
+        )
+        if legacy is None and ledger_view is None:
+            raise LookupError("Agent Run 不存在")
+        run: dict[str, Any] = row_to_dict(legacy) if legacy is not None else {}
+        ledger_projection: dict[str, Any] | None = None
+        ledger_records: Sequence[object] = ()
+        if ledger_view is not None:
+            accepted = ledger_view.accepted.event
+            projection = ledger_view.projection
+            ledger_projection = projection.to_dict()
+            ledger_records = ledger_view.records
+            if legacy is None:
+                run.update({
+                    "run_id": projection.run_id,
+                    "trace_id": accepted.correlation.trace_id,
+                    "session_id": accepted.correlation.session_id,
+                    "user_id": (
+                        accepted.identity.actor_id
+                        if accepted.identity.actor_type == "user"
+                        else ""
+                    ),
+                    "chat_type": str(accepted.payload.get("chat_type") or ""),
+                    "group_id": (
+                        accepted.identity.owner_id
+                        if accepted.identity.owner_type == "group"
+                        else ""
+                    ),
+                    "run_type": str(accepted.payload.get("run_type") or ""),
+                    "meta_json": "{}",
+                })
+            run.update({
+                "status": projection.status,
+                "started_at": (
+                    projection.started_at.isoformat()
+                    if projection.started_at
+                    else None
+                ),
+                "finished_at": (
+                    projection.finished_at.isoformat()
+                    if projection.finished_at
+                    else None
+                ),
+                "prompt_mode": projection.prompt_mode
+                or str(run.get("prompt_mode") or ""),
+                "prompt_key": projection.prompt_key
+                or str(run.get("prompt_key") or ""),
+                "prompt_sha256": projection.prompt_sha256
+                or str(run.get("prompt_sha256") or ""),
+            })
+            if projection.model_ids:
+                run["model"] = projection.model_ids[-1]
+        tool_calls = (
+            self._db.query(ToolCall)
+            .filter(ToolCall.run_id == normalized_run_id)
+            .order_by(ToolCall.started_at.asc())
+            .limit(_MAX_ROWS_PER_SOURCE)
+            .all()
+        )
+        prompt_logs = (
+            self._db.query(PromptRenderLog)
+            .filter(PromptRenderLog.run_id == normalized_run_id)
+            .order_by(PromptRenderLog.created_at.asc())
+            .limit(_MAX_ROWS_PER_SOURCE)
+            .all()
+        )
+        llm_requests = (
+            self._db.query(LLMApiRequestLog)
+            .filter(LLMApiRequestLog.run_id == normalized_run_id)
+            .order_by(LLMApiRequestLog.created_at.asc())
+            .limit(_MAX_ROWS_PER_SOURCE)
+            .all()
+        )
+        return self.build(
+            run_id=normalized_run_id,
+            run=run,
+            ledger_projection=ledger_projection,
+            ledger_records=ledger_records,
+            tool_calls=tool_calls,
+            prompt_logs=prompt_logs,
+            llm_requests=llm_requests,
+        )
 
 
 __all__ = ["OfflineRunViewRepository"]

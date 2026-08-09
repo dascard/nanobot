@@ -276,6 +276,7 @@ from api.admin.system_routes import router as system_router
 from api.admin.sandbox_routes import router as sandbox_router
 from api.admin.scheduled_task_routes import router as scheduled_task_router
 from api.admin.skill_routes import router as skill_router
+from api.admin.skill_candidate_routes import router as skill_candidate_router
 from api.admin.mcp_routes import router as mcp_router
 from api.admin.trace_routes import (
     RunTaskCancelRequest as RunTaskCancelRequest,
@@ -319,6 +320,7 @@ router.include_router(system_router)
 router.include_router(sandbox_router)
 router.include_router(scheduled_task_router)
 router.include_router(skill_router)
+router.include_router(skill_candidate_router)
 router.include_router(mcp_router)
 router.include_router(db_browser_router)
 router.include_router(prompt_v2_router)

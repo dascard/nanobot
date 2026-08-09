@@ -128,6 +128,14 @@ def test_harness_registry_separates_three_lanes_and_evidence_authority():
     assert online.authority is EvidenceAuthority.READONLY_SIGNAL
     assert online.production_data_mode == "readonly"
     assert online.allows_model_calls is False
+    skill_check = next(
+        item
+        for item in EVAL_HARNESS_REGISTRY.require(
+            "offline_memory_skill_mcp"
+        ).checks
+        if item.check_id == "skill_selection"
+    )
+    assert "tests/test_skill_candidates.py" in skill_check.selectors
 
 
 def test_harness_catalog_exposes_registry_hash_and_lane_authority():

@@ -343,6 +343,7 @@ _SUITES = (
                 "skill_selection_pass_rate",
                 "tests/test_skill_governance.py",
                 "tests/test_agent_skills.py",
+                "tests/test_skill_candidates.py",
             ),
             _check(
                 "mcp_contract",

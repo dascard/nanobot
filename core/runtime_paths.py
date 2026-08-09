@@ -64,5 +64,9 @@ class RuntimePaths:
     def evolution_control_dir(self) -> Path:
         return self.data_dir / "evals" / "evolution_control"
 
+    @property
+    def skill_candidate_dir(self) -> Path:
+        return self.data_dir / "evals" / "skill_candidates"
+
 
 RUNTIME_PATHS = RuntimePaths.from_environment()

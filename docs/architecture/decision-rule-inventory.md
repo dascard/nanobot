@@ -1,10 +1,10 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`2d46f33d7eea557c17222a11ea2a207c1c5cd6f9`
-- 规则总数：8661
+- 源提交：`2b63d8c6e178a95c4dc0fd00b456d1be4f397ef7`
+- 规则总数：8790
 - 扫描错误：0
-- 人工复核队列：722
+- 人工复核队列：723
 - 完整逐项记录：`decision-rule-inventory.json`
 
 ## 分类汇总
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1695 |
-| `data_consistency` | 493 |
+| `configurable_policy` | 1727 |
+| `data_consistency` | 495 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4595 |
-| `security_invariant` | 1705 |
+| `protocol_syntax` | 4675 |
+| `security_invariant` | 1720 |
 
 ## 文件汇总
 
@@ -51,6 +51,7 @@
 | `clients/model_registry.py` | 50 |
 | `core/run_recovery/service.py` | 50 |
 | `api/admin/model_preset_routes.py` | 49 |
+| `core/skill_candidates/extraction.py` | 49 |
 | `api/admin/reply_routes.py` | 48 |
 | `core/daily_digest.py` | 47 |
 | `core/sandbox/process_service.py` | 47 |
@@ -99,6 +100,7 @@
 | `core/legacy_adapter.py` | 30 |
 | `core/interoperability/a2a.py` | 29 |
 | `core/mcp/contracts.py` | 29 |
+| `core/skill_candidates/contracts.py` | 29 |
 | `api/admin/rag_benchmark_routes.py` | 28 |
 | `app/memory_digest/jobs.py` | 28 |
 | `core/group_memory.py` | 28 |
@@ -112,6 +114,7 @@
 | `app/session_memory/jobs.py` | 26 |
 | `core/evolution_control/contracts.py` | 26 |
 | `core/prompt_v2/template_registry.py` | 26 |
+| `core/skill_candidates/store.py` | 26 |
 | `sandboxd/environment_manager.py` | 26 |
 | `webui/src/api/generated/adminClient.ts` | 26 |
 | `api/admin/runtime_routes.py` | 25 |
@@ -255,6 +258,7 @@
 | `sandboxd/container_security.py` | 12 |
 | `api/admin/evolution_control_routes.py` | 11 |
 | `api/admin/persona_routes.py` | 11 |
+| `api/admin/skill_candidate_routes.py` | 11 |
 | `api/agent_link_routes.py` | 11 |
 | `core/agent_runtime/native.py` | 11 |
 | `core/asset_transport.py` | 11 |
@@ -367,6 +371,7 @@
 | `core/run_ledger/read_model.py` | 7 |
 | `core/run_recovery/proofs.py` | 7 |
 | `core/semantic/provider_factory.py` | 7 |
+| `core/skill_candidates/publishing.py` | 7 |
 | `core/tool_plan.py` | 7 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/htmllist.py` | 7 |
 | `creatures/nanobot/prompts/skills/news_search/runtime_cache.py` | 7 |
@@ -427,6 +432,7 @@
 | `core/run_ledger/governance_service.py` | 5 |
 | `core/run_recovery/coordinator.py` | 5 |
 | `core/sandbox/workspace_acl.py` | 5 |
+| `core/skill_candidates/gates.py` | 5 |
 | `core/task_runtime/contracts.py` | 5 |
 | `core/telemetry/job_observer.py` | 5 |
 | `core/telemetry/persistence.py` | 5 |
@@ -517,6 +523,7 @@
 | `core/proactive/runtime_support.py` | 3 |
 | `core/proactive/scheduler.py` | 3 |
 | `core/prompt_v2/section_descriptors.py` | 3 |
+| `core/repositories/run_viewer.py` | 3 |
 | `core/runtime/extensions.py` | 3 |
 | `core/runtime_health.py` | 3 |
 | `core/telemetry/runtime.py` | 3 |
@@ -622,7 +629,6 @@
 | `core/registry/builder.py` | 1 |
 | `core/release/runtime_verify.py` | 1 |
 | `core/repositories/chat_logs.py` | 1 |
-| `core/repositories/run_viewer.py` | 1 |
 | `core/retrieval/contracts.py` | 1 |
 | `core/run_recovery/verification.py` | 1 |
 | `core/runtime/event_bus.py` | 1 |
@@ -755,6 +761,9 @@
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.977c501b8afbd22c5090` | `api/admin/reply_routes.py:426` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：category in {"被叫到", "直接问题", "情绪低落", "技术求助", "身份试探"} |  |  |  |  |  |
+|  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
+| `decision.9977351ed6d77297f6ed` | `api/admin/skill_candidate_routes.py:101` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+|  | 摘要："不存在" in str(exc) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.c0a0d839ec2d68dc5b14` | `api/admin/tool_routes.py:46` | `python.string_control_flow` | `protocol_syntax` | `resource` | 阶段 8 | `reviewed` |
 |  | 摘要：raw.startswith("group_") |  |  |  |  |  |
