@@ -57,6 +57,7 @@ MAX_LLM_REQUEST_JSON_CHARS = 256_000
 MAX_LLM_RESPONSE_JSON_CHARS = 64_000
 MAX_LLM_FAILURE_SUMMARY_CHARS = 4_000
 MAX_SANDBOX_TRACE_COMMAND_BYTES = 16 * 1024
+MAX_CONTEXT_MANIFEST_JSON_BYTES = 256 * 1024
 
 
 @dataclass
@@ -115,6 +116,27 @@ def _json_dumps(value: Any, *, max_chars: int = 0) -> str:
     if max_chars > 0 and len(text) > max_chars:
         return text[:max_chars] + "...[truncated]"
     return text
+
+
+def _serialize_context_manifest_json(
+    value: Mapping[str, Any] | None,
+) -> str:
+    """只保存通过 canonical 校验且大小受限的无正文 Manifest。"""
+
+    if not value:
+        return "{}"
+    from core.context_engine import validate_context_manifest
+
+    validate_context_manifest(value)
+    serialized = json.dumps(
+        dict(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if len(serialized.encode("utf-8")) > MAX_CONTEXT_MANIFEST_JSON_BYTES:
+        return "{}"
+    return serialized
 
 
 def _preview(value: Any, *, max_chars: int = MAX_PREVIEW_CHARS) -> str:
@@ -1318,7 +1340,7 @@ class PromptTracer:
         prompt_default_path: str = "",
         prompt_sha256: str = "",
         prompt_template_resolutions: dict[str, Any] | None = None,
-        context_manifest: dict[str, Any] | None = None,
+        context_manifest: Mapping[str, Any] | None = None,
     ) -> None:
         try:
             from core.database import PromptRenderLog
@@ -1361,6 +1383,11 @@ class PromptTracer:
                         variables_json=_json_dumps(
                             trace_variables or {},
                             max_chars=6000,
+                        ),
+                        context_manifest_json=(
+                            _serialize_context_manifest_json(
+                                context_manifest
+                            )
                         ),
                         rendered_preview=_prompt_preview(rendered_content, max_chars=1000),
                         token_estimate=int(token_estimate or 0),

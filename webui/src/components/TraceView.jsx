@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 import { Badge, Card, InfoGrid, MiniStat } from './ui'
-import { safeJsonParse } from './traceUtils'
+import { hasHiddenReasoning, redactHiddenReasoning, safeJsonParse } from './traceUtils'
 
 const CACHE_STATUS_META = {
   hit: { label: '命中', tone: 'emerald', className: 'text-emerald-300' },
@@ -30,23 +30,6 @@ function compactJson(value) {
   try { return JSON.stringify(value) } catch { return String(value) }
 }
 
-const REASONING_KEYS = ['reasoning_content', 'reasoning', 'reasoning_text', 'thinking', 'thinking_content']
-
-function collectMessageText(message = {}, keys = REASONING_KEYS) {
-  return keys.map(key => compactJson(message?.[key])).filter(Boolean).join('')
-}
-
-function collectChoiceMessageText(response = {}, keys = REASONING_KEYS) {
-  const parts = []
-  for (const choice of response.choices || []) {
-    const msg = choice?.message || {}
-    const delta = choice?.delta || {}
-    const text = collectMessageText(msg, keys) || collectMessageText(delta, keys)
-    if (text) parts.push(text)
-  }
-  return parts.join('')
-}
-
 function extractUsage(response = {}) {
   if (response.usage) return response.usage
   for (let i = (response.chunks_sample || []).length - 1; i >= 0; i -= 1) {
@@ -61,11 +44,9 @@ function extractReasoningTrace(response = {}) {
   const usage = extractUsage(response)
   const usageDetails = usage?.completion_tokens_details || usage?.output_tokens_details || {}
   const reasoningTokens = usageDetails.reasoning_tokens ?? usage?.reasoning_tokens
-  const reasoningText = compactJson(response.reasoning_content) || collectChoiceMessageText(response)
   const hasMetrics = Object.keys(streamMetrics).length > 0
   return {
-    has: Boolean(reasoningText || hasMetrics || reasoningTokens !== undefined),
-    reasoningText,
+    has: Boolean(hasHiddenReasoning(response) || hasMetrics || reasoningTokens !== undefined),
     reasoningTokens,
     streamMetrics,
   }
@@ -221,7 +202,11 @@ export function RawJsonAccordion({ label, text, defaultOpen = false }) {
 export function LLMApiLogViewer({ log }) {
   if (!log) return <div className="py-8 text-center text-sm text-slate-600">无数据</div>
   const request = safeJsonParse(log.request_json, {})
-  const response = safeJsonParse(log.response_json, {})
+  const rawResponse = safeJsonParse(log.response_json, {})
+  const response = redactHiddenReasoning(rawResponse)
+  const redactedResponseJson = Object.keys(response).length
+    ? JSON.stringify(response, null, 2)
+    : ''
   const cacheDetails = safeJsonParse(log.cache_details_json, {})
   const requestLint = safeJsonParse(log.request_lint_json, {})
   const lintIssues = Array.isArray(requestLint.issues) ? requestLint.issues : []
@@ -235,7 +220,7 @@ export function LLMApiLogViewer({ log }) {
   const isIncomplete = (log.status === 'created') && (log.latency_ms === 0 || !log.latency_ms)
   const statusTone = log.status === 'success' ? 'emerald' : log.status === 'stream_success' ? 'blue' : log.status === 'error' || log.status === 'failed' || log.status === 'stream_error' ? 'red' : log.status === 'stream_created' ? 'blue' : 'slate'
   const issueTone = (severity) => severity === 'P0' ? 'red' : severity === 'P1' ? 'amber' : 'slate'
-  const reasoningTrace = extractReasoningTrace(response)
+  const reasoningTrace = extractReasoningTrace(rawResponse)
   const cacheMeta = CACHE_STATUS_META[log.cache_status] || CACHE_STATUS_META.pending
 
   return (
@@ -386,32 +371,21 @@ export function LLMApiLogViewer({ log }) {
               { label: '首正文', value: formatMs(reasoningTrace.streamMetrics.first_content_ms) },
               { label: '推理耗时', value: formatMs(reasoningTrace.streamMetrics.reasoning_elapsed_ms) },
               { label: '推理 tokens', value: reasoningTrace.reasoningTokens ?? '-' },
-              { label: '推理字符', value: reasoningTrace.streamMetrics.reasoning_char_count ?? (reasoningTrace.reasoningText ? reasoningTrace.reasoningText.length : '-') },
+              { label: '推理字符', value: reasoningTrace.streamMetrics.reasoning_char_count ?? '-' },
               { label: '正文字符', value: reasoningTrace.streamMetrics.content_char_count ?? '-' },
               { label: 'chunk 数', value: reasoningTrace.streamMetrics.chunk_count ?? '-' },
             ]}
           />
-          {reasoningTrace.reasoningText && (
-            <details className="border border-slate-700/50 rounded-lg mt-2">
-              <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-xs text-slate-400">
-                reasoning_content ({reasoningTrace.reasoningText.length} chars)
-              </summary>
-              <div className="p-3 border-t border-slate-700/50">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-slate-600">模型推理内容</span>
-                  <CopyButton text={reasoningTrace.reasoningText} />
-                </div>
-                <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-[600px] overflow-auto">{reasoningTrace.reasoningText}</pre>
-              </div>
-            </details>
-          )}
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 mt-2 text-xs text-slate-500">
+            隐藏推理正文已省略，仅保留计量指标
+          </div>
         </section>
       )}
       {!reasoningTrace.has && Object.keys(response).length > 0 && (
         <section>
           <h3 className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">推理与流式指标</h3>
           <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-500">
-            本次未返回 reasoning_content
+            本次没有可用的推理计量；隐藏推理正文始终不展示
           </div>
         </section>
       )}
@@ -422,21 +396,11 @@ export function LLMApiLogViewer({ log }) {
           <div className="space-y-2">
             {response.choices?.map((choice, i) => {
               const msg = choice.message || {}
-              const msgReasoning = collectMessageText(msg)
               return (
                 <div key={i} className="border border-slate-700/50 rounded-lg p-3">
                   <div className="flex gap-3 mb-2 text-xs">
                     <span className="text-slate-500">finish_reason: <span className="text-slate-300">{choice.finish_reason || '-'}</span></span>
                   </div>
-                  {msgReasoning && (
-                    <div className="mb-2">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] text-slate-600">message.reasoning_content · {msgReasoning.length} chars</span>
-                        <CopyButton text={msgReasoning} />
-                      </div>
-                      <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-[600px] overflow-auto">{msgReasoning}</pre>
-                    </div>
-                  )}
                   {msg.content && (
                     <div className="mb-2">
                       <div className="flex items-center justify-between mb-1">
@@ -482,7 +446,7 @@ export function LLMApiLogViewer({ log }) {
         <h3 className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">Raw JSON</h3>
         <div className="space-y-1">
           <RawJsonAccordion label="原始 request_json" text={log.request_json} />
-          <RawJsonAccordion label="原始 response_json" text={log.response_json} />
+          <RawJsonAccordion label="脱敏 response_json" text={redactedResponseJson} />
           <RawJsonAccordion label="headers_json" text={log.headers_json} />
           <RawJsonAccordion label="request_lint_json" text={log.request_lint_json} />
           <RawJsonAccordion label="message_sources_json" text={log.message_sources_json} />

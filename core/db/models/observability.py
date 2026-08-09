@@ -74,6 +74,12 @@ class PromptRenderLog(Base):
         server_default=text("'{}'"),
     )
     variables_json = Column(Text, default="{}")
+    context_manifest_json = Column(
+        Text,
+        nullable=False,
+        default="{}",
+        server_default=text("'{}'"),
+    )
     rendered_preview = Column(Text, default="")
     token_estimate = Column(Integer, default=0)
     warnings_json = Column(Text, default="[]")

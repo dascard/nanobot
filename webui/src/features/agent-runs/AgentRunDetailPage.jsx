@@ -4,6 +4,7 @@ import { NavLink, useParams } from 'react-router-dom'
 import { api } from '../../api'
 import { Card, JsonBlock, MiniStat, Spinner } from '../../components/ui'
 import { LLMApiRequestLogsBlock } from '../../components/TraceView'
+import { RunViewer } from './RunViewer'
 
 function formatApiError(e, fallback = '请求失败') {
   return e?.response?.data?.detail || e?.message || fallback
@@ -78,6 +79,8 @@ export function AgentRunDetailPage() {
       {r.error && <div className="p-3 bg-red-500/10 text-red-400 rounded-lg mb-4 text-sm">{r.error}</div>}
       {r.input_preview && <Card className="p-4 mb-4"><h3 className="text-sm font-medium text-slate-400 mb-2">输入摘要</h3><pre className="text-xs text-slate-300 whitespace-pre-wrap">{r.input_preview}</pre></Card>}
       {r.output_preview && <Card className="p-4 mb-4"><h3 className="text-sm font-medium text-slate-400 mb-2">输出摘要</h3><pre className="text-xs text-slate-300 whitespace-pre-wrap">{r.output_preview}</pre></Card>}
+
+      <RunViewer viewer={detail.viewer} />
 
       {/* Tool Calls */}
       <h2 className="text-sm font-medium text-slate-300 mt-6 mb-3">工具调用 ({detail.tool_calls?.length || 0})</h2>

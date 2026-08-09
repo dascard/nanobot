@@ -27,11 +27,13 @@ _SENSITIVE_KEY_PARTS = (
 )
 
 _SAFE_TOKEN_COUNT_KEYS = frozenset({
+    "cached_input_tokens",
     "input_token_estimate",
     "input_tokens",
     "output_tokens",
     "prompt_cache_hit_tokens",
     "prompt_cache_miss_tokens",
+    "reasoning_tokens",
     "total_tokens",
 })
 

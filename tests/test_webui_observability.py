@@ -25,10 +25,11 @@ def test_logs_page_contains_all_lines_and_error_context_mode():
     assert "group_errors" in source
 
 
-def test_reply_and_reasoning_views_expose_counts_and_missing_reasoning():
+def test_reply_and_reasoning_views_expose_counts_without_hidden_reasoning():
     agent_detail = (ROOT / "webui/src/features/agent-runs/AgentRunDetailPage.jsx").read_text(encoding="utf-8")
     reply_eval = (ROOT / "webui/src/features/reply-eval/ReplyEvalPage.jsx").read_text(encoding="utf-8")
     trace_view = (ROOT / "webui/src/components/TraceView.jsx").read_text(encoding="utf-8")
+    run_viewer = (ROOT / "webui/src/features/agent-runs/RunViewer.jsx").read_text(encoding="utf-8")
 
     assert "total_final_action_count" in agent_detail
     assert "prompt_miss_count" in agent_detail
@@ -36,7 +37,17 @@ def test_reply_and_reasoning_views_expose_counts_and_missing_reasoning():
     assert "/reply-eval/traffic" in reply_eval
     assert "真实流量" in reply_eval
     assert "retry_failed_after_prompt_count" in reply_eval
-    assert "本次未返回 reasoning_content" in trace_view
+    assert "隐藏推理正文已省略，仅保留计量指标" in trace_view
+    assert "脱敏 response_json" in trace_view
+    assert "模型推理内容" not in trace_view
+    assert "CopyButton text={reasoningTrace" not in trace_view
+    assert "统一离线 Run Viewer" in run_viewer
+    assert "脱敏时间线" in run_viewer
+    assert "Run / Turn DAG" in run_viewer
+    assert "Token / Cost Waterfall" in run_viewer
+    assert "Context Manifest" in run_viewer
+    assert "不调用模型、不恢复任务、不执行工具" in run_viewer
+    assert "<RunViewer viewer={detail.viewer}" in agent_detail
 
 
 def test_timing_gate_detail_exposes_scoring_breakdown():

@@ -161,7 +161,11 @@ def test_runtime_event_authority_failure_only_blocks_correlated_run():
 def test_default_runtime_event_registry_covers_cross_cutting_boundaries():
     from core.runtime.event_registry import RUNTIME_EVENT_REGISTRY
 
-    assert {descriptor.name for descriptor in RUNTIME_EVENT_REGISTRY.list()} == {
+    descriptors = {
+        descriptor.name: descriptor
+        for descriptor in RUNTIME_EVENT_REGISTRY.list()
+    }
+    assert set(descriptors) == {
         "agent.lifecycle",
         "agent.plugin_hook",
         "agent.runtime_selection",
@@ -170,11 +174,27 @@ def test_default_runtime_event_registry_covers_cross_cutting_boundaries():
         "http.request",
         "job.lifecycle",
         "memory.retrieve",
+        "mcp.call",
         "model.request",
         "prompt.compile",
+        "subagent.execute",
         "task.execute",
         "tool.execute",
     }
+    sensitive_fields = {
+        "arguments",
+        "content",
+        "input",
+        "prompt",
+        "reasoning",
+        "result",
+        "skill_content",
+        "summary",
+    }
+    for name in ("mcp.call", "subagent.execute"):
+        assert sensitive_fields.isdisjoint(
+            field.name for field in descriptors[name].fields
+        )
 
 
 def test_plugin_failure_diagnostic_reaches_authoritative_event_ledger():

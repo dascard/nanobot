@@ -329,6 +329,17 @@ async def test_runtime_call_preserves_blocks_scrubs_credentials_and_binds_native
     db_session,
     monkeypatch,
 ):
+    runtime_events: list[tuple[str, str, dict[str, object]]] = []
+
+    def capture_runtime_event(name, phase, *, attributes=None, context=None):
+        del context
+        runtime_events.append((name, phase, dict(attributes or {})))
+        return None
+
+    monkeypatch.setattr(
+        "core.runtime.event_bus.emit_runtime_event",
+        capture_runtime_event,
+    )
     secret = "MCP-CREDENTIAL-MUST-NOT-LEAK"
     monkeypatch.setenv(
         "NANOBOT_MCP_CREDENTIAL_SECRET",
@@ -378,6 +389,21 @@ async def test_runtime_call_preserves_blocks_scrubs_credentials_and_binds_native
             await runtime.call("remote__search", {"query": 1})
     assert invalid.value.code == "arguments_invalid"
     assert len(client.calls) == 2
+    mcp_events = [item for item in runtime_events if item[0] == "mcp.call"]
+    assert [item[1] for item in mcp_events] == [
+        "started",
+        "succeeded",
+        "started",
+        "succeeded",
+        "started",
+        "failed",
+    ]
+    assert mcp_events[-1][2]["failure_code"] == "arguments_invalid"
+    assert all(item[2]["server_id"] == "remote" for item in mcp_events)
+    serialized_events = json.dumps(mcp_events, ensure_ascii=False)
+    assert secret not in serialized_events
+    assert "hello" not in serialized_events
+    assert "kt" not in serialized_events
 
 
 @pytest.mark.asyncio

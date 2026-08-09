@@ -728,6 +728,37 @@ def test_llm_provider_error_category_migration_backfills_stable_categories():
     ]
 
 
+def test_prompt_context_manifest_migration_adds_safe_manifest_column():
+    from core.schema_migrations import (
+        MIGRATIONS,
+        _PROMPT_CONTEXT_MANIFEST_VERSION,
+        _prompt_context_manifest_column,
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE prompt_render_logs ("
+            "id INTEGER PRIMARY KEY, variables_json TEXT DEFAULT '{}')"
+        ))
+        _prompt_context_manifest_column(conn, engine, None)
+        _prompt_context_manifest_column(conn, engine, None)
+        conn.execute(text("INSERT INTO prompt_render_logs(id) VALUES (1)"))
+        value = conn.execute(text(
+            "SELECT context_manifest_json FROM prompt_render_logs WHERE id = 1"
+        )).scalar_one()
+
+    assert value == "{}"
+    assert "context_manifest_json" in {
+        column["name"]
+        for column in inspect(engine).get_columns("prompt_render_logs")
+    }
+    assert any(
+        version == _PROMPT_CONTEXT_MANIFEST_VERSION
+        for version, _name, _migration in MIGRATIONS
+    )
+
+
 def test_block_session_memory_migration_adds_table_and_column():
     """块式会话记忆迁移:conversation_blocks 表 + rolling_session_summaries.block_id。"""
 

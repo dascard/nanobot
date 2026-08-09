@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 9.3 已完成，准备阶段 10.1）
+> 状态：执行中（阶段 10.1 已完成，准备阶段 10.2）
 >
 > 建立日期：2026-08-03
 >
@@ -1393,9 +1393,37 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 10.1 统一 Trace 和离线 Run Viewer
 
-- [ ] 将 LLM、Prompt、Tool、Memory、MCP、Sandbox、Subagent、Cache、Artifact 和 Delivery span 关联到 Run/Turn。
-- [ ] 提供脱敏时间线、DAG、token/cost waterfall 和上下文 manifest。
-- [ ] 显示失败点、重试、恢复和版本，不展示隐藏推理。
+- [x] 将 LLM、Prompt、Tool、Memory、MCP、Sandbox、Subagent、Cache、Artifact 和 Delivery span 关联到 Run/Turn。
+- [x] 提供脱敏时间线、DAG、token/cost waterfall 和上下文 manifest。
+- [x] 显示失败点、重试、恢复和版本，不展示隐藏推理。
+
+实现记录（2026-08-09）：
+
+- 新增框架无关的 `core/observability/run_view.py`，仅从已持久化且经过白名单处理的证据生成版本化离线
+  Run Viewer；统一关联 Run/Turn 下的 LLM、Prompt、Tool、Memory、MCP、Sandbox、Subagent、Cache、
+  Artifact、Delivery、Checkpoint、副作用回执和恢复操作，并输出脱敏时间线、contains/retry DAG、
+  token/cost waterfall、失败点、重试、恢复和版本集合。Viewer 不调用模型、不执行工具、不恢复任务，且不
+  接受 Prompt／消息正文、工具参数／结果、Sandbox 命令／输出、凭据或隐藏推理正文。
+- 新增 SQLAlchemy 只读 Adapter，将 Runtime Telemetry、Sandbox Run、Workspace Asset、Checkpoint、
+  Side Effect 和 Recovery 与现有 AgentRun、ToolCall、PromptRenderLog、LLMApiRequestLog、Run Ledger
+  投影合并；Admin `GET /agent-runs/{run_id}` 返回独立 `viewer` 读模型。Prompt Trace 增加经 canonical
+  校验且限制为 256 KiB 的完整无正文 Context Manifest 列和幂等迁移；旧记录继续回退到 Run Ledger
+  指纹，不伪造完整清单。
+- Runtime Event Registry 新增 `mcp.call` 与 `subagent.execute`，在实际 MCP 请求边界和子 Agent 执行器
+  记录 parent Run、child task run、Turn、ToolCall、模型、尝试次数、时延、用量、失败类别和可重试性；
+  Descriptor 不允许参数、结果、任务输入、Skill 正文、总结或隐藏推理进入事件。取消、模糊状态和缺失调用
+  ID 均有稳定终态与唯一 span，Telemetry 持久化仅新增受控 token 指标字段。
+- 管理端 Run 详情页新增离线 Viewer，展示时间线、DAG、成本瀑布、Context Manifest、失败／重试／恢复和
+  版本证据。原 LLM Trace 页面递归省略 `reasoning_content`、`reasoning`、`reasoning_text`、`thinking`
+  和 `thinking_content`，包括脱敏 Raw JSON，仅保留 reasoning token、字符数和耗时等计量；生产 WebUI
+  资产同步更新。
+- 定向后端回归为 198 passed；前端 lint、19 项测试和生产构建通过。架构边界、OpenAPI、Release Impact、
+  Verification Plan、Task SLO、决策规则、行为基线、受控 Ruff、Python 编译与 `git diff --check` 全部
+  通过；Runtime Registry 和 Admin Table View 的受控行为 Golden 及决策规则清单已用项目生成器同步。
+- 本阶段只新增观测持久化和展示，没有改变 `enriched_query`、历史注入、conversation、工具输出合同或
+  Prompt Runtime 输入；canonical `chat`、`tasks`、`tools` 模板、变量与模板注册表经全量回归确认无需
+  修改。最终完整 `python -m pytest tests/ -v` 在清除代理变量并使用 Linux `/var/tmp` basetemp 后为
+  6819 passed、12 skipped、0 failed，耗时 725.24 秒。
 
 #### 10.2 回放、对比和故障注入
 

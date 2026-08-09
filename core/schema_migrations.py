@@ -109,6 +109,9 @@ _LLM_PROVIDER_CACHE_PERFORMANCE_VERSION = (
 _LLM_PROVIDER_ERROR_CATEGORY_VERSION = (
     "20260805_llm_provider_error_category"
 )
+_PROMPT_CONTEXT_MANIFEST_VERSION = (
+    "20260809_prompt_context_manifest_json"
+)
 _SESSION_GOAL_PLAN_MODE_V1_VERSION = (
     "20260804_session_goal_plan_mode_v1"
 )
@@ -1171,6 +1174,19 @@ def _llm_provider_error_category(
             })
         conn.execute(statement, updates)
         last_id = int(rows[-1]["id"])
+
+
+def _prompt_context_manifest_column(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """为 Prompt Trace 增加不含正文的完整 Context Manifest。"""
+
+    del engine, db_path
+    _add_missing_columns(conn, "prompt_render_logs", {
+        "context_manifest_json": "TEXT NOT NULL DEFAULT '{}'",
+    })
 
 
 def _reply_contract_check_logs(conn: Any, engine: Any, db_path: str | None) -> None:
@@ -5424,6 +5440,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _LLM_PROVIDER_ERROR_CATEGORY_VERSION,
         "llm provider stable error category",
         _llm_provider_error_category,
+    ),
+    (
+        _PROMPT_CONTEXT_MANIFEST_VERSION,
+        "prompt trace safe context manifest",
+        _prompt_context_manifest_column,
     ),
 ]
 

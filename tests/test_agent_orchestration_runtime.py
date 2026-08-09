@@ -786,7 +786,24 @@ def _tool_environment():
 
 
 @pytest.mark.asyncio
-async def test_runtime_executor_compiles_exact_tool_skill_mcp_and_workspace_subset():
+async def test_runtime_executor_compiles_exact_tool_skill_mcp_and_workspace_subset(
+    monkeypatch,
+):
+    runtime_events = []
+
+    def capture_runtime_event(name, phase, *, attributes=None, context=None):
+        runtime_events.append((
+            name,
+            phase,
+            dict(attributes or {}),
+            context,
+        ))
+        return None
+
+    monkeypatch.setattr(
+        "core.runtime.event_bus.emit_runtime_event",
+        capture_runtime_event,
+    )
     parent, authority, environment, mcp_wire_name, skill_document = _tool_environment()
     plan = _plan(worker_authority=authority, worker_tool_calls=2)
     factory = _Factory()
@@ -833,6 +850,18 @@ async def test_runtime_executor_compiles_exact_tool_skill_mcp_and_workspace_subs
     assert binding.context.plan(RuntimePlanKind.WORKSPACE) == (
         parent.plan(RuntimePlanKind.WORKSPACE)
     )
+    subagent_events = [
+        item for item in runtime_events if item[0] == "subagent.execute"
+    ]
+    assert [item[1] for item in subagent_events] == ["started", "succeeded"]
+    assert subagent_events[0][3].run_id == parent.run_id
+    assert subagent_events[0][3].task_run_id == binding.context.run_id
+    assert subagent_events[1][2]["status"] == "success"
+    assert subagent_events[1][2]["model_call_count"] == 1
+    assert subagent_events[1][2]["input_tokens"] > 0
+    serialized_events = json.dumps(subagent_events, ensure_ascii=False, default=str)
+    assert "最小权限" not in serialized_events
+    assert skill_document.decode("utf-8") not in serialized_events
     payload = json.loads(binding.request_content)
     assert payload["skills"][0]["document"].startswith("# 受限检索")
     assert "parent-secret-capability" not in binding.context.capabilities

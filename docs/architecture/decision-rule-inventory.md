@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`63de2779d2631dcb56848ddd055eda1d3dbfea07`
-- 规则总数：8495
+- 源提交：`2e851a2095dcac5e2974dc163d6773dd9fed5bcd`
+- 规则总数：8540
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1660 |
+| `configurable_policy` | 1665 |
 | `data_consistency` | 489 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4496 |
-| `security_invariant` | 1677 |
+| `protocol_syntax` | 4534 |
+| `security_invariant` | 1679 |
 
 ## 文件汇总
 
@@ -42,7 +42,7 @@
 | `core/llm_request_linter.py` | 63 |
 | `core/sandbox/lease_reconciler.py` | 63 |
 | `core/outbound/settlement.py` | 59 |
-| `core/tracing.py` | 56 |
+| `core/tracing.py` | 57 |
 | `core/prompt_v2/template_migration.py` | 55 |
 | `clients/new_api_client.py` | 53 |
 | `core/chat_delivery_outbox_schema.py` | 53 |
@@ -60,6 +60,7 @@
 | `api/admin/sticker_routes.py` | 45 |
 | `core/prompt_v2/flow_migrations.py` | 45 |
 | `api/admin/tool_routes.py` | 44 |
+| `core/observability/run_view.py` | 43 |
 | `app/memory_digest/builder.py` | 42 |
 | `core/persona_preprocess.py` | 41 |
 | `sandboxd/network_policy.py` | 41 |
@@ -614,6 +615,7 @@
 | `core/registry/builder.py` | 1 |
 | `core/release/runtime_verify.py` | 1 |
 | `core/repositories/chat_logs.py` | 1 |
+| `core/repositories/run_viewer.py` | 1 |
 | `core/retrieval/contracts.py` | 1 |
 | `core/run_recovery/verification.py` | 1 |
 | `core/runtime/event_bus.py` | 1 |
@@ -2001,13 +2003,13 @@
 | `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:924` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:734` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:737` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:734` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:737` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2534` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2550` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
@@ -2229,16 +2231,16 @@
 | `decision.3b34bc810d84fa25e477` | `core/telemetry/persistence.py:16` | `python.literal_collection` | `security_invariant` | `preserve` | 阶段 8 | `reviewed` |
 |  | 摘要：_SENSITIVE_KEY_PARTS = ( "authorization", "command", "content", "cookie", "password", "prompt", "secret", "stderr", "stdout", "token", ) |  |  |  |  |  |
 |  | 原因：人工复核：敏感键、控制字符和字段长度的二次过滤用于阻止正文、凭据和日志注入进入 Telemetry 账本 |  |  |  |  |  |
-| `decision.99a0f861dcb2f235b2a6` | `core/telemetry/persistence.py:54` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+| `decision.99a0f861dcb2f235b2a6` | `core/telemetry/persistence.py:56` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
 |  | 摘要：len(key) > 64 |  |  |  |  |  |
 |  | 原因：人工复核：敏感键、控制字符和字段长度的二次过滤用于阻止正文、凭据和日志注入进入 Telemetry 账本 |  |  |  |  |  |
-| `decision.9cbe9a17e5d720a823d9` | `core/telemetry/persistence.py:64` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+| `decision.9cbe9a17e5d720a823d9` | `core/telemetry/persistence.py:66` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
 |  | 摘要：value < 0 |  |  |  |  |  |
 |  | 原因：人工复核：敏感键、控制字符和字段长度的二次过滤用于阻止正文、凭据和日志注入进入 Telemetry 账本 |  |  |  |  |  |
-| `decision.73b415801c72f167a564` | `core/telemetry/persistence.py:71` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+| `decision.73b415801c72f167a564` | `core/telemetry/persistence.py:73` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
 |  | 摘要：len(value) > 256 |  |  |  |  |  |
 |  | 原因：人工复核：敏感键、控制字符和字段长度的二次过滤用于阻止正文、凭据和日志注入进入 Telemetry 账本 |  |  |  |  |  |
-| `decision.0be8d041d47e5a0a1209` | `core/telemetry/persistence.py:72` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+| `decision.0be8d041d47e5a0a1209` | `core/telemetry/persistence.py:74` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
 |  | 摘要：ord(character) < 32 |  |  |  |  |  |
 |  | 原因：人工复核：敏感键、控制字符和字段长度的二次过滤用于阻止正文、凭据和日志注入进入 Telemetry 账本 |  |  |  |  |  |
 | `decision.08e285f6b723a3dc496e` | `core/telemetry/runtime.py:43` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |

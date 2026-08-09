@@ -34,6 +34,7 @@ from core.run_ledger.read_model import (
     AuthoritativeRunLedgerView,
     load_authoritative_run_view,
 )
+from core.repositories.run_viewer import OfflineRunViewRepository
 
 router = APIRouter(tags=["admin-trace"])
 
@@ -294,8 +295,23 @@ def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(veri
     from core.durable_tasks import SqlAlchemyRunTaskService
 
     task_view = SqlAlchemyRunTaskService(db).get(run_id)
+    run_read_model = _run_read_model(run, ledger_view)
+    viewer = OfflineRunViewRepository(db).build(
+        run_id=run_id,
+        run=run_read_model,
+        ledger_projection=(
+            ledger_projection.to_dict()
+            if ledger_projection is not None
+            else None
+        ),
+        ledger_records=ledger_records,
+        tool_calls=tool_calls,
+        prompt_logs=prompt_logs,
+        llm_requests=llm_logs,
+    )
     return {
-        "run": _run_read_model(run, ledger_view),
+        "run": run_read_model,
+        "viewer": viewer,
         "durable_task": (
             task_view.to_dict() if task_view is not None else None
         ),

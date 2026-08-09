@@ -6,7 +6,7 @@ import asyncio
 import copy
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import time
 from types import MappingProxyType
@@ -40,10 +40,17 @@ from core.mcp.contracts import (
 )
 from core.mcp.diagnostics import McpDiagnosticService
 from core.mcp.secrets import McpSecretService
+from core.runtime.events import RuntimeEventContext
 
 
 SessionFactory = Callable[[], Session]
 _MAX_REQUEST_TOOLS = 64
+
+
+def _current_mcp_event_context() -> RuntimeEventContext:
+    from core.runtime.event_bus import current_runtime_event_context
+
+    return current_runtime_event_context()
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +243,8 @@ class McpRequestRuntime:
         self,
         wire_name: str,
         arguments: Mapping[str, Any],
+        *,
+        telemetry_context: RuntimeEventContext | None = None,
     ) -> McpCallResult:
         descriptor = self.descriptor(wire_name)
         if descriptor is None:
@@ -249,31 +258,89 @@ class McpRequestRuntime:
                 "MCP server 已停用或不在当前配置快照中",
                 runtime_id="mcp:request-runtime",
             )
-        _validate_arguments(descriptor, arguments)
-        db = self.session_factory()
+        from core.runtime.event_bus import (
+            current_runtime_event_context,
+            emit_runtime_event,
+        )
+
+        event_context = telemetry_context or current_runtime_event_context()
+        event_attributes = {
+            "server_id": descriptor.server_id,
+            "tool_name": descriptor.tool_name,
+            "input_schema_sha256": descriptor.input_schema_sha256,
+        }
+        event_started = time.perf_counter()
+        emit_runtime_event(
+            "mcp.call",
+            "started",
+            context=event_context,
+            attributes=event_attributes,
+        )
         try:
+            _validate_arguments(descriptor, arguments)
+            db = self.session_factory()
             try:
                 secrets = McpSecretService(db).resolve(config.secret_refs)
-            except McpSecretUnavailable:
-                failure = McpClientFailure(
-                    "secret_unavailable",
-                    phase="call",
-                    error_type="McpSecretUnavailable",
-                    retryable=False,
-                )
-                self._record_call(config, failure=failure)
-                raise failure from None
-        finally:
-            db.close()
-        try:
+            finally:
+                db.close()
             result = await self.client.call(
                 config,
                 descriptor,
                 dict(arguments),
                 secrets,
             )
+        except McpSecretUnavailable:
+            failure = McpClientFailure(
+                "secret_unavailable",
+                phase="call",
+                error_type="McpSecretUnavailable",
+                retryable=False,
+            )
+            self._record_call(config, failure=failure)
+            emit_runtime_event(
+                "mcp.call",
+                "failed",
+                context=event_context,
+                attributes={
+                    **event_attributes,
+                    "latency_ms": (time.perf_counter() - event_started) * 1000,
+                    "failure_code": failure.code,
+                    "error_type": failure.error_type,
+                    "retryable": failure.retryable,
+                    "ambiguous": failure.ambiguous,
+                },
+            )
+            raise failure from None
         except McpClientFailure as failure:
             self._record_call(config, failure=failure)
+            emit_runtime_event(
+                "mcp.call",
+                "failed",
+                context=event_context,
+                attributes={
+                    **event_attributes,
+                    "latency_ms": (time.perf_counter() - event_started) * 1000,
+                    "failure_code": failure.code,
+                    "error_type": failure.error_type,
+                    "retryable": failure.retryable,
+                    "ambiguous": failure.ambiguous,
+                },
+            )
+            raise
+        except BaseException as exc:
+            emit_runtime_event(
+                "mcp.call",
+                "failed",
+                context=event_context,
+                attributes={
+                    **event_attributes,
+                    "latency_ms": (time.perf_counter() - event_started) * 1000,
+                    "failure_code": "mcp_unexpected_error",
+                    "error_type": type(exc).__name__,
+                    "retryable": False,
+                    "ambiguous": False,
+                },
+            )
             raise
         scrubbed = _redact(
             dict(result.payload),
@@ -292,6 +359,20 @@ class McpRequestRuntime:
             latency_ms=result.latency_ms,
         )
         self._record_call(config, result=safe_result)
+        emit_runtime_event(
+            "mcp.call",
+            "failed" if safe_result.is_error else "succeeded",
+            context=event_context,
+            attributes={
+                **event_attributes,
+                "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "is_error": safe_result.is_error,
+                "failure_code": "mcp_tool_error" if safe_result.is_error else "",
+                "error_type": "mcp_tool_error" if safe_result.is_error else "",
+                "retryable": False,
+                "ambiguous": False,
+            },
+        )
         return safe_result
 
 
@@ -322,6 +403,15 @@ class McpToolExecutionPort:
             result = await self.runtime.call(
                 request.tool_call.name,
                 request.arguments,
+                telemetry_context=replace(
+                    _current_mcp_event_context(),
+                    request_id=request.context.request_id,
+                    session_id=request.context.session_id,
+                    turn_id=request.context.turn_id,
+                    trace_id=request.context.trace_id,
+                    run_id=request.context.run_id,
+                    tool_call_id=request.tool_call.call_id,
+                ),
             )
         except McpClientFailure as failure:
             if failure.ambiguous:

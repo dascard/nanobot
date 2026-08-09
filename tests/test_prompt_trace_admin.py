@@ -37,6 +37,7 @@ def test_effective_prompt_preview_request_defaults_to_canonical_prompt():
 
 def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
     from core import database
+    from core.context_engine import ContextLayer, ContextLayerBudget, ContextManifest
     from core.tracing import PromptTracer, RunTracer, ToolTracer
 
     engine = create_engine(
@@ -62,6 +63,15 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
             "drift_status": "untracked_legacy",
         }
     }
+    context_manifest = ContextManifest(
+        policy_id="prompt-context-v1-private",
+        request_prompt_sha256="d" * 64,
+        entries=(),
+        layer_budgets=tuple(
+            ContextLayerBudget(layer, 1_000, 0)
+            for layer in ContextLayer
+        ),
+    ).to_dict()
 
     run = RunTracer.start_run(
         trace_id="trace-a",
@@ -104,6 +114,7 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         prompt_default_path="/default/group_chat.md",
         prompt_sha256="b" * 64,
         prompt_template_resolutions=template_resolutions,
+        context_manifest=context_manifest,
     )
     guidance_body = "TRACE_META_GUIDANCE_BODY_SENTINEL"
     RunTracer.finish_run(
@@ -142,6 +153,7 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         assert json.loads(log.variables_json)["message_token_estimate"] == 6
         assert json.loads(log.variables_json)["tool_schema_token_estimate"] == 2
         assert json.loads(log.variables_json)["token_estimate"] == 8
+        assert json.loads(log.context_manifest_json) == context_manifest
         assert log.token_estimate == 8
         assert log.rendered_preview != "系统提示词不应完整入库"
         assert "系统提示词" in log.rendered_preview
@@ -292,7 +304,13 @@ def test_admin_prompt_and_trace_endpoints(
     db_session,
 ):
     from core import database
-    from core.tracing import LLMRequestTracer, ReplyContractTracer, RunTracer, ToolTracer
+    from core.tracing import (
+        LLMRequestTracer,
+        PromptTracer,
+        ReplyContractTracer,
+        RunTracer,
+        ToolTracer,
+    )
 
     legacy_prompt = tmp_path / "runtime_prompt.md"
     legacy_prompt.write_text("旧 Prompt 运行时标记 LEGACY_RUNTIME_MARKER", encoding="utf-8")
@@ -407,6 +425,19 @@ def test_admin_prompt_and_trace_endpoints(
         prompt_default_path=effective_v2_json["prompt_default_path"],
         prompt_sha256=effective_v2_json["prompt_sha256"],
         prompt_template_resolutions=template_resolutions,
+    )
+    PromptTracer.record_render(
+        trace_id="trace-admin",
+        run_id=run.run_id,
+        prompt_key=effective_v2_json["prompt_key"],
+        mode="managed",
+        variables={"token_estimate": effective_v2_json["token_estimate"]},
+        rendered_content="仅用于验证摘要，不进入统一 Viewer",
+        token_estimate=effective_v2_json["token_estimate"],
+        prompt_source=effective_v2_json["prompt_source"],
+        prompt_sha256=effective_v2_json["prompt_sha256"],
+        prompt_template_resolutions=template_resolutions,
+        context_manifest=effective_v2_json["context_manifest"],
     )
     tool_id = ToolTracer.start_tool_call("trace-admin", run.run_id, "reply", {"text": "ok"})
     ToolTracer.finish_tool_call(tool_id, status="error", error="boom")
@@ -531,6 +562,26 @@ def test_admin_prompt_and_trace_endpoints(
     assert detail_resp.json()["reply_contract_check_logs"][0]["result"] == "no_tool_call"
     assert json.loads(detail_resp.json()["llm_api_request_logs"][0]["response_json"])["choices"][0]["message"]["content"] == "输出"
     assert detail_resp.json()["llm_api_request_logs"][0]["response_status"] == 200
+    viewer = detail_resp.json()["viewer"]
+    assert viewer["offline"] is True
+    assert viewer["source"] == "persisted_evidence"
+    assert viewer["summary"]["status"] == "failed"
+    assert {span["kind"] for span in viewer["spans"]} >= {
+        "cache",
+        "llm",
+        "prompt",
+        "run",
+        "tool",
+    }
+    assert viewer["context_manifest"]["available"] is True
+    assert viewer["context_manifest"]["manifest"]["sha256"] == (
+        effective_v2_json["context_manifest"]["sha256"]
+    )
+    assert viewer["redaction"]["hidden_reasoning"] == "omitted"
+    serialized_viewer = json.dumps(viewer, ensure_ascii=False)
+    assert "仅用于验证摘要" not in serialized_viewer
+    assert "输入" not in serialized_viewer
+    assert "输出" not in serialized_viewer
 
     ledger_resp = client.get(
         f"/api/v1/admin/agent-runs/{run.run_id}/events",

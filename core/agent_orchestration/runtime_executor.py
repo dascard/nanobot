@@ -9,6 +9,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
+import time
 from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
@@ -62,6 +63,7 @@ from core.prompt_v2.task_contracts import (
 )
 from core.prompt_v2.task_templates import render_task_messages
 from core.tool_plan import ToolPlan, restrict_tool_plan, tool_plan_scope
+from core.telemetry.contracts import TelemetryCorrelation
 
 
 AGENT_SUBTASK_PROMPT_KEY = "tasks/agent_subtask"
@@ -383,6 +385,99 @@ class AgentRuntimeTaskExecutor:
     ) -> AgentTaskOutput:
         self._validate_execution_context(context)
         binding = self._compile_binding(context)
+        parent = self._environment.parent_context
+        parent_identity = parent.execution_identity()
+        event_context = TelemetryCorrelation(
+            request_id=parent.request_id,
+            session_id=parent.session_id,
+            turn_id=parent.turn_id,
+            trace_id=parent.trace_id or parent_identity.correlation_id,
+            run_id=parent_identity.run_id,
+            task_id=context.task.task_id,
+            task_run_id=binding.context.run_id,
+        )
+        event_attributes = {
+            "child_run_id": binding.context.run_id,
+            "task_id": context.task.task_id,
+            "role_id": context.role.role_id,
+            "attempt_no": context.attempt_no,
+            "model": binding.model_route.model_id,
+        }
+        from core.runtime.event_bus import emit_runtime_event
+
+        event_started = time.perf_counter()
+        emit_runtime_event(
+            "subagent.execute",
+            "started",
+            context=event_context,
+            attributes=event_attributes,
+        )
+        try:
+            output = await self._execute_bound(context, binding)
+        except BaseException as exc:
+            failure_code = (
+                exc.code
+                if isinstance(exc, AgentOrchestrationError)
+                else "subagent_execution_interrupted"
+                if isinstance(exc, asyncio.CancelledError)
+                else "subagent_execution_failed"
+            )
+            emit_runtime_event(
+                "subagent.execute",
+                "failed",
+                context=event_context,
+                attributes={
+                    **event_attributes,
+                    "status": "cancelled"
+                    if isinstance(exc, asyncio.CancelledError)
+                    else "error",
+                    "latency_ms": (time.perf_counter() - event_started) * 1000,
+                    "failure_code": failure_code,
+                    "error_type": type(exc).__name__,
+                    "retryable": context.task.retry_policy.permits(
+                        failure_code,
+                        context.attempt_no,
+                    ),
+                },
+            )
+            raise
+        failed = output.status is AgentTaskOutputStatus.ERROR
+        failure_code = str(output.data.get("error_code") or "") if failed else ""
+        emit_runtime_event(
+            "subagent.execute",
+            "failed" if failed else "succeeded",
+            context=event_context,
+            attributes={
+                **event_attributes,
+                "status": output.status.value,
+                "latency_ms": (time.perf_counter() - event_started) * 1000,
+                "model_call_count": output.model_calls,
+                "tool_call_count": output.tool_calls,
+                "artifact_count": len(output.artifacts),
+                "input_tokens": output.usage.input_tokens,
+                "output_tokens": output.usage.output_tokens,
+                "cached_input_tokens": output.usage.cached_input_tokens,
+                "reasoning_tokens": output.usage.reasoning_tokens,
+                "cost_microunits": output.usage.cost_microunits,
+                "failure_code": failure_code,
+                "error_type": "AgentTaskOutputError" if failed else "",
+                "retryable": (
+                    context.task.retry_policy.permits(
+                        failure_code,
+                        context.attempt_no,
+                    )
+                    if failed
+                    else False
+                ),
+            },
+        )
+        return output
+
+    async def _execute_bound(
+        self,
+        context: AgentTaskExecutionContext,
+        binding: ChildAgentRuntimeBinding,
+    ) -> AgentTaskOutput:
         lease = await self._factory.create(binding)
         if not isinstance(lease, ChildAgentRuntimeLease):
             raise AgentOrchestrationError(
