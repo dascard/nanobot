@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from core.database import AdminAuditLog
+from core.evolution_control import store as evolution_store
 from core.evolution_control import (
     EVOLUTION_SCHEMA_VERSION,
     EvolutionCandidateBundle,
@@ -797,7 +798,8 @@ def test_approved_routing_canary_reorders_real_reply_runtime_candidates(
         allowlist=("session/allowlisted",),
     )
     monkeypatch.setattr(
-        "core.evolution_control.store._utc_now",
+        evolution_store,
+        "_utc_now",
         lambda: FIXED_NOW,
     )
 
@@ -866,7 +868,8 @@ def test_routing_canary_cannot_inject_unconfigured_model(tmp_path, monkeypatch):
         allowlist=("session/allowlisted",),
     )
     monkeypatch.setattr(
-        "core.evolution_control.store._utc_now",
+        evolution_store,
+        "_utc_now",
         lambda: FIXED_NOW,
     )
 
