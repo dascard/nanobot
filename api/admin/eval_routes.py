@@ -557,6 +557,145 @@ class EvalRunRequest(BaseModel):
     include_candidates: bool = False
 
 
+class EvalReplayCompareRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    fixture: dict[str, Any]
+    baseline: dict[str, Any]
+    candidate: dict[str, Any]
+
+
+class EvalReplayFaultMatrixRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    fixture: dict[str, Any]
+    script: dict[str, Any]
+    faults: list[dict[str, Any]] | None = None
+
+
+@router.post("/evals/replay/compare")
+def eval_replay_compare(
+    body: EvalReplayCompareRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.replay import ReplayContractError
+    from evals.replay import execute_compare
+
+    try:
+        report = execute_compare(body.model_dump())
+    except ReplayContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    branches = ("baseline", "candidate")
+    passed = sum(
+        1 for branch in branches if report[branch]["status"] == "succeeded"
+    )
+    run_record = save_run(db, "semantic_replay_compare", {
+        "total": len(branches),
+        "passed": passed,
+        "failed": len(branches) - passed,
+        "pass_rate": passed / len(branches),
+        "summary": {
+            "fixture_id": report["fixture_id"],
+            "diff": report["diff"],
+            "report_sha256": report["report_sha256"],
+        },
+    })
+    save_run_results(db, run_record.id, [
+        {
+            "case_id": f"semantic-replay-{branch}",
+            "suite": "semantic_replay_compare",
+            "passed": report[branch]["status"] == "succeeded",
+            "score": (
+                1.0 if report[branch]["status"] == "succeeded" else 0.0
+            ),
+            "errors": (
+                []
+                if report[branch]["status"] == "succeeded"
+                else [report[branch]["failure_code"]]
+            ),
+            "output": report[branch],
+        }
+        for branch in branches
+    ])
+    audit_request(
+        db,
+        request,
+        "run_semantic_replay_compare",
+        "eval",
+        str(report["fixture_id"]),
+        {
+            "run_id": run_record.id,
+            "report_sha256": report["report_sha256"],
+            "changed_dimensions": report["diff"]["changed_dimensions"],
+        },
+    )
+    return {"run_id": run_record.id, **report}
+
+
+@router.post("/evals/replay/fault-matrix")
+def eval_replay_fault_matrix(
+    body: EvalReplayFaultMatrixRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.replay import ReplayContractError
+    from evals.replay import execute_fault_matrix
+
+    payload = body.model_dump(exclude_none=True)
+    try:
+        report = execute_fault_matrix(payload)
+    except ReplayContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    total = int(report["total"])
+    passed = int(report["passed"])
+    run_record = save_run(db, "semantic_replay_fault_matrix", {
+        "total": total,
+        "passed": passed,
+        "failed": total - passed,
+        "pass_rate": passed / total if total else 0.0,
+        "summary": {
+            "fixture_id": report["fixture_id"],
+            "complete_coverage": report["complete_coverage"],
+            "missing_fault_kinds": report["missing_fault_kinds"],
+            "duplicate_side_effect_execution_count": report[
+                "duplicate_side_effect_execution_count"
+            ],
+            "report_sha256": report["report_sha256"],
+        },
+    })
+    save_run_results(db, run_record.id, [
+        {
+            "case_id": f"semantic-replay-{item['fault_kind']}",
+            "suite": "semantic_replay_fault_matrix",
+            "passed": item["passed"],
+            "score": 1.0 if item["passed"] else 0.0,
+            "errors": item["errors"],
+            "output": item["report"],
+        }
+        for item in report["results"]
+    ])
+    audit_request(
+        db,
+        request,
+        "run_semantic_replay_fault_matrix",
+        "eval",
+        str(report["fixture_id"]),
+        {
+            "run_id": run_record.id,
+            "report_sha256": report["report_sha256"],
+            "passed": passed,
+            "failed": total - passed,
+            "complete_coverage": report["complete_coverage"],
+        },
+    )
+    return {"run_id": run_record.id, **report}
+
+
 @router.post("/evals/run")
 def eval_run_suite(
     body: EvalRunRequest,

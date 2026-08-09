@@ -2467,6 +2467,69 @@
         "title": "EvalCandidatePatch",
         "type": "object"
       },
+      "EvalReplayCompareRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline": {
+            "additionalProperties": true,
+            "title": "Baseline",
+            "type": "object"
+          },
+          "candidate": {
+            "additionalProperties": true,
+            "title": "Candidate",
+            "type": "object"
+          },
+          "fixture": {
+            "additionalProperties": true,
+            "title": "Fixture",
+            "type": "object"
+          }
+        },
+        "required": [
+          "fixture",
+          "baseline",
+          "candidate"
+        ],
+        "title": "EvalReplayCompareRequest",
+        "type": "object"
+      },
+      "EvalReplayFaultMatrixRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "faults": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faults"
+          },
+          "fixture": {
+            "additionalProperties": true,
+            "title": "Fixture",
+            "type": "object"
+          },
+          "script": {
+            "additionalProperties": true,
+            "title": "Script",
+            "type": "object"
+          }
+        },
+        "required": [
+          "fixture",
+          "script"
+        ],
+        "title": "EvalReplayFaultMatrixRequest",
+        "type": "object"
+      },
       "EvalRunRequest": {
         "properties": {
           "include_candidates": {
@@ -14256,6 +14319,136 @@
           }
         },
         "summary": "Eval Expected Contract",
+        "tags": [
+          "admin-eval"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/replay/compare": {
+      "post": {
+        "operationId": "post_api_v1_admin_evals_replay_compare",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalReplayCompareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Eval Replay Compare",
+        "tags": [
+          "admin-eval"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/replay/fault-matrix": {
+      "post": {
+        "operationId": "post_api_v1_admin_evals_replay_fault_matrix",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalReplayFaultMatrixRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Eval Replay Fault Matrix",
         "tags": [
           "admin-eval"
         ],

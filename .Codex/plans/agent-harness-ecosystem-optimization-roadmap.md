@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 10.1 已完成，准备阶段 10.2）
+> 状态：执行中（阶段 10.2 已完成，准备阶段 10.3）
 >
 > 建立日期：2026-08-03
 >
@@ -1427,10 +1427,38 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 10.2 回放、对比和故障注入
 
-- [ ] 使用冻结 Event 和模型替身进行确定性回放。
-- [ ] 支持 Runtime、Prompt、模型、Skill 和 Context 策略 A/B diff。
-- [ ] 注入超时、断流、工具失败、DB 锁、lease 丢失和 Sandbox 重启。
-- [ ] 验证恢复不会重复副作用。
+- [x] 使用冻结 Event 和模型替身进行确定性回放。
+- [x] 支持 Runtime、Prompt、模型、Skill 和 Context 策略 A/B diff。
+- [x] 注入超时、断流、工具失败、DB 锁、lease 丢失和 Sandbox 重启。
+- [x] 验证恢复不会重复副作用。
+
+实现记录（2026-08-09）：
+
+- 新增框架无关的 `core/replay` 稳定合同和执行引擎。冻结 fixture 只接受连续 Event 序号、安全标识符、
+  状态、计数和 SHA-256，不保存消息、Prompt、工具参数／结果或隐藏推理正文；输入使用严格字段白名单、
+  数量上限和版本校验。回放明确标记为离线 semantic replay 和 `wire_exact=false`，不把语义恢复夸大为
+  逐字节请求重放。
+- 冻结模型替身将每个响应绑定到 fixture、Runtime／Prompt／模型／Skill／Context 五维策略指纹、步骤和
+  前序状态的请求摘要；摘要或步骤不匹配时拒绝运行，且模型外部调用数固定为零。冻结工具替身只消费只读
+  结果或已落定的副作用回执；副作用工具缺回执、回执未终止或状态不一致时 fail closed，回放不会调用真实
+  工具，副作用执行数与重复执行数均固定为零。
+- A/B 对比在同一冻结 Event 上分别执行 baseline 与 candidate，逐维报告 Runtime、Prompt、模型、Skill
+  集和 Context 策略的 ID／摘要变化，同时比较终态、输出摘要、状态摘要、Trace 和 token／成本差值；报告
+  不自动宣布质量赢家，输出变化必须交给后续质量评测。
+- 故障矩阵将模型超时、流中断、工具失败、DB 锁、lease 丢失和 Sandbox 重启拆成六次独立运行，避免前一
+  终态掩盖后续覆盖。DB 锁使用有界 checkpoint 重试，lease 丢失立即取消，Sandbox 重启先恢复冻结
+  checkpoint 再复用副作用回执；矩阵强制检查故障已命中、恢复已发生、回执已复用且无重复副作用。
+- 新增 `python -m evals.replay compare|fault-matrix` 实际 CLI，以及受管理员认证的
+  `POST /evals/replay/compare`、`POST /evals/replay/fault-matrix`；两条管理接口真实执行回放并把安全报告
+  写入现有 EvalRun／EvalRunResult，审计只记录 fixture ID、报告摘要和汇总字段。OpenAPI 生成物和兼容
+  Admin façade 已同步，不存在只观测不执行的 shadow 分支。
+- 新增 10 项回放专项测试；Runtime、恢复、评测 API 与治理门禁定向回归为 201 passed。架构边界、
+  OpenAPI、Release Impact、Verification Plan、Task SLO、行为基线、决策规则清单、受控 Ruff、Python
+  编译与 `git diff --check` 均通过；决策规则清单已用项目生成器同步。
+- 本阶段没有修改 `enriched_query`、历史注入、conversation、工具输出合同或 Prompt Runtime 输入；
+  canonical `chat`、`tasks`、`tools` 模板、变量和模板注册表经完整回归确认无需修改。最终完整
+  `python -m pytest tests/ -v --basetemp=/var/tmp/nanobot-pytest-stage10-2` 在清除代理变量后为
+  6829 passed、12 skipped、0 failed，耗时 758.45 秒。
 
 #### 10.3 扩展评测门禁
 

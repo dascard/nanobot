@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`2e851a2095dcac5e2974dc163d6773dd9fed5bcd`
-- 规则总数：8540
+- 源提交：`c59630fc1b022599ab2e8c2e9f953359138e72ec`
+- 规则总数：8564
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1665 |
-| `data_consistency` | 489 |
+| `configurable_policy` | 1674 |
+| `data_consistency` | 493 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4534 |
-| `security_invariant` | 1679 |
+| `protocol_syntax` | 4544 |
+| `security_invariant` | 1680 |
 
 ## 文件汇总
 
@@ -92,6 +92,7 @@
 | `core/outbound/generation.py` | 31 |
 | `core/sticker_memory.py` | 31 |
 | `sandboxd/docker_backend.py` | 31 |
+| `api/admin/eval_routes.py` | 30 |
 | `api/admin/group_learning_routes.py` | 30 |
 | `core/context_compaction.py` | 30 |
 | `core/legacy_adapter.py` | 30 |
@@ -117,7 +118,6 @@
 | `core/run_ledger/projection.py` | 25 |
 | `core/timing_score.py` | 25 |
 | `sandboxd/process_manager.py` | 25 |
-| `api/admin/eval_routes.py` | 24 |
 | `core/outbound_transport.py` | 24 |
 | `core/model_provider/preset_config.py` | 23 |
 | `core/outbound/run_claims.py` | 23 |
@@ -241,6 +241,7 @@
 | `core/proactive/grounding.py` | 12 |
 | `core/proactive/serialization.py` | 12 |
 | `core/prompt_v2/flow.py` | 12 |
+| `core/replay/contracts.py` | 12 |
 | `core/run_ledger/adapters.py` | 12 |
 | `core/semantic/scoring.py` | 12 |
 | `core/session_goal.py` | 12 |
@@ -394,6 +395,7 @@
 | `core/proactive_candidate.py` | 6 |
 | `core/proactive_diagnostics.py` | 6 |
 | `core/qq_outbound_renderer.py` | 6 |
+| `core/replay/engine.py` | 6 |
 | `core/web_search/search_runtime.py` | 6 |
 | `foundation/message_contract/parsing.py` | 6 |
 | `nanobot_kt/runtime_adapter.py` | 6 |
