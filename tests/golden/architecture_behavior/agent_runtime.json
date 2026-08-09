@@ -64,6 +64,8 @@
       "request_count": 1,
       "routes": [
         {
+          "cost_input_1m": 0.0,
+          "cost_output_1m": 0.0,
           "enable_thinking": "false",
           "max_tokens": 512,
           "model_id": "fixture-model",
@@ -320,6 +322,8 @@
       "request_count": 1,
       "routes": [
         {
+          "cost_input_1m": 0.0,
+          "cost_output_1m": 0.0,
           "enable_thinking": "false",
           "max_tokens": 512,
           "model_id": "fixture-model",
@@ -704,6 +708,8 @@
       "request_count": 3,
       "routes": [
         {
+          "cost_input_1m": 0.0,
+          "cost_output_1m": 0.0,
           "enable_thinking": "false",
           "max_tokens": 512,
           "model_id": "fixture-model",
@@ -1617,6 +1623,8 @@
       "request_count": 1,
       "routes": [
         {
+          "cost_input_1m": 0.0,
+          "cost_output_1m": 0.0,
           "enable_thinking": "false",
           "max_tokens": 512,
           "model_id": "fixture-model",

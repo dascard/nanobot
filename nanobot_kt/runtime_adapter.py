@@ -243,6 +243,7 @@ class KtRuntimeAdapter:
         self._budget_guard_plugin: object | None = None
         self._active_request: AgentTurnRequest | None = None
         self._active_budget: RuntimeBudgetAccount | None = None
+        self._active_route: RuntimeModelRoute | None = None
 
     @property
     def runtime_id(self) -> str:
@@ -847,6 +848,8 @@ class KtRuntimeAdapter:
             self._agent,
             lambda: self._active_budget,
             lambda: self._active_request,
+            route_provider=lambda: self._active_route,
+            max_tokens_applier=self._apply_budget_max_tokens,
         )
         manager = getattr(self._agent, "plugins", None)
         getter = getattr(manager, "get_plugin", None)
@@ -874,6 +877,17 @@ class KtRuntimeAdapter:
             )
         return status
 
+    def _apply_budget_max_tokens(self, max_tokens: int) -> None:
+        controller = getattr(self._agent, "controller", None)
+        llm = getattr(controller, "llm", None)
+        config = getattr(llm, "config", None)
+        if config is None or not hasattr(config, "max_tokens"):
+            raise AgentRuntimeCapabilityError(
+                "KT LLM 不支持预算收紧 max_tokens",
+                runtime_id=self.runtime_id,
+            )
+        config.max_tokens = max_tokens
+
     def set_model_route(self, route: RuntimeModelRoute) -> None:
         self._lifecycle.ensure(RuntimeLifecycleState.RUNNING)
         try:
@@ -890,6 +904,7 @@ class KtRuntimeAdapter:
                 "KT 模型路由应用失败",
                 runtime_id=self.runtime_id,
             ) from exc
+        self._active_route = route
 
     def inspect_tool_calls(self) -> tuple[RuntimeToolCall, ...]:
         calls: list[RuntimeToolCall] = []

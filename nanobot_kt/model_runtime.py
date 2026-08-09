@@ -267,8 +267,12 @@ def _resolve_legacy_reply_route_plan(
 
     model_id = str(route.get("model") or "")
     model_info = registry.get_model_info(model_id) if model_id else None
+    cost_input_1m = route.get("cost_input_1m")
+    cost_output_1m = route.get("cost_output_1m")
     if model_info is not None:
         normalized_model = normalize_model_capability_fields(model_info)
+        cost_input_1m = normalized_model.get("cost_input_1m")
+        cost_output_1m = normalized_model.get("cost_output_1m")
         capabilities = {
             key: bool(normalized_model.get(key))
             for key in (
@@ -319,6 +323,8 @@ def _resolve_legacy_reply_route_plan(
         temperature=route.get("temperature"),
         max_tokens=max_tokens,
         max_context=int(route.get("max_context") or 128000),
+        cost_input_1m=cost_input_1m,
+        cost_output_1m=cost_output_1m,
         enable_thinking=route.get("enable_thinking", "auto"),
         capabilities=capabilities,
         capability_evidence=capability_evidence,

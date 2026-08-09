@@ -138,6 +138,7 @@ def _stub_healthy_reply_route(monkeypatch):
         "provider": "new-api",
         "intelligence": 12,
         "cost_input_1m": 0.0,
+        "cost_output_1m": 0.0,
         "context_window": 128000,
         "supports_stream": True,
         "supports_tools": True,

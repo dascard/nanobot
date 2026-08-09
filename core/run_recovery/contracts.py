@@ -372,6 +372,8 @@ def _model_route_to_dict(route: RuntimeModelRoute | None) -> dict[str, object] |
         "max_tokens": route.max_tokens,
         "timeout_seconds": route.timeout_seconds,
         "enable_thinking": route.enable_thinking,
+        "cost_input_1m": route.cost_input_1m,
+        "cost_output_1m": route.cost_output_1m,
     }
 
 
@@ -566,6 +568,8 @@ def checkpoint_document_model_route(
         max_tokens=route.get("max_tokens"),
         timeout_seconds=route.get("timeout_seconds"),
         enable_thinking=route.get("enable_thinking"),
+        cost_input_1m=route.get("cost_input_1m", 0.0),
+        cost_output_1m=route.get("cost_output_1m", 0.0),
     )
 
 

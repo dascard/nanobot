@@ -255,6 +255,9 @@ def runtime_model_route_sha256(route: RuntimeModelRoute) -> str:
         "timeout_seconds": route.timeout_seconds,
         "enable_thinking": route.enable_thinking,
     }
+    if route.cost_input_1m != 0.0 or route.cost_output_1m != 0.0:
+        payload["cost_input_1m"] = route.cost_input_1m
+        payload["cost_output_1m"] = route.cost_output_1m
     encoded = json.dumps(
         payload,
         ensure_ascii=False,

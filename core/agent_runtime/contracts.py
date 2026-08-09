@@ -878,6 +878,8 @@ class RuntimeModelRoute:
     max_tokens: int | None = None
     timeout_seconds: float | None = None
     enable_thinking: str | bool | None = None
+    cost_input_1m: float | None = None
+    cost_output_1m: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "route_id", _required(self.route_id, "route_id"))
@@ -892,6 +894,16 @@ class RuntimeModelRoute:
         if self.timeout_seconds is not None:
             if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
                 raise ValueError("timeout_seconds 必须是有限正数")
+        for name in ("cost_input_1m", "cost_output_1m"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} 必须是非负有限数值或 None")
+            normalized = float(value)
+            if not math.isfinite(normalized) or normalized < 0:
+                raise ValueError(f"{name} 必须是非负有限数值或 None")
+            object.__setattr__(self, name, normalized)
         thinking = self.enable_thinking
         if isinstance(thinking, bool):
             thinking = "true" if thinking else "false"

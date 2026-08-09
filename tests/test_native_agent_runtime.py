@@ -48,6 +48,7 @@ from core.agent_runtime import (
     RuntimeToolExecutionResult,
     RuntimeTurnKind,
     StaticPermissionPort,
+    estimate_model_input_tokens,
 )
 from core.context_compaction import (
     ContextCompactionPolicy,
@@ -247,6 +248,19 @@ class _BlockingCompletionPort:
         yield {"choices": [{"delta": {"content": "不应到达"}}]}
 
 
+class _TestNativeAgentRuntime(NativeAgentRuntime):
+    async def start(self) -> None:
+        await super().start()
+        self.set_model_route(RuntimeModelRoute(
+            route_id="test/default-free",
+            model_id="host-bound",
+            provider_id="test",
+            max_tokens=16_384,
+            cost_input_1m=0.0,
+            cost_output_1m=0.0,
+        ))
+
+
 def _completed_tool_result(
     request: RuntimeToolExecutionRequest,
     output: object,
@@ -278,7 +292,7 @@ def _runtime(
 ) -> NativeAgentRuntime:
     bindings = dict(handlers or {})
     tool_port = RegisteredToolExecutionPort(bindings)
-    return NativeAgentRuntime(
+    return _TestNativeAgentRuntime(
         completion_port,
         tool_port,
         runtime_id="native:test",
@@ -296,7 +310,7 @@ def _runtime(
 def _governance_with_limits(
     *,
     model_calls: int,
-    tokens: int = 100,
+    tokens: int = 10_000,
     tool_steps: int = 4,
     tool_name: str = "",
 ) -> RuntimeGovernanceEnvelope:
@@ -388,6 +402,131 @@ async def test_native_runtime_counts_every_physical_model_attempt_against_budget
         ))
 
     assert len(completion.complete_requests) == 1
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_clamps_provider_max_tokens_before_request():
+    completion = _ScriptedCompletionPort(responses=(
+        _assistant_response(
+            "已收紧",
+            usage={"prompt_tokens": 8, "completion_tokens": 2},
+        ),
+    ))
+    runtime = _runtime(completion)
+    await runtime.start()
+    runtime.set_model_route(RuntimeModelRoute(
+        route_id="reply/budget-clamp",
+        model_id="model-native",
+        provider_id="new-api",
+        max_tokens=16_000,
+        cost_input_1m=0.0,
+        cost_output_1m=0.0,
+    ))
+    context = _context(governance=_governance_with_limits(
+        model_calls=1,
+        tokens=80,
+    ))
+
+    await runtime.run(AgentTurnRequest(context, "执行"))
+
+    request = completion.complete_requests[0]
+    expected_input = estimate_model_input_tokens(
+        request.messages,
+        request.tools or (),
+    )
+    assert request.max_tokens == 80 - expected_input
+    assert 0 < request.max_tokens < 16_000
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_denies_unknown_pricing_before_provider_request():
+    completion = _ScriptedCompletionPort(responses=(
+        _assistant_response("不应调用"),
+    ))
+    runtime = _runtime(completion)
+    await runtime.start()
+    runtime.set_model_route(RuntimeModelRoute(
+        route_id="reply/unknown-pricing",
+        model_id="model-native",
+        provider_id="new-api",
+        max_tokens=16,
+        cost_input_1m=None,
+        cost_output_1m=None,
+    ))
+
+    with pytest.raises(
+        AgentRuntimeBudgetExceededError,
+        match="model_pricing_unknown",
+    ):
+        await runtime.run(AgentTurnRequest(_context(), "执行"))
+
+    assert completion.complete_requests == []
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_denies_missing_route_before_provider_request():
+    completion = _ScriptedCompletionPort(responses=(
+        _assistant_response("不应调用"),
+    ))
+    runtime = NativeAgentRuntime(
+        completion,
+        RegisteredToolExecutionPort({}),
+        runtime_id="native:missing-route",
+        tool_plan_resolver=lambda: None,
+        available_tool_names=(),
+    )
+    await runtime.start()
+
+    with pytest.raises(
+        AgentRuntimeBudgetExceededError,
+        match="model_pricing_unknown",
+    ):
+        await runtime.run(AgentTurnRequest(_context(), "执行"))
+
+    assert completion.complete_requests == []
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_timeout_keeps_pessimistic_model_charge():
+    completion = _BlockingCompletionPort()
+    manager = RuntimeBudgetManager()
+    runtime = _runtime(
+        completion,
+        budget_manager=manager,
+        config=NativeAgentRuntimeConfig(
+            request_timeout_seconds=0.02,
+            max_model_attempts=1,
+        ),
+    )
+    await runtime.start()
+    runtime.set_model_route(RuntimeModelRoute(
+        route_id="reply/charged-timeout",
+        model_id="model-native",
+        provider_id="new-api",
+        max_tokens=10,
+        cost_input_1m=2.0,
+        cost_output_1m=5.0,
+    ))
+    context = _context(governance=_governance_with_limits(
+        model_calls=1,
+        tokens=100,
+    ))
+
+    with pytest.raises(TimeoutError):
+        await runtime.run(AgentTurnRequest(context, "等待超时"))
+
+    account = manager.bind(
+        context.execution_identity(),
+        context.governance,
+    )
+    charged = account.consumption(RuntimeBudgetScope.TURN)
+    assert charged.model_calls == 1
+    assert charged.tokens > 10
+    assert charged.cost_microunits > 50
     await runtime.stop()
 
 
@@ -655,6 +794,8 @@ async def test_native_runtime_satisfies_port_and_projects_prompt_route_and_usage
             temperature=0.2,
             max_tokens=256,
             enable_thinking=False,
+            cost_input_1m=0.0,
+            cost_output_1m=0.0,
         )
     )
     sink = InMemoryRunEventSink()
@@ -895,7 +1036,7 @@ async def test_native_runtime_reports_each_call_usage_instead_of_turn_cumulative
     await runtime.start()
     context = _context(governance=_governance_with_limits(
         model_calls=2,
-        tokens=20,
+        tokens=1_000,
     ))
 
     first = await runtime.run(AgentTurnRequest(context, "第一次"))
@@ -1096,6 +1237,8 @@ async def test_native_runtime_timeout_is_normalized_to_typed_terminal_events():
             model_id="model-native",
             provider_id="new-api",
             timeout_seconds=0.02,
+            cost_input_1m=0.0,
+            cost_output_1m=0.0,
         )
     )
     events = []
@@ -1374,6 +1517,8 @@ async def test_native_runtime_completes_bridge_reply_contract_main_path():
         api_key="secret",
         timeout=30,
         model="model-native",
+        cost_input_1m=0.0,
+        cost_output_1m=0.0,
         capabilities={
             "supports_stream": True,
             "supports_tools": True,

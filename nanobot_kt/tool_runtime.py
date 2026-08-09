@@ -20,7 +20,10 @@ from core.agent_runtime import (
     AgentTurnRequest,
     PermissionPort,
     RuntimeBudgetAccount,
+    RuntimeModelBudgetReservation,
+    RuntimeModelRoute,
     RuntimeBudgetReservation,
+    estimate_model_input_tokens,
 )
 from core.tool_execution_policy import (
     FINAL_ACTION_TOOLS,
@@ -311,6 +314,9 @@ class _BudgetTurnState:
     reservations: dict[str, RuntimeBudgetReservation] = field(
         default_factory=dict
     )
+    model_reservations: list[RuntimeModelBudgetReservation] = field(
+        default_factory=list
+    )
 
 
 class RuntimeBudgetGuardPlugin(BasePlugin):
@@ -320,14 +326,27 @@ class RuntimeBudgetGuardPlugin(BasePlugin):
     # 放在受管 Hook 之后，确保预算批准是原始调用前的最后一道门禁。
     priority = 20_000
 
-    def __init__(self, budget_provider: Any, request_provider: Any) -> None:
+    def __init__(
+        self,
+        budget_provider: Any,
+        request_provider: Any,
+        *,
+        route_provider: Any = None,
+        max_tokens_applier: Any = None,
+    ) -> None:
         super().__init__()
         if not callable(budget_provider):
             raise TypeError("budget_provider 必须可调用")
         if not callable(request_provider):
             raise TypeError("request_provider 必须可调用")
+        if route_provider is not None and not callable(route_provider):
+            raise TypeError("route_provider 必须可调用")
+        if max_tokens_applier is not None and not callable(max_tokens_applier):
+            raise TypeError("max_tokens_applier 必须可调用")
         self._budget_provider = budget_provider
         self._request_provider = request_provider
+        self._route_provider = route_provider
+        self._max_tokens_applier = max_tokens_applier
         self._turn_state: ContextVar[_BudgetTurnState | None] = ContextVar(
             f"nanobot_kt_budget_failure_{id(self)}",
             default=None,
@@ -341,12 +360,21 @@ class RuntimeBudgetGuardPlugin(BasePlugin):
         if state is not None:
             budget = self._budget_provider()
             if isinstance(budget, RuntimeBudgetAccount):
+                for reservation in tuple(state.model_reservations):
+                    try:
+                        budget.charge_model_attempt_unknown(
+                            reservation,
+                            reason="turn_ended_without_usage",
+                        )
+                    except Exception:
+                        pass
                 for reservation in tuple(state.reservations.values()):
                     try:
                         budget.release(reservation)
                     except Exception:
                         pass
             state.reservations.clear()
+            state.model_reservations.clear()
         self._turn_state.reset(token)
 
     def raise_deferred_failure(self) -> None:
@@ -424,10 +452,44 @@ class RuntimeBudgetGuardPlugin(BasePlugin):
         messages: list[dict],
         **kwargs: Any,
     ) -> list[dict] | None:
-        del messages
         try:
-            self._budget().reserve_model(self._model_id(kwargs.get("model")))
+            route = (
+                self._route_provider()
+                if self._route_provider is not None
+                else None
+            )
+            if route is not None and not isinstance(route, RuntimeModelRoute):
+                raise TypeError("KT Runtime 模型路由无效")
+            model_id = self._model_id(kwargs.get("model"))
+            if route is not None and route.model_id != model_id:
+                raise RuntimeError("KT Runtime 模型路由与实际调用不一致")
+            reservation = self._budget().reserve_model_attempt(
+                model_id,
+                input_tokens=estimate_model_input_tokens(
+                    messages,
+                    kwargs.get("tools") or (),
+                ),
+                max_output_tokens=(
+                    route.max_tokens
+                    if route is not None and route.max_tokens is not None
+                    else 16_384
+                ),
+                cost_input_1m=(
+                    route.cost_input_1m if route is not None else None
+                ),
+                cost_output_1m=(
+                    route.cost_output_1m if route is not None else None
+                ),
+            )
+            if self._max_tokens_applier is not None:
+                self._max_tokens_applier(reservation.max_output_tokens)
+            self._state().model_reservations.append(reservation)
         except Exception as exc:
+            if "reservation" in locals():
+                self._budget().charge_model_attempt_unknown(
+                    reservation,
+                    reason="max_tokens_apply_failed",
+                )
             self._defer(exc)
             raise PluginBlockError("runtime_model_budget_denied") from exc
         return None
@@ -441,13 +503,21 @@ class RuntimeBudgetGuardPlugin(BasePlugin):
     ) -> str | None:
         del messages, response, kwargs
         normalized = self._usage(usage)
-        if normalized is not None:
-            try:
-                self._budget().record_usage(normalized)
-            except Exception as exc:
-                # KT 会隔离 post hook 异常；Adapter 在 inject_event 返回后
-                # 重新抛出这个失败，避免预算超限退化成观测日志。
-                self._defer(exc)
+        state = self._state()
+        if not state.model_reservations:
+            self._defer(RuntimeError("KT 模型 budget reservation 缺失"))
+            return None
+        reservation = state.model_reservations.pop(0)
+        try:
+            self._budget().settle_model_attempt(reservation, normalized)
+        except Exception as exc:
+            self._budget().charge_model_attempt_unknown(
+                reservation,
+                reason="usage_settlement_failed",
+            )
+            # KT 会隔离 post hook 异常；Adapter 在 inject_event 返回后
+            # 重新抛出这个失败，避免预算超限退化成观测日志。
+            self._defer(exc)
         return None
 
     async def pre_tool_execute(
@@ -597,6 +667,9 @@ def install_runtime_budget_guard(
     agent: Any,
     budget_provider: Any,
     request_provider: Any,
+    *,
+    route_provider: Any = None,
+    max_tokens_applier: Any = None,
 ) -> bool:
     """安装 KT 统一预算门禁；同一 Agent 只注册一次。"""
 
@@ -606,7 +679,12 @@ def install_runtime_budget_guard(
     if _get_registered_plugin(manager, RuntimeBudgetGuardPlugin.name) is not None:
         agent._nanobot_runtime_budget_guard_installed = True
         return False
-    manager.register(RuntimeBudgetGuardPlugin(budget_provider, request_provider))
+    manager.register(RuntimeBudgetGuardPlugin(
+        budget_provider,
+        request_provider,
+        route_provider=route_provider,
+        max_tokens_applier=max_tokens_applier,
+    ))
     agent._nanobot_runtime_budget_guard_installed = True
     return True
 

@@ -152,6 +152,8 @@ def _route(model: str = "test-model") -> RuntimeModelRoute:
         max_tokens=2048,
         timeout_seconds=30.0,
         enable_thinking="false",
+        cost_input_1m=0.5,
+        cost_output_1m=2.0,
     )
 
 
@@ -332,6 +334,8 @@ async def test_checkpoint_is_authoritative_versioned_and_secret_safe(db_session)
     assert "sk-abcdefghijklmnop" not in serialized
     assert "redacted" in serialized
     assert state.reference.resumable is True
+    assert state.model_route.cost_input_1m == 0.5
+    assert state.model_route.cost_output_1m == 2.0
     assert state.plan(RuntimePlanKind.MANIFEST).sha256 == "1" * 64
     row = db_session.get(RunCheckpointRow, reference.checkpoint_id)
     record = SqlAlchemyRunEventLedger(db_session).get(

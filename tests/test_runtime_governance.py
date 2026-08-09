@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -25,6 +26,7 @@ from core.agent_runtime import (
     RuntimeBudgetScope,
     RuntimeChatType,
     RuntimeGovernanceEnvelope,
+    RuntimeModelRoute,
     RuntimeOwnerType,
     RuntimePermissionDecision,
     RuntimePermissionOutcome,
@@ -35,6 +37,7 @@ from core.agent_runtime import (
     RuntimePrincipal,
     RuntimeRunIdentity,
     RuntimeUsage,
+    estimate_model_input_tokens,
 )
 from core.db.models.permission import PermissionSessionGrantRow
 from core.permissions import (
@@ -423,6 +426,133 @@ def test_budget_manager_denies_actual_token_and_cost_overrun(usage, reason):
         account.record_usage(usage)
 
 
+def test_budget_manager_reserves_pessimistic_model_usage_and_refunds_actual():
+    account = RuntimeBudgetManager().bind(
+        _identity(),
+        _governance(tokens=20, cost=100),
+    )
+
+    reservation = account.reserve_model_attempt(
+        "model-a",
+        input_tokens=4,
+        max_output_tokens=10,
+        cost_input_1m=2.0,
+        cost_output_1m=5.0,
+    )
+
+    assert reservation.max_output_tokens == 10
+    assert reservation.reserved_tokens == 14
+    assert reservation.reserved_cost_microunits == 58
+    reserved = account.consumption(RuntimeBudgetScope.TURN)
+    assert (reserved.model_calls, reserved.tokens, reserved.cost_microunits) == (
+        1,
+        14,
+        58,
+    )
+
+    settled = account.settle_model_attempt(
+        reservation,
+        RuntimeUsage(input_tokens=4, output_tokens=3),
+    )
+
+    assert settled == RuntimeUsage(
+        input_tokens=4,
+        output_tokens=3,
+        cost_microunits=23,
+    )
+    actual = account.consumption(RuntimeBudgetScope.TURN)
+    assert (actual.model_calls, actual.tokens, actual.cost_microunits) == (
+        1,
+        7,
+        23,
+    )
+
+
+def test_budget_manager_clamps_output_to_remaining_token_and_cost_budget():
+    account = RuntimeBudgetManager().bind(
+        _identity(),
+        _governance(tokens=20, cost=30),
+    )
+
+    reservation = account.reserve_model_attempt(
+        "model-a",
+        input_tokens=4,
+        max_output_tokens=10,
+        cost_input_1m=2.0,
+        cost_output_1m=5.0,
+    )
+
+    assert reservation.max_output_tokens == 4
+    assert reservation.reserved_tokens == 8
+    assert reservation.reserved_cost_microunits == 28
+
+
+def test_budget_manager_denies_unknown_model_pricing_before_attempt():
+    account = RuntimeBudgetManager().bind(_identity(), _governance())
+
+    with pytest.raises(
+        AgentRuntimeBudgetExceededError,
+        match="model_pricing_unknown",
+    ):
+        account.reserve_model_attempt(
+            "model-a",
+            input_tokens=4,
+            max_output_tokens=10,
+            cost_input_1m=None,
+            cost_output_1m=None,
+        )
+
+    assert account.consumption(RuntimeBudgetScope.TURN).model_calls == 0
+
+
+def test_budget_manager_keeps_pessimistic_charge_when_outcome_is_unknown():
+    decisions = []
+
+    class Sink:
+        def emit(self, decision):
+            decisions.append(decision)
+
+    account = RuntimeBudgetManager(sink=Sink()).bind(
+        _identity(),
+        _governance(tokens=20, cost=100),
+    )
+    reservation = account.reserve_model_attempt(
+        "model-a",
+        input_tokens=4,
+        max_output_tokens=10,
+        cost_input_1m=2.0,
+        cost_output_1m=5.0,
+    )
+
+    account.charge_model_attempt_unknown(
+        reservation,
+        reason="provider_timeout",
+    )
+
+    charged = account.consumption(RuntimeBudgetScope.TURN)
+    assert (charged.tokens, charged.cost_microunits) == (14, 58)
+    assert [item.reason for item in decisions[-2:]] == [
+        "charged_unknown",
+        "charged_unknown",
+    ]
+
+
+def test_model_input_estimate_uses_conservative_utf8_upper_bound():
+    messages = [{"role": "user", "content": "测试 ascii"}]
+    tools = [{"type": "function", "function": {"name": "lookup"}}]
+
+    estimated = estimate_model_input_tokens(messages, tools)
+
+    assert estimated >= len(
+        json.dumps(
+            {"messages": messages, "tools": tools},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
 def test_budget_manager_denies_model_scope_and_elapsed_time():
     clock = [0.0]
     manager = RuntimeBudgetManager(monotonic=lambda: clock[0])
@@ -492,6 +622,14 @@ async def test_kt_guards_block_and_defer_original_authority_or_budget_failure():
     budget = RuntimeBudgetGuardPlugin(
         lambda: account,
         lambda: request,
+        route_provider=lambda: RuntimeModelRoute(
+            route_id="test/free",
+            model_id="model-a",
+            provider_id="test",
+            max_tokens=16,
+            cost_input_1m=0.0,
+            cost_output_1m=0.0,
+        ),
     )
     budget_token = budget.begin_turn()
     await asyncio.create_task(budget.pre_llm_call([], model="model-a"))
@@ -522,6 +660,64 @@ async def test_kt_guards_block_and_defer_original_authority_or_budget_failure():
         job_id="job-1",
     )
     tool_budget.end_turn(tool_token)
+
+
+@pytest.mark.asyncio
+async def test_kt_budget_guard_clamps_before_call_and_refunds_after_usage():
+    messages = [{"role": "user", "content": "执行"}]
+    input_tokens = estimate_model_input_tokens(messages, ())
+    governance = _governance(
+        tokens=input_tokens + 4,
+        cost=1_000,
+    )
+    identity = _identity()
+    context = RequestRuntimeContext(
+        request_id="request-kt-hard-budget",
+        agent_id="test.agent",
+        principal=identity.owner,
+        session_id="session-1",
+        chat_type=RuntimeChatType.PRIVATE,
+        trace_id=identity.correlation_id,
+        run_id=identity.run_id,
+        turn_id=identity.turn_id,
+        correlation_id=identity.correlation_id,
+        actor=identity.actor,
+        governance=governance,
+    )
+    account = RuntimeBudgetManager().bind(identity, governance)
+    applied_max_tokens = []
+    guard = RuntimeBudgetGuardPlugin(
+        lambda: account,
+        lambda: AgentTurnRequest(context, "执行"),
+        route_provider=lambda: RuntimeModelRoute(
+            route_id="reply/kt-budget",
+            model_id="model-a",
+            provider_id="new-api",
+            max_tokens=10,
+            cost_input_1m=2.0,
+            cost_output_1m=5.0,
+        ),
+        max_tokens_applier=applied_max_tokens.append,
+    )
+    token = guard.begin_turn()
+
+    await guard.pre_llm_call(messages, model="model-a", tools=[])
+
+    assert applied_max_tokens == [4]
+    reserved = account.consumption(RuntimeBudgetScope.TURN)
+    assert reserved.tokens == input_tokens + 4
+
+    await guard.post_llm_call(
+        messages,
+        "完成",
+        {"prompt_tokens": input_tokens, "completion_tokens": 2},
+        model="model-a",
+    )
+
+    settled = account.consumption(RuntimeBudgetScope.TURN)
+    assert settled.tokens == input_tokens + 2
+    assert settled.cost_microunits == input_tokens * 2 + 10
+    guard.end_turn(token)
 
 
 def test_budget_decisions_are_authoritative_and_do_not_store_resource_text(

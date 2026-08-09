@@ -849,6 +849,8 @@ def _runtime_route_from_fixture(payload: Mapping[str, Any]):
         max_tokens=payload.get("max_tokens"),
         timeout_seconds=payload.get("timeout_seconds"),
         enable_thinking=payload.get("enable_thinking"),
+        cost_input_1m=payload.get("cost_input_1m", 0.0),
+        cost_output_1m=payload.get("cost_output_1m", 0.0),
     )
 
 

@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -49,6 +50,40 @@ def test_bridge_runtime_context_keeps_source_message_id_out_of_system_facts():
     facts = _runtime_facts(text)
     assert facts["chat_type"] == "group"
     assert "current_message_id" not in facts
+
+
+def test_bridge_model_route_freezes_pricing_for_runtime_budget():
+    from core.agent_runtime import AgentRuntimeKind
+    from nanobot_kt.bridge_runtime_support import set_bridge_runtime_model_route
+
+    applied = []
+    runtime = SimpleNamespace(set_model_route=applied.append)
+    bridge = SimpleNamespace(
+        runtime_kind=AgentRuntimeKind.KT,
+        _active_route_plan=None,
+        _require_runtime=lambda: runtime,
+    )
+    route_plan = SimpleNamespace(
+        provider_id="new-api",
+        profile_id="paid-model",
+        temperature=0.2,
+        max_tokens=512,
+        timeout=30.0,
+        enable_thinking="false",
+        cost_input_1m=0.5,
+        cost_output_1m=2.0,
+    )
+
+    route = set_bridge_runtime_model_route(
+        bridge,
+        "model-a",
+        route_plan,
+        unavailable_error=RuntimeError,
+    )
+
+    assert route.cost_input_1m == 0.5
+    assert route.cost_output_1m == 2.0
+    assert applied == [route]
 
 
 def test_bridge_trigger_policy_requires_typed_binding_and_exact_owner():

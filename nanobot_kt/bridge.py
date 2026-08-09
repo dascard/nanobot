@@ -25,6 +25,7 @@ from nanobot_kt.bridge_runtime_support import (
     build_child_bridge,
     build_request_runtime_plans,
     compatibility_runtime_selection_policy,
+    resolve_candidate_route_plan,
     set_bridge_runtime_model_route,
 )
 from nanobot_kt.request_scope import BridgeRequestScope
@@ -1034,7 +1035,10 @@ class NanobotBridge(MessageContractBridgeMixin):
             attempts = attempt + 1
             health_status = "pending"
 
-            candidate_route_plan = candidate.get("_route_plan") or route_plan
+            candidate_route_plan = resolve_candidate_route_plan(
+                route_plan,
+                candidate,
+            )
             attempt_cache_context = build_attempt_cache_context(cache_context, candidate_route_plan)
             meta["_prompt_cache_context"] = attempt_cache_context
             runtime_route = self._set_runtime_model_route(

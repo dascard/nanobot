@@ -54,12 +54,14 @@ from core.agent_runtime.errors import (
     AgentRuntimeStateError,
 )
 from core.agent_runtime.governance import (
+    estimate_model_input_tokens,
     RuntimeBudgetAccount,
     RuntimeBudgetConsumption,
     RuntimeBudgetDecision,
     RuntimeBudgetDecisionOutcome,
     RuntimeBudgetDecisionSink,
     RuntimeBudgetManager,
+    RuntimeModelBudgetReservation,
     RuntimeBudgetReservation,
 )
 from core.agent_runtime.governance_contracts import (
@@ -206,6 +208,7 @@ __all__ = [
     "RuntimeBudgetEnvelope",
     "RuntimeBudgetLimit",
     "RuntimeBudgetManager",
+    "RuntimeModelBudgetReservation",
     "RuntimeBudgetReservation",
     "RuntimeBudgetScope",
     "RuntimeContextDecision",
@@ -265,6 +268,7 @@ __all__ = [
     "create_isolated_agent_gateway",
     "create_research_agent_runtime",
     "dispatch_agent_message",
+    "estimate_model_input_tokens",
     "get_agent_gateway",
     "parse_runtime_scope_ids",
     "validate_run_status_transition",

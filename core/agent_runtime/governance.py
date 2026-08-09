@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
 from enum import Enum
+import json
 import time
 from typing import Callable, Protocol
 
@@ -99,6 +102,21 @@ class RuntimeBudgetReservation:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeModelBudgetReservation:
+    """一次真实模型请求的最坏情况预留。"""
+
+    reservation_id: str
+    turn_id: str
+    model_id: str
+    input_tokens: int
+    max_output_tokens: int
+    reserved_tokens: int
+    reserved_cost_microunits: int
+    cost_input_1m: Decimal
+    cost_output_1m: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeBudgetConsumption:
     """预算账户的只读累计量，用于 Runtime 回传真实物理消费。"""
 
@@ -119,6 +137,72 @@ def _numeric_policy(limit: RuntimeBudgetLimit) -> tuple[int, ...]:
         limit.time_limit_ms,
         limit.concurrency_limit,
     )
+
+
+def _json_default(value: object) -> object:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, Sequence) and not isinstance(
+        value,
+        (str, bytes, bytearray),
+    ):
+        return list(value)
+    for method_name in ("model_dump", "to_dict"):
+        method = getattr(value, method_name, None)
+        if callable(method):
+            return method()
+    return str(value)
+
+
+def estimate_model_input_tokens(messages: object, tools: object = ()) -> int:
+    """按 UTF-8 请求字节数给出保守输入 Token 上界。"""
+
+    message_items = tuple(messages or ()) if not isinstance(
+        messages,
+        (str, bytes, bytearray),
+    ) else (messages,)
+    tool_items = tuple(tools or ()) if not isinstance(
+        tools,
+        (str, bytes, bytearray),
+    ) else (tools,)
+    if not message_items and not tool_items:
+        return 1
+    encoded = json.dumps(
+        {"messages": message_items, "tools": tool_items},
+        allow_nan=False,
+        default=_json_default,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return max(1, len(encoded))
+
+
+def _model_price(value: float | int | None, name: str) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{name} 必须是非负有限数值")
+    try:
+        normalized = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{name} 必须是非负有限数值") from exc
+    if not normalized.is_finite() or normalized < 0:
+        raise ValueError(f"{name} 必须是非负有限数值")
+    return normalized
+
+
+def _model_cost_microunits(
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    cost_input_1m: Decimal,
+    cost_output_1m: Decimal,
+) -> int:
+    # 美元／百万 Token 换算为微美元时，百万因子正好抵消。
+    raw = Decimal(input_tokens) * cost_input_1m
+    raw += Decimal(output_tokens) * cost_output_1m
+    return int(raw.to_integral_value(rounding=ROUND_CEILING))
 
 
 class RuntimeBudgetAccount:
@@ -155,6 +239,10 @@ class RuntimeBudgetAccount:
         self._decision_sequence = 0
         self._reservation_sequence = 0
         self._reservations: dict[str, RuntimeBudgetReservation] = {}
+        self._model_reservations: dict[
+            str,
+            RuntimeModelBudgetReservation,
+        ] = {}
         self._emit(
             identity,
             RuntimeBudgetScope.RUN,
@@ -530,6 +618,316 @@ class RuntimeBudgetAccount:
                 self._limit(scope),
             )
 
+    def reserve_model_attempt(
+        self,
+        model_id: str,
+        *,
+        input_tokens: int,
+        max_output_tokens: int | None,
+        cost_input_1m: float | int | None,
+        cost_output_1m: float | int | None,
+    ) -> RuntimeModelBudgetReservation:
+        """在请求出站前预留最坏情况 Token 与费用并返回输出上限。"""
+
+        if type(input_tokens) is not int or input_tokens < 0:
+            raise ValueError("input_tokens 必须是非负整数")
+        if max_output_tokens is not None and (
+            type(max_output_tokens) is not int or max_output_tokens <= 0
+        ):
+            raise ValueError("max_output_tokens 必须是正整数或 None")
+        input_price = _model_price(cost_input_1m, "cost_input_1m")
+        output_price = _model_price(cost_output_1m, "cost_output_1m")
+
+        identity = self._identity
+        self._check_time(identity)
+        normalized_model = str(model_id or "").strip() or "host-bound"
+        scopes = (RuntimeBudgetScope.RUN, RuntimeBudgetScope.TURN)
+        for scope in scopes:
+            state = self._state(scope)
+            limit = self._limit(scope)
+            if (
+                limit.allowed_model_ids
+                and normalized_model not in limit.allowed_model_ids
+            ):
+                self._deny(
+                    identity,
+                    scope,
+                    "model_attempt_reservation",
+                    "model_scope_denied",
+                    normalized_model,
+                    state,
+                    limit,
+                )
+            exceeded = self._would_exceed(
+                state,
+                limit,
+                model_calls=1,
+                steps=1,
+            )
+            if exceeded:
+                self._deny(
+                    identity,
+                    scope,
+                    "model_attempt_reservation",
+                    exceeded,
+                    normalized_model,
+                    state,
+                    limit,
+                )
+        if input_price is None or output_price is None:
+            self._deny(
+                identity,
+                RuntimeBudgetScope.RUN,
+                "model_attempt_reservation",
+                "model_pricing_unknown",
+                normalized_model,
+                self._run,
+                self._limit(RuntimeBudgetScope.RUN),
+            )
+
+        output_caps: list[int] = []
+        for scope in scopes:
+            state = self._state(scope)
+            limit = self._limit(scope)
+            remaining_tokens = limit.token_limit - state.tokens
+            if remaining_tokens <= input_tokens:
+                self._deny(
+                    identity,
+                    scope,
+                    "model_attempt_reservation",
+                    "token_limit",
+                    normalized_model,
+                    state,
+                    limit,
+                )
+            token_cap = remaining_tokens - input_tokens
+            output_cap = (
+                token_cap
+                if max_output_tokens is None
+                else min(token_cap, max_output_tokens)
+            )
+
+            remaining_cost = limit.cost_limit_microunits - state.cost_microunits
+            input_cost = Decimal(input_tokens) * input_price
+            if input_cost > Decimal(remaining_cost):
+                self._deny(
+                    identity,
+                    scope,
+                    "model_attempt_reservation",
+                    "cost_limit_microunits",
+                    normalized_model,
+                    state,
+                    limit,
+                )
+            if output_price > 0:
+                cost_cap = int(
+                    (
+                        (Decimal(remaining_cost) - input_cost)
+                        / output_price
+                    ).to_integral_value(rounding=ROUND_FLOOR)
+                )
+                output_cap = min(output_cap, cost_cap)
+            if output_cap <= 0:
+                reason = (
+                    "cost_limit_microunits"
+                    if token_cap > 0
+                    else "token_limit"
+                )
+                self._deny(
+                    identity,
+                    scope,
+                    "model_attempt_reservation",
+                    reason,
+                    normalized_model,
+                    state,
+                    limit,
+                )
+            output_caps.append(output_cap)
+
+        effective_output = min(output_caps)
+        reserved_tokens = input_tokens + effective_output
+        reserved_cost = _model_cost_microunits(
+            input_tokens=input_tokens,
+            output_tokens=effective_output,
+            cost_input_1m=input_price,
+            cost_output_1m=output_price,
+        )
+        for scope in scopes:
+            state = self._state(scope)
+            limit = self._limit(scope)
+            exceeded = self._would_exceed(
+                state,
+                limit,
+                model_calls=1,
+                tokens=reserved_tokens,
+                cost_microunits=reserved_cost,
+                steps=1,
+            )
+            if exceeded:
+                self._deny(
+                    identity,
+                    scope,
+                    "model_attempt_reservation",
+                    exceeded,
+                    normalized_model,
+                    state,
+                    limit,
+                )
+
+        self._reservation_sequence += 1
+        reservation = RuntimeModelBudgetReservation(
+            reservation_id=(
+                f"model-budget-reservation:{identity.run_id}:"
+                f"{self._reservation_sequence}"
+            ),
+            turn_id=identity.turn_id,
+            model_id=normalized_model,
+            input_tokens=input_tokens,
+            max_output_tokens=effective_output,
+            reserved_tokens=reserved_tokens,
+            reserved_cost_microunits=reserved_cost,
+            cost_input_1m=input_price,
+            cost_output_1m=output_price,
+        )
+        for scope in scopes:
+            state = self._state(scope)
+            self._consume(
+                state,
+                model_calls=1,
+                tokens=reserved_tokens,
+                cost_microunits=reserved_cost,
+                steps=1,
+            )
+            self._emit(
+                identity,
+                scope,
+                "model_attempt_reservation",
+                RuntimeBudgetDecisionOutcome.ALLOW,
+                "pessimistic_charge",
+                normalized_model,
+                state,
+                self._limit(scope),
+            )
+        self._model_reservations[reservation.reservation_id] = reservation
+        return reservation
+
+    def _pending_model_reservation(
+        self,
+        reservation: RuntimeModelBudgetReservation,
+    ) -> RuntimeModelBudgetReservation | None:
+        if not isinstance(reservation, RuntimeModelBudgetReservation):
+            raise TypeError("model reservation 类型无效")
+        existing = self._model_reservations.get(reservation.reservation_id)
+        if existing is None:
+            return None
+        if existing != reservation:
+            raise ValueError("model reservation 内容不匹配")
+        if reservation.turn_id != self._identity.turn_id:
+            raise ValueError("model reservation 不属于当前 Turn")
+        return existing
+
+    def charge_model_attempt_unknown(
+        self,
+        reservation: RuntimeModelBudgetReservation,
+        *,
+        reason: str,
+    ) -> bool:
+        """模型结果未知时保留最坏情况计费，不把失败调用当成零成本。"""
+
+        existing = self._pending_model_reservation(reservation)
+        if existing is None:
+            return False
+        normalized_reason = str(reason or "").strip() or "unknown"
+        self._model_reservations.pop(existing.reservation_id)
+        resource = f"{existing.model_id}:{normalized_reason}"
+        for scope in (RuntimeBudgetScope.RUN, RuntimeBudgetScope.TURN):
+            self._emit(
+                self._identity,
+                scope,
+                "model_attempt_settlement",
+                RuntimeBudgetDecisionOutcome.ALLOW,
+                "charged_unknown",
+                resource,
+                self._state(scope),
+                self._limit(scope),
+            )
+        return True
+
+    def settle_model_attempt(
+        self,
+        reservation: RuntimeModelBudgetReservation,
+        usage: RuntimeUsage | None,
+    ) -> RuntimeUsage | None:
+        """按可信真实用量结算；用量缺失或不完整时保留全部预留。"""
+
+        existing = self._pending_model_reservation(reservation)
+        if existing is None:
+            raise ValueError("model reservation 不存在或已结算")
+        if usage is None or usage.input_tokens == 0 or usage.output_tokens == 0:
+            self.charge_model_attempt_unknown(
+                existing,
+                reason="usage_unavailable",
+            )
+            return usage
+
+        actual_cost = max(
+            usage.cost_microunits,
+            _model_cost_microunits(
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cost_input_1m=existing.cost_input_1m,
+                cost_output_1m=existing.cost_output_1m,
+            ),
+        )
+        actual = RuntimeUsage(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cached_input_tokens=usage.cached_input_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+            cost_microunits=actual_cost,
+        )
+        if (
+            actual.total_tokens > existing.reserved_tokens
+            or actual.cost_microunits > existing.reserved_cost_microunits
+        ):
+            reason = (
+                "model_usage_exceeds_token_reservation"
+                if actual.total_tokens > existing.reserved_tokens
+                else "model_usage_exceeds_cost_reservation"
+            )
+            self._deny(
+                self._identity,
+                RuntimeBudgetScope.TURN,
+                "model_attempt_settlement",
+                reason,
+                existing.model_id,
+                self._state(RuntimeBudgetScope.TURN),
+                self._limit(RuntimeBudgetScope.TURN),
+            )
+
+        token_refund = existing.reserved_tokens - actual.total_tokens
+        cost_refund = (
+            existing.reserved_cost_microunits - actual.cost_microunits
+        )
+        self._model_reservations.pop(existing.reservation_id)
+        for scope in (RuntimeBudgetScope.RUN, RuntimeBudgetScope.TURN):
+            state = self._state(scope)
+            state.tokens -= token_refund
+            state.cost_microunits -= cost_refund
+            if state.tokens < 0 or state.cost_microunits < 0:
+                raise RuntimeError("model budget 退款导致累计量失衡")
+            self._emit(
+                self._identity,
+                scope,
+                "model_attempt_settlement",
+                RuntimeBudgetDecisionOutcome.ALLOW,
+                "actual_usage_reconciled",
+                existing.model_id,
+                state,
+                self._limit(scope),
+            )
+        return actual
+
     def record_usage(self, usage: RuntimeUsage | None) -> None:
         if usage is None:
             return
@@ -867,11 +1265,13 @@ class RuntimeBudgetManager:
 
 
 __all__ = [
+    "estimate_model_input_tokens",
     "RuntimeBudgetAccount",
     "RuntimeBudgetConsumption",
     "RuntimeBudgetDecision",
     "RuntimeBudgetDecisionOutcome",
     "RuntimeBudgetDecisionSink",
     "RuntimeBudgetManager",
+    "RuntimeModelBudgetReservation",
     "RuntimeBudgetReservation",
 ]

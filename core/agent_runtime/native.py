@@ -42,12 +42,15 @@ from core.agent_runtime.contracts import (
 from core.agent_runtime.service_ports import PermissionPort
 from core.agent_runtime.errors import (
     AgentRuntimeAmbiguousError,
+    AgentRuntimeBudgetExceededError,
     AgentRuntimeCapabilityError,
     AgentRuntimeExecutionError,
 )
 from core.agent_runtime.governance import (
     RuntimeBudgetAccount,
     RuntimeBudgetManager,
+    RuntimeModelBudgetReservation,
+    estimate_model_input_tokens,
 )
 from core.agent_runtime.governance_contracts import RuntimeBudgetScope
 from core.agent_runtime.recovery import (
@@ -118,6 +121,7 @@ NativeToolEffectResolver = Callable[[str], RuntimeToolEffectClass]
 NativeTextDeltaHandler = Callable[[str], Awaitable[None]]
 NativeToolActivityHandler = Callable[[RuntimeToolCall], Awaitable[None]]
 NativeArtifactHandler = Callable[[RuntimeArtifactRef], Awaitable[None]]
+_DEFAULT_MODEL_MAX_OUTPUT_TOKENS = 16_384
 NativeContextDecisionHandler = Callable[
     [RuntimeContextDecision],
     Awaitable[None],
@@ -919,6 +923,37 @@ class NativeAgentRuntime:
         )
         return completion, decision
 
+    def _reserve_completion_request(
+        self,
+        completion_request: ChatCompletionRequest,
+        budget: RuntimeBudgetAccount,
+    ) -> tuple[ChatCompletionRequest, RuntimeModelBudgetReservation]:
+        route = self._route
+        reservation = budget.reserve_model_attempt(
+            completion_request.manual_model,
+            input_tokens=estimate_model_input_tokens(
+                completion_request.messages,
+                completion_request.tools or (),
+            ),
+            max_output_tokens=(
+                completion_request.max_tokens
+                or _DEFAULT_MODEL_MAX_OUTPUT_TOKENS
+            ),
+            cost_input_1m=(
+                route.cost_input_1m if route is not None else None
+            ),
+            cost_output_1m=(
+                route.cost_output_1m if route is not None else None
+            ),
+        )
+        return (
+            replace(
+                completion_request,
+                max_tokens=reservation.max_output_tokens,
+            ),
+            reservation,
+        )
+
     async def _complete_non_streaming(
         self,
         completion_request: ChatCompletionRequest,
@@ -928,19 +963,61 @@ class NativeAgentRuntime:
     ) -> _CompletionTurn:
         last_error: BaseException | None = None
         for attempt in range(self._config.max_model_attempts):
-            budget.reserve_model(completion_request.manual_model)
+            attempt_request, reservation = self._reserve_completion_request(
+                completion_request,
+                budget,
+            )
+            reservation_open = True
             try:
-                response = await self._completion_port.complete_chat(completion_request)
-                return _completion_from_response(response, model_step=model_step)
+                response = await self._completion_port.complete_chat(
+                    attempt_request
+                )
+                completion = _completion_from_response(
+                    response,
+                    model_step=model_step,
+                )
+                settled_usage = budget.settle_model_attempt(
+                    reservation,
+                    completion.usage,
+                )
+                reservation_open = False
+                return replace(completion, usage=settled_usage)
             except asyncio.CancelledError:
+                if reservation_open:
+                    budget.charge_model_attempt_unknown(
+                        reservation,
+                        reason="provider_cancelled",
+                    )
+                raise
+            except AgentRuntimeBudgetExceededError:
+                if reservation_open:
+                    budget.charge_model_attempt_unknown(
+                        reservation,
+                        reason="usage_exceeded_reservation",
+                    )
                 raise
             except TimeoutError as exc:
+                if reservation_open:
+                    budget.charge_model_attempt_unknown(
+                        reservation,
+                        reason="provider_timeout",
+                    )
                 last_error = exc
             except _NativeModelResponseError as exc:
+                if reservation_open:
+                    budget.charge_model_attempt_unknown(
+                        reservation,
+                        reason="response_invalid",
+                    )
                 last_error = exc
                 if not _is_retryable_model_error(str(exc)):
                     break
             except Exception as exc:
+                if reservation_open:
+                    budget.charge_model_attempt_unknown(
+                        reservation,
+                        reason="provider_error",
+                    )
                 from core.run_ledger.contracts import (
                     find_run_ledger_authority_error,
                 )
@@ -973,14 +1050,18 @@ class NativeAgentRuntime:
     ) -> _CompletionTurn:
         last_error: BaseException | None = None
         for attempt in range(self._config.max_model_attempts):
-            budget.reserve_model(completion_request.manual_model)
+            attempt_request, reservation = self._reserve_completion_request(
+                completion_request,
+                budget,
+            )
+            reservation_open = True
             content_parts: list[str] = []
             raw_tool_calls: dict[int, dict[str, Any]] = {}
             usage: RuntimeUsage | None = None
             saw_irreversible_payload = False
             try:
                 async for chunk in self._completion_port.stream_chat(
-                    completion_request
+                    attempt_request
                 ):
                     if chunk.get("error"):
                         raise _NativeModelResponseError(_model_error_message(chunk))
@@ -1024,20 +1105,51 @@ class NativeAgentRuntime:
                     "choices": [{"message": message}],
                     "_native_stream": True,
                 }
-                usage_payload = _usage_to_mapping(usage)
+                settled_usage = budget.settle_model_attempt(
+                    reservation,
+                    usage,
+                )
+                reservation_open = False
+                usage_payload = _usage_to_mapping(settled_usage)
                 if usage_payload:
                     raw_response["usage"] = usage_payload
                 return _CompletionTurn(
                     content=content,
                     tool_calls=calls,
-                    usage=usage,
+                    usage=settled_usage,
                     raw_response=raw_response,
                 )
             except asyncio.CancelledError:
+                if reservation_open:
+                    budget.charge_model_attempt_unknown(
+                        reservation,
+                        reason="provider_cancelled",
+                    )
+                raise
+            except AgentRuntimeBudgetExceededError:
+                if reservation_open:
+                    budget.charge_model_attempt_unknown(
+                        reservation,
+                        reason="usage_exceeded_reservation",
+                    )
                 raise
             except TimeoutError as exc:
+                if reservation_open:
+                    budget.charge_model_attempt_unknown(
+                        reservation,
+                        reason="provider_timeout",
+                    )
                 last_error = exc
             except Exception as exc:
+                if reservation_open:
+                    budget.charge_model_attempt_unknown(
+                        reservation,
+                        reason=(
+                            "stream_interrupted"
+                            if saw_irreversible_payload
+                            else "provider_error"
+                        ),
+                    )
                 from core.run_ledger.contracts import (
                     find_run_ledger_authority_error,
                 )
@@ -1697,7 +1809,6 @@ class NativeAgentRuntime:
                 on_context_decision=on_context_decision,
                 budget=budget,
             )
-            budget.record_usage(completion.usage)
             turn_usage = _merge_usage(turn_usage, completion.usage)
             assistant = RuntimeMessage(
                 "assistant",

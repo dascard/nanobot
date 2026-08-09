@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import replace
+from dataclasses import is_dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -110,6 +110,28 @@ def build_attempt_cache_context(
         "cost_input_1m": getattr(route_plan, "cost_input_1m", None),
         "cost_output_1m": getattr(route_plan, "cost_output_1m", None),
     }
+
+
+def resolve_candidate_route_plan(
+    route_plan: Any,
+    candidate: Mapping[str, Any],
+) -> Any:
+    """把旧候选目录中的模型价格冻结到本次不可变路由计划。"""
+
+    explicit = candidate.get("_route_plan")
+    if explicit is not None or not is_dataclass(route_plan):
+        return explicit or route_plan
+    return replace(
+        route_plan,
+        cost_input_1m=candidate.get(
+            "cost_input_1m",
+            getattr(route_plan, "cost_input_1m", None),
+        ),
+        cost_output_1m=candidate.get(
+            "cost_output_1m",
+            getattr(route_plan, "cost_output_1m", None),
+        ),
+    )
 
 
 def build_native_tool_registry_runtime_info(
@@ -324,6 +346,8 @@ def set_bridge_runtime_model_route(
         max_tokens=max_tokens,
         timeout_seconds=float(getattr(route_plan, "timeout", 120.0) or 120.0),
         enable_thinking=thinking,
+        cost_input_1m=getattr(route_plan, "cost_input_1m", None),
+        cost_output_1m=getattr(route_plan, "cost_output_1m", None),
     )
     bridge._require_runtime().set_model_route(runtime_route)
     return runtime_route

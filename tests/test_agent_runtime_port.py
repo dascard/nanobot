@@ -793,6 +793,14 @@ def test_native_and_kt_runtimes_share_minimal_port_contract():
 
         await runtime.start()
         assert runtime.state is RuntimeLifecycleState.RUNNING
+        runtime.set_model_route(RuntimeModelRoute(
+            route_id="test/contract-free",
+            model_id="contract-model",
+            provider_id="test",
+            max_tokens=256,
+            cost_input_1m=0.0,
+            cost_output_1m=0.0,
+        ))
         assert (
             runtime.replace_conversation((RuntimeMessage("system", "合同规则"),)) == 1
         )

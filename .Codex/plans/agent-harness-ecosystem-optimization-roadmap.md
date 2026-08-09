@@ -1707,9 +1707,16 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
   `ambiguous` receipt，再决定普通取消、超时或租约失败；新增 `cancel/timeout × prepared/ambiguous`
   四组交叉回归，并同时校验 Durable Task、权威 Ledger、Legacy Run 和 Recovery 投影均终结为
   `AMBIGUOUS`。定向回归为 4 passed，Durable Task 模块回归为 11 passed。
-- [ ] **Runtime Budget × Provider Billing：** 模型调用前保守预留 input/output token 与费用，按剩余额度
+- [x] **Runtime Budget × Provider Billing：** 模型调用前保守预留 input/output token 与费用，按剩余额度
   收紧 `max_tokens`，成功后依真实 usage 结算并退还差额；超时或结果未知的 Provider attempt 保留保守计费
   或显式 `charged_unknown`，使 token／cost 与 step／model-call 一样具有真正的调用前硬上限。
+
+  实现证据（2026-08-09）：Native 与可选 KT 的每次真实 Provider attempt 均在调用前冻结路由价格、保守估算
+  输入并预留最大输出 token／费用，`max_tokens` 会按 Run 与 Turn 剩余额度收紧；未知价格在网络调用前失败关闭，
+  timeout、cancel、异常响应和部分流式结果保留 `charged_unknown`，正常 usage 则按冻结价格结算并退还差额。
+  Recovery Checkpoint 同步保存价格合同，旧版无价格快照只按显式免费路由兼容。架构、OpenAPI、Release／
+  Verification Golden、决策清单、Task SLO、行为 Golden、Ruff 和 `git diff --check` 均通过；相关定向回归
+  为 164 passed，最终完整 `python -m pytest tests/ -v` 为 6927 passed、12 skipped、0 failed。
 - [ ] **Skill Candidate × 跨存储发布：** 消除正式 Skill 数据库提交先于 publication receipt／approval
   consumption 文件的窗口；以同事务 publication intent／outbox 和幂等 reconcile 表达
   pending／ambiguous／finalized，确保 API 报错时不会留下无记录的已生效 Skill 或可重放批准令牌。

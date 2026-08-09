@@ -1,7 +1,7 @@
 {
   "approved_changes": [
     {
-      "after_sha256": "edd4cdddc6b9ed8d8196ae3bab852e387bea29a702e1302d3717c441bdbbb171",
+      "after_sha256": "b983f84dc80523cac089218ec731fae429e52bf9abd15d410364352c3c22418d",
       "before_sha256": null,
       "id": "agent_harness_stage1_runtime_baseline",
       "reason": "新增不导入 KT 的 Runtime 重放 fixture，冻结普通、流式、多轮工具消息、中断信号、模型路由、conversation 和生命周期；本项只记录升级前行为，不改变生产 Runtime。",
@@ -241,7 +241,7 @@
       "stage": "Agent Harness 阶段 9.2"
     }
   ],
-  "baseline_git_commit": "2e851a2095dcac5e2974dc163d6773dd9fed5bcd",
+  "baseline_git_commit": "7bd33e9f31aa3b43f32229d32e72ade368f99d6b",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -267,7 +267,7 @@
       "id": "agent_runtime",
       "note": "使用框架无关 FakeAgentRuntime 重放普通、流式、工具链和中断信号，冻结 KT 升级前的 Port 输入、结果、conversation、route 与生命周期。",
       "path": "tests/golden/architecture_behavior/agent_runtime.json",
-      "sha256": "edd4cdddc6b9ed8d8196ae3bab852e387bea29a702e1302d3717c441bdbbb171"
+      "sha256": "b983f84dc80523cac089218ec731fae429e52bf9abd15d410364352c3c22418d"
     },
     {
       "classification": "known_bad",
