@@ -166,6 +166,7 @@ from api.admin.eval_routes import (
     eval_candidates_trend as eval_candidates_trend,
     eval_defer_candidate as eval_defer_candidate,
     eval_expected_contract as eval_expected_contract,
+    eval_harness_catalog as eval_harness_catalog,
     eval_get_candidate as eval_get_candidate,
     eval_get_run as eval_get_run,
     eval_ignore_candidate as eval_ignore_candidate,

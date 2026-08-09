@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 10.2 已完成，准备阶段 10.3）
+> 状态：执行中（阶段 10.3 已完成，准备阶段 10.4）
 >
 > 建立日期：2026-08-03
 >
@@ -1462,12 +1462,40 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 10.3 扩展评测门禁
 
-- [ ] Runtime 合同和 Native/KT 等价评测。
-- [ ] Prompt 稳定、缓存和 Context 压缩评测。
-- [ ] 记忆注入、Skill 选择和 MCP 评测。
-- [ ] 权限、恢复、成本和长任务评测。
-- [ ] 多 Agent 完成率、协作成本和失败传播评测。
-- [ ] 区分离线确定性 gate、真实模型 benchmark 和线上只读采样。
+- [x] Runtime 合同和 Native/KT 等价评测。
+- [x] Prompt 稳定、缓存和 Context 压缩评测。
+- [x] 记忆注入、Skill 选择和 MCP 评测。
+- [x] 权限、恢复、成本和长任务评测。
+- [x] 多 Agent 完成率、协作成本和失败传播评测。
+- [x] 区分离线确定性 gate、真实模型 benchmark 和线上只读采样。
+
+实现记录（2026-08-09）：
+
+- 新增基于共享 `core.registry` 内核的不可变 Agent Harness Registry，将评测严格拆成
+  `offline_deterministic`、`real_model_benchmark` 和 `online_readonly_sampling` 三条通道，并固定为
+  `blocking_gate`、`benchmark_only` 和 `readonly_signal` 三种互不提升的证据权限。目录通过 Registry
+  generation 与 SHA-256 冻结，可由 CLI 和受管理员认证的只读 Admin API 查询；只有离线确定性通道有
+  提交阻断权，真实模型结果和线上采样即使有效也不能变成阻断 gate。
+- 离线 gate 使用 Registry 固定的 pytest selector 和独立子进程真实执行，不接受用户命令；执行环境使用
+  in-memory SQLite、测试凭据、固定 hash seed 且移除代理和业务密钥。报告解析 JUnit，强制测试数大于零、
+  通过率 100%、failure／error／skip 均为零；stdout、stderr 和失败 case 只保存大小与摘要，超时会终止
+  整个进程组。`scripts/run_eval_pr_gate.sh` 已接入 `python -m evals.harness_gate offline --all`，因此该
+  能力是现有 PR／push 评测工作流中的实际门禁，不是 shadow 检查。
+- 五套离线 suite 共 15 个检查，分别覆盖 Runtime 合同与 Native／KT 等价，Prompt 稳定、前缀缓存与
+  Context 压缩，记忆注入、Skill 选择与 MCP，权限、恢复、成本与长期任务，以及多 Agent 完成率、协作
+  成本与失败传播。最终状态下的真实门禁执行为 5/5 suites、15/15 checks、325/325 tests，所有检查
+  通过且无 failure、error、skip 或超时。
+- 真实模型 benchmark 证据必须显式 opt-in、至少发生一次模型调用、声明并遵守成本预算，禁止生产数据访问、
+  生产写入和原始内容持久化；所有 rate 指标强制位于 0..1。线上采样使用 SQLite `mode=ro` 与
+  `PRAGMA query_only=ON`，只读取 Run、恢复、缓存和成本的标量聚合，不调用模型、不写生产库、不返回
+  数据库路径或正文。两类外部证据均使用严格字段、指标合同、时间、revision、dataset 和 artifact 摘要校验。
+- Harness、Admin、OpenAPI 和 CI 契约定向回归为 49 passed；架构边界、OpenAPI、Release Impact、
+  Verification Plan、Task SLO、行为基线、决策规则清单、受控 Ruff、Python 编译、shell 语法和
+  `git diff --check` 均通过，决策规则清单已用项目生成器同步。
+- 本阶段没有修改 `enriched_query`、历史注入、conversation、工具输出合同或 Prompt Runtime 输入；
+  canonical `chat`、`tasks`、`tools` 模板、变量和模板注册表经全量回归确认无需修改。最终完整
+  `python -m pytest tests/ -v --basetemp=/var/tmp/nanobot-pytest-stage10-3` 在清除代理变量后为
+  6839 passed、12 skipped、0 failed，耗时 740.17 秒。
 
 #### 10.4 受控自进化
 

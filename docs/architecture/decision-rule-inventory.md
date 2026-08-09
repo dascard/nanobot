@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`c59630fc1b022599ab2e8c2e9f953359138e72ec`
-- 规则总数：8564
+- 源提交：`ff46228225da2171db7268722ddc6c79b784d141`
+- 规则总数：8565
 - 扫描错误：0
 - 人工复核队列：721
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -16,7 +16,7 @@
 | `data_consistency` | 493 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4544 |
+| `protocol_syntax` | 4545 |
 | `security_invariant` | 1680 |
 
 ## 文件汇总
@@ -88,11 +88,11 @@
 | `webui/src/features/sandbox/SandboxPage.test.jsx` | 33 |
 | `app/session_memory/llm_contract.py` | 32 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/adapters.py` | 32 |
+| `api/admin/eval_routes.py` | 31 |
 | `core/agent_link/runtime.py` | 31 |
 | `core/outbound/generation.py` | 31 |
 | `core/sticker_memory.py` | 31 |
 | `sandboxd/docker_backend.py` | 31 |
-| `api/admin/eval_routes.py` | 30 |
 | `api/admin/group_learning_routes.py` | 30 |
 | `core/context_compaction.py` | 30 |
 | `core/legacy_adapter.py` | 30 |

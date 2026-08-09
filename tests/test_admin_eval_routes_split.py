@@ -6,6 +6,7 @@ from pathlib import Path
 
 _ADMIN_EVAL_ROUTE_SIGNATURES = (
     ("GET", "/api/v1/admin/evals/expected-contract"),
+    ("GET", "/api/v1/admin/evals/harness/catalog"),
     ("GET", "/api/v1/admin/evals/timing-tuning/proposal"),
     ("GET", "/api/v1/admin/evals/timing-tuning/proposal/review"),
     ("POST", "/api/v1/admin/evals/timing-tuning/proposal/reviews"),
@@ -51,6 +52,7 @@ _EVAL_ROUTE_EXPORTS = (
     "_proposal_review_from_audit",
     "_triage_response_or_404",
     "eval_expected_contract",
+    "eval_harness_catalog",
     "eval_timing_tuning_proposal",
     "eval_timing_tuning_proposal_review_state",
     "eval_timing_tuning_proposal_review",

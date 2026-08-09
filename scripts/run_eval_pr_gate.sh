@@ -9,6 +9,11 @@ export DATABASE_URL="${DATABASE_URL:-sqlite:///:memory:}"
 export NEW_API_KEY="${NEW_API_KEY:-test-key-for-ci}"
 export NANOBOT_ADMIN_TOKEN="${NANOBOT_ADMIN_TOKEN:-test-admin-token}"
 
+python -B -m evals.harness_gate \
+  offline \
+  --all \
+  --output evals/reports/harness_gate_latest.json
+
 python -B -m pytest \
   tests/test_eval_baseline.py \
   tests/test_timing_gate_prompt_policy.py \

@@ -101,6 +101,13 @@ def eval_expected_contract(_auth=Depends(verify_admin)):
     return expected_contract_payload()
 
 
+@router.get("/evals/harness/catalog")
+def eval_harness_catalog(_auth=Depends(verify_admin)):
+    from evals.harness_registry import harness_catalog_payload
+
+    return harness_catalog_payload()
+
+
 @router.get("/evals/timing-tuning/proposal")
 def eval_timing_tuning_proposal(_auth=Depends(verify_admin)):
     path = _current_timing_tuning_proposal_report()
