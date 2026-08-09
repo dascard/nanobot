@@ -796,6 +796,10 @@ def test_approved_routing_canary_reorders_real_reply_runtime_candidates(
         routing_candidate,
         allowlist=("session/allowlisted",),
     )
+    monkeypatch.setattr(
+        "core.evolution_control.store._utc_now",
+        lambda: FIXED_NOW,
+    )
 
     baseline = ["cheap-profile", "quality-profile", "fallback-profile"]
     ordered, evidence = reorder_routing_candidates(
@@ -838,7 +842,7 @@ def test_approved_routing_canary_reorders_real_reply_runtime_candidates(
     )
 
 
-def test_routing_canary_cannot_inject_unconfigured_model(tmp_path):
+def test_routing_canary_cannot_inject_unconfigured_model(tmp_path, monkeypatch):
     store = EvolutionControlStore(tmp_path / "routing-injection", clock=lambda: FIXED_NOW)
     manifest = _manifest()
     candidate = replace(
@@ -860,6 +864,10 @@ def test_routing_canary_cannot_inject_unconfigured_model(tmp_path):
         manifest,
         candidate,
         allowlist=("session/allowlisted",),
+    )
+    monkeypatch.setattr(
+        "core.evolution_control.store._utc_now",
+        lambda: FIXED_NOW,
     )
 
     from core.evolution_control.runtime import reorder_routing_candidates
