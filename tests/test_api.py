@@ -156,10 +156,17 @@ def test_api_auth_missing_or_wrong_token_returns_401(monkeypatch):
 
 def test_api_auth_accepts_valid_bearer_token(monkeypatch):
     from api import routes
+    from api.common_auth import AuthenticatedApiPrincipal
 
     monkeypatch.setattr(routes, "NANOBOT_API_TOKEN", "test-token")
 
-    assert routes.verify_token(authorization="Bearer test-token") is None
+    principal = routes.verify_token(authorization="Bearer test-token")
+
+    assert isinstance(principal, AuthenticatedApiPrincipal)
+    assert principal.subject == "nanobot-api-gateway"
+    assert principal.kind == "gateway"
+    assert principal.has_scope("session_goal:control") is True
+    assert "test-token" not in repr(principal)
 
 
 def test_search_logs_rejects_limit_above_max(client, monkeypatch):

@@ -100,6 +100,49 @@
         "title": "AdminRegistrySnapshotResponse",
         "type": "object"
       },
+      "AdminSessionPlanApproveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_plan_revision": {
+            "minimum": 1.0,
+            "title": "Expected Plan Revision",
+            "type": "integer"
+          },
+          "expected_plan_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "title": "Expected Plan Sha256",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "gateway_run_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Gateway Run Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gateway_run_id",
+          "expected_version",
+          "expected_plan_revision",
+          "expected_plan_sha256",
+          "reason"
+        ],
+        "title": "AdminSessionPlanApproveRequest",
+        "type": "object"
+      },
       "AdminTableColumnResponse": {
         "properties": {
           "display_policy": {
@@ -8901,6 +8944,7 @@
         "type": "object"
       },
       "SessionGoalBudgetInput": {
+        "additionalProperties": false,
         "properties": {
           "max_cost_microunits": {
             "default": 50000000,
@@ -8949,13 +8993,8 @@
         "type": "object"
       },
       "SessionGoalCreateRequest": {
+        "additionalProperties": false,
         "properties": {
-          "actor_id": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Actor Id",
-            "type": "string"
-          },
           "budget": {
             "$ref": "#/components/schemas/SessionGoalBudgetInput"
           },
@@ -8970,40 +9009,40 @@
             "title": "Completion Criteria",
             "type": "array"
           },
+          "gateway_run_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Gateway Run Id",
+            "type": "string"
+          },
           "objective": {
             "maxLength": 1500,
             "minLength": 1,
             "title": "Objective",
             "type": "string"
-          },
-          "principal": {
-            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
           }
         },
         "required": [
-          "principal",
+          "gateway_run_id",
           "objective",
-          "completion_criteria",
-          "actor_id"
+          "completion_criteria"
         ],
         "title": "SessionGoalCreateRequest",
         "type": "object"
       },
       "SessionGoalFinishRequest": {
+        "additionalProperties": false,
         "properties": {
-          "actor_id": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Actor Id",
-            "type": "string"
-          },
           "expected_version": {
             "minimum": 1.0,
             "title": "Expected Version",
             "type": "integer"
           },
-          "principal": {
-            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
+          "gateway_run_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Gateway Run Id",
+            "type": "string"
           },
           "reason": {
             "maxLength": 512,
@@ -9022,9 +9061,8 @@
           }
         },
         "required": [
-          "principal",
+          "gateway_run_id",
           "expected_version",
-          "actor_id",
           "status",
           "reason"
         ],
@@ -9032,77 +9070,30 @@
         "type": "object"
       },
       "SessionGoalMutationRequest": {
+        "additionalProperties": false,
         "properties": {
-          "actor_id": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Actor Id",
-            "type": "string"
-          },
           "expected_version": {
             "minimum": 1.0,
             "title": "Expected Version",
             "type": "integer"
           },
-          "principal": {
-            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
+          "gateway_run_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Gateway Run Id",
+            "type": "string"
           }
         },
         "required": [
-          "principal",
-          "expected_version",
-          "actor_id"
+          "gateway_run_id",
+          "expected_version"
         ],
         "title": "SessionGoalMutationRequest",
         "type": "object"
       },
-      "SessionGoalPrincipalInput": {
-        "properties": {
-          "owner_id": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Owner Id",
-            "type": "string"
-          },
-          "owner_type": {
-            "enum": [
-              "user",
-              "group",
-              "project"
-            ],
-            "title": "Owner Type",
-            "type": "string"
-          },
-          "platform": {
-            "maxLength": 32,
-            "minLength": 1,
-            "title": "Platform",
-            "type": "string"
-          },
-          "session_id": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Session Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "platform",
-          "owner_type",
-          "owner_id",
-          "session_id"
-        ],
-        "title": "SessionGoalPrincipalInput",
-        "type": "object"
-      },
       "SessionPlanApproveRequest": {
+        "additionalProperties": false,
         "properties": {
-          "actor_id": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Actor Id",
-            "type": "string"
-          },
           "expected_plan_revision": {
             "minimum": 1.0,
             "title": "Expected Plan Revision",
@@ -9120,14 +9111,16 @@
             "title": "Expected Version",
             "type": "integer"
           },
-          "principal": {
-            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
+          "gateway_run_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Gateway Run Id",
+            "type": "string"
           }
         },
         "required": [
-          "principal",
+          "gateway_run_id",
           "expected_version",
-          "actor_id",
           "expected_plan_revision",
           "expected_plan_sha256"
         ],
@@ -9135,13 +9128,8 @@
         "type": "object"
       },
       "SessionPlanWriteRequest": {
+        "additionalProperties": false,
         "properties": {
-          "actor_id": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Actor Id",
-            "type": "string"
-          },
           "content": {
             "maxLength": 262144,
             "minLength": 1,
@@ -9153,20 +9141,16 @@
             "title": "Expected Version",
             "type": "integer"
           },
-          "principal": {
-            "$ref": "#/components/schemas/SessionGoalPrincipalInput"
-          },
-          "source_run_id": {
-            "default": "",
+          "gateway_run_id": {
             "maxLength": 160,
-            "title": "Source Run Id",
+            "minLength": 1,
+            "title": "Gateway Run Id",
             "type": "string"
           }
         },
         "required": [
-          "principal",
+          "gateway_run_id",
           "expected_version",
-          "actor_id",
           "content"
         ],
         "title": "SessionPlanWriteRequest",
@@ -29624,6 +29608,81 @@
         "x-nanobot-pagination": "none"
       }
     },
+    "/api/v1/admin/session-goals/{goal_id}/approve": {
+      "post": {
+        "description": "以独立 Admin scope 批准绑定计划，不模拟用户 actor。",
+        "operationId": "post_api_v1_admin_session_goals_goal_id_approve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminSessionPlanApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Approve Session Plan As Admin",
+        "tags": [
+          "admin-session-goals"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
     "/api/v1/admin/session-memory/jobs/{job_id}/retry": {
       "post": {
         "operationId": "post_api_v1_admin_session_memory_jobs_job_id_retry",
@@ -37288,48 +37347,12 @@
           },
           {
             "in": "query",
-            "name": "platform",
+            "name": "gateway_run_id",
             "required": true,
             "schema": {
-              "maxLength": 32,
+              "maxLength": 160,
               "minLength": 1,
-              "title": "Platform",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "owner_type",
-            "required": true,
-            "schema": {
-              "enum": [
-                "user",
-                "group",
-                "project"
-              ],
-              "title": "Owner Type",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "owner_id",
-            "required": true,
-            "schema": {
-              "maxLength": 255,
-              "minLength": 1,
-              "title": "Owner Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "maxLength": 255,
-              "minLength": 1,
-              "title": "Session Id",
+              "title": "Gateway Run Id",
               "type": "string"
             }
           },
@@ -37547,48 +37570,12 @@
           },
           {
             "in": "query",
-            "name": "platform",
+            "name": "gateway_run_id",
             "required": true,
             "schema": {
-              "maxLength": 32,
+              "maxLength": 160,
               "minLength": 1,
-              "title": "Platform",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "owner_type",
-            "required": true,
-            "schema": {
-              "enum": [
-                "user",
-                "group",
-                "project"
-              ],
-              "title": "Owner Type",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "owner_id",
-            "required": true,
-            "schema": {
-              "maxLength": 255,
-              "minLength": 1,
-              "title": "Owner Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "maxLength": 255,
-              "minLength": 1,
-              "title": "Session Id",
+              "title": "Gateway Run Id",
               "type": "string"
             }
           },

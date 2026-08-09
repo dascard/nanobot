@@ -68,7 +68,11 @@ def test_api_common_auth_uses_legacy_api_routes_token_monkeypatch(monkeypatch):
 
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
 
-    assert common_auth.verify_token(authorization="Bearer split-token") is None
+    principal = common_auth.verify_token(
+        authorization="Bearer split-token"
+    )
+    assert principal.subject == "nanobot-api-gateway"
+    assert principal.has_scope("session_goal:control") is True
     for header in ("", "Bearer wrong"):
         try:
             common_auth.verify_token(authorization=header)

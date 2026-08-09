@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+import hashlib
 import json
 
 import pytest
 from sqlalchemy.orm import sessionmaker
 
 from core.agent_runtime.request_scope import runtime_context_scope
+from core.db.models.admin import AdminAuditLog
 from core.db.models.session_goal import (
     SessionGoalEventRow,
     SessionGoalRow,
     SessionPlanAssetRow,
+)
+from core.db.models.gateway_control import (
+    GatewayRunBindingRow,
+    GatewaySessionBindingRow,
 )
 from core.session_goal import (
     SessionGoalBudget,
@@ -22,6 +29,10 @@ from core.session_goal import (
     SessionGoalService,
     SessionGoalStatus,
     SessionGoalValidationError,
+)
+from core.session_goal_control import (
+    SessionGoalControlIdentityIntegrityError,
+    resolve_session_goal_control_identity,
 )
 from tests.async_helpers import run_async
 
@@ -40,6 +51,155 @@ def _create_goal(db_session):
     )
     db_session.commit()
     return snapshot
+
+
+def _gateway_run(
+    db_session,
+    *,
+    run_id: str,
+    owner_id: str = "api-goal-user",
+    actor_id: str = "api-goal-user",
+    session_id: str = "private-api-goal-user",
+) -> GatewayRunBindingRow:
+    binding_id = hashlib.sha256(
+        f"qq\0private\0{session_id}".encode("utf-8")
+    ).hexdigest()
+    session = db_session.get(GatewaySessionBindingRow, binding_id)
+    if session is None:
+        db_session.add(GatewaySessionBindingRow(
+            binding_id=binding_id,
+            transport="qq",
+            owner_platform="qq",
+            owner_type="user",
+            owner_id=owner_id,
+            actor_id=actor_id,
+            chat_type="private",
+            chat_stream_id=session_id,
+            runtime_session_id=session_id,
+            current_run_id=run_id,
+            generation=1,
+            created_at=datetime(2026, 8, 9, 12, 0, 0),
+            updated_at=datetime(2026, 8, 9, 12, 0, 0),
+        ))
+    row = GatewayRunBindingRow(
+        run_id=run_id,
+        binding_id=binding_id,
+        transport="qq",
+        owner_platform="qq",
+        owner_type="user",
+        owner_id=owner_id,
+        actor_id=actor_id,
+        chat_type="private",
+        chat_stream_id=session_id,
+        runtime_session_id=session_id,
+        admitted_at=datetime(2026, 8, 9, 12, 0, 0),
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row
+
+
+def test_session_goal_api_uses_gateway_binding_and_rejects_self_asserted_identity(
+    client,
+    db_session,
+):
+    run = _gateway_run(db_session, run_id="run-session-goal-owner")
+
+    created = client.post("/api/v1/session-goals", json={
+        "gateway_run_id": run.run_id,
+        "objective": "只接受受信 Gateway 身份",
+        "completion_criteria": ["拒绝自报 owner", "记录真实 actor"],
+        "budget": {"max_model_steps": 8, "max_tool_calls": 16},
+    })
+
+    assert created.status_code == 200, created.text
+    goal = created.json()
+    assert goal["principal"] == {
+        "platform": "qq",
+        "owner_type": "user",
+        "owner_id": "api-goal-user",
+        "session_id": "private-api-goal-user",
+    }
+    event = db_session.query(SessionGoalEventRow).filter_by(
+        goal_id=goal["goal_id"],
+        event_kind="created",
+    ).one()
+    assert event.actor_id == "api-goal-user"
+    assert event.source_run_id == run.run_id
+
+    forged = client.post("/api/v1/session-goals", json={
+        "gateway_run_id": run.run_id,
+        "principal": {
+            "platform": "qq",
+            "owner_type": "user",
+            "owner_id": "forged-owner",
+            "session_id": "forged-session",
+        },
+        "actor_id": "forged-actor",
+        "objective": "不应创建",
+        "completion_criteria": ["不应执行"],
+    })
+    assert forged.status_code == 422
+
+    foreign = _gateway_run(
+        db_session,
+        run_id="run-session-goal-foreign",
+        owner_id="foreign-owner",
+        actor_id="foreign-owner",
+        session_id="private-foreign-owner",
+    )
+    hidden = client.get(
+        f"/api/v1/session-goals/{goal['goal_id']}",
+        params={"gateway_run_id": foreign.run_id},
+    )
+    assert hidden.status_code == 404
+
+
+def test_session_goal_api_requires_authenticated_control_scope(
+    client,
+    db_session,
+):
+    from api import routes
+    from api.common_auth import AuthenticatedApiPrincipal
+
+    run = _gateway_run(
+        db_session,
+        run_id="run-session-goal-without-control-scope",
+    )
+    client.app.dependency_overrides[routes.verify_token] = lambda: (
+        AuthenticatedApiPrincipal(
+            subject="read-only-service",
+            kind="service",
+            scopes=frozenset({"api:access"}),
+        )
+    )
+
+    response = client.post("/api/v1/session-goals", json={
+        "gateway_run_id": run.run_id,
+        "objective": "无控制权限时拒绝创建",
+        "completion_criteria": ["返回 403"],
+    })
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "当前认证主体无 Session Goal 控制权限"
+
+
+def test_session_goal_gateway_identity_fails_closed_for_private_actor_forgery(
+    db_session,
+):
+    forged = _gateway_run(
+        db_session,
+        run_id="run-session-goal-forged-actor",
+        owner_id="real-owner",
+        actor_id="forged-actor",
+        session_id="private-real-owner",
+    )
+
+    with pytest.raises(
+        SessionGoalControlIdentityIntegrityError,
+        match="actor",
+    ):
+        resolve_session_goal_control_identity(db_session, forged.run_id)
 
 
 def test_session_goal_requires_frozen_approval_before_execution(db_session):
@@ -318,19 +478,19 @@ def test_plan_tools_use_only_trusted_runtime_identity(db_session, monkeypatch):
     assert "owner 不匹配" in str(denied.error)
 
 
-def test_session_goal_control_api_keeps_approval_and_mode_switch_separate(client):
-    principal = {
-        "platform": "qq",
-        "owner_type": "user",
-        "owner_id": "api-goal-user",
-        "session_id": "private-api-goal-user",
-    }
+def test_session_goal_control_api_keeps_approval_and_mode_switch_separate(
+    client,
+    db_session,
+):
+    owner_run = _gateway_run(
+        db_session,
+        run_id="run-session-goal-api-owner",
+    )
     created = client.post("/api/v1/session-goals", json={
-        "principal": principal,
+        "gateway_run_id": owner_run.run_id,
         "objective": "通过 API 执行长任务",
         "completion_criteria": ["计划获批", "执行完成"],
         "budget": {"max_model_steps": 8, "max_tool_calls": 16},
-        "actor_id": "api-goal-user",
     })
     assert created.status_code == 200
     goal = created.json()
@@ -338,9 +498,8 @@ def test_session_goal_control_api_keeps_approval_and_mode_switch_separate(client
     written = client.put(
         f"/api/v1/session-goals/{goal['goal_id']}/plan",
         json={
-            "principal": principal,
+            "gateway_run_id": owner_run.run_id,
             "expected_version": goal["version"],
-            "actor_id": "api-goal-user",
             "content": "# API 计划\n\n1. 执行",
         },
     )
@@ -349,9 +508,8 @@ def test_session_goal_control_api_keeps_approval_and_mode_switch_separate(client
     requested = client.post(
         f"/api/v1/session-goals/{goal['goal_id']}/request-approval",
         json={
-            "principal": principal,
+            "gateway_run_id": owner_run.run_id,
             "expected_version": goal["version"],
-            "actor_id": "api-goal-user",
         },
     )
     assert requested.status_code == 200
@@ -359,9 +517,8 @@ def test_session_goal_control_api_keeps_approval_and_mode_switch_separate(client
     approved = client.post(
         f"/api/v1/session-goals/{goal['goal_id']}/approve",
         json={
-            "principal": principal,
+            "gateway_run_id": owner_run.run_id,
             "expected_version": goal["version"],
-            "actor_id": "human-reviewer",
             "expected_plan_revision": goal["latest_plan_revision"],
             "expected_plan_sha256": goal["latest_plan_sha256"],
         },
@@ -374,15 +531,154 @@ def test_session_goal_control_api_keeps_approval_and_mode_switch_separate(client
     started = client.post(
         f"/api/v1/session-goals/{goal['goal_id']}/start-execution",
         json={
-            "principal": principal,
+            "gateway_run_id": owner_run.run_id,
             "expected_version": goal["version"],
-            "actor_id": "human-reviewer",
         },
     )
     assert started.status_code == 200
     goal = started.json()
     assert goal["status"] == "executing"
     assert goal["mode"] == "execute"
+
+
+def test_admin_session_goal_approval_is_explicit_scoped_and_audited(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "api.admin_routes.NANOBOT_ADMIN_TOKEN",
+        "session-goal-admin-token",
+    )
+    owner_run = _gateway_run(
+        db_session,
+        run_id="run-session-goal-admin-owner",
+    )
+    created = client.post("/api/v1/session-goals", json={
+        "gateway_run_id": owner_run.run_id,
+        "objective": "由独立管理权限批准",
+        "completion_criteria": ["批准有真实管理审计"],
+    }).json()
+    written = client.put(
+        f"/api/v1/session-goals/{created['goal_id']}/plan",
+        json={
+            "gateway_run_id": owner_run.run_id,
+            "expected_version": created["version"],
+            "content": "# 待管理端批准的计划",
+        },
+    ).json()
+    awaiting = client.post(
+        f"/api/v1/session-goals/{created['goal_id']}/request-approval",
+        json={
+            "gateway_run_id": owner_run.run_id,
+            "expected_version": written["version"],
+        },
+    ).json()
+    headers = {"Authorization": "Bearer session-goal-admin-token"}
+
+    forged = client.post(
+        f"/api/v1/admin/session-goals/{created['goal_id']}/approve",
+        headers=headers,
+        json={
+            "gateway_run_id": owner_run.run_id,
+            "expected_version": awaiting["version"],
+            "expected_plan_revision": awaiting["latest_plan_revision"],
+            "expected_plan_sha256": awaiting["latest_plan_sha256"],
+            "reason": "人工复核通过",
+            "approver_id": "伪造批准者",
+        },
+    )
+    assert forged.status_code == 422
+
+    approved = client.post(
+        f"/api/v1/admin/session-goals/{created['goal_id']}/approve",
+        headers=headers,
+        json={
+            "gateway_run_id": owner_run.run_id,
+            "expected_version": awaiting["version"],
+            "expected_plan_revision": awaiting["latest_plan_revision"],
+            "expected_plan_sha256": awaiting["latest_plan_sha256"],
+            "reason": "人工复核通过",
+        },
+    )
+
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["approved_by"] == "admin:admin"
+    audit = db_session.query(AdminAuditLog).filter_by(
+        action="session_goal.admin_approve",
+        target_id=created["goal_id"],
+    ).one()
+    detail = json.loads(audit.detail_json)
+    assert detail["scope"] == "session_goal:approve"
+    assert detail["gateway_run_id"] == owner_run.run_id
+    assert detail["approver_id"] == "admin:admin"
+
+
+def test_admin_session_goal_approval_rolls_back_when_audit_fails(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "api.admin_routes.NANOBOT_ADMIN_TOKEN",
+        "session-goal-admin-token",
+    )
+    owner_run = _gateway_run(
+        db_session,
+        run_id="run-session-goal-admin-audit-failure",
+    )
+    created = client.post("/api/v1/session-goals", json={
+        "gateway_run_id": owner_run.run_id,
+        "objective": "审计失败不得批准",
+        "completion_criteria": ["状态保持待批准"],
+    }).json()
+    written = client.put(
+        f"/api/v1/session-goals/{created['goal_id']}/plan",
+        json={
+            "gateway_run_id": owner_run.run_id,
+            "expected_version": created["version"],
+            "content": "# 审计失败回滚计划",
+        },
+    ).json()
+    awaiting = client.post(
+        f"/api/v1/session-goals/{created['goal_id']}/request-approval",
+        json={
+            "gateway_run_id": owner_run.run_id,
+            "expected_version": written["version"],
+        },
+    ).json()
+
+    def reject_audit(*_args, **_kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(
+        "api.admin.session_goal_routes.stage_audit_request",
+        reject_audit,
+    )
+    response = client.post(
+        f"/api/v1/admin/session-goals/{created['goal_id']}/approve",
+        headers={
+            "Authorization": "Bearer session-goal-admin-token"
+        },
+        json={
+            "gateway_run_id": owner_run.run_id,
+            "expected_version": awaiting["version"],
+            "expected_plan_revision": awaiting["latest_plan_revision"],
+            "expected_plan_sha256": awaiting["latest_plan_sha256"],
+            "reason": "应被审计故障阻断",
+        },
+    )
+
+    assert response.status_code == 500
+    db_session.expire_all()
+    row = db_session.get(SessionGoalRow, created["goal_id"])
+    assert row is not None
+    assert row.status == SessionGoalStatus.AWAITING_APPROVAL.value
+    assert row.approved_by == ""
+    assert db_session.query(AdminAuditLog).filter_by(
+        action="session_goal.admin_approve",
+        target_id=created["goal_id"],
+    ).count() == 0
 
 
 def test_build_tool_plan_only_exposes_plan_assets_when_server_enables_mode(

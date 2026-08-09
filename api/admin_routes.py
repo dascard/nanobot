@@ -195,6 +195,7 @@ from api.admin.prompt_v2_routes import router as prompt_v2_router
 from api.admin.persona_routes import router as persona_router
 from api.admin.rag_routes import router as rag_router
 from api.admin.session_memory_routes import router as session_memory_router
+from api.admin.session_goal_routes import router as session_goal_admin_router
 from api.admin.chat_config_routes import (
     BlockRuleCreate as BlockRuleCreate,
     BlockRuleUpdate as BlockRuleUpdate,
@@ -327,6 +328,7 @@ router.include_router(prompt_v2_router)
 router.include_router(persona_router)
 router.include_router(rag_router)
 router.include_router(session_memory_router)
+router.include_router(session_goal_admin_router)
 router.include_router(chat_config_router)
 router.include_router(sticker_router)
 router.include_router(group_learning_router)

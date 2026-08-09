@@ -1746,8 +1746,19 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
   Task SLO、行为 Golden、决策清单、致命 Ruff 和 `git diff --check` 均通过；最终完整
   `python -m pytest tests/ -v` 为 6944 passed、12 skipped、0 failed。
 
-- [ ] **Session Goal × 认证身份：** 认证层返回 typed principal，owner／actor／approver 从认证上下文或已验证
+- [x] **Session Goal × 认证身份：** 认证层返回 typed principal，owner／actor／approver 从认证上下文或已验证
   Gateway binding 推导，不再接受任意请求体身份；管理员模拟作为显式、带 scope 且可审计的能力处理。
+
+  实现证据（2026-08-09）：普通 API Bearer 验证现在返回不可变 `AuthenticatedApiPrincipal` 和固定
+  `session_goal:control` scope；Session Goal 控制 API 只接收 `gateway_run_id` 与业务字段，并以
+  `extra=forbid` 拒绝自报 principal、actor、approver 或 source Run。服务端从不可变 Gateway Run binding
+  派生 owner／actor／runtime session，同时核对对应 Session binding 的 transport、owner、chat stream 与
+  runtime session；缺失或漂移均 fail closed。所有状态事件记录经过核验的来源 Run，跨 owner 查询仍统一表现为
+  不可见。新增显式 Admin 批准入口，以类型化 Admin principal 和 `session_goal:approve` scope 执行，不允许请求方
+  指定批准者；批准事实与脱敏审计事实在同一数据库事务提交，审计失败会回滚批准。身份伪造、scope 缺失、私聊
+  actor 漂移、独立 Admin 批准与审计失败回滚均有回归覆盖；Session Goal／API／OpenAPI 定向回归为
+  112 passed。架构、OpenAPI、Release／Verification Golden、决策清单、Task SLO、行为 Golden、致命 Ruff
+  和 `git diff --check` 均通过；最终完整 `python -m pytest tests/ -v` 为 6949 passed、12 skipped、0 failed。
 - [ ] **Evolution Canary × 文件控制面：** 为 release、approval consumption、active index 与 rollback 引入
   可恢复 journal／状态机，补齐崩溃点重试和启动 reconcile，避免“未激活但令牌已永久消费”或响应不确定。
 - [ ] **A2A × DNS/网络边界：** 在连接时验证并固定实际解析地址，持续拒绝 private、loopback、link-local、

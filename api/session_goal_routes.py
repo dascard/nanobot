@@ -6,11 +6,11 @@ from dataclasses import asdict
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from api.common_auth import verify_token
+from api.common_auth import AuthenticatedApiPrincipal, verify_token
 from core.database import get_db
 from core.session_goal import (
     MAX_COMPLETION_CRITERIA,
@@ -19,26 +19,26 @@ from core.session_goal import (
     SessionGoalBudget,
     SessionGoalConflictError,
     SessionGoalNotFoundError,
-    SessionGoalPrincipal,
     SessionGoalService,
     SessionGoalSnapshot,
     SessionGoalStatus,
     SessionGoalValidationError,
     SessionPlanAsset,
 )
+from core.session_goal_control import (
+    SessionGoalControlIdentity,
+    SessionGoalControlIdentityIntegrityError,
+    SessionGoalControlIdentityNotFound,
+    resolve_session_goal_control_identity,
+)
 
 
 router = APIRouter(tags=["session-goals"])
 
 
-class SessionGoalPrincipalInput(BaseModel):
-    platform: str = Field(min_length=1, max_length=32)
-    owner_type: Literal["user", "group", "project"]
-    owner_id: str = Field(min_length=1, max_length=255)
-    session_id: str = Field(min_length=1, max_length=255)
-
-
 class SessionGoalBudgetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     max_model_steps: int = Field(default=64, ge=1, le=10_000)
     max_tool_calls: int = Field(default=128, ge=1, le=100_000)
     max_input_tokens: int = Field(default=1_000_000, ge=1, le=1_000_000_000)
@@ -52,7 +52,9 @@ class SessionGoalBudgetInput(BaseModel):
 
 
 class SessionGoalCreateRequest(BaseModel):
-    principal: SessionGoalPrincipalInput
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    gateway_run_id: str = Field(min_length=1, max_length=160)
     objective: str = Field(
         min_length=1,
         max_length=MAX_GOAL_OBJECTIVE_CHARS,
@@ -64,18 +66,17 @@ class SessionGoalCreateRequest(BaseModel):
         ]
     ] = Field(min_length=1, max_length=MAX_COMPLETION_CRITERIA)
     budget: SessionGoalBudgetInput = Field(default_factory=SessionGoalBudgetInput)
-    actor_id: str = Field(min_length=1, max_length=255)
 
 
 class SessionGoalMutationRequest(BaseModel):
-    principal: SessionGoalPrincipalInput
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    gateway_run_id: str = Field(min_length=1, max_length=160)
     expected_version: int = Field(ge=1)
-    actor_id: str = Field(min_length=1, max_length=255)
 
 
 class SessionPlanWriteRequest(SessionGoalMutationRequest):
     content: str = Field(min_length=1, max_length=262_144)
-    source_run_id: str = Field(default="", max_length=160)
 
 
 class SessionPlanApproveRequest(SessionGoalMutationRequest):
@@ -92,11 +93,27 @@ class SessionGoalFinishRequest(SessionGoalMutationRequest):
     reason: str = Field(min_length=1, max_length=512)
 
 
-def _principal(value: SessionGoalPrincipalInput) -> SessionGoalPrincipal:
-    return SessionGoalPrincipal(**value.model_dump())
+def _control_identity(
+    db: Session,
+    auth: AuthenticatedApiPrincipal,
+    gateway_run_id: str,
+) -> SessionGoalControlIdentity:
+    if (
+        not isinstance(auth, AuthenticatedApiPrincipal)
+        or not auth.has_scope("session_goal:control")
+    ):
+        raise HTTPException(403, "当前认证主体无 Session Goal 控制权限")
+    try:
+        return resolve_session_goal_control_identity(db, gateway_run_id)
+    except SessionGoalControlIdentityNotFound as exc:
+        raise HTTPException(404, "Gateway Run 不存在") from exc
+    except SessionGoalControlIdentityIntegrityError as exc:
+        raise HTTPException(503, "Gateway 身份事实不可用") from exc
 
 
-def _snapshot_payload(snapshot: SessionGoalSnapshot) -> dict[str, object]:
+def session_goal_snapshot_payload(
+    snapshot: SessionGoalSnapshot,
+) -> dict[str, object]:
     return {
         "goal_id": snapshot.goal_id,
         "principal": asdict(snapshot.principal),
@@ -165,56 +182,54 @@ def _commit(db: Session, operation):
 def create_session_goal(
     request: SessionGoalCreateRequest,
     db: Session = Depends(get_db),
-    _auth=Depends(verify_token),
+    auth: AuthenticatedApiPrincipal = Depends(verify_token),
 ):
+    identity = _control_identity(db, auth, request.gateway_run_id)
     snapshot = _commit(
         db,
         lambda: SessionGoalService(db).create_goal(
-            principal=_principal(request.principal),
+            principal=identity.principal,
             objective=request.objective,
             completion_criteria=request.completion_criteria,
             budget=SessionGoalBudget(**request.budget.model_dump()),
-            actor_id=request.actor_id,
+            actor_id=identity.actor_id,
+            source_run_id=identity.gateway_run_id,
         ),
     )
-    return _snapshot_payload(snapshot)
+    return session_goal_snapshot_payload(snapshot)
 
 
 @router.get("/session-goals/{goal_id}")
 def get_session_goal(
     goal_id: str,
-    platform: str = Query(min_length=1, max_length=32),
-    owner_type: Literal["user", "group", "project"] = Query(),
-    owner_id: str = Query(min_length=1, max_length=255),
-    session_id: str = Query(min_length=1, max_length=255),
+    gateway_run_id: str = Query(min_length=1, max_length=160),
     db: Session = Depends(get_db),
-    _auth=Depends(verify_token),
+    auth: AuthenticatedApiPrincipal = Depends(verify_token),
 ):
+    identity = _control_identity(db, auth, gateway_run_id)
     try:
         snapshot = SessionGoalService(db).get_goal(
             goal_id,
-            SessionGoalPrincipal(platform, owner_type, owner_id, session_id),
+            identity.principal,
         )
     except (SessionGoalNotFoundError, SessionGoalValidationError) as exc:
         raise _http_error(exc) from exc
-    return _snapshot_payload(snapshot)
+    return session_goal_snapshot_payload(snapshot)
 
 
 @router.get("/session-goals/{goal_id}/plan")
 def get_session_plan(
     goal_id: str,
-    platform: str = Query(min_length=1, max_length=32),
-    owner_type: Literal["user", "group", "project"] = Query(),
-    owner_id: str = Query(min_length=1, max_length=255),
-    session_id: str = Query(min_length=1, max_length=255),
+    gateway_run_id: str = Query(min_length=1, max_length=160),
     revision: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    _auth=Depends(verify_token),
+    auth: AuthenticatedApiPrincipal = Depends(verify_token),
 ):
+    identity = _control_identity(db, auth, gateway_run_id)
     try:
         plan = SessionGoalService(db).get_plan(
             goal_id,
-            SessionGoalPrincipal(platform, owner_type, owner_id, session_id),
+            identity.principal,
             revision=revision,
         )
     except (SessionGoalNotFoundError, SessionGoalValidationError) as exc:
@@ -227,20 +242,21 @@ def write_session_plan(
     goal_id: str,
     request: SessionPlanWriteRequest,
     db: Session = Depends(get_db),
-    _auth=Depends(verify_token),
+    auth: AuthenticatedApiPrincipal = Depends(verify_token),
 ):
+    identity = _control_identity(db, auth, request.gateway_run_id)
     snapshot = _commit(
         db,
         lambda: SessionGoalService(db).write_plan(
             goal_id=goal_id,
-            principal=_principal(request.principal),
+            principal=identity.principal,
             content=request.content,
             expected_version=request.expected_version,
-            actor_id=request.actor_id,
-            source_run_id=request.source_run_id,
+            actor_id=identity.actor_id,
+            source_run_id=identity.gateway_run_id,
         ),
     )
-    return _snapshot_payload(snapshot)
+    return session_goal_snapshot_payload(snapshot)
 
 
 @router.post("/session-goals/{goal_id}/request-approval")
@@ -248,18 +264,20 @@ def request_session_plan_approval(
     goal_id: str,
     request: SessionGoalMutationRequest,
     db: Session = Depends(get_db),
-    _auth=Depends(verify_token),
+    auth: AuthenticatedApiPrincipal = Depends(verify_token),
 ):
+    identity = _control_identity(db, auth, request.gateway_run_id)
     snapshot = _commit(
         db,
         lambda: SessionGoalService(db).request_approval(
             goal_id=goal_id,
-            principal=_principal(request.principal),
+            principal=identity.principal,
             expected_version=request.expected_version,
-            actor_id=request.actor_id,
+            actor_id=identity.actor_id,
+            source_run_id=identity.gateway_run_id,
         ),
     )
-    return _snapshot_payload(snapshot)
+    return session_goal_snapshot_payload(snapshot)
 
 
 @router.post("/session-goals/{goal_id}/approve")
@@ -267,20 +285,22 @@ def approve_session_plan(
     goal_id: str,
     request: SessionPlanApproveRequest,
     db: Session = Depends(get_db),
-    _auth=Depends(verify_token),
+    auth: AuthenticatedApiPrincipal = Depends(verify_token),
 ):
+    identity = _control_identity(db, auth, request.gateway_run_id)
     snapshot = _commit(
         db,
         lambda: SessionGoalService(db).approve(
             goal_id=goal_id,
-            principal=_principal(request.principal),
+            principal=identity.principal,
             expected_version=request.expected_version,
             expected_plan_revision=request.expected_plan_revision,
             expected_plan_sha256=request.expected_plan_sha256,
-            approver_id=request.actor_id,
+            approver_id=identity.actor_id,
+            source_run_id=identity.gateway_run_id,
         ),
     )
-    return _snapshot_payload(snapshot)
+    return session_goal_snapshot_payload(snapshot)
 
 
 @router.post("/session-goals/{goal_id}/start-execution")
@@ -288,18 +308,20 @@ def start_session_goal_execution(
     goal_id: str,
     request: SessionGoalMutationRequest,
     db: Session = Depends(get_db),
-    _auth=Depends(verify_token),
+    auth: AuthenticatedApiPrincipal = Depends(verify_token),
 ):
+    identity = _control_identity(db, auth, request.gateway_run_id)
     snapshot = _commit(
         db,
         lambda: SessionGoalService(db).start_execution(
             goal_id=goal_id,
-            principal=_principal(request.principal),
+            principal=identity.principal,
             expected_version=request.expected_version,
-            actor_id=request.actor_id,
+            actor_id=identity.actor_id,
+            source_run_id=identity.gateway_run_id,
         ),
     )
-    return _snapshot_payload(snapshot)
+    return session_goal_snapshot_payload(snapshot)
 
 
 @router.post("/session-goals/{goal_id}/finish")
@@ -307,20 +329,22 @@ def finish_session_goal(
     goal_id: str,
     request: SessionGoalFinishRequest,
     db: Session = Depends(get_db),
-    _auth=Depends(verify_token),
+    auth: AuthenticatedApiPrincipal = Depends(verify_token),
 ):
+    identity = _control_identity(db, auth, request.gateway_run_id)
     snapshot = _commit(
         db,
         lambda: SessionGoalService(db).finish(
             goal_id=goal_id,
-            principal=_principal(request.principal),
+            principal=identity.principal,
             expected_version=request.expected_version,
-            actor_id=request.actor_id,
+            actor_id=identity.actor_id,
             status=SessionGoalStatus(request.status),
             reason=request.reason,
+            source_run_id=identity.gateway_run_id,
         ),
     )
-    return _snapshot_payload(snapshot)
+    return session_goal_snapshot_payload(snapshot)
 
 
 __all__ = [
@@ -330,4 +354,5 @@ __all__ = [
     "SessionPlanApproveRequest",
     "SessionPlanWriteRequest",
     "router",
+    "session_goal_snapshot_payload",
 ]

@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`c803cac93bae2ee18351e50a1557f535e1dc0e84`
-- 规则总数：8847
+- 源提交：`f6315da87117d61bb7d4da56a1f77c107f71dc57`
+- 规则总数：8856
 - 扫描错误：0
 - 人工复核队列：723
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -16,8 +16,8 @@
 | `data_consistency` | 509 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4694 |
-| `security_invariant` | 1735 |
+| `protocol_syntax` | 4699 |
+| `security_invariant` | 1739 |
 
 ## 文件汇总
 
@@ -455,6 +455,7 @@
 | `api/chat_pre_bridge_decision.py` | 4 |
 | `api/chat_pre_bridge_route_result.py` | 4 |
 | `api/chat_private_buffer.py` | 4 |
+| `api/common_auth.py` | 4 |
 | `app/group_analysis/render.py` | 4 |
 | `app/group_analysis/service.py` | 4 |
 | `app/group_learning/schedule_service.py` | 4 |
@@ -539,6 +540,7 @@
 | `webui/src/features/agent-runs/AgentRunDetailPage.jsx` | 3 |
 | `webui/src/features/agent-runs/AgentRunsPage.jsx` | 3 |
 | `webui/src/features/agent-runs/LLMApiLogsPage.jsx` | 3 |
+| `api/admin/common.py` | 2 |
 | `api/admin/db_browser_routes.py` | 2 |
 | `api/chat_streaming_helpers.py` | 2 |
 | `app/group_ingress/response_contract.py` | 2 |
@@ -566,6 +568,7 @@
 | `core/run_ledger/sinks.py` | 2 |
 | `core/sandbox/execution_profiles.py` | 2 |
 | `core/sandbox/quota_service.py` | 2 |
+| `core/session_goal_control.py` | 2 |
 | `core/sqlite_maintenance.py` | 2 |
 | `core/state_manager.py` | 2 |
 | `core/telemetry/__init__.py` | 2 |
@@ -589,6 +592,7 @@
 | `webui/src/features/models/RouteBindingsPanel.jsx` | 2 |
 | `webui/src/features/tools/ToolsPage.jsx` | 2 |
 | `api/admin/runtime_module_routes.py` | 1 |
+| `api/admin/session_goal_routes.py` | 1 |
 | `api/chat_non_streaming_result.py` | 1 |
 | `api/chat_persona_context.py` | 1 |
 | `api/chat_persona_lookup.py` | 1 |

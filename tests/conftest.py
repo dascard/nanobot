@@ -100,6 +100,7 @@ def db_session():
 def client(db_session):
     """提供 FastAPI TestClient，并覆盖 get_db 依赖"""
     from api import routes
+    from api.common_auth import AuthenticatedApiPrincipal
 
     def override_get_db():
         try:
@@ -109,7 +110,13 @@ def client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[canonical_get_db] = override_get_db
-    app.dependency_overrides[routes.verify_token] = lambda: None
+    app.dependency_overrides[routes.verify_token] = lambda: (
+        AuthenticatedApiPrincipal(
+            subject="pytest-api-gateway",
+            kind="gateway",
+            scopes=frozenset({"api:access", "session_goal:control"}),
+        )
+    )
     test_client = TestClient(app)
     try:
         yield test_client

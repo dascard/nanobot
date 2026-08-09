@@ -520,6 +520,7 @@ class SessionGoalService:
         completion_criteria: object,
         budget: SessionGoalBudget,
         actor_id: str,
+        source_run_id: str = "",
     ) -> SessionGoalSnapshot:
         actor = _normalize_actor_id(actor_id)
         objective_text = _normalize_text(
@@ -559,6 +560,7 @@ class SessionGoalService:
             previous_status="",
             previous_mode="",
             actor_id=actor,
+            source_run_id=source_run_id,
             occurred_at=now,
         )
         self._db.flush()
@@ -650,6 +652,7 @@ class SessionGoalService:
         principal: SessionGoalPrincipal,
         expected_version: int,
         actor_id: str,
+        source_run_id: str = "",
     ) -> SessionGoalSnapshot:
         row = self._owned_row(goal_id, principal)
         self._require_version(row, expected_version)
@@ -663,6 +666,7 @@ class SessionGoalService:
             values={"status": SessionGoalStatus.AWAITING_APPROVAL.value},
             event_kind="approval_requested",
             actor_id=actor_id,
+            source_run_id=source_run_id,
             plan_revision=int(row.latest_plan_revision),
             plan_sha256=str(row.latest_plan_sha256),
         )
@@ -677,6 +681,7 @@ class SessionGoalService:
         expected_plan_revision: int,
         expected_plan_sha256: str,
         approver_id: str,
+        source_run_id: str = "",
     ) -> SessionGoalSnapshot:
         row = self._owned_row(goal_id, principal)
         self._require_version(row, expected_version)
@@ -705,6 +710,7 @@ class SessionGoalService:
             },
             event_kind="approved",
             actor_id=approver_id,
+            source_run_id=source_run_id,
             plan_revision=expected_plan_revision,
             plan_sha256=digest,
         )
@@ -717,6 +723,7 @@ class SessionGoalService:
         principal: SessionGoalPrincipal,
         expected_version: int,
         actor_id: str,
+        source_run_id: str = "",
     ) -> SessionGoalSnapshot:
         row = self._owned_row(goal_id, principal)
         self._require_version(row, expected_version)
@@ -737,6 +744,7 @@ class SessionGoalService:
             },
             event_kind="execution_started",
             actor_id=actor_id,
+            source_run_id=source_run_id,
             plan_revision=int(row.approved_plan_revision),
             plan_sha256=str(row.approved_plan_sha256),
         )
@@ -751,6 +759,7 @@ class SessionGoalService:
         actor_id: str,
         status: SessionGoalStatus,
         reason: str,
+        source_run_id: str = "",
     ) -> SessionGoalSnapshot:
         if status not in {
             SessionGoalStatus.COMPLETED,
@@ -782,6 +791,7 @@ class SessionGoalService:
             },
             event_kind=status.value,
             actor_id=actor_id,
+            source_run_id=source_run_id,
             plan_revision=int(row.approved_plan_revision),
             plan_sha256=str(row.approved_plan_sha256 or ""),
         )

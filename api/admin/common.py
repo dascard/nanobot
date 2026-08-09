@@ -25,6 +25,27 @@ _LOGGER = logging.getLogger("nanobot.admin.audit")
 _ResultT = TypeVar("_ResultT")
 
 
+class AuthenticatedAdminPrincipal(str):
+    """兼容字符串调用面的类型化 Admin 凭据主体。"""
+
+    _SCOPES = frozenset({"admin:*", "session_goal:approve"})
+
+    def __new__(cls):
+        return super().__new__(cls, "admin")
+
+    @property
+    def subject(self) -> str:
+        return str(self)
+
+    @property
+    def scopes(self) -> frozenset[str]:
+        return self._SCOPES
+
+    def has_scope(self, scope: str) -> bool:
+        normalized = str(scope or "").strip()
+        return normalized in self._SCOPES or "admin:*" in self._SCOPES
+
+
 def _current_admin_token() -> str:
     # 兼容现有测试对 api.admin_routes.NANOBOT_ADMIN_TOKEN 的 monkeypatch。
     admin_routes = sys.modules.get("api.admin_routes")
@@ -33,14 +54,17 @@ def _current_admin_token() -> str:
     return str(CONFIG_ADMIN_TOKEN or "")
 
 
-def verify_admin(authorization: str = Header(default="")) -> str:
+def verify_admin(
+    authorization: str = Header(default=""),
+) -> AuthenticatedAdminPrincipal:
     token_config = _current_admin_token()
     if not token_config:
         raise HTTPException(status_code=503, detail="Admin token not configured")
-    token = authorization.replace("Bearer ", "").strip()
+    scheme, separator, value = str(authorization or "").partition(" ")
+    token = value.strip() if separator and scheme.lower() == "bearer" else ""
     if not token or not compare_digest(token, token_config):
         raise HTTPException(status_code=401, detail="Invalid token")
-    return "admin"
+    return AuthenticatedAdminPrincipal()
 
 
 def client_ip(request: Request) -> str:
