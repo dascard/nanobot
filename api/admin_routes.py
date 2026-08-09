@@ -188,6 +188,9 @@ from api.admin.eval_routes import (
     eval_timing_tuning_proposal_review_state as eval_timing_tuning_proposal_review_state,
     router as eval_router,
 )
+from api.admin.evolution_control_routes import (
+    router as evolution_control_router,
+)
 from api.admin.prompt_v2_routes import router as prompt_v2_router
 from api.admin.persona_routes import router as persona_router
 from api.admin.rag_routes import router as rag_router
@@ -336,6 +339,7 @@ router.include_router(proactive_outreach_router)
 router.include_router(outbound_delivery_router)
 router.include_router(reply_router)
 router.include_router(eval_router)
+router.include_router(evolution_control_router)
 router.include_router(run_evidence_router)
 router.include_router(collaboration_router)
 router.include_router(gateway_control_router)

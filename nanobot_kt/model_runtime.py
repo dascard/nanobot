@@ -30,10 +30,12 @@ def resolve_reply_route_plans(
 
     bound_candidates = resolve_route_binding_candidates("reply")
     if not bound_candidates:
-        return _prioritize_reply_profile([_resolve_legacy_reply_route_plan(
+        plans = [_resolve_legacy_reply_route_plan(
             default_base_url=default_base_url,
             default_api_key=default_api_key,
-        )], preferred_profile_id)
+        )]
+        plans = _apply_evolution_reply_routing(plans, session_id)
+        return _prioritize_reply_profile(plans, preferred_profile_id)
 
     from core.model_provider.provider_config import get_provider_instance
 
@@ -139,7 +141,34 @@ def resolve_reply_route_plans(
         raise RuntimeError(f"reply Route Binding 无可用模型：{detail}")
     if unavailable:
         logger.warning("reply Route 跳过不可用模型：%s", "；".join(unavailable))
+    plans = _apply_evolution_reply_routing(plans, session_id)
     return _prioritize_reply_profile(plans, preferred_profile_id)
+
+
+def _apply_evolution_reply_routing(
+    plans: list[ReplyRoutePlan],
+    session_id: str,
+) -> list[ReplyRoutePlan]:
+    """只重排已解析并验证的 Profile，不允许候选注入新 Provider。"""
+
+    from core.evolution_control.runtime import reorder_routing_candidates
+
+    ordered, evidence = reorder_routing_candidates(
+        plans,
+        route_key="reply",
+        subject_id=session_id,
+        candidate_id=lambda item: str(item.profile_id or item.model or ""),
+    )
+    if evidence.get("applied") is not True:
+        return ordered
+    release_id = str(evidence.get("release_id") or "")
+    return [
+        replace(
+            plan,
+            routing_evidence=f"evolution_canary:{release_id}",
+        )
+        for plan in ordered
+    ]
 
 
 def resolve_gateway_reply_route_plans(

@@ -1,10 +1,10 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`ff46228225da2171db7268722ddc6c79b784d141`
-- 规则总数：8565
+- 源提交：`2d46f33d7eea557c17222a11ea2a207c1c5cd6f9`
+- 规则总数：8661
 - 扫描错误：0
-- 人工复核队列：721
+- 人工复核队列：722
 - 完整逐项记录：`decision-rule-inventory.json`
 
 ## 分类汇总
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1674 |
+| `configurable_policy` | 1695 |
 | `data_consistency` | 493 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4545 |
-| `security_invariant` | 1680 |
+| `protocol_syntax` | 4595 |
+| `security_invariant` | 1705 |
 
 ## 文件汇总
 
@@ -62,6 +62,7 @@
 | `api/admin/tool_routes.py` | 44 |
 | `core/observability/run_view.py` | 43 |
 | `app/memory_digest/builder.py` | 42 |
+| `core/evolution_control/store.py` | 41 |
 | `core/persona_preprocess.py` | 41 |
 | `sandboxd/network_policy.py` | 41 |
 | `core/agent_orchestration/contracts.py` | 40 |
@@ -109,6 +110,7 @@
 | `api/admin/rag_routes.py` | 26 |
 | `app/group_ingress/helpers.py` | 26 |
 | `app/session_memory/jobs.py` | 26 |
+| `core/evolution_control/contracts.py` | 26 |
 | `core/prompt_v2/template_registry.py` | 26 |
 | `sandboxd/environment_manager.py` | 26 |
 | `webui/src/api/generated/adminClient.ts` | 26 |
@@ -208,6 +210,7 @@
 | `config.py` | 14 |
 | `core/ai_daily_ingest.py` | 14 |
 | `core/eval_sampling/store.py` | 14 |
+| `core/evolution_control/gates.py` | 14 |
 | `core/group_learning/rules.py` | 14 |
 | `core/outbound/control.py` | 14 |
 | `core/run_ledger/persistence.py` | 14 |
@@ -250,6 +253,7 @@
 | `core/tool_registration.py` | 12 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/curated.py` | 12 |
 | `sandboxd/container_security.py` | 12 |
+| `api/admin/evolution_control_routes.py` | 11 |
 | `api/admin/persona_routes.py` | 11 |
 | `api/agent_link_routes.py` | 11 |
 | `core/agent_runtime/native.py` | 11 |
@@ -261,6 +265,7 @@
 | `core/schedule_spec.py` | 11 |
 | `core/settings_service.py` | 11 |
 | `core/skills/governance.py` | 11 |
+| `nanobot_kt/model_runtime.py` | 11 |
 | `nanobot_kt/tools/ai_daily.py` | 11 |
 | `sandboxd/quota.py` | 11 |
 | `webui/src/features/rag/RagBenchmarkPage.jsx` | 11 |
@@ -279,7 +284,6 @@
 | `core/prompt_v2/template_resolution.py` | 10 |
 | `core/runtime/events.py` | 10 |
 | `core/sandbox/asset_service.py` | 10 |
-| `nanobot_kt/model_runtime.py` | 10 |
 | `scripts/build_semantic_task_baseline.py` | 10 |
 | `scripts/docker-build.sh` | 10 |
 | `scripts/sandbox-smoke-summary.py` | 10 |
@@ -501,6 +505,7 @@
 | `core/db/group_memory_adapter.py` | 3 |
 | `core/durable_tasks/owner.py` | 3 |
 | `core/durable_tasks/reconciler.py` | 3 |
+| `core/evolution_control/runtime.py` | 3 |
 | `core/lifecycle/compatibility_registry.py` | 3 |
 | `core/lifecycle/feature_registry.py` | 3 |
 | `core/llm_sdk_tracing.py` | 3 |
@@ -673,6 +678,9 @@
 | `decision.0abdb1fef12979b214c8` | `api/admin/chat_config_routes.py:399` | `python.numeric_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／4 | `reviewed` |
 |  | 摘要：body.enabled == 0 |  |  |  |  |  |
 |  | 原因：人工复核：只允许关闭既有 Web regex 是旧规则迁移期的单向兼容门禁 |  |  |  |  |  |
+| `decision.daa216a8047f9af92635` | `api/admin/evolution_control_routes.py:98` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+|  | 摘要："不存在" in message |  |  |  |  |  |
+|  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.05ec86e829e3aa58963f` | `api/admin/group_memory_routes.py:31` | `python.route_literal` | `protocol_syntax` | `resource` | 阶段 7A–7D | `reviewed` |
 |  | 摘要：router.get( "/groups/{group_id:path}/memories", operation_id="adminGroupMemoriesListLegacy", response_model=GroupMemoryListResponse, responses=standard_error_responses(401, 422), deprecated=True, ) |  |  |  |  |  |
 |  | 原因：人工复核：群记忆路由和 operation ID 由 Endpoint Registry 管理，是显式版本化的公开协议资源 |  |  |  |  |  |

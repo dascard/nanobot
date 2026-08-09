@@ -854,6 +854,21 @@
         "title": "ApiErrorResponse",
         "type": "object"
       },
+      "ArtifactImportBody": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "additionalProperties": true,
+            "title": "Artifact",
+            "type": "object"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "title": "ArtifactImportBody",
+        "type": "object"
+      },
       "AuditLogItemResponse": {
         "properties": {
           "action": {
@@ -2544,6 +2559,173 @@
           }
         },
         "title": "EvalRunRequest",
+        "type": "object"
+      },
+      "EvolutionApprovalBody": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Candidate Sha256",
+            "type": "string"
+          },
+          "confirm_candidate_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Confirm Candidate Sha256",
+            "type": "string"
+          },
+          "expires_in_seconds": {
+            "maximum": 604800.0,
+            "minimum": 60.0,
+            "title": "Expires In Seconds",
+            "type": "integer"
+          },
+          "gate_report_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Gate Report Sha256",
+            "type": "string"
+          },
+          "max_basis_points": {
+            "maximum": 2000.0,
+            "minimum": 1.0,
+            "title": "Max Basis Points",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "reviewer": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Reviewer",
+            "type": "string"
+          },
+          "reviewer_kind": {
+            "const": "human",
+            "title": "Reviewer Kind",
+            "type": "string"
+          },
+          "risk_scope": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "title": "Risk Scope",
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidate_sha256",
+          "gate_report_sha256",
+          "confirm_candidate_sha256",
+          "reviewer",
+          "reviewer_kind",
+          "reason",
+          "risk_scope",
+          "max_basis_points",
+          "expires_in_seconds"
+        ],
+        "title": "EvolutionApprovalBody",
+        "type": "object"
+      },
+      "EvolutionCanaryActivateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "maxLength": 128,
+            "minLength": 2,
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "approval_token": {
+            "format": "password",
+            "title": "Approval Token",
+            "type": "string",
+            "writeOnly": true
+          },
+          "basis_points": {
+            "maximum": 2000.0,
+            "minimum": 1.0,
+            "title": "Basis Points",
+            "type": "integer"
+          },
+          "candidate_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Candidate Sha256",
+            "type": "string"
+          },
+          "duration_seconds": {
+            "maximum": 86400.0,
+            "minimum": 60.0,
+            "title": "Duration Seconds",
+            "type": "integer"
+          },
+          "operator": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operator",
+            "type": "string"
+          },
+          "subject_allowlist": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Subject Allowlist",
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidate_sha256",
+          "approval_id",
+          "approval_token",
+          "basis_points",
+          "duration_seconds",
+          "operator"
+        ],
+        "title": "EvolutionCanaryActivateBody",
+        "type": "object"
+      },
+      "EvolutionGateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          }
+        },
+        "required": [
+          "evidence"
+        ],
+        "title": "EvolutionGateBody",
+        "type": "object"
+      },
+      "EvolutionRollbackBody": {
+        "additionalProperties": false,
+        "properties": {
+          "operator": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operator",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operator",
+          "reason"
+        ],
+        "title": "EvolutionRollbackBody",
         "type": "object"
       },
       "EvolutionTriggerRequest": {
@@ -14266,6 +14448,691 @@
         "summary": "Eval Reopen Candidate",
         "tags": [
           "admin-eval"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/approvals": {
+      "post": {
+        "operationId": "post_api_v1_admin_evals_evolution_approvals",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvolutionApprovalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Evals Evolution Approvals Evolution Approve Candidate",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution Approve Candidate",
+        "tags": [
+          "admin-evolution-control"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/canary/activate": {
+      "post": {
+        "operationId": "post_api_v1_admin_evals_evolution_canary_activate",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvolutionCanaryActivateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Evals Evolution Canary Activate Evolution Activate Canary",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution Activate Canary",
+        "tags": [
+          "admin-evolution-control"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/canary/resolve": {
+      "get": {
+        "operationId": "get_api_v1_admin_evals_evolution_canary_resolve",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "target_kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "prompt",
+                "skill",
+                "routing",
+                "manifest"
+              ],
+              "title": "Target Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Resource Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Subject Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Api V1 Admin Evals Evolution Canary Resolve Evolution Resolve Canary",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution Resolve Canary",
+        "tags": [
+          "admin-evolution-control"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/canary/{release_id}/rollback": {
+      "post": {
+        "operationId": "post_api_v1_admin_evals_evolution_canary_release_id_rollback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "title": "Release Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvolutionRollbackBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Evals Evolution Canary Release Id Rollback Evolution Rollback Canary",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution Rollback Canary",
+        "tags": [
+          "admin-evolution-control"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/candidates/import": {
+      "post": {
+        "operationId": "post_api_v1_admin_evals_evolution_candidates_import",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactImportBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Evals Evolution Candidates Import Evolution Import Candidate",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution Import Candidate",
+        "tags": [
+          "admin-evolution-control"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/candidates/{candidate_sha256}": {
+      "get": {
+        "operationId": "get_api_v1_admin_evals_evolution_candidates_candidate_sha256",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_sha256",
+            "required": true,
+            "schema": {
+              "title": "Candidate Sha256",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Api V1 Admin Evals Evolution Candidates Candidate Sha256 Evolution Get Candidate",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution Get Candidate",
+        "tags": [
+          "admin-evolution-control"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/catalog": {
+      "get": {
+        "operationId": "get_api_v1_admin_evals_evolution_catalog",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Api V1 Admin Evals Evolution Catalog Evolution Catalog",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution Catalog",
+        "tags": [
+          "admin-evolution-control"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/datasets/import": {
+      "post": {
+        "operationId": "post_api_v1_admin_evals_evolution_datasets_import",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactImportBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Evals Evolution Datasets Import Evolution Import Dataset",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution Import Dataset",
+        "tags": [
+          "admin-evolution-control"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/gates": {
+      "post": {
+        "operationId": "post_api_v1_admin_evals_evolution_gates",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvolutionGateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Api V1 Admin Evals Evolution Gates Evolution Gate Candidate",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution Gate Candidate",
+        "tags": [
+          "admin-evolution-control"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/evals/evolution/state": {
+      "get": {
+        "operationId": "get_api_v1_admin_evals_evolution_state",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Api V1 Admin Evals Evolution State Evolution State",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Evolution State",
+        "tags": [
+          "admin-evolution-control"
         ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"

@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：执行中（阶段 10.3 已完成，准备阶段 10.4）
+> 状态：执行中（阶段 10.4 已完成，准备阶段 10.5）
 >
 > 建立日期：2026-08-03
 >
@@ -1499,12 +1499,44 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
 
 #### 10.4 受控自进化
 
-- [ ] 只允许离线生成候选。
-- [ ] 冻结 baseline、训练集、验证集和测试集。
-- [ ] 经过安全、成本和质量门禁。
-- [ ] 人工批准后再灰度。
-- [ ] 允许优化 Prompt、Skill、路由和有限 Manifest 字段。
-- [ ] 禁止生产 Agent 直接修改、提交或批准主干代码。
+- [x] 只允许离线生成候选。
+- [x] 冻结 baseline、训练集、验证集和测试集。
+- [x] 经过安全、成本和质量门禁。
+- [x] 人工批准后再灰度。
+- [x] 允许优化 Prompt、Skill、路由和有限 Manifest 字段。
+- [x] 禁止生产 Agent 直接修改、提交或批准主干代码。
+
+阶段 10.4 实施证据（2026-08-09）：
+
+- 新增 `core/evolution_control/` 受控自进化内核和文件型不可变存储。数据集导入会读取实际
+  JSON／JSONL 文件，冻结 baseline、training、validation、test 四个精确分片及其内容摘要；候选生成器
+  只能看到 baseline／training 答案，validation／test 答案保持封存，门禁按冻结全集精确计分，缺失结果
+  计零分，不能通过删减困难样本抬高指标。
+- 候选必须携带确定性的离线生成证明，明确禁止网络、生产数据、仓库写入和 Git 操作；变更目标仅允许
+  Prompt、Skill、路由及白名单内的有限 Manifest 字段，并显式拒绝权限、评测器、发布配置、仓库操作和
+  主干代码变更。Prompt 产物使用内容寻址 URI，所有候选、数据集和产物摘要均参与不可变身份绑定。
+- 安全、成本和质量门禁绑定候选、数据集、来源、当前 Harness Registry 以及必需产物；生成器不能兼任
+  独立评测器，validation 必须严格优于基线，test 和各领域指标不得回退，成本增幅不得超过显式预算且
+  上限为 20%。阻断式门禁报告带不可变摘要，读取时会重新计算并拒绝被篡改、证据缺失、来源漂移或
+  Registry 漂移的结果。
+- 发布只能由人工对当前已通过的门禁执行，并再次确认精确 candidate hash、风险范围、灰度比例和期限。
+  批准令牌使用随机单次明文、持久层只保存摘要且审计记录不泄漏令牌；灰度最多 20%、最长 24 小时。
+  每次运行时解析都会重新验证 candidate → gate → approval → release 完整证据链，支持按上一条仍有效且
+  验证通过的 release 回滚，不依赖 Git 回滚。
+- `evals/evolution_control.py` 提供 catalog、freeze-dataset、generate-candidate 和 gate 离线入口；Admin
+  API 提供数据集、候选、门禁、人工批准、灰度激活、运行时解析、状态查看和回滚的完整治理链路，所有
+  写操作均要求 Admin 身份、严格字段校验并进入审计。
+- 路由候选不止于 shadow：`nanobot_kt/model_runtime.py` 的真实 `reply` 数据面会按会话稳定桶消费已批准
+  灰度，仅允许重排当前已验证的既有 Provider／model profile，不能注入未知模型或删除未声明 fallback；
+  命中时写入 `evolution_canary:<release>` 路由证据，任一文件损坏、证据失效或候选非法时自动保持原基线顺序。
+- 受控自进化、Admin 路由和 KT 真实路由定向回归为 45 passed；治理生成物与架构相关回归为
+  76 passed。架构边界、OpenAPI、决策规则清单、Release Impact、Verification Plan、Task SLO、行为基线、
+  受控 Ruff、Python 编译和 `git diff --check` 均通过。最终完整
+  `python -m pytest tests/ -v --basetemp=/var/tmp/nanobot-pytest-stage10-4-full` 在清除代理变量后为
+  6877 passed、12 skipped、0 failed，耗时 719.34 秒。
+- 本阶段只改变已选模型 profile 的受控排序，没有修改 `enriched_query`、历史注入、conversation、工具输出
+  合同或 Prompt Runtime 输入。canonical `prompts.v2.default/chat/*`、`tasks/*`、`tools/*/usage.md`、变量
+  定义和模板注册表已随全量 Prompt Runtime 回归核对，现有描述仍准确，因此无需修改默认或运行时模板。
 
 #### 10.5 经验提取和 Skill 候选
 
