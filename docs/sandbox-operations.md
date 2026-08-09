@@ -64,17 +64,19 @@ project quota 的唯一事实源是 `workspace_quota_bindings`。project ID 由�
 
 代码测试通过、healthz 成功或 Docker 配置看起来正确，都不能替代真实隔离 Smoke。
 
-### 2.1 当前宿主验收状态
+### 2.1 验收状态与逐机复验
 
-截至 2026-07-26，当前开发宿主只能完成实现和静态回归，不能作为生产隔离验收通过的证据：
+2026-08-09，Sandbox 候选实现已在启用 KVM 的独立 Ubuntu 24.04 宿主完成真实验收。该宿主使用
+Docker 29.1.3、cgroup v2、builtin seccomp、enforce 状态的两个 AppArmor Profile，以及以
+`prjquota` 挂载到 `/srv/nanobot` 的独立 32 GiB XFS 数据盘。preflight 和基础安全、Lease、
+Process、Developer 工具链、网络、数据连续性六组测试均通过：6 groups、6 tests、6 passed，
+0 failed／failure／error／skipped／blocked。固定镜像、manifest、环境事实和实验宿主网络例外见
+[真实宿主验收记录](superpowers/research/agent-harness-ecosystem/2026-08-09-sandbox-real-host-acceptance.md)。
 
-- 当前会话 EUID 为 `1000`，不能运行要求 root 的真实 Smoke；
-- Docker SecurityOptions 只有 builtin seccomp 与 cgroup namespace，没有报告 AppArmor；
-- `/sys/kernel/security/apparmor/profiles` 不可读；
-- `/srv/nanobot` 尚未建立为独立 project quota 数据盘；
-- `xfs_quota` 与 `quota` 工具未安装。
-
-因此当前状态是 `BLOCKED`，不是 `passed`。必须在满足本节全部宿主前置条件的生产候选机上重新运行完整六组矩阵。
+该结果解除的是“实现没有真实隔离证据”的项目级阻断，不是可跨宿主复用的放行凭据。当前 WSL 开发环境
+仍缺少 AppArmor 和 root 条件，不能作为生产验收机；每台实际生产候选机仍必须以自己的固定镜像、
+manifest、数据盘和网络运行完整 preflight 与六组矩阵。目标宿主完成控制面安装、备份恢复、kill
+switch 和有限 session 灰度前，业务开关、session 执行开关和两侧 Developer 网络硬开关继续关闭。
 
 ## 3. 安装与部署顺序
 
@@ -92,7 +94,7 @@ sudo scripts/manage-sandbox-production.sh install-control-plane
 
 - `nanobot-sandbox-python:<VERSION>`；
 - `nanobot-sandbox-developer:<VERSION>`；
-- `nanobot-sandbox-egress-proxy:2026.07.25`；
+- `nanobot-sandbox-egress-proxy:2026.08.09`；
 - 包含以上三个实际 IMAGE ID 的部署 Profile manifest。
 
 `image-built` 阶段凭据同时绑定三个镜像引用、三个 IMAGE ID 和部署 manifest SHA256。`--reuse-built-image` 只有在 Restricted、Developer、代理的全部构建输入、canonical manifest 和 manifest 渲染器均未漂移时才允许复用。

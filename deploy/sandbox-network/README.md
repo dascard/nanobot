@@ -16,7 +16,7 @@ Lease 内部 bridge 使用 `com.docker.network.bridge.inhibit_ipv4=true`，不�
 
 ## 部署前置
 
-1. 构建 `nanobot-sandbox-egress-proxy:2026.07.25`。
+1. 构建 `nanobot-sandbox-egress-proxy:2026.08.09`。
 2. 确认 IMAGE ID 与 `config/sandbox-execution-profiles.v1.json` 的 `network_proxy_image_allowlist` 完全一致。
 3. 保持 `NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED=false`，先执行真实拒绝矩阵。
 4. 检查 Docker 支持 `internal` bridge 与 `com.docker.network.bridge.inhibit_ipv4=true`。
@@ -27,7 +27,7 @@ Lease 内部 bridge 使用 `com.docker.network.bridge.inhibit_ipv4=true`，不�
 
 ## 固定安全参数
 
-- 代理镜像：`nanobot-sandbox-egress-proxy:2026.07.25`
+- 代理镜像：`nanobot-sandbox-egress-proxy:2026.08.09`
 - 代理端口：`3128/tcp`，不发布到宿主
 - 非 root 用户：`13:13`
 - 只读根文件系统

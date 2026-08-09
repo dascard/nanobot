@@ -126,9 +126,11 @@ npm --prefix webui test
 npm --prefix webui run build
 ```
 
-Sandbox 还必须在满足 AppArmor、独立 quota 数据盘和固定镜像条件的真实部署宿主运行完整 Smoke。若前置
-检查返回 `blocked`、测试被 skip 或测试数为 0，迁移状态只能记录为「代码已就绪，生产 Sandbox 未启用」，
-不能记录为生产验收完成。
+Sandbox 候选实现已在满足 AppArmor、独立 quota 数据盘和固定镜像条件的 KVM Linux 宿主完成六组真实
+Smoke，项目级证据见
+[真实宿主验收记录](superpowers/research/agent-harness-ecosystem/2026-08-09-sandbox-real-host-acceptance.md)。
+迁移目标机仍必须用自己的镜像和 manifest 重跑完整 Smoke；若前置检查返回 `blocked`、测试被 skip
+或测试数为 0，迁移状态只能记录为「代码已就绪，目标机 Sandbox 未启用」，不能记录为该主机验收完成。
 
 ## 6. 回滚完成条件
 

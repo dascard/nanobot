@@ -14,7 +14,7 @@
 
 ```bash
 docker build \
-  --tag nanobot-sandbox-egress-proxy:2026.07.25 \
+  --tag nanobot-sandbox-egress-proxy:2026.08.09 \
   docker/sandbox/egress-proxy
 ```
 

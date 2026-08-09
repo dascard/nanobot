@@ -321,7 +321,9 @@ def test_p16_docs_define_profile_lifecycle_and_fail_closed_boundaries():
     assert "明确不备份" in backup
     assert "不是安全边界" in security
     assert "process_id" in security
-    assert "生产宿主真实隔离验收为 `BLOCKED`" in security
+    assert "6/6 passed、0 skipped、0 failed" in security
+    assert "仍必须保持 `BLOCKED`" in security
+    assert "不能引用本记录跨宿主放行" in security
 
 
 def test_local_same_disk_backup_rejects_missing_risk_marker(tmp_path):

@@ -225,7 +225,7 @@ class _ProxyImage:
 
 class _Images:
     def get(self, reference):
-        if reference == "nanobot-sandbox-egress-proxy:2026.07.25":
+        if reference == "nanobot-sandbox-egress-proxy:2026.08.09":
             return _ProxyImage()
         return _Image()
 

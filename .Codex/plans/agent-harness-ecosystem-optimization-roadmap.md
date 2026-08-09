@@ -1,6 +1,6 @@
 # Nanobot Agent Harness 生态调研与优化总路线
 
-> 状态：仓库内实施已完成；阶段 11.3 的真实 Sandbox 宿主隔离矩阵因外部条件阻塞（BLOCKED）
+> 状态：全部实施与验收项已完成；阶段 11.3 的真实 Sandbox 宿主隔离矩阵已通过
 >
 > 建立日期：2026-08-03
 >
@@ -1085,15 +1085,15 @@ Release Artifact 联合回归 113 passed；单独治理测试 9 passed；最终�
   Runtime 持久化和 A／B Workspace 隔离；生产 `smoke` 仍要求每组至少一项测试且零 skipped 才能进入
   control-plane 安装。
 - Sandbox 全量单元和合同回归为 374 passed、6 skipped、0 failed；6 个 skip 均为必须显式开启的真实 Docker
-  测试。当前 WSL 开发宿主的生产 `--preflight-only` 真实返回 exit 2／`blocked`（非 root，且 Docker
-  SecurityOptions 未提供 AppArmor），没有把跳过或阻塞伪装为 passed。阶段 11.3 仍必须在满足 AppArmor、
-  project quota 和独立数据盘条件的真实部署宿主运行完整六组矩阵后才能最终交付。
+  测试。当时 WSL 开发宿主的生产 `--preflight-only` 真实返回 exit 2／`blocked`（非 root，且 Docker
+  SecurityOptions 未提供 AppArmor），没有把跳过或阻塞伪装为 passed。该阶段保留的真实宿主门禁后来已在
+  阶段 11.3 的独立 KVM Ubuntu 宿主完成，preflight 与六组矩阵均为 passed。
 - 依赖门禁确认所有 requirements 与 Compose 均未引入 OpenSandbox、OpenShell 或 E2B。最终完整
   `python -m pytest tests/ -v` 为 6684 passed、12 skipped、0 failed；架构边界、OpenAPI／客户端、
   Release／Verification／Behavior Golden、决策规则、Task SLO、Bash 语法、Ruff、Python 编译和
-  `git diff --check` 均通过。`systemd-analyze verify` 已接受新增 unit 指令，但当前 WSL `/mnt/d` 源码挂载
-  的文件模式及尚未安装的 `/opt/nanobot-server` 使其返回 exit 1；这不作为生产验收通过，仍由阶段 11.3
-  在真实部署宿主复验。
+  `git diff --check` 均通过。`systemd-analyze verify` 已接受新增 unit 指令，但当时 WSL `/mnt/d` 源码挂载
+  的文件模式及尚未安装的 `/opt/nanobot-server` 使其返回 exit 1；该 WSL 结果没有被当成生产验收通过。
+  目标生产机安装控制面时仍须由安装脚本对安装后的三个 unit 重新执行 verify。
 
 #### 7.3 Agent Identity、Workspace 和 ACL
 
@@ -1653,10 +1653,10 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
 - [x] 运行 `git diff --check` 和必要的 Python 编译检查。
 - [x] 验证依赖锁、Docker 镜像、Compose 配置和 CI。
 - [x] 涉及 WebUI 时运行 lint、build 和相关静态测试。
-- [ ] 在真实部署宿主验证 Sandbox 隔离矩阵。（BLOCKED：当前宿主缺少 root、AppArmor 和 project quota）
+- [x] 在独立 KVM Linux 部署候选宿主验证 Sandbox 隔离矩阵，preflight 与六组真实测试全部通过。
 - [x] 验证未安装 KT 时 Native Runtime 和非 Agent 功能可正常启动。
 - [x] 验证 KT/Native 行为基线、恢复幂等、缓存收益和权限闭环。
-- [x] 已成为运行事实的能力更新 README、运维和迁移文档；Sandbox 未验收状态明确记录为 BLOCKED。
+- [x] 已成为运行事实的能力更新 README、运维和迁移文档；Sandbox 真实宿主证据与逐机复验边界已记录。
 
 阶段 11 仓库内收口证据（2026-08-09）：
 
@@ -1674,14 +1674,26 @@ KT 镜像测试名已在最终收口中修正；历史数据兼容 Registry 因�
 - README 已按运行事实删除 KT submodule／vendor／v1.3.0 指引，改为 Native 默认、KT 可选，并补充 Ledger、
   恢复、治理、评测、受控进化、经验 Skill 候选及对应 Admin API。新增
   `docs/agent-harness-operations.md` 和 `docs/agent-harness-migration.md`，记录默认状态、分 Wave 迁移、
-  人工门禁、回滚、隐私和 Sandbox 生产阻断；没有把外部项目调研列表或未实现能力写入 README。
+  人工门禁、回滚、隐私和 Sandbox 逐机复验边界；没有把外部项目调研列表或未实现能力写入 README。
 - 最终完整 `python -m pytest tests/ -v --basetemp=/var/tmp/nanobot-pytest-stage11-full` 在清除代理变量后为
   6913 passed、12 skipped、0 failed，耗时 635.66 秒。12 个 skip 仍是需要真实外部环境的显式测试，
   没有作为通过证据。
-- 当前 WSL2 开发宿主的 Docker Engine 29.1.3 只报告 builtin seccomp 和 cgroup namespace，不报告
-  AppArmor；当前会话没有免密 root。`scripts/sandbox-smoke-test.sh --preflight-only` 真实返回 exit 2 和
-  `result=blocked`、0 groups／0 tests，原因是必须以 root 运行；计划内服务器 `10.60.42.158:22` 的只读
-  SSH 探测超时。因此不能运行六组真实矩阵，唯一未完成项继续保持未勾选，Sandbox 硬开关必须保持关闭。
+- WSL2 开发宿主仍不具备 AppArmor 和 root 条件，不能作为验收机。最终改用启用 KVM 的独立 Ubuntu 24.04
+  宿主：内核 6.8.0-136、Docker 29.1.3、cgroup v2、AppArmor 与 builtin seccomp 生效，两个 Sandbox
+  AppArmor Profile 均为 enforce，独立 32 GiB XFS `/dev/vdb` 以 `prjquota` 挂载到
+  `/srv/nanobot`，project quota 的 Accounting 与 Enforcement 均为 ON。
+- 固定 Restricted、Developer、出口代理镜像实际 ID 分别为
+  `sha256:0c395eebdbd1aa663caf49021753148d04b03b12f7a3b96c0f3b8c7d362ea169`、
+  `sha256:ac848b5823e5435115d3a1be0e6467b67e3b701ccd0fc6e89430ae820f0c44ba` 和
+  `sha256:26e5108ac2576446f18541e8966319e7fd91f3e6a5ffe4fe937993bdd7f29d3c`。部署 manifest SHA256 为
+  `43ac5843c79d0c3ea9c0ddd35159be0ccabe025e0b69e07f6214ef3df3d243a6`，完整策略 SHA256 为
+  `939906040d03778ec87cf587c76deb86c1c6a7f080642cd26502cf52b1f90002`。
+- `scripts/sandbox-smoke-test.sh` 的 preflight 和基础安全、Lease、Process、Developer 工具链、网络、
+  数据连续性六组真实 Docker 矩阵全部通过：6 groups、6 tests、6 passed，0 failed／failure／error／
+  skipped／blocked。网络组保留真实 GitHub clone、codeload、PyPI、npm 和全部拒绝断言；实验宿主的
+  GitHub GeoDNS 路由异常通过明确记录的临时宿主上游转发修正，没有进入镜像、manifest 或生产代码。
+  完整环境事实、内容摘要、网络例外和机器可读 summary 见
+  `docs/superpowers/research/agent-harness-ecosystem/2026-08-09-sandbox-real-host-acceptance.md`。
 - 本阶段没有改变 `enriched_query`、历史注入、conversation、工具输出合同或 Prompt Runtime 输入。
   canonical 默认／运行时模板、变量表和注册表仍与阶段 10.5 的 500 项 Prompt 回归一致，无需修改。
 

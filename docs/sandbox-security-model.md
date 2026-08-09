@@ -321,15 +321,14 @@ kill switch 必须执行以下动作：
 
 模型体验验收还必须使用真实 Agent 事件 artifact 运行 `evals/sandbox_agent_compatibility.py`。静态 case 与合成 artifact 只能测试评估器，不能证明生产 Agent 已完成任务。
 
-截至 2026-07-26，当前开发宿主状态为：
+2026-08-09，候选实现在独立 KVM Ubuntu 24.04 宿主完成真实矩阵。Docker 实际报告 AppArmor、
+builtin seccomp 和 cgroup namespace；两个 Sandbox AppArmor Profile 均为 enforce；独立
+`/dev/vdb` 以 XFS `prjquota` 挂载到 `/srv/nanobot`，project quota 的 Accounting 与
+Enforcement 均为 ON。preflight 与六组矩阵结果为 6/6 passed、0 skipped、0 failed，完整证据见
+[真实宿主验收记录](superpowers/research/agent-harness-ecosystem/2026-08-09-sandbox-real-host-acceptance.md)。
 
-- EUID 为 `1000`；
-- Docker 没有报告 AppArmor；
-- `/sys/kernel/security/apparmor/profiles` 不可读；
-- `/srv/nanobot` 不存在；
-- `xfs_quota` 与 `quota` 不可用。
-
-因此当前只能声明实现和静态回归完成，生产宿主真实隔离验收为 `BLOCKED`。不得把该状态描述为通过。
+这证明实现边界在满足条件的真实 Linux 宿主上成立，但不替代目标生产机逐机复验。任一生产机缺少上述
+事实、固定镜像或完整 manifest 时，仍必须保持 `BLOCKED`，不能引用本记录跨宿主放行。
 
 ## 15. 剩余风险与变更规则
 

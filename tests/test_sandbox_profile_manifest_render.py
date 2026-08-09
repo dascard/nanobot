@@ -42,7 +42,7 @@ def _run(
             "--developer-image-id",
             DEVELOPER_ID,
             "--proxy-reference",
-            "nanobot-sandbox-egress-proxy:2026.07.25",
+            "nanobot-sandbox-egress-proxy:2026.08.09",
             "--proxy-image-id",
             proxy_id,
         ],
@@ -134,7 +134,7 @@ def test_rendered_manifest_rejects_symbolic_link_source(tmp_path):
         "--developer-image-id",
         DEVELOPER_ID,
         "--proxy-reference",
-        "nanobot-sandbox-egress-proxy:2026.07.25",
+        "nanobot-sandbox-egress-proxy:2026.08.09",
         "--proxy-image-id",
         PROXY_ID,
     ]

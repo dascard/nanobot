@@ -2,7 +2,7 @@ FROM ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38ced
 
 LABEL org.opencontainers.image.title="Nanobot Sandbox Egress Proxy" \
       org.opencontainers.image.description="固定域名白名单的 Sandbox CONNECT 出口代理" \
-      org.opencontainers.image.version="2026.07.25" \
+      org.opencontainers.image.version="2026.08.09" \
       com.nanobot.egress-policy-id="developer_allowlist_v1"
 
 COPY squid.conf /etc/squid/squid.conf

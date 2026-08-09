@@ -79,6 +79,9 @@ scripts/sandbox-smoke-test.sh \
 - 六组真实 Docker 测试存在失败、错误、跳过、零测试或缺少 JUnit 证据。
 
 开发机上的单元测试和 `--preflight-only` 只能证明失败关闭是否有效，不能替代真实宿主验收。
+项目候选实现在 2026-08-09 已于独立 KVM Ubuntu 宿主取得 6/6 真实矩阵证据，见
+[真实宿主验收记录](superpowers/research/agent-harness-ecosystem/2026-08-09-sandbox-real-host-acceptance.md)；
+该记录不替代当前部署宿主按上述命令逐机复验。
 
 ## 4. 运行观测与恢复
 

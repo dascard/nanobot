@@ -765,7 +765,7 @@ def test_production_image_stage_binds_two_profiles_proxy_and_manifest():
     assert 'RESTRICTED_IMAGE="nanobot-sandbox-python:${VERSION}"' in source
     assert 'DEVELOPER_IMAGE="nanobot-sandbox-developer:${VERSION}"' in source
     assert (
-        'CANONICAL_PROXY_IMAGE="nanobot-sandbox-egress-proxy:2026.07.25"'
+        'CANONICAL_PROXY_IMAGE="nanobot-sandbox-egress-proxy:2026.08.09"'
         in source
     )
     assert '"${VERSION}" --profile developer' in build_body

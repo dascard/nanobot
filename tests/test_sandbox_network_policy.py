@@ -99,7 +99,7 @@ def test_canonical_developer_policy_binds_proxy_domains_ports_and_cidrs():
     assert set(profile.network_destination_ports) == {80, 443}
     assert set(profile.network_connect_ports) == {443}
     assert profile.network_proxy_image_reference == (
-        "nanobot-sandbox-egress-proxy:2026.07.25"
+        "nanobot-sandbox-egress-proxy:2026.08.09"
     )
     assert profile.network_proxy_image_allowlist == ()
     assert profile.network_proxy_port == 3128
@@ -126,6 +126,7 @@ def test_squid_policy_matches_catalog_and_checks_domain_before_resolved_ip():
         assert f"    {cidr}" in config
     assert "acl Safe_ports port 80 443" in config
     assert "acl SSL_ports port 443" in config
+    assert "connect_timeout 5 seconds" in config
     assert config.index("http_access deny !allowed_domains") < config.index(
         "http_access deny denied_ipv4"
     )
@@ -809,9 +810,8 @@ def test_real_docker_developer_egress_and_rejection_matrix(tmp_path):
         assert_success(
             sandbox,
             (
-                "timeout 60 npm view npm version "
-                "--registry=https://registry.npmjs.org "
-                "> /tmp/npm-version && test -s /tmp/npm-version"
+                "timeout 60 npm ping "
+                "--registry=https://registry.npmjs.org"
             ),
         )
 

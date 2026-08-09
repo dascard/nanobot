@@ -1,0 +1,99 @@
+{
+  "generated_at": "2026-08-09T10:10:21.414373+00:00",
+  "groups": [
+    {
+      "errors": 0,
+      "exit_code": 0,
+      "failures": 0,
+      "id": "basic-security",
+      "junit": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/basic-security.xml",
+      "log": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/basic-security.log",
+      "name": "基础安全",
+      "parse_error": "",
+      "skipped": 0,
+      "status": "passed",
+      "tests": 1
+    },
+    {
+      "errors": 0,
+      "exit_code": 0,
+      "failures": 0,
+      "id": "lease",
+      "junit": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/lease.xml",
+      "log": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/lease.log",
+      "name": "Lease",
+      "parse_error": "",
+      "skipped": 0,
+      "status": "passed",
+      "tests": 1
+    },
+    {
+      "errors": 0,
+      "exit_code": 0,
+      "failures": 0,
+      "id": "process",
+      "junit": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/process.xml",
+      "log": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/process.log",
+      "name": "Process",
+      "parse_error": "",
+      "skipped": 0,
+      "status": "passed",
+      "tests": 1
+    },
+    {
+      "errors": 0,
+      "exit_code": 0,
+      "failures": 0,
+      "id": "developer-toolchain",
+      "junit": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/developer-toolchain.xml",
+      "log": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/developer-toolchain.log",
+      "name": "Developer 工具链",
+      "parse_error": "",
+      "skipped": 0,
+      "status": "passed",
+      "tests": 1
+    },
+    {
+      "errors": 0,
+      "exit_code": 0,
+      "failures": 0,
+      "id": "network",
+      "junit": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/network.xml",
+      "log": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/network.log",
+      "name": "网络",
+      "parse_error": "",
+      "skipped": 0,
+      "status": "passed",
+      "tests": 1
+    },
+    {
+      "errors": 0,
+      "exit_code": 0,
+      "failures": 0,
+      "id": "data-continuity",
+      "junit": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/data-continuity.xml",
+      "log": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/groups/data-continuity.log",
+      "name": "数据连续性",
+      "parse_error": "",
+      "skipped": 0,
+      "status": "passed",
+      "tests": 1
+    }
+  ],
+  "preflight": {
+    "log": "/var/tmp/nanobot-sandbox-evidence/20260809T100641Z-17336/preflight.log",
+    "status": "passed"
+  },
+  "result": "passed",
+  "schema_version": 1,
+  "totals": {
+    "blocked": 0,
+    "errors": 0,
+    "failed": 0,
+    "failures": 0,
+    "groups": 6,
+    "passed": 6,
+    "skipped": 0,
+    "tests": 6
+  }
+}

@@ -97,7 +97,7 @@
       "network_connect_ports": [
         443
       ],
-      "network_proxy_image_reference": "nanobot-sandbox-egress-proxy:2026.07.25",
+      "network_proxy_image_reference": "nanobot-sandbox-egress-proxy:2026.08.09",
       "network_proxy_image_allowlist": [],
       "network_proxy_port": 3128,
       "shell_path": "/bin/bash",

@@ -37,7 +37,10 @@ platform:encoded_external_session_id:chat_type
 - 旧 bash/read/write/edit/grep/glob 与通用宿主写入口继续硬禁用；
 - Trace 中的 `sandbox_exec` 命令已经凭据脱敏且不超过 16 KiB；没有文件正文、stdout/stderr、transport token 或宿主路径。
 
-截至 2026-07-26，当前开发宿主缺少 AppArmor、`/srv/nanobot` 独立 project quota 数据盘和 quota 工具，且当前会话不是 root，因此生产灰度状态为 `BLOCKED`。代码与静态测试通过不能解除该阻断。
+2026-08-09，候选实现已在具备 AppArmor、独立 XFS project quota 数据盘和 root 权限的 KVM
+Ubuntu 24.04 宿主完成 preflight 与六组真实矩阵，结果为 6/6 passed、0 skipped、0 failed，详见
+[真实宿主验收记录](superpowers/research/agent-harness-ecosystem/2026-08-09-sandbox-real-host-acceptance.md)。
+该证据只解除项目实现级阻断；目标生产机未完成本节全部前置条件和本机 Smoke 时，仍不得开始灰度。
 
 ## 3. 灰度顺序
 
