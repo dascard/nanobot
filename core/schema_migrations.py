@@ -106,6 +106,7 @@ _ARTIFACT_LIFECYCLE_V1_VERSION = "20260804_artifact_lifecycle_v1"
 _LLM_PROVIDER_CACHE_PERFORMANCE_VERSION = (
     "20260804_llm_provider_cache_performance"
 )
+_LLM_CACHE_DENOMINATOR_VERSION = "20260810_llm_cache_denominator"
 _LLM_PROVIDER_ERROR_CATEGORY_VERSION = (
     "20260805_llm_provider_error_category"
 )
@@ -1114,6 +1115,57 @@ def _llm_provider_cache_performance(
                 "first_token_latency_ms": first_token,
                 "cost_microusd": cost.cost_microusd,
                 "cost_source": cost.source,
+            })
+        conn.execute(statement, updates)
+        last_id = int(rows[-1]["id"])
+
+
+def _llm_cache_denominator(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """为缓存统计增加可空分母，并回填已有缓存观测。"""
+
+    from foundation.llm.cache_usage import normalize_llm_cache_usage
+
+    _add_missing_columns(conn, "llm_api_request_logs", {
+        "cache_input_tokens": "INTEGER",
+        "cache_miss_source": "TEXT",
+    })
+    if "llm_api_request_logs" not in _table_names(conn):
+        return
+    required = {"id", "status", "response_json"}
+    if not required <= _columns(conn, "llm_api_request_logs"):
+        return
+    statement = text(
+        "UPDATE llm_api_request_logs SET "
+        "cache_input_tokens=:cache_input_tokens, "
+        "cache_miss_source=:cache_miss_source WHERE id=:id"
+    )
+    last_id = -(2**63)
+    while True:
+        rows = conn.execute(text(
+            "SELECT id, status, response_json FROM llm_api_request_logs "
+            "WHERE id > :last_id ORDER BY id LIMIT 500"
+        ), {"last_id": last_id}).mappings().all()
+        if not rows:
+            break
+        updates: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                response = json.loads(str(row.get("response_json") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                response = {}
+            usage = normalize_llm_cache_usage(
+                response,
+                successful=str(row.get("status") or "")
+                in {"success", "stream_success"},
+            )
+            updates.append({
+                "id": row["id"],
+                "cache_input_tokens": usage.input_tokens,
+                "cache_miss_source": usage.miss_source,
             })
         conn.execute(statement, updates)
         last_id = int(rows[-1]["id"])
@@ -5482,6 +5534,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _LLM_PROVIDER_CACHE_PERFORMANCE_VERSION,
         "llm provider cache token latency and cost metrics",
         _llm_provider_cache_performance,
+    ),
+    (
+        _LLM_CACHE_DENOMINATOR_VERSION,
+        "llm cache denominator provenance",
+        _llm_cache_denominator,
     ),
     (
         _SESSION_GOAL_PLAN_MODE_V1_VERSION,

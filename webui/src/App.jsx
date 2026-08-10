@@ -1988,6 +1988,21 @@ function SessionSummaryBrowser({ mode }) {
   })
   const selectedSessionInfo = sessions.find(item => item.session_id === selectedSession) || null
 
+  const formatCoverage = (item, prefix = '') => {
+    const sourceType = String(item?.source_type || item?.active_summary_source_type || 'conversation_turn')
+    const from = Number(item?.covered_from_source_id ?? item?.active_summary_covered_from_source_id ?? item?.oldest_turn_index ?? 0)
+    const until = Number(item?.covered_until_source_id ?? item?.active_summary_covered_until_source_id ?? item?.latest_turn_index ?? 0)
+    const count = Number(item?.source_message_count ?? item?.active_summary_source_message_count ?? 0)
+    if (sourceType === 'chat_log') {
+      const range = from > 0 && until > 0 ? `${from}-${until}` : '-'
+      return `${prefix}source ${range}${count > 0 ? ` · ${count} 条` : ''}`
+    }
+    const range = from > 0 && until > 0
+      ? `${from}-${until}`
+      : `${Number(item?.turn_start || 0)}-${Number(item?.turn_end || 0)}`
+    return `${prefix}turn ${range}`
+  }
+
   const refreshAfterOperation = useCallback(() => {
     return Promise.allSettled([
       loadSessions(),
@@ -2049,7 +2064,7 @@ function SessionSummaryBrowser({ mode }) {
             const preview = isRecent ? s.active_summary_preview : s.latest_digest_preview
             const emptyPreview = isRecent ? '无近期摘要预览' : '无长期摘要预览'
             const rangeText = isRecent
-              ? `turn_start ${s.oldest_turn_index || 0} · turn_end ${s.latest_turn_index || 0}`
+              ? formatCoverage(s)
               : `digest_date ${s.latest_digest_date || '-'} · latest ${s.latest_digest_created_at || '-'}`
             return (
             <button key={s.session_id} onClick={() => { setSelectedSession(s.session_id); loadDetail(s.session_id) }}
@@ -2116,7 +2131,7 @@ function SessionSummaryBrowser({ mode }) {
                     <div className="min-w-0">
                       <span className="font-mono text-slate-300">job {job.id}</span>
                       <span className="ml-2">{job.status}</span>
-                      <span className="ml-2">turn {job.covered_from_turn_id}-{job.covered_until_turn_id}</span>
+                      <span className="ml-2">{formatCoverage(job)}</span>
                       {job.error && <span className="ml-2 text-red-300">{job.error}</span>}
                     </div>
                     {job.status === 'failed' && (
@@ -2149,8 +2164,9 @@ function SessionSummaryBrowser({ mode }) {
             </div>
             {isRecent ? (
               <div className="mb-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">turn_start {item.turn_start}</div>
-                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">turn_end {item.turn_end}</div>
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">{formatCoverage(item)}</div>
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">source_type {item.source_type || 'conversation_turn'}</div>
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">source_count {item.source_message_count || 0}</div>
                 <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">quality {Number(item.quality_score || 0).toFixed(2)}</div>
                 <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">llm {item.llm_status || '-'}</div>
               </div>

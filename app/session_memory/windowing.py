@@ -28,6 +28,21 @@ INTERNAL_KINDS = frozenset({
 })
 LEADING_ASSISTANT_CONTEXT_KINDS = frozenset({"outbound_delivery_summary"})
 
+
+def context_policy_skip_reason(meta: Mapping[str, Any]) -> str:
+    """返回结构化上下文排除原因；未声明排除策略时返回空串。
+
+    ``directed_to_other`` 等指向性字段不是排除条件，只有服务端明确写入
+    ``context_policy=exclude``（或兼容的 moderation/no_context）才会丢弃。
+    """
+
+    policy = str(meta.get("context_policy") or "").strip().lower()
+    if policy == "exclude":
+        reason = str(meta.get("no_context_reason") or "policy_exclude").strip()
+        reason = re.sub(r"[^a-zA-Z0-9_.:-]+", "_", reason)[:96]
+        return f"context_policy_exclude:{reason or 'policy_exclude'}"
+    return ""
+
 USERNAME_MARKER_RE = re.compile(r"\[用户名\]\s*([^\r\n\[]+)")
 
 
@@ -55,6 +70,9 @@ def _sender_key_for_turn(turn: ConversationTurn) -> str:
 
 def is_context_eligible_turn(turn: ConversationTurn) -> tuple[bool, str]:
     meta = safe_meta(getattr(turn, "meta_json", "{}"))
+    policy_reason = context_policy_skip_reason(meta)
+    if policy_reason:
+        return False, policy_reason
     moderation = meta.get("moderation")
     if isinstance(moderation, dict) and moderation.get("no_context"):
         return False, "moderation_no_context"
@@ -79,6 +97,9 @@ def is_context_eligible_chat_log(row: ChatLog) -> tuple[bool, str]:
     """判断 ChatLog 是否可进入群聊原文窗口或摘要来源。"""
 
     meta = safe_meta(getattr(row, "meta_json", "{}"))
+    policy_reason = context_policy_skip_reason(meta)
+    if policy_reason:
+        return False, policy_reason
     moderation = meta.get("moderation")
     if isinstance(moderation, dict) and moderation.get("no_context"):
         return False, "moderation_no_context"

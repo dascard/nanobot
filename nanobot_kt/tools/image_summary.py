@@ -34,7 +34,7 @@ from nanobot_kt.tools.result_adapter import to_kt_tool_result
 def _get_image_summary_route() -> dict:
     """解析表情包打标完整路由配置。结果缓存 30s 避免频繁 DB 查询。"""
     import time as _time
-    from clients.classifier_client import _resolve_classifier_route
+    from clients.classifier_client import resolve_model_route
     from core.database import SessionLocal, SystemSetting
 
     # 缓存：避免每次图片描述都查 DB
@@ -43,7 +43,7 @@ def _get_image_summary_route() -> dict:
     if cache and now - cache["ts"] < 30:
         return cache["route"]
 
-    route = _resolve_classifier_route("sticker_describe")
+    route = resolve_model_route("sticker_describe")
 
     saved_keys: set[str] = set()
     try:
@@ -204,11 +204,32 @@ class ImageSummaryTool(BaseTool):
         )
 
     def _call_qwen(self, files: list[str], focus: str) -> str:
-        from clients.classifier_client import ensure_model_route_enabled
+        from clients.classifier_client import (
+            call_model_route_response,
+            ensure_model_route_enabled,
+        )
 
         route = _get_image_summary_route()
         ensure_model_route_enabled("sticker_describe", route)
         payload = self._build_payload(files, focus, route)
+        if route.get("binding_candidates"):
+            logger.info(
+                "  [image_summary] >> route=sticker_describe | files=%d",
+                len(files),
+            )
+            response = call_model_route_response(
+                route_key="sticker_describe",
+                messages=payload["messages"],
+                max_tokens=int(payload["max_tokens"]),
+                temperature=float(payload["temperature"]),
+                timeout=float(route.get("timeout", IMAGE_SUMMARY_TIMEOUT)),
+            )
+            content = str(response.content or "")
+            logger.info("  [image_summary] << raw: %.120s", content)
+            return content
+
+        # 尚未迁移到 Route Binding 的旧配置保留直接调用兼容路径。正式绑定
+        # 一旦存在，上面的统一 helper 负责候选切换、熔断和 Trace。
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         base_url = str(route.get("base_url", "")).rstrip("/")
         url = f"{base_url}/chat/completions"

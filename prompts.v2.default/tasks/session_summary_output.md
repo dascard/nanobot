@@ -15,3 +15,4 @@ summary 不超过 400 字；open_threads、decisions、important_user_requests�
 resolved_items、participants、keywords 也必须保持简洁。
 整份紧凑 JSON 必须简洁并同时控制在 6000 字符、约 3000 tokens 以内，排版缩进和换行不计入预算；quality.score 必须是 0 到 1 的有限数字，只衡量摘要的忠实度、完整性以及角色和状态归因是否准确；不得因为源对话是闲聊、信息稀疏或缺少长期价值而降低分数。不要把 pending_fragments 当日志转写，不要保留 turn_id、时间戳、role 或 fragment 标签。
 如果只能摘录，请改写为简洁要点。必须完整合并 previous_summary，不能只输出 pending_fragments 的摘要。
+当 user 消息包含 summary_repair 模式标记时，必须按其中的 repair_obligation_ledger 逐项输出 inheritance；每个 source_id 恰好一次，disposition 只允许 carried 或 updated，禁止 resolved。四个可继承数组的逐字段 field_target_limits 与总数上限必须同时满足；每个输出目标都至少被一个 source_id 引用，不得生成账本之外的事项。

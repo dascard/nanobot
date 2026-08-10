@@ -234,12 +234,28 @@ def init_prompt_v2_runtime_dir() -> dict[str, Any]:
 
     from core.prompt_v2.flow_storage import flow_write_lock
 
-    with flow_write_lock(runtime_dir / "chat" / "flow.json"):
-        return _init_prompt_v2_runtime_dir_locked(
+    runtime_flow_path = runtime_dir / "chat" / "flow.json"
+    with flow_write_lock(runtime_flow_path):
+        result = _init_prompt_v2_runtime_dir_locked(
             source_dir=source_dir,
             runtime_dir=runtime_dir,
             template_recovery=template_recovery,
         )
+
+    # 模板 provision 完成并释放外层 flow 锁后，再由迁移函数获取统一的
+    # flow + 模板治理写锁。这样既避免嵌套文件锁，也确保迁移始终针对最终
+    # runtime bytes 校验、精确备份并原子替换。
+    from core.prompt_v2.flow_migrations import (
+        default_session_guidance_flow_backup_dir,
+        upgrade_runtime_flow_file,
+    )
+
+    flow_result = upgrade_runtime_flow_file(
+        runtime_flow_path,
+        backup_dir=default_session_guidance_flow_backup_dir(runtime_flow_path),
+    )
+    result.update(flow_result)
+    return result
 
 
 def _init_prompt_v2_runtime_dir_locked(
@@ -281,11 +297,6 @@ def _init_prompt_v2_runtime_dir_locked(
                 copied.append(rel.as_posix())
                 baseline_provisioned.append(template_key)
 
-    flow_result = {
-        "flow_migrated": False,
-        "flow_backup_path": "",
-    }
-
     from core.prompt_v2.task_templates import inspect_live_task_templates
 
     task_contracts = inspect_live_task_templates()
@@ -308,8 +319,8 @@ def _init_prompt_v2_runtime_dir_locked(
         "template_audit": template_audit,
         "template_recovery": template_recovery,
         "task_contracts": task_contracts,
-        "flow_migrated": flow_result["flow_migrated"],
-        "flow_backup_path": flow_result["flow_backup_path"],
+        "flow_migrated": False,
+        "flow_backup_path": "",
     }
 
 

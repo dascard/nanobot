@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.agent_runtime import RuntimeModelRoute
+from core.tool_plan import ToolPlan, tool_plan_scope
 from nanobot_kt.model_provider_adapter import (
     apply_kt_preset_model_route,
     create_kt_provider,
@@ -14,6 +15,7 @@ from nanobot_kt.model_runtime import (
     ReplyRoutePlan,
     resolve_reply_route_plans,
 )
+from nanobot_kt.tool_runtime import ToolPlanProviderAdapter
 
 
 def _transport(driver_type: str, **overrides):
@@ -52,6 +54,21 @@ class _ProviderDouble:
 
     def on_emergency_drop(self, callback):
         self.emergency_drop_callbacks.append(callback)
+
+
+class _ChatProviderDouble:
+    def __init__(self, driver_type: str):
+        self.nanobot_driver_type = driver_type
+        self.chat_calls: list[dict] = []
+        self.complete_calls: list[dict] = []
+
+    async def chat(self, _messages, **kwargs):
+        self.chat_calls.append(dict(kwargs))
+        yield "模型片段"
+
+    async def chat_complete(self, _messages, **kwargs):
+        self.complete_calls.append(dict(kwargs))
+        return "模型结果"
 
 
 @pytest.mark.parametrize(
@@ -104,6 +121,7 @@ def test_create_kt_provider_uses_driver_specific_constructor(
     assert provider.nanobot_profile_id == f"{driver_type}-preset"
     assert provider.nanobot_provider_id == f"{driver_type}-provider"
     assert provider.provider_name == driver_type
+    assert provider.nanobot_driver_type == driver_type
     assert provider.kwargs["model"] == f"{driver_type}-model"
     assert provider.kwargs["max_retries"] == 4
     if driver_type == "openai":
@@ -183,6 +201,82 @@ def test_apply_preset_route_replaces_all_kt_provider_references(
     assert replacement.prompt_cache_key == "prompt-cache"
     assert agent.compact_manager.config.enabled is False
     assert registered == [{"name": "image_gen"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("driver_type", "required"),
+    [("openai", True), ("anthropic", False), ("codex", False)],
+)
+async def test_tool_plan_final_action_only_forces_openai_tool_choice(
+    driver_type,
+    required,
+):
+    provider = _ChatProviderDouble(driver_type)
+    adapter = ToolPlanProviderAdapter(provider)
+    plan = ToolPlan.from_effective_tools(
+        enabled={"reply": True},
+        chat_type="private",
+        tool_schemas=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "reply",
+                    "description": "最终回复",
+                    "parameters": {"type": "object"},
+                },
+            },
+        ],
+    )
+
+    with tool_plan_scope(plan):
+        chunks = [
+            chunk
+            async for chunk in adapter.chat(
+                [],
+                extra_body={"parallel_tool_calls": True},
+            )
+        ]
+        result = await adapter.chat_complete([], extra_body={"trace": "x"})
+
+    assert chunks == ["模型片段"]
+    assert result == "模型结果"
+    assert provider.chat_calls[0]["extra_body"]["parallel_tool_calls"] is True
+    assert provider.complete_calls[0]["extra_body"].get(
+        "tool_choice",
+    ) == ("required" if required else None)
+    if not required:
+        assert "tool_choice" not in provider.complete_calls[0]["extra_body"]
+
+
+@pytest.mark.asyncio
+async def test_tool_plan_without_final_action_keeps_provider_tool_choice():
+    provider = _ChatProviderDouble("openai")
+    adapter = ToolPlanProviderAdapter(provider)
+    plan = ToolPlan.from_effective_tools(
+        enabled={"memory_query": True},
+        chat_type="private",
+        tool_schemas=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "memory_query",
+                    "description": "查询记忆",
+                    "parameters": {"type": "object"},
+                },
+            },
+        ],
+    )
+
+    with tool_plan_scope(plan):
+        await adapter.chat_complete(
+            [],
+            extra_body={"tool_choice": "auto"},
+        )
+
+    assert provider.complete_calls == [
+        {"extra_body": {"tool_choice": "auto"}},
+    ]
 
 
 def test_preset_route_client_keeps_binding_order_and_capability_filter(

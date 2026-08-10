@@ -42,6 +42,10 @@ GROUP_CONTEXT_MAX_MESSAGE_CHARS = 12000
 # 新消息都移动缓存前缀；正常 6000 tokens 原文窗口不会触发该裁剪。
 GROUP_CONTEXT_SOURCE_ID_BLOCK_SPAN = 8
 GROUP_SUMMARY_DISCOVERY_BATCH_SIZE = 100
+# 同一摘要合同失败后，后台扫描只允许一次有界自动恢复；恢复前保留冷却，
+# 避免扫描热循环不断创建等价任务。管理端显式 retry 不受该门禁限制。
+GROUP_SUMMARY_AUTO_RECOVERY_MAX = 1
+GROUP_SUMMARY_FAILURE_COOLDOWN_SECONDS = 15 * 60
 # 仅供旧 ConversationTurn 辅助入口兼容；真实群聊链路不按消息条数裁剪。
 GROUP_RAW_WINDOW_MAX_TURNS = 5000
 

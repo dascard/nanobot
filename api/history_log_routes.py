@@ -351,7 +351,9 @@ def submit_ambient_log(req: AmbientLogRequest, db: Session = Depends(get_db),
         db.add(ChatLog(user_id=actual_user_id, session_id=actual_user_id,
                        sender_name=req.sender_name, session_name=req.session_name,
                        role="ambient", content=formatted, processed=1,
-                       message_id=req.message_id))
+                       message_id=req.message_id,
+                       meta_json='{"context_policy":"include","kind":"chat",'
+                                 '"source":"deprecated_ambient_log"}'))
         db.commit()
 
     run_sqlite_locked_retry(

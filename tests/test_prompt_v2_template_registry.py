@@ -146,7 +146,7 @@ def test_prompt_v2_init_runtime_dir_copies_missing_files_without_overwrite(tmp_p
     ).read_text(encoding="utf-8") == canonical_flow
 
 
-def test_prompt_v2_init_runtime_dir_preserves_existing_legacy_flow(
+def test_prompt_v2_init_runtime_dir_migrates_existing_legacy_flow(
     tmp_path,
     monkeypatch,
 ):
@@ -178,10 +178,22 @@ def test_prompt_v2_init_runtime_dir_preserves_existing_legacy_flow(
 
     result = init_prompt_v2_runtime_dir()
 
-    assert result["flow_migrated"] is False
-    assert result["flow_backup_path"] == ""
-    assert runtime_flow.read_text(encoding="utf-8") == original
-    assert not (tmp_path / "prompt_template_backups").exists()
+    assert result["flow_migrated"] is True
+    backup_path = Path(result["flow_backup_path"])
+    assert backup_path.parent == (
+        tmp_path / "prompt_template_backups" / "session_guidance_flow"
+    )
+    assert backup_path.read_bytes() == original.encode("utf-8")
+    migrated = json.loads(runtime_flow.read_text(encoding="utf-8"))
+    assert sum(node["id"] == "session_guidance" for node in migrated["nodes"]) == 1
+    assert {
+        (edge["from"], edge["to"])
+        for edge in migrated["edges"]
+    } >= {
+        ("group_context", "project_context"),
+        ("project_context", "summary_context"),
+        ("summary_context", "conversation_context_header"),
+    }
 
 
 def test_prompt_v2_init_runtime_dir_rejects_broken_flow_symlink_before_copy(

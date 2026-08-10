@@ -34,6 +34,47 @@ from core.tool_plan import ToolPlanExecutionError, get_current_tool_plan
 logger = logging.getLogger("nanobot.kt.tool_runtime")
 
 
+def _provider_supports_required_tool_choice(provider: Any) -> bool:
+    """仅为明确支持 OpenAI Chat Completions 的出口启用 required。"""
+
+    explicit = getattr(provider, "nanobot_supports_required_tool_choice", None)
+    if isinstance(explicit, bool):
+        return explicit
+    driver_type = str(getattr(provider, "nanobot_driver_type", "") or "").strip().lower()
+    if driver_type:
+        return driver_type == "openai"
+    module = str(type(provider).__module__ or "").lower()
+    name = str(type(provider).__name__ or "").lower()
+    if "anthropic" in module or "anthropic" in name:
+        return False
+    if "codex" in module or "responses" in module or "codex" in name:
+        return False
+    return "openai" in module or name.startswith("openaiprovider")
+
+
+def _final_action_tool_choice_kwargs(
+    provider: Any,
+    plan: Any,
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    if plan is None:
+        return kwargs
+    sent_names = {
+        str(name or "").strip()
+        for name in getattr(plan, "sent_tool_names", ())
+    }
+    if not sent_names.intersection(FINAL_ACTION_TOOLS):
+        return kwargs
+    if not _provider_supports_required_tool_choice(provider):
+        return kwargs
+    extra_body = dict(kwargs.get("extra_body") or {})
+    # 请求级 ToolPlan 是权限事实源，不能被 Preset 中的 auto 覆盖。
+    extra_body["tool_choice"] = "required"
+    result = dict(kwargs)
+    result["extra_body"] = extra_body
+    return result
+
+
 class ToolPlanProviderAdapter:
     """在 KT 的公开 Provider 边界应用请求级 ToolPlan schema。
 
@@ -84,16 +125,25 @@ class ToolPlanProviderAdapter:
         effective_tools = (
             _tool_plan_native_schemas(plan) if plan is not None else tools
         )
+        call_kwargs = _final_action_tool_choice_kwargs(
+            self.provider,
+            plan,
+            kwargs,
+        )
         async for chunk in self.provider.chat(
             messages,
             stream=stream,
             tools=effective_tools,
-            **kwargs,
+            **call_kwargs,
         ):
             yield chunk
 
     async def chat_complete(self, messages: list[Any], **kwargs: Any) -> Any:
-        return await self.provider.chat_complete(messages, **kwargs)
+        plan = get_current_tool_plan()
+        return await self.provider.chat_complete(
+            messages,
+            **_final_action_tool_choice_kwargs(self.provider, plan, kwargs),
+        )
 
     def on_emergency_drop(self, callback: Any) -> None:
         self.provider.on_emergency_drop(callback)

@@ -13,6 +13,10 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.session_memory import config
+from app.session_memory.summary_contract import (
+    SESSION_SUMMARY_CONTRACT_VERSION,
+    session_summary_contract_fingerprint,
+)
 from core.db.models.chat import ConversationTurn
 from core.db.models.session_memory import RollingSessionSummary, SessionSummaryJob
 from core.fencing import lease_deadline, new_fencing_token
@@ -205,6 +209,57 @@ def enqueue_session_summary_job(
         return existing, False
 
     now = db_now_naive()
+    # 自动恢复的群聊任务要继承同覆盖失败账本的次数，避免每次扫描都把
+    # 计数重置为零；显式管理端 retry 不依赖该字段。
+    inherited_auto_recovery_count = 0
+    if normalized_source_type == "chat_log":
+        failed_rows = (
+            db.query(SessionSummaryJob.meta_json)
+            .filter(
+                SessionSummaryJob.session_id == session_id,
+                SessionSummaryJob.source_type == normalized_source_type,
+                SessionSummaryJob.covered_from_source_id == covered_from,
+                SessionSummaryJob.covered_until_source_id == covered_until,
+                SessionSummaryJob.status == "failed",
+            )
+            .all()
+        )
+        for (raw_meta,) in failed_rows:
+            try:
+                parsed_meta = json.loads(raw_meta or "{}")
+            except (TypeError, json.JSONDecodeError):
+                parsed_meta = {}
+            if not isinstance(parsed_meta, dict):
+                continue
+            try:
+                inherited_auto_recovery_count = max(
+                    inherited_auto_recovery_count,
+                    max(0, int(parsed_meta.get("auto_recovery_count", 0) or 0)),
+                )
+            except (TypeError, ValueError):
+                continue
+    job_meta = {
+        "schema_version": 2,
+        "summary_contract_version": SESSION_SUMMARY_CONTRACT_VERSION,
+        "summary_prompt_fingerprint": session_summary_contract_fingerprint(),
+        "created_by": (
+            "group_summary_sweep"
+            if normalized_source_type == "chat_log"
+            else "rolling_summary_fallback"
+        ),
+        "source_type": normalized_source_type,
+        "fallback_summary_kind": (
+            getattr(fallback_summary, "summary_kind", "")
+            if fallback_summary is not None
+            else ""
+        ),
+        "recent_raw_turn_ids": list(dict.fromkeys(
+            int(item) for item in (recent_raw_turn_ids or [])
+        )),
+        "current_user_input": str(current_user_input or "").replace("\x00", "")[:2000],
+    }
+    if inherited_auto_recovery_count:
+        job_meta["auto_recovery_count"] = inherited_auto_recovery_count
     job = SessionSummaryJob(
         session_id=session_id,
         user_id=user_id or "",
@@ -230,24 +285,7 @@ def enqueue_session_summary_job(
         retry_count=0,
         max_retry=int(max_retry if max_retry is not None else config.SESSION_SUMMARY_MAX_RETRY),
         stable_hash=stable_hash,
-        meta_json=json.dumps({
-            "schema_version": 2,
-            "created_by": (
-                "group_summary_sweep"
-                if normalized_source_type == "chat_log"
-                else "rolling_summary_fallback"
-            ),
-            "source_type": normalized_source_type,
-            "fallback_summary_kind": (
-                getattr(fallback_summary, "summary_kind", "")
-                if fallback_summary is not None
-                else ""
-            ),
-            "recent_raw_turn_ids": list(dict.fromkeys(
-                int(item) for item in (recent_raw_turn_ids or [])
-            )),
-            "current_user_input": str(current_user_input or "").replace("\x00", "")[:2000],
-        }, ensure_ascii=False),
+        meta_json=json.dumps(job_meta, ensure_ascii=False),
         created_at=now,
         updated_at=now,
     )

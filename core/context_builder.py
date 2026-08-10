@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from app.session_memory import config
+from app.session_memory.windowing import context_policy_skip_reason
 from core.time_utils import db_now_naive
 from core.token_utils import estimate_tokens as estimate_tokens
 
@@ -900,6 +901,8 @@ def build_timing_recent_context(
     for row in rows:
         if row.message_id and row.message_id in excluded:
             continue
+        if _chatlog_context_skip(_safe_meta(getattr(row, "meta_json", "{}"))):
+            continue
         selected.append(row)
         if len(selected) >= limit:
             break
@@ -939,6 +942,8 @@ def _chatlog_source_ids(row) -> set[str]:
 
 
 def _chatlog_context_skip(meta: dict) -> bool:
+    if context_policy_skip_reason(meta):
+        return True
     moderation = meta.get("moderation", {})
     if isinstance(moderation, dict) and moderation.get("no_context"):
         return True

@@ -17,7 +17,7 @@
       "stage": "阶段 1.1"
     },
     {
-      "after_sha256": "31b822b1a2e8d51563ccbfd4957f37ea259f521064e39c79e28cf206ecf446cb",
+      "after_sha256": "fe272f0c3ec11febbf4f391d890427d4a65fd00b283b9e7341618dce2f16677a",
       "before_sha256": "04889c5b873921f3ca330e5803b7c5f3ed894f6c50acb7a32f773073491ba533",
       "id": "agent_harness_prefix_cache_provider_metrics",
       "reason": "为结构化 LLM 请求日志追加输入、输出、首 token 延迟、成本和成本来源列，以便按 Provider 审计前缀缓存效果；管理端仍只能访问登记的只读表视图。",
@@ -145,7 +145,7 @@
       "stage": "Agent Harness 阶段 6.2"
     },
     {
-      "after_sha256": "8de00d261da0faf1ef40313472d5057ee30948f3bd236131b43dc1027a3eca88",
+      "after_sha256": "b4e8e351182423a92c321dc00b6ae791692e0936f5ca41cd216325a8ce3e8cf0",
       "before_sha256": "2bea17f21d71f93bf88174c1f0fdd56f624ca49f3227b02febd14a5cefed68e1",
       "id": "agent_harness_mcp_control_plane_prompt",
       "reason": "登记带 server namespace 的请求级 MCP 工具、冻结 schema、不可信结果信封和服务端秘密引用边界。",
@@ -241,7 +241,7 @@
       "stage": "Agent Harness 阶段 9.2"
     }
   ],
-  "baseline_git_commit": "f6315da87117d61bb7d4da56a1f77c107f71dc57",
+  "baseline_git_commit": "947e5881e36bc8eac1e86257edab87fa7e883180",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -256,7 +256,7 @@
     "sha256": "f2596f57d97ec4b6ad11746da6ec93f02fefafcebb3f4cf507d8b552090a1396"
   },
   "runtime_versions": {
-    "generated_with_python": "3.12.7",
+    "generated_with_python": "3.11.14",
     "prompt_runtime_schema": "v2",
     "python_constraint": ">=3.11"
   },
@@ -295,7 +295,7 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "8de00d261da0faf1ef40313472d5057ee30948f3bd236131b43dc1027a3eca88"
+      "sha256": "b4e8e351182423a92c321dc00b6ae791692e0936f5ca41cd216325a8ce3e8cf0"
     },
     {
       "classification": "preserve",
@@ -309,7 +309,7 @@
       "id": "security_invariants",
       "note": "Sandbox 路径、Admin 结构化视图、URL、CQ 和 Prompt 权威边界不得削弱。",
       "path": "tests/golden/architecture_behavior/security_invariants.json",
-      "sha256": "31b822b1a2e8d51563ccbfd4957f37ea259f521064e39c79e28cf206ecf446cb"
+      "sha256": "fe272f0c3ec11febbf4f391d890427d4a65fd00b283b9e7341618dce2f16677a"
     }
   ]
 }

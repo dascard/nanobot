@@ -22,7 +22,7 @@ from core.prompt_v2.flow_migrations import (  # noqa: E402
     default_flow_v2_plan_dir,
     default_session_guidance_flow_backup_dir,
     list_session_guidance_flow_backups,
-    migrate_session_guidance_flow,
+    migrate_runtime_flow,
     plan_runtime_flow_v2,
     rollback_session_guidance_flow,
 )
@@ -75,7 +75,7 @@ def _check(runtime_path: Path) -> dict[str, object]:
         raise PromptFlowMigrationError(f"runtime flow 读取失败: {exc}") from exc
     if not isinstance(value, dict):
         raise PromptFlowMigrationError("runtime flow 顶层必须是 JSON object")
-    _migrated, changed = migrate_session_guidance_flow(value)
+    _migrated, changed = migrate_runtime_flow(value)
     return {
         "runtime_flow_path": str(runtime_path),
         "needs_migration": changed,

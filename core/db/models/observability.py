@@ -142,6 +142,9 @@ class LLMApiRequestLog(Base):
         default=0,
         server_default=text("0"),
     )
+    # 缓存命中率专用分母；NULL 表示供应商没有提供可核对的总输入量。
+    cache_input_tokens = Column(Integer, nullable=True)
+    cache_miss_source = Column(String(32), nullable=True)
     cache_write_tokens = Column(
         Integer,
         nullable=False,

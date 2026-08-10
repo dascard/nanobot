@@ -23,6 +23,29 @@ from core.db.models.session_memory import (
     MemoryDigest,
     RollingSessionSummary,
 )
+
+
+def _summary_source_ids(row: RollingSessionSummary) -> list[int]:
+    """返回摘要实际覆盖的来源 ID；群聊来源是 ChatLog 而非 turn。"""
+
+    source_type = str(getattr(row, "source_type", "conversation_turn") or "conversation_turn")
+    raw = (
+        getattr(row, "source_ids_json", "[]")
+        if source_type == "chat_log"
+        else getattr(row, "source_turn_ids_json", "[]")
+    )
+    value = _safe_json(raw, [])
+    if not isinstance(value, list):
+        return []
+    result: list[int] = []
+    for item in value:
+        try:
+            parsed = int(item)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            result.append(parsed)
+    return result
 def _safe_json(raw: str | None, fallback: Any) -> Any:
     try:
         value = json.loads(raw or "")
@@ -419,6 +442,10 @@ class AdminSessionMemoryBrowser:
                 "active_summary_preview": "",
                 "active_summary_created_at": "",
                 "active_summary_updated_at": "",
+                "active_summary_source_type": "",
+                "active_summary_covered_from_source_id": 0,
+                "active_summary_covered_until_source_id": 0,
+                "active_summary_source_message_count": 0,
                 "latest_turn_index": int(row.get("latest_turn_index") or 0),
                 "oldest_turn_index": int(row.get("oldest_turn_index") or 0),
                 "has_archived": bool(row.get("has_archived") or 0),
@@ -457,6 +484,29 @@ class AdminSessionMemoryBrowser:
                 item["active_summary_updated_at"] = _iso(row.updated_at)
                 item["llm_status"] = str(row.llm_status or "")
                 item["quality_score"] = float(row.quality_score or 0.0)
+                source_type = str(
+                    getattr(row, "source_type", "conversation_turn")
+                    or "conversation_turn"
+                )
+                source_ids = _summary_source_ids(row)
+                item["active_summary_source_type"] = source_type
+                if source_type == "chat_log":
+                    item["active_summary_covered_from_source_id"] = int(
+                        getattr(row, "covered_from_source_id", 0) or 0
+                    )
+                    item["active_summary_covered_until_source_id"] = int(
+                        getattr(row, "covered_until_source_id", 0) or 0
+                    )
+                else:
+                    item["active_summary_covered_from_source_id"] = int(
+                        getattr(row, "covered_from_turn_id", 0) or 0
+                    )
+                    item["active_summary_covered_until_source_id"] = int(
+                        getattr(row, "covered_until_turn_id", 0) or 0
+                    )
+                item["active_summary_source_message_count"] = int(
+                    getattr(row, "source_turn_count", 0) or 0
+                ) or len(source_ids)
 
             digest_rows = (
                 self.db.query(MemoryDigest)
@@ -574,12 +624,36 @@ class AdminSessionMemoryBrowser:
 
     @staticmethod
     def _summary_to_dict(row: RollingSessionSummary, *, include_content: bool = False) -> dict[str, Any]:
+        source_type = str(
+            getattr(row, "source_type", "conversation_turn")
+            or "conversation_turn"
+        )
+        source_ids = _summary_source_ids(row)
+        if source_type == "chat_log":
+            covered_from = int(getattr(row, "covered_from_source_id", 0) or 0)
+            covered_until = int(getattr(row, "covered_until_source_id", 0) or 0)
+        else:
+            covered_from = int(getattr(row, "covered_from_turn_id", 0) or 0)
+            covered_until = int(getattr(row, "covered_until_turn_id", 0) or 0)
         item = {
             "summary_id": row.id,
             "summary_kind": row.summary_kind or "deterministic_fallback",
             "preview": _preview(row.summary_text),
+            # legacy 字段继续保留；新字段按来源类型表达真实覆盖范围。
             "turn_start": int(row.covered_from_turn_id or 0),
             "turn_end": int(row.covered_until_turn_id or 0),
+            "source_type": source_type,
+            "covered_from_source_id": covered_from,
+            "covered_until_source_id": covered_until,
+            "source_ids": source_ids,
+            "source_ids_json": (
+                str(getattr(row, "source_ids_json", "[]") or "[]")
+                if source_type == "chat_log"
+                else str(getattr(row, "source_turn_ids_json", "[]") or "[]")
+            ),
+            "source_message_count": int(
+                getattr(row, "source_turn_count", 0) or 0
+            ) or len(source_ids),
             "is_active": row.status == "active",
             "is_archived": row.status == "archived",
             "quality_score": float(row.quality_score or 0.0),
@@ -591,6 +665,7 @@ class AdminSessionMemoryBrowser:
                 "issues_json": _safe_json(row.issues_json, []),
                 "meta_json": _safe_json(row.meta_json, {}),
                 "source_turn_ids_json": _safe_json(row.source_turn_ids_json, []),
+                "source_ids_json": _safe_json(row.source_ids_json, []),
             },
         }
         if include_content:

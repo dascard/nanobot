@@ -166,7 +166,8 @@ export function LLMApiLogsPage() {
         <MiniStat label="缓存未命中" value={pageStats.cache_miss ?? pageStats.cacheMiss} tone={(pageStats.cache_miss ?? pageStats.cacheMiss) ? 'amber' : 'slate'} />
         <MiniStat label="缓存未上报" value={pageStats.cache_not_reported ?? pageStats.cacheNotReported} />
         <MiniStat label="未命中 tokens" value={pageStats.cache_miss_tokens ?? 0} tone={(pageStats.cache_miss_tokens ?? 0) ? 'amber' : 'slate'} />
-        <MiniStat label="Token 命中率" value={pageStats.cache_hit_token_ratio == null ? '-' : `${(pageStats.cache_hit_token_ratio * 100).toFixed(1)}%`} tone={(pageStats.cache_hit_token_ratio ?? 0) >= 0.5 ? 'emerald' : 'amber'} />
+        <MiniStat label="缓存分母未知" value={pageStats.cache_denominator_unknown_requests ?? '-'} tone={(pageStats.cache_denominator_unknown_requests ?? 0) ? 'amber' : 'slate'} />
+        <MiniStat label="Token 命中率" value={pageStats.cache_hit_token_ratio == null ? '未知/未上报' : `${(pageStats.cache_hit_token_ratio * 100).toFixed(1)}%`} tone={pageStats.cache_hit_token_ratio == null ? 'slate' : (pageStats.cache_hit_token_ratio >= 0.5 ? 'emerald' : 'amber')} />
         <MiniStat label="平均延迟" value={avgLatency ? `${avgLatency}ms` : '-'} />
         <MiniStat label="首 token 延迟" value={pageStats.avg_first_token_latency_ms ? `${pageStats.avg_first_token_latency_ms}ms` : '-'} />
         <MiniStat label="输入 tokens" value={pageStats.input_tokens ?? 0} />
@@ -196,7 +197,7 @@ export function LLMApiLogsPage() {
                   onClick={() => openLog(ll.id)}>
                   <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${statusTone === 'emerald' ? 'bg-emerald-500/10 text-emerald-300' : statusTone === 'blue' ? 'bg-blue-500/10 text-blue-300' : statusTone === 'red' ? 'bg-red-500/10 text-red-300' : 'bg-slate-500/10 text-slate-400'}`}>{ll.status || '-'}</span></td>
                   <td className="py-2 px-3"><span className={`whitespace-nowrap rounded px-1.5 py-0.5 font-mono text-[10px] ${ll.error_category && ll.error_category !== 'none' ? 'bg-red-500/10 text-red-300' : 'bg-slate-500/10 text-slate-500'}`}>{ll.error_category || 'none'}</span></td>
-                  <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs whitespace-nowrap ${cacheMeta.className}`}>{cacheMeta.label}{ll.cache_status === 'hit' ? ` · ${ll.cache_hit_tokens || 0}` : ll.cache_status === 'miss' ? ` · ${ll.cache_miss_tokens || 0}` : ''}</span></td>
+                  <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs whitespace-nowrap ${cacheMeta.className}`} title={ll.cache_status === 'hit' || ll.cache_status === 'miss' ? (ll.cache_input_tokens == null ? '供应商未上报缓存分母' : `缓存输入 ${ll.cache_input_tokens}`) : ''}>{cacheMeta.label}{ll.cache_status === 'hit' ? ` · ${ll.cache_hit_tokens || 0}` : ll.cache_status === 'miss' ? ` · ${ll.cache_miss_tokens || 0}` : ''}{(ll.cache_status === 'hit' || ll.cache_status === 'miss') && ll.cache_input_tokens == null ? ' · 分母未知' : ''}</span></td>
                   <td className="py-2 px-3 font-mono text-xs text-slate-400">{ll.provider || '-'}</td>
                   <td className="py-2 px-3 text-slate-200">{ll.source || '-'}</td>
                   <td className="py-2 px-3 text-slate-400 max-w-40 truncate">{ll.model || '-'}</td>

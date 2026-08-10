@@ -364,7 +364,8 @@ export function ProviderConnectionsPanel({ providers, driverTypes, nativeTools, 
                     <span className="text-slate-500">请求 / 成功率</span><span className="text-right text-slate-300">{draft.runtime_evidence?.requests || 0} / {formatPercent(draft.runtime_evidence?.success_rate)}</span>
                     <span className="text-slate-500">首 token / 总延迟</span><span className="text-right text-slate-300">{draft.runtime_evidence?.avg_first_token_latency_ms || 0} / {draft.runtime_evidence?.avg_total_latency_ms || 0} ms</span>
                     <span className="text-slate-500">输入 / 输出 token</span><span className="text-right text-slate-300">{draft.runtime_evidence?.input_tokens || 0} / {draft.runtime_evidence?.output_tokens || 0}</span>
-                    <span className="text-slate-500">缓存 token 命中率</span><span className="text-right text-slate-300">{formatPercent(draft.runtime_evidence?.cache_hit_token_ratio)}</span>
+                    <span className="text-slate-500">缓存 token 命中率</span><span className="text-right text-slate-300">{draft.runtime_evidence?.cache_hit_token_ratio == null ? '未知/未上报' : formatPercent(draft.runtime_evidence.cache_hit_token_ratio)}</span>
+                    <span className="text-slate-500">缓存分母未知请求</span><span className="text-right text-amber-300">{draft.runtime_evidence?.cache_denominator_unknown_requests || 0}</span>
                     <span className="text-slate-500">累计成本</span><span className="text-right text-slate-300">{formatCost(draft.runtime_evidence?.cost_microusd)}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1">

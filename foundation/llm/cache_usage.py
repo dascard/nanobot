@@ -13,6 +13,10 @@ CACHE_STATUS_MISS = "miss"
 CACHE_STATUS_NOT_REPORTED = "not_reported"
 CACHE_STATUS_ERROR = "error"
 
+CACHE_MISS_SOURCE_REPORTED = "reported"
+CACHE_MISS_SOURCE_DERIVED_TOTAL_INPUT = "derived_total_input"
+CACHE_MISS_SOURCE_UNKNOWN = "unknown"
+
 
 @dataclass(frozen=True, slots=True)
 class LLMCacheUsage:
@@ -23,6 +27,11 @@ class LLMCacheUsage:
     hit_tokens: int
     miss_tokens: int
     write_tokens: int
+    # 缓存命中率的分母。供应商只报 cached_tokens 而没有总输入时必须为 None，
+    # 不能把 hit_tokens 误当作完整输入量。
+    input_tokens: int | None
+    input_tokens_known: bool
+    miss_source: str
     details: dict[str, Any]
 
 
@@ -107,6 +116,9 @@ def normalize_llm_cache_usage(
             hit_tokens=0,
             miss_tokens=0,
             write_tokens=0,
+            input_tokens=None,
+            input_tokens_known=False,
+            miss_source=CACHE_MISS_SOURCE_UNKNOWN,
             details={},
         )
 
@@ -151,49 +163,61 @@ def normalize_llm_cache_usage(
             hit_tokens=0,
             miss_tokens=0,
             write_tokens=0,
+            input_tokens=None,
+            input_tokens_known=False,
+            miss_source=CACHE_MISS_SOURCE_UNKNOWN,
             details={},
         )
 
     hit_tokens = max(values_by_kind["read"], default=0)
     miss_tokens = max(values_by_kind["miss"], default=0)
     write_tokens = max(values_by_kind["write"], default=0)
-    if not values_by_kind["miss"]:
-        total_inputs: list[int] = []
 
-        def collect_total(payload: Any) -> None:
-            for parts in _TOTAL_INPUT_PATHS:
-                present, raw_value = _value_at_path(payload, parts)
-                if not present:
-                    continue
-                count = _token_count(raw_value)
-                if count is not None:
-                    total_inputs.append(count)
+    total_inputs: list[int] = []
 
-        collect_total(response)
-        if isinstance(response, Mapping):
-            for chunk in response.get("chunks_sample") or []:
-                collect_total(chunk)
-        if total_inputs:
-            total_input = max(total_inputs)
-            anthropic_cache = any(
-                metric["source"].endswith(
-                    (
-                        "usage.cache_read_input_tokens",
-                        "usage.cache_creation_input_tokens",
-                    )
-                )
-                for metric in reported
-            )
-            miss_tokens = (
-                total_input
-                if anthropic_cache
-                else max(0, total_input - hit_tokens)
-            )
-            reported.append({
-                "kind": "miss_derived",
-                "source": "usage.total_input",
-                "count": miss_tokens,
-            })
+    def collect_total(payload: Any) -> None:
+        for parts in _TOTAL_INPUT_PATHS:
+            present, raw_value = _value_at_path(payload, parts)
+            if not present:
+                continue
+            count = _token_count(raw_value)
+            if count is not None:
+                total_inputs.append(count)
+
+    collect_total(response)
+    if isinstance(response, Mapping):
+        for chunk in response.get("chunks_sample") or []:
+            collect_total(chunk)
+
+    if values_by_kind["miss"]:
+        # DeepSeek 等供应商明确给出 miss 时，hit+miss 是可审计分母；若同时
+        # 给出总 input，优先使用供应商总量并保留 reported 来源。
+        input_tokens = max(total_inputs) if total_inputs else hit_tokens + miss_tokens
+        input_tokens_known = True
+        miss_source = CACHE_MISS_SOURCE_REPORTED
+    elif total_inputs:
+        input_tokens = max(total_inputs)
+        miss_tokens = max(0, input_tokens - hit_tokens)
+        reported.append({
+            "kind": "miss_derived",
+            "source": "usage.total_input",
+            "count": miss_tokens,
+        })
+        input_tokens_known = True
+        miss_source = CACHE_MISS_SOURCE_DERIVED_TOTAL_INPUT
+    elif hit_tokens or write_tokens:
+        # ``cache_write_tokens`` 只表示写入缓存的数量，不等价于本次请求的
+        # 未命中输入。除非供应商同时提供总输入（上面的分支），不能用它
+        # 人为构造分母；否则会把“命中 + 写入”误报成命中率分母。
+        # Anthropic 的 read/write 字段也保留原始写入事实，分母仍等待明确
+        # 的 input_tokens 或 miss 指标。
+        input_tokens = None
+        input_tokens_known = False
+        miss_source = CACHE_MISS_SOURCE_UNKNOWN
+    else:
+        input_tokens = None
+        input_tokens_known = False
+        miss_source = CACHE_MISS_SOURCE_UNKNOWN
     cache_hit = hit_tokens > 0
     return LLMCacheUsage(
         status=CACHE_STATUS_HIT if cache_hit else CACHE_STATUS_MISS,
@@ -201,7 +225,15 @@ def normalize_llm_cache_usage(
         hit_tokens=hit_tokens,
         miss_tokens=miss_tokens,
         write_tokens=write_tokens,
-        details={"reported_metrics": reported},
+        input_tokens=input_tokens,
+        input_tokens_known=input_tokens_known,
+        miss_source=miss_source,
+        details={
+            "reported_metrics": reported,
+            "cache_input_tokens": input_tokens,
+            "input_tokens_known": input_tokens_known,
+            "miss_source": miss_source,
+        },
     )
 
 
@@ -211,6 +243,9 @@ __all__ = [
     "CACHE_STATUS_MISS",
     "CACHE_STATUS_NOT_REPORTED",
     "CACHE_STATUS_PENDING",
+    "CACHE_MISS_SOURCE_DERIVED_TOTAL_INPUT",
+    "CACHE_MISS_SOURCE_REPORTED",
+    "CACHE_MISS_SOURCE_UNKNOWN",
     "LLMCacheUsage",
     "normalize_llm_cache_usage",
 ]

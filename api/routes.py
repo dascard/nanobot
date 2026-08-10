@@ -964,7 +964,12 @@ def _prepare_chat_database_phase(
                 processed=1,
                 message_id=req.message_id or "",
                 meta_json=json.dumps(
-                    {"blocked": True, "reason": "user_blocked"},
+                    {
+                        "blocked": True,
+                        "reason": "user_blocked",
+                        "context_policy": "exclude",
+                        "no_context_reason": "user_blocked",
+                    },
                     ensure_ascii=False,
                 ),
             ))

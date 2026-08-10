@@ -673,6 +673,8 @@ def test_admin_prompt_and_trace_endpoints(
         "cache_hit_tokens": 16,
         "cache_miss_tokens": 4,
         "cache_write_tokens": 0,
+        "cache_input_tokens": 20,
+        "cache_denominator_unknown_requests": 0,
         "cache_hit_token_ratio": 0.8,
         "avg_first_token_latency_ms": 0,
         "avg_total_latency_ms": 7,

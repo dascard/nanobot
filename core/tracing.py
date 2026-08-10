@@ -668,6 +668,8 @@ def _llm_usage_ledger_metrics(
     *,
     cache_hit_tokens: int,
     cache_miss_tokens: int,
+    cache_input_tokens: int | None = None,
+    cache_input_tokens_known: bool = False,
 ) -> dict[str, int]:
     response_mapping = response if isinstance(response, Mapping) else {}
     raw_usage = response_mapping.get("usage")
@@ -684,14 +686,25 @@ def _llm_usage_ledger_metrics(
         if isinstance(completion_details_value, Mapping)
         else {}
     )
-    input_tokens = _nonnegative_usage_metric(
-        usage.get("prompt_tokens", usage.get("input_tokens"))
-    )
-    if input_tokens == 0:
-        input_tokens = max(
-            0,
-            int(cache_hit_tokens) + int(cache_miss_tokens),
+    explicit_input = None
+    for key in ("prompt_tokens", "input_tokens"):
+        if key not in usage:
+            continue
+        value = usage.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)) and float(value).is_integer() and value >= 0:
+            explicit_input = int(value)
+            break
+    input_tokens = (
+        explicit_input
+        if explicit_input is not None
+        else (
+            max(0, int(cache_input_tokens or 0))
+            if cache_input_tokens_known and cache_input_tokens is not None
+            else 0
         )
+    )
     return {
         "input_tokens": input_tokens,
         "output_tokens": _nonnegative_usage_metric(
@@ -1542,6 +1555,8 @@ class LLMRequestTracer:
                         cache_hit_tokens=0,
                         cache_miss_tokens=0,
                         cache_write_tokens=0,
+                        cache_input_tokens=None,
+                        cache_miss_source="unknown",
                         cache_details_json=json.dumps(
                             {
                                 "cache_shape": cache_shape,
@@ -1609,6 +1624,8 @@ class LLMRequestTracer:
                         response or {},
                         cache_hit_tokens=cache_usage.hit_tokens,
                         cache_miss_tokens=cache_usage.miss_tokens,
+                        cache_input_tokens=cache_usage.input_tokens,
+                        cache_input_tokens_known=cache_usage.input_tokens_known,
                     )
                     if successful:
                         log.response_json = _bounded_payload_json(
@@ -1635,6 +1652,8 @@ class LLMRequestTracer:
                     log.cache_hit_tokens = cache_usage.hit_tokens
                     log.cache_miss_tokens = cache_usage.miss_tokens
                     log.cache_write_tokens = cache_usage.write_tokens
+                    log.cache_input_tokens = cache_usage.input_tokens
+                    log.cache_miss_source = cache_usage.miss_source
                     try:
                         cache_details = json.loads(log.cache_details_json or "{}")
                         if not isinstance(cache_details, dict):
@@ -1661,14 +1680,19 @@ class LLMRequestTracer:
                     cache_shape = (
                         cache_shape if isinstance(cache_shape, dict) else {}
                     )
-                    total_cache_tokens = (
-                        cache_usage.hit_tokens + cache_usage.miss_tokens
-                    )
-                    if total_cache_tokens > 0:
+                    cache_input_tokens = cache_usage.input_tokens
+                    if (
+                        cache_usage.input_tokens_known
+                        and cache_input_tokens is not None
+                        and cache_input_tokens > 0
+                    ):
                         cache_details["cache_hit_ratio"] = round(
-                            cache_usage.hit_tokens / total_cache_tokens,
+                            cache_usage.hit_tokens / cache_input_tokens,
                             6,
                         )
+                    else:
+                        # 明确返回 null，前端和报表可区分“未上报分母”与 0%。
+                        cache_details["cache_hit_ratio"] = None
                     if cache_usage.status == CACHE_STATUS_MISS:
                         previous_shape = _previous_comparable_cache_shape(
                             db,

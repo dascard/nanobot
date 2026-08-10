@@ -9,6 +9,27 @@ from typing import Any
 from core.agent_runtime import RuntimeRunEvent, RuntimeRunEventKind
 
 
+def _reply_contract_stream_gate_active() -> bool:
+    """有最终动作工具时，首轮普通文本只能留在内部审计。"""
+
+    try:
+        from core.tool_execution_policy import FINAL_ACTION_TOOLS
+        from core.tool_plan import get_current_tool_plan
+
+        plan = get_current_tool_plan()
+        if plan is None:
+            return False
+        names = {
+            str(name or "").strip()
+            for name in getattr(plan, "sent_tool_names", ())
+        }
+        return bool(names.intersection(FINAL_ACTION_TOOLS))
+    except Exception:
+        # 事件投影不能因为诊断性门禁异常阻断 durable sink；合同检查仍会
+        # 在 Bridge 的最终阶段执行。
+        return False
+
+
 RuntimeEventHandler = Callable[[RuntimeRunEvent], Awaitable[None]]
 
 
@@ -32,7 +53,11 @@ def build_runtime_event_handler(
             await durable_sink.append(event)
         if stream_queue is None:
             return
-        if event.kind is RuntimeRunEventKind.TEXT_DELTA and event.text_delta:
+        if (
+            event.kind is RuntimeRunEventKind.TEXT_DELTA
+            and event.text_delta
+            and not _reply_contract_stream_gate_active()
+        ):
             await stream_queue.put({"status": "delta", "text": event.text_delta})
         elif event.kind is RuntimeRunEventKind.ERROR and event.error is not None:
             await stream_queue.put({

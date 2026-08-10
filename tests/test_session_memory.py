@@ -3089,10 +3089,11 @@ def test_summary_long_previous_state_is_compacted_before_second_batch(db_session
     assert "inheritance" not in json.loads(saved.summary_json)
 
 
-def test_summary_previous_obligation_over_budget_fails_before_llm_without_backoff(
+def test_summary_previous_obligation_over_budget_repairs_once_before_normal_batch(
     db_session,
 ):
     from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_contract import build_summary_obligations
     from app.session_memory.llm_summarizer import run_session_summary_worker_once
 
     previous_turn = _turn(db_session, content="旧摘要来源")
@@ -3141,23 +3142,68 @@ def test_summary_previous_obligation_over_budget_fails_before_llm_without_backof
         previous_summary=previous,
         fallback_summary=fallback,
     )
-    calls = []
+    previous_obligations = build_summary_obligations(previous_state)
+    repaired_state = {
+        **previous_state,
+        "open_threads": ["九项待办已在同字段内合并，仍保持待处理状态"],
+    }
+    repaired_obligation = build_summary_obligations(repaired_state)[0]
+    calls: list[str] = []
+
+    def summarizer(messages):
+        prompt = messages[-1]["content"]
+        calls.append(prompt)
+        if "<summary_repair>" in prompt:
+            return {
+                **repaired_state,
+                "inheritance": [
+                    {
+                        "source_id": obligation.source_id,
+                        "disposition": "updated",
+                        "target_field": "open_threads",
+                        "target_index": 0,
+                    }
+                    for obligation in previous_obligations
+                ],
+                "quality": {"score": 0.9, "issues": []},
+            }
+        return {
+            **repaired_state,
+            "summary": "旧摘要与新一轮内容已连续合并",
+            "inheritance": [{
+                "source_id": repaired_obligation.source_id,
+                "disposition": "carried",
+                "target_field": "open_threads",
+                "target_index": 0,
+            }],
+            "quality": {"score": 0.9, "issues": []},
+        }
 
     result = run_session_summary_worker_once(
         db_session,
-        summarizer=lambda _messages: calls.append(True),
+        summarizer=summarizer,
         owner="budget-worker",
     )
 
     db_session.refresh(job)
     db_session.refresh(fallback)
-    assert result["failed"] == 1
-    assert calls == []
-    assert job.status == "failed"
-    assert job.retry_count == 1
+    assert result["done"] == 1
+    assert len(calls) == 2
+    assert "<summary_repair>" in calls[0]
+    assert "<pending_fragments>" not in calls[0]
+    assert '<summary_batch index="0">' in calls[1]
+    assert job.status == "done"
+    assert job.retry_count == 0
     assert job.next_retry_at is None
-    assert job.error == "summary_previous_obligation_budget_exceeded"
-    assert fallback.status == "active"
+    assert job.error == ""
+    assert fallback.status == "archived"
+    saved = db_session.get(RollingSessionSummary, job.result_summary_id)
+    assert saved.covered_from_turn_id == previous_turn.id
+    assert saved.covered_until_turn_id == turn.id
+    trace = json.loads(saved.meta_json)["batch_traces"][0]
+    assert trace["repair"]["attempt_count"] == 1
+    assert trace["repair"]["kind"] == "previous_state_obligation_budget"
+    assert trace["repair"]["inheritance"]["obligation_count"] == 9
 
 
 def test_summary_previous_state_over_budget_is_non_retryable_prepare_error(db_session):
@@ -3229,6 +3275,7 @@ def test_summary_previous_obligation_over_budget_persists_in_sync_short_transact
     from app.session_memory.llm_summarizer import (
         process_claimed_session_summary_job_short_transactions,
     )
+    from app.session_memory.llm_contract import build_summary_obligations
     from core import database
 
     previous_turn = _turn(db_session, content="同步短事务旧摘要来源")
@@ -3276,27 +3323,53 @@ def test_summary_previous_obligation_over_budget_persists_in_sync_short_transact
         owner="sync-budget-worker",
     )
     db_session.commit()
-    calls = []
+    previous_state = json.loads(previous.summary_json)
+    previous_obligations = build_summary_obligations(previous_state)
+    repaired_state = {
+        **previous_state,
+        "open_threads": ["同步九项待办已合并，仍待处理"],
+    }
+    repaired_obligation = build_summary_obligations(repaired_state)[0]
+    calls: list[str] = []
+
+    def summarizer(messages):
+        prompt = messages[-1]["content"]
+        calls.append(prompt)
+        if "<summary_repair>" in prompt:
+            return {
+                **repaired_state,
+                "inheritance": [{
+                    "source_id": obligation.source_id,
+                    "disposition": "updated",
+                    "target_field": "open_threads",
+                    "target_index": 0,
+                } for obligation in previous_obligations],
+                "quality": {"score": 0.9, "issues": []},
+            }
+        return {
+            **repaired_state,
+            "inheritance": [{
+                "source_id": repaired_obligation.source_id,
+                "disposition": "carried",
+                "target_field": "open_threads",
+                "target_index": 0,
+            }],
+            "quality": {"score": 0.9, "issues": []},
+        }
 
     ok = process_claimed_session_summary_job_short_transactions(
         database.SessionLocal,
         lease=lease,
-        summarizer=lambda _messages: calls.append(True),
+        summarizer=summarizer,
     )
 
-    assert ok is False
-    assert calls == []
+    assert ok is True
+    assert len(calls) == 2
     with database.SessionLocal() as verify_db:
         persisted = verify_db.get(SessionSummaryJob, job.id)
-        assert persisted.status == "failed"
+        assert persisted.status == "done"
         assert persisted.next_retry_at is None
-        assert persisted.error == "summary_previous_obligation_budget_exceeded"
-        retry_session_summary_job(verify_db, job.id)
-        verify_db.commit()
-    with database.SessionLocal() as verify_db:
-        retried = verify_db.get(SessionSummaryJob, job.id)
-        assert retried.status == "pending"
-        assert retried.error == ""
+        assert persisted.error == ""
 
 
 @pytest.mark.asyncio
@@ -3307,6 +3380,7 @@ async def test_summary_previous_obligation_over_budget_persists_in_async_short_t
     from app.session_memory.llm_summarizer import (
         process_claimed_session_summary_job_short_transactions_async,
     )
+    from app.session_memory.llm_contract import build_summary_obligations
     from core import database
 
     previous_turn = _turn(db_session, content="异步短事务旧摘要来源")
@@ -3354,10 +3428,39 @@ async def test_summary_previous_obligation_over_budget_persists_in_async_short_t
         owner="async-budget-worker",
     )
     db_session.commit()
-    calls = []
+    previous_state = json.loads(previous.summary_json)
+    previous_obligations = build_summary_obligations(previous_state)
+    repaired_state = {
+        **previous_state,
+        "open_threads": ["异步九项待办已合并，仍待处理"],
+    }
+    repaired_obligation = build_summary_obligations(repaired_state)[0]
+    calls: list[str] = []
 
-    async def summarizer(_messages):
-        calls.append(True)
+    async def summarizer(messages):
+        prompt = messages[-1]["content"]
+        calls.append(prompt)
+        if "<summary_repair>" in prompt:
+            return {
+                **repaired_state,
+                "inheritance": [{
+                    "source_id": obligation.source_id,
+                    "disposition": "updated",
+                    "target_field": "open_threads",
+                    "target_index": 0,
+                } for obligation in previous_obligations],
+                "quality": {"score": 0.9, "issues": []},
+            }
+        return {
+            **repaired_state,
+            "inheritance": [{
+                "source_id": repaired_obligation.source_id,
+                "disposition": "carried",
+                "target_field": "open_threads",
+                "target_index": 0,
+            }],
+            "quality": {"score": 0.9, "issues": []},
+        }
 
     ok = await process_claimed_session_summary_job_short_transactions_async(
         database.SessionLocal,
@@ -3365,13 +3468,13 @@ async def test_summary_previous_obligation_over_budget_persists_in_async_short_t
         summarizer=summarizer,
     )
 
-    assert ok is False
-    assert calls == []
+    assert ok is True
+    assert len(calls) == 2
     with database.SessionLocal() as verify_db:
         persisted = verify_db.get(SessionSummaryJob, job.id)
-        assert persisted.status == "failed"
+        assert persisted.status == "done"
         assert persisted.next_retry_at is None
-        assert persisted.error == "summary_previous_obligation_budget_exceeded"
+        assert persisted.error == ""
 
 
 @pytest.mark.asyncio

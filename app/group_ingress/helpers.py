@@ -32,6 +32,13 @@ _MAX_REPLY_CONTENT = 300
 _MAX_SEGMENT_TEXT = 500
 _MAX_MENTION_NICK = 80
 
+_NO_CONTEXT_EVENT_KINDS = frozenset({
+    "runtime_status",
+    "statistics_broadcast",
+    "system_broadcast",
+    "usage_report",
+})
+
 _ALLOWED_SEGMENT_KEYS = {
     "image": ("file", "url", "file_id", "summary", "sub_type"),
     "mface": ("file", "url", "emoji_id", "summary", "key", "emoji_package_id"),
@@ -265,6 +272,21 @@ def build_group_message_meta(req: Any, registered_stickers: list[dict]) -> dict:
     reply_to = normalize_group_reply_to(req, segments)
     directed = derive_group_direction(req, mentions, reply_to)
     bot_sender_kind = detect_group_bot_sender(req)
+    client_meta = (
+        getattr(req, "client_meta", None)
+        if isinstance(getattr(req, "client_meta", None), dict)
+        else {}
+    )
+    event_kind = str(
+        client_meta.get("context_event_kind")
+        or client_meta.get("event_kind")
+        or ""
+    ).strip().lower()
+    no_context_reason = ""
+    if bot_sender_kind == "current_bot":
+        no_context_reason = "current_bot_echo"
+    elif event_kind in _NO_CONTEXT_EVENT_KINDS:
+        no_context_reason = event_kind
     return {
         "message_type": "group_message",
         "raw_message": str(getattr(req, "raw_message", "") or "")[:2000],
@@ -284,7 +306,9 @@ def build_group_message_meta(req: Any, registered_stickers: list[dict]) -> dict:
             "bot_name": str(getattr(req, "bot_name", "") or "")[:80],
         },
         "files": normalize_files(getattr(req, "files", None)),
-        "client_meta": getattr(req, "client_meta", None) if isinstance(getattr(req, "client_meta", None), dict) else {},
+        "client_meta": client_meta,
+        "context_policy": "exclude" if no_context_reason else "include",
+        "no_context_reason": no_context_reason,
     }
 
 
@@ -577,6 +601,9 @@ def log_group_no_reply(db, user_id: str, query: str, agent_result: str, message_
             content=f"[NO_SEND] agent_result={agent_result}",
             message_id=message_id,
             meta_json=json.dumps({
+                "kind": "no_send",
+                "context_policy": "exclude",
+                "no_context_reason": "group_no_reply_audit",
                 "agent_result": agent_result,
                 "no_send": True,
                 "note": "群聊主流程未调用 reply/no_reply 工具，无消息发送",
@@ -613,7 +640,7 @@ def persist_group_bridge_reply(
     if message_id and message_id not in source_ids:
         source_ids.insert(0, message_id)
     source_ids_json = json.dumps(source_ids, ensure_ascii=False) if source_ids else "[]"
-    meta = {"kind": "group_reply"}
+    meta = {"kind": "group_reply", "context_policy": "include"}
     if message_id:
         if claim_key is None or completion is None:
             raise ValueError(
@@ -667,6 +694,7 @@ def persist_group_bridge_reply(
                 "kind": "chat",
                 "source": "group_message",
                 "sender_name": sender_name or "",
+                "context_policy": "include",
             }, ensure_ascii=False),
         ))
         db.add(ConversationTurn(
@@ -674,7 +702,11 @@ def persist_group_bridge_reply(
             session_id=group_user_id,
             role="assistant",
             content=answer,
-            meta_json=json.dumps({"kind": "chat", "bot_name": (bot_name or "nanobot")}, ensure_ascii=False),
+            meta_json=json.dumps({
+                "kind": "chat",
+                "bot_name": (bot_name or "nanobot"),
+                "context_policy": "include",
+            }, ensure_ascii=False),
         ))
         db.commit()
 

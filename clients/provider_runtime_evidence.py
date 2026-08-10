@@ -97,6 +97,8 @@ def _empty_evidence(window_days: int) -> dict[str, Any]:
         "cache_hit_tokens": 0,
         "cache_miss_tokens": 0,
         "cache_write_tokens": 0,
+        "cache_input_tokens": 0,
+        "cache_denominator_unknown_requests": 0,
         "cache_hit_token_ratio": None,
         "cost_microusd": 0,
         "by_error_category": {},
@@ -146,6 +148,46 @@ def summarize_provider_runtime_evidence(
                 raw_owner[raw_alias] = provider_id
 
     cutoff = db_now_naive() - timedelta(days=normalized_window)
+    cache_hit_expr = func.coalesce(LLMApiRequestLog.cache_hit_tokens, 0)
+    cache_miss_expr = func.coalesce(LLMApiRequestLog.cache_miss_tokens, 0)
+    cache_observed_expr = LLMApiRequestLog.cache_status.in_(("hit", "miss"))
+    # 新记录优先使用明确分母；迁移前的旧记录没有 cache_input_tokens，但
+    # 若同时保存了 miss_tokens，则 hit + miss 仍是可审计的兼容分母。
+    effective_cache_input_expr = case(
+        (
+            cache_observed_expr & (LLMApiRequestLog.cache_input_tokens > 0),
+            LLMApiRequestLog.cache_input_tokens,
+        ),
+        (
+            cache_observed_expr
+            & LLMApiRequestLog.cache_input_tokens.is_(None)
+            & (cache_miss_expr > 0),
+            cache_hit_expr + cache_miss_expr,
+        ),
+        else_=0,
+    )
+    effective_cache_hit_expr = case(
+        (
+            cache_observed_expr & (LLMApiRequestLog.cache_input_tokens > 0),
+            cache_hit_expr,
+        ),
+        (
+            cache_observed_expr
+            & LLMApiRequestLog.cache_input_tokens.is_(None)
+            & (cache_miss_expr > 0),
+            cache_hit_expr,
+        ),
+        else_=0,
+    )
+    cache_unknown_expr = case(
+        (
+            cache_observed_expr
+            & LLMApiRequestLog.cache_input_tokens.is_(None)
+            & (cache_miss_expr <= 0),
+            1,
+        ),
+        else_=0,
+    )
     rows = (
         db.query(
             LLMApiRequestLog.provider,
@@ -161,6 +203,9 @@ def summarize_provider_runtime_evidence(
             func.sum(LLMApiRequestLog.cache_hit_tokens),
             func.sum(LLMApiRequestLog.cache_miss_tokens),
             func.sum(LLMApiRequestLog.cache_write_tokens),
+            func.sum(effective_cache_input_expr),
+            func.sum(cache_unknown_expr),
+            func.sum(effective_cache_hit_expr),
             func.sum(LLMApiRequestLog.cost_microusd),
             func.max(LLMApiRequestLog.created_at),
         )
@@ -197,12 +242,16 @@ def summarize_provider_runtime_evidence(
         item["cache_hit_tokens"] += int(row[10] or 0)
         item["cache_miss_tokens"] += int(row[11] or 0)
         item["cache_write_tokens"] += int(row[12] or 0)
-        item["cost_microusd"] += int(row[13] or 0)
+        item["cache_input_tokens"] += int(row[13] or 0)
+        item["cache_denominator_unknown_requests"] += int(row[14] or 0)
+        item.setdefault("_cache_ratio_hit_tokens", 0)
+        item["_cache_ratio_hit_tokens"] += int(row[15] or 0)
+        item["cost_microusd"] += int(row[16] or 0)
         latency_weights[provider_id]["first"] += first_count
         latency_weights[provider_id]["total"] += total_count
         latency_sums[provider_id]["first"] += first_latency * first_count
         latency_sums[provider_id]["total"] += total_latency * total_count
-        observed_at = row[14]
+        observed_at = row[17]
         current_at = item["last_observed_at"]
         if observed_at is not None and (current_at is None or observed_at > current_at):
             item["last_observed_at"] = observed_at
@@ -295,12 +344,11 @@ def summarize_provider_runtime_evidence(
         item["success_rate"] = (
             round(successful / requests, 6) if requests else None
         )
-        hit_tokens = int(item["cache_hit_tokens"])
-        miss_tokens = int(item["cache_miss_tokens"])
-        comparable_cache_tokens = hit_tokens + miss_tokens
+        hit_tokens = int(item.get("_cache_ratio_hit_tokens", 0))
+        cache_input_tokens = int(item["cache_input_tokens"])
         item["cache_hit_token_ratio"] = (
-            round(hit_tokens / comparable_cache_tokens, 6)
-            if comparable_cache_tokens else None
+            round(hit_tokens / cache_input_tokens, 6)
+            if cache_input_tokens else None
         )
         for latency_key, result_key in (
             ("first", "avg_first_token_latency_ms"),
@@ -327,6 +375,7 @@ def summarize_provider_runtime_evidence(
             last_observed_at.isoformat()
             if hasattr(last_observed_at, "isoformat") else None
         )
+        item.pop("_cache_ratio_hit_tokens", None)
     return evidence
 
 

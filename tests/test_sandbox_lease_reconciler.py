@@ -323,6 +323,47 @@ def test_database_leader_fencing_allows_only_one_reconciler_claim(
     assert second_claim is None
 
 
+def test_reconciler_loop_uses_bounded_backoff_and_resets_after_success(
+    db_session,
+    monkeypatch,
+):
+    reconciler = SandboxLeaseReconciler(
+        _factory(db_session),
+        interval_seconds=1,
+        max_backoff_seconds=3,
+    )
+    outcomes = iter((False, False, False, True, False))
+    delays: list[float] = []
+
+    monkeypatch.setattr(reconciler, "run_once", lambda: next(outcomes))
+
+    def fake_wait(delay: float) -> bool:
+        delays.append(delay)
+        if len(delays) == 5:
+            reconciler._stop.set()
+        return reconciler._stop.is_set()
+
+    monkeypatch.setattr(reconciler._stop, "wait", fake_wait)
+    reconciler._run_loop()
+
+    assert delays == [1.0, 2.0, 3.0, 1.0, 1.0]
+
+
+def test_reconciler_backoff_rejects_unbounded_configuration(db_session):
+    import math
+
+    with pytest.raises(ValueError, match="最大退避"):
+        SandboxLeaseReconciler(
+            _factory(db_session),
+            max_backoff_seconds=math.inf,
+        )
+    with pytest.raises(ValueError, match="退避倍数"):
+        SandboxLeaseReconciler(
+            _factory(db_session),
+            backoff_multiplier=0.5,
+        )
+
+
 class _LeaseServiceBackend(FakeSandboxBackend):
     def __init__(self, registry):
         super().__init__()

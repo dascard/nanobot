@@ -46,6 +46,18 @@ _SESSION_GUIDANCE_NODE = {
     "label": "system: session_guidance",
     "runtime_key": "session_guidance",
 }
+_PROJECT_CONTEXT_NODE = {
+    "id": "project_context",
+    "type": "runtime",
+    "label": "context: governed project data",
+    "runtime_key": "project_context",
+}
+_SUMMARY_CONTEXT_NODE = {
+    "id": "summary_context",
+    "type": "runtime",
+    "label": "context: conversation summary",
+    "runtime_key": "summary_context",
+}
 
 
 @contextmanager
@@ -129,8 +141,14 @@ def _validate_existing_guidance_relationships(flow: dict[str, Any]) -> None:
 
 def migrate_session_guidance_flow(
     flow: dict[str, Any],
+    *,
+    validate_result: bool = True,
 ) -> tuple[dict[str, Any], bool]:
-    """在 identity 后插入 session guidance，并保留原下游边全部元数据。"""
+    """在 identity 后插入 session guidance，并保留原下游边全部元数据。
+
+    ``validate_result=False`` 仅供组合迁移使用：插入 guidance 后，旧 flow
+    可能还缺少后续上下文节点，必须等上下文链迁移完成后再做最终运行契约校验。
+    """
     migrated = copy.deepcopy(flow)
     _validate_base_flow(migrated)
 
@@ -158,7 +176,8 @@ def migrate_session_guidance_flow(
         }:
             raise PromptFlowMigrationError("session_guidance 节点不是唯一规范节点")
         _validate_existing_guidance_relationships(migrated)
-        _validate_migrated_flow(migrated)
+        if validate_result:
+            _validate_migrated_flow(migrated)
         return migrated, False
 
     edges = list(migrated.get("edges") or [])
@@ -188,8 +207,188 @@ def migrate_session_guidance_flow(
         rewritten_edges.append(rewritten)
     migrated["edges"] = rewritten_edges
 
-    _validate_migrated_flow(migrated)
+    if validate_result:
+        _validate_migrated_flow(migrated)
     return migrated, True
+
+
+def migrate_context_sections_flow(
+    flow: dict[str, Any],
+    *,
+    validate_result: bool = True,
+) -> tuple[dict[str, Any], bool]:
+    """为旧 runtime flow 补齐 project/summary 上下文链。
+
+    317c91a6 将两个运行时上下文段加入 canonical flow，但生产外置目录可能仍
+    保留旧的 ``session_guidance/group_context -> conversation_context_header``
+    结构。迁移只改写这两条受保留契约约束的边，保留其它节点、边和顶层字段，
+    并由调用方决定是否在中间状态执行最终契约校验。
+    """
+
+    migrated = copy.deepcopy(flow)
+    _validate_base_flow(migrated)
+    nodes = list(migrated.get("nodes") or [])
+    header_indexes = [
+        index
+        for index, node in enumerate(nodes)
+        if node.get("id") == "conversation_context_header"
+    ]
+    if len(header_indexes) != 1:
+        raise PromptFlowMigrationError(
+            "flow 必须且只能包含一个 conversation_context_header 节点"
+        )
+
+    changed = False
+    indexes: dict[str, int] = {}
+    for node_id in ("project_context", "summary_context"):
+        matches = [
+            index
+            for index, node in enumerate(nodes)
+            if node.get("id") == node_id
+            or node.get("runtime_key") == node_id
+        ]
+        if len(matches) > 1:
+            raise PromptFlowMigrationError(
+                f"flow 中 {node_id} 节点不唯一"
+            )
+        if matches:
+            index = matches[0]
+            node = nodes[index]
+            if (
+                node.get("id") != node_id
+                or node.get("type") != "runtime"
+                or node.get("runtime_key") != node_id
+            ):
+                raise PromptFlowMigrationError(
+                    f"flow 中 {node_id} 节点不是规范 runtime 节点"
+                )
+            indexes[node_id] = index
+
+    header_index = header_indexes[0]
+    if "project_context" not in indexes:
+        nodes.insert(header_index, copy.deepcopy(_PROJECT_CONTEXT_NODE))
+        changed = True
+        header_index += 1
+    if "summary_context" not in indexes:
+        nodes.insert(header_index, copy.deepcopy(_SUMMARY_CONTEXT_NODE))
+        changed = True
+    migrated["nodes"] = nodes
+
+    edges = list(migrated.get("edges") or [])
+    rewritten: list[dict[str, Any]] = []
+    for edge in edges:
+        if (
+            edge.get("to") == "conversation_context_header"
+            and edge.get("from") in {"session_guidance", "group_context"}
+        ):
+            replacement = copy.deepcopy(edge)
+            replacement["to"] = "project_context"
+            rewritten.append(replacement)
+            changed = True
+        else:
+            rewritten.append(edge)
+
+    def has_edge(source: str, target: str) -> bool:
+        return any(
+            edge.get("from") == source and edge.get("to") == target
+            for edge in rewritten
+        )
+
+    # 如果旧 flow 的两条分支边已经被改写，下面的检查不会产生重复边；
+    # 缺少某条分支时补上 canonical 条件，确保六个 live branch 都可达。
+    def ensure_branch_edge(
+        source: str,
+        target: str,
+        edge: dict[str, Any],
+    ) -> None:
+        """仅为没有任何下游的旧分支补 canonical 边。
+
+        旧版本允许在 guidance 后挂载自定义节点；若该分支已有下游，贸然
+        再追加 project_context 会制造同条件分叉。已有旧 header 边会在上面
+        被改写，因此这里只处理真正没有下游的基线分支。
+        """
+        nonlocal changed
+        if has_edge(source, target):
+            return
+        if any(item.get("from") == source for item in rewritten):
+            return
+        rewritten.append(edge)
+        changed = True
+
+    ensure_branch_edge(
+        "session_guidance",
+        "project_context",
+        {
+            "from": "session_guidance",
+            "to": "project_context",
+            "chat_types": ["private"],
+        },
+    )
+    ensure_branch_edge(
+        "group_context",
+        "project_context",
+        {
+            "from": "group_context",
+            "to": "project_context",
+            "chat_types": ["group"],
+        },
+    )
+    if not has_edge("project_context", "summary_context"):
+        rewritten.append(
+            {"from": "project_context", "to": "summary_context"}
+        )
+        changed = True
+    if not has_edge("summary_context", "conversation_context_header"):
+        rewritten.append(
+            {
+                "from": "summary_context",
+                "to": "conversation_context_header",
+            }
+        )
+        changed = True
+    migrated["edges"] = rewritten
+
+    if validate_result:
+        _validate_migrated_flow(migrated)
+    return migrated, changed
+
+
+def migrate_runtime_flow(flow: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """合并当前 schema 内的 session guidance 与上下文链结构迁移。
+
+    Flow v1 到 v2 受独立 ``plan/apply`` 治理；启动期结构迁移不能顺带修改
+    schema 版本或 internal/private 核心边，因此 v1 在这里保持字节语义不变。
+    """
+
+    migrated = copy.deepcopy(flow)
+    _validate_base_flow(migrated)
+    if migrated.get("version", 1) != FLOW_SCHEMA_VERSION:
+        return migrated, False
+
+    has_guidance = any(
+        node.get("id") == "session_guidance"
+        or node.get("runtime_key") == "session_guidance"
+        for node in list(migrated.get("nodes") or [])
+    )
+    if has_guidance:
+        migrated, context_changed = migrate_context_sections_flow(
+            migrated,
+            validate_result=False,
+        )
+        migrated, guidance_changed = migrate_session_guidance_flow(migrated)
+    else:
+        # 旧 schema 基线通常已经包含 project/summary 节点；先插入 guidance，
+        # 再执行上下文链迁移，避免在中间状态触发严格运行契约校验。
+        migrated, guidance_changed = migrate_session_guidance_flow(
+            migrated,
+            validate_result=False,
+        )
+        migrated, context_changed = migrate_context_sections_flow(
+            migrated,
+            validate_result=False,
+        )
+        _validate_migrated_flow(migrated)
+    return migrated, bool(guidance_changed or context_changed)
 
 
 def _normalized_condition_values(value: Any) -> list[str]:
@@ -636,7 +835,7 @@ def upgrade_runtime_flow_file(
         with _runtime_flow_write_lock(runtime_flow_path):
             original = _read_regular_file(runtime_flow_path, label="runtime flow")
             flow = _decode_flow(original, label="runtime flow")
-            migrated, changed = migrate_session_guidance_flow(flow)
+            migrated, changed = migrate_runtime_flow(flow)
             if not changed:
                 return {
                     "flow_migrated": False,

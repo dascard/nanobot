@@ -374,4 +374,7 @@ def test_missing_profile_digest_is_reported_not_ready_without_startup_failure(
             "network_policy_id": "developer_allowlist_v1",
             "network_proxy_image_id": "",
             "error_code": "image_digest_missing",
+            "retryable": False,
+            "stop": True,
+            "hint": "",
         }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import secrets
 import threading
@@ -45,6 +46,8 @@ _PROCESS_EXECUTION_STATUSES = frozenset({
     "cancelled",
 })
 _PROCESS_STATES = frozenset({"running", "exited", "lost"})
+_DEFAULT_RECONCILE_MAX_BACKOFF_SECONDS = 300.0
+_DEFAULT_RECONCILE_BACKOFF_MULTIPLIER = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +180,10 @@ class SandboxLeaseReconciler:
         leader_lease_seconds: int = 60,
         interval_seconds: float = 15.0,
         provisioning_grace_seconds: int = 60,
+        max_backoff_seconds: float = (
+            _DEFAULT_RECONCILE_MAX_BACKOFF_SECONDS
+        ),
+        backoff_multiplier: float = _DEFAULT_RECONCILE_BACKOFF_MULTIPLIER,
     ) -> None:
         self.session_factory = session_factory
         self.backend_factory = backend_factory or self._default_backend
@@ -186,6 +193,18 @@ class SandboxLeaseReconciler:
         )[:128]
         self.leader_lease_seconds = max(10, int(leader_lease_seconds))
         self.interval_seconds = max(1.0, float(interval_seconds))
+        max_backoff = float(max_backoff_seconds)
+        if not math.isfinite(max_backoff) or max_backoff <= 0:
+            raise ValueError("Sandbox Lease 对账最大退避必须为有限正数")
+        # 最大退避不能短于基础周期，否则成功后的正常轮询也会越界。
+        self.max_backoff_seconds = max(
+            self.interval_seconds,
+            max_backoff,
+        )
+        multiplier = float(backoff_multiplier)
+        if not math.isfinite(multiplier) or multiplier < 1.0:
+            raise ValueError("Sandbox Lease 对账退避倍数必须不小于 1")
+        self.backoff_multiplier = multiplier
         self.provisioning_grace_seconds = max(
             1,
             int(provisioning_grace_seconds),
@@ -943,10 +962,31 @@ class SandboxLeaseReconciler:
             thread.join(timeout=max(0.0, float(timeout)))
         self._thread = None
 
+    def _failure_backoff_seconds(self, failure_count: int) -> float:
+        """按连续失败次数计算有界退避，首次失败仍使用基础周期。"""
+
+        count = max(1, int(failure_count))
+        delay = self.interval_seconds
+        for _ in range(count - 1):
+            if delay >= self.max_backoff_seconds:
+                break
+            delay = min(
+                self.max_backoff_seconds,
+                delay * self.backoff_multiplier,
+            )
+        return delay
+
     def _run_loop(self) -> None:
+        consecutive_failures = 0
         while not self._stop.is_set():
-            self.run_once()
-            self._stop.wait(self.interval_seconds)
+            worked = self.run_once()
+            if worked:
+                consecutive_failures = 0
+                delay = self.interval_seconds
+            else:
+                consecutive_failures += 1
+                delay = self._failure_backoff_seconds(consecutive_failures)
+            self._stop.wait(delay)
 
 
 __all__ = ["ReconcileClaim", "SandboxLeaseReconciler"]

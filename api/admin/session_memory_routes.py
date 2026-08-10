@@ -16,6 +16,9 @@ from app.session_memory.rolling_summary import (
     archive_active_summaries_for_session,
     get_best_session_summary,
     maybe_rollup_session_summary,
+    summary_covered_from,
+    summary_covered_until,
+    summary_source_ids_json,
 )
 from app.session_memory.windowing import (
     load_latest_raw_window,
@@ -59,11 +62,33 @@ class MemoryDigestRunAdminRequest(BaseModel):
 def _summary_to_dict(row: RollingSessionSummary | None) -> dict:
     if row is None:
         return {}
+    source_type = str(getattr(row, "source_type", "conversation_turn") or "conversation_turn")
+    source_ids_raw = summary_source_ids_json(row)
+    try:
+        parsed_source_ids = json.loads(source_ids_raw or "[]")
+    except (TypeError, json.JSONDecodeError):
+        parsed_source_ids = []
+    if not isinstance(parsed_source_ids, list):
+        parsed_source_ids = []
+    source_ids: list[int] = []
+    for value in parsed_source_ids:
+        try:
+            source_ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
     return {
         "id": row.id,
         "session_id": row.session_id,
         "user_id": row.user_id,
         "chat_type": row.chat_type,
+        "source_type": source_type,
+        "covered_from_source_id": summary_covered_from(row),
+        "covered_until_source_id": summary_covered_until(row),
+        "source_ids_json": source_ids_raw,
+        "source_ids": source_ids,
+        "source_message_count": int(
+            getattr(row, "source_turn_count", 0) or 0
+        ) or len(source_ids),
         "status": row.status,
         "summary_kind": getattr(row, "summary_kind", "") or "deterministic_fallback",
         "summary_text": row.summary_text,
@@ -114,11 +139,54 @@ def _job_to_dict(row: SessionSummaryJob | None) -> dict:
             ),
             "reason": str(raw_obsolete.get("reason") or "")[:128],
         }
+    source_type = str(getattr(row, "source_type", "conversation_turn") or "conversation_turn")
+    raw_source_ids = str(getattr(row, "source_ids_json", "[]") or "[]")
+    try:
+        parsed_source_ids = json.loads(raw_source_ids)
+    except (TypeError, json.JSONDecodeError):
+        parsed_source_ids = []
+    if not isinstance(parsed_source_ids, list):
+        parsed_source_ids = []
+    source_ids: list[int] = []
+    for value in parsed_source_ids:
+        try:
+            source_ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    covered_from_source_id = int(
+        getattr(row, "covered_from_source_id", 0) or 0
+    )
+    covered_until_source_id = int(
+        getattr(row, "covered_until_source_id", 0) or 0
+    )
+    if source_type == "conversation_turn":
+        covered_from_source_id = covered_from_source_id or int(
+            getattr(row, "covered_from_turn_id", 0) or 0
+        )
+        covered_until_source_id = covered_until_source_id or int(
+            getattr(row, "covered_until_turn_id", 0) or 0
+        )
+        if not source_ids:
+            try:
+                legacy_ids = json.loads(row.source_turn_ids_json or "[]")
+            except (TypeError, json.JSONDecodeError):
+                legacy_ids = []
+            if isinstance(legacy_ids, list):
+                source_ids = [
+                    int(value) for value in legacy_ids
+                    if isinstance(value, (int, float, str)) and str(value).isdigit()
+                ]
     return {
         "id": row.id,
         "session_id": row.session_id,
         "user_id": row.user_id,
         "chat_type": row.chat_type,
+        "source_type": source_type,
+        "covered_from_source_id": covered_from_source_id,
+        "covered_until_source_id": covered_until_source_id,
+        "source_ids_json": raw_source_ids,
+        "source_ids": source_ids,
+        "source_message_count": len(source_ids),
         "covered_from_turn_id": row.covered_from_turn_id,
         "covered_until_turn_id": row.covered_until_turn_id,
         "source_turn_ids_json": row.source_turn_ids_json,

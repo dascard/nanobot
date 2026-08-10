@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import inspect
 import json
 import logging
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import SimpleNamespace
@@ -33,6 +34,7 @@ from app.session_memory.llm_contract import (
     canonical_summary_state,
     fragment_summary_turn,
     normalize_inheritance_metadata,
+    request_char_count,
     strip_summary_inheritance,
     validate_inheritance,
 )
@@ -72,8 +74,10 @@ logger = logging.getLogger("nanobot.session_summary.llm")
 
 LEGACY_SYNC_WORKER_HELPERS = True
 
-# Prompt 目标仍为 7 项；硬门禁容忍 1 项偏差，历史 12 项膨胀仍会失败。
+# Prompt 目标为 7 项；正常结果允许最多 8 项作为一次局部修复的触发条件。
 SESSION_SUMMARY_MAX_STATE_OBLIGATIONS = 8
+SESSION_SUMMARY_REPAIR_TARGET_OBLIGATIONS = 7
+SESSION_SUMMARY_MAX_REPAIR_ATTEMPTS = 1
 SESSION_SUMMARY_MAX_SUMMARY_CHARS = 400
 # Prompt 目标仍为 60 字；硬门禁保留 4 字格式容差，避免轻微越界导致整单重试。
 SESSION_SUMMARY_MAX_OBLIGATION_CHARS = 64
@@ -153,6 +157,8 @@ _SAFE_SESSION_SUMMARY_ERROR_CODES = frozenset({
     "summary_request_message_invalid",
     "summary_state_budget_exceeded",
     "summary_state_obligation_budget_exceeded",
+    "summary_state_repair_failed",
+    "summary_state_repair_invalid",
     "summary_state_output_budget_exceeded",
     "summary_state_output_token_budget_exceeded",
     "summary_too_long",
@@ -240,6 +246,11 @@ class PreparedSessionSummaryJob:
     batch_contracts: tuple[SummaryRequestBatch, ...]
     previous_state: dict[str, Any]
     previous_obligations: tuple[SummaryObligation, ...]
+    previous_legacy_summary: bool = False
+    previous_quality: dict[str, Any] = field(
+        default_factory=lambda: {"score": 0.0, "issues": []}
+    )
+    previous_quality_present: bool = False
     source_type: str = "conversation_turn"
     max_fragment_chars: int = SESSION_SUMMARY_FRAGMENT_MAX_CHARS
     batch_traces: list[SummaryBatchTrace] = field(default_factory=list, compare=False)
@@ -251,6 +262,19 @@ class PreparedSessionSummaryJob:
         if not self.batch_contracts:
             return []
         return [dict(message) for message in self.batch_contracts[0].messages]
+
+
+@dataclass(frozen=True)
+class _AcceptedSummaryPayload:
+    """一次模型输出通过来源、预算和 inheritance 审计后的内存态。"""
+
+    business_payload: dict[str, Any]
+    state: dict[str, Any]
+    obligations: tuple[SummaryObligation, ...]
+    inheritance: tuple[dict[str, Any], ...]
+    inheritance_audit: InheritanceAudit
+    llm_result: SessionSummaryLLMResult
+    quality_immutable: bool = True
 
 
 def _reject_json_constant(value: str) -> None:
@@ -439,7 +463,6 @@ def build_llm_summary_messages(
         previous_summary,
         max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
     )
-    _validate_previous_obligation_budget(obligations)
     batches = build_summary_request_batches(
         system_prompt=_render_session_summary_prompt("tasks/session_summary_system"),
         previous_state=previous_state,
@@ -829,7 +852,7 @@ def _validate_summary_response_budget(
 def _validate_previous_obligation_budget(
     obligations: tuple[SummaryObligation, ...],
 ) -> None:
-    """首批调用前拒绝 1200 tokens 下不可满足的历史审计合同。"""
+    """保留旧调用方的显式门禁，但不再用于 worker 的首轮准备。"""
 
     if len(obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
         raise NonRetryableSessionSummaryError(
@@ -859,19 +882,42 @@ def _build_next_request_batch(
     return batches[0]
 
 
-def _accept_summary_batch_payload(
+def _with_bounded_summary_obligations(
+    accepted: _AcceptedSummaryPayload,
+    *,
+    repair_response: bool = False,
+) -> _AcceptedSummaryPayload:
+    try:
+        obligations = _build_bounded_summary_obligations(accepted.state)
+    except ValueError as exc:
+        if (
+            repair_response
+            and str(exc) == "summary_state_obligation_budget_exceeded"
+        ):
+            raise NonRetryableSessionSummaryError(
+                "summary_state_obligation_budget_exceeded"
+            ) from exc
+        raise
+    return _AcceptedSummaryPayload(
+        business_payload=accepted.business_payload,
+        state=accepted.state,
+        obligations=obligations,
+        inheritance=accepted.inheritance,
+        inheritance_audit=accepted.inheritance_audit,
+        llm_result=accepted.llm_result,
+        quality_immutable=accepted.quality_immutable,
+    )
+
+
+def _accept_summary_payload(
     *,
     raw: Any,
     obligations: tuple[SummaryObligation, ...],
-    prepared: PreparedSessionSummaryJob,
-    batch: SummaryRequestBatch,
-) -> tuple[
-    dict[str, Any],
-    dict[str, Any],
-    tuple[SummaryObligation, ...],
-    InheritanceAudit,
-    SessionSummaryLLMResult,
-]:
+    source_turns: tuple[SessionSummaryTurnSnapshot, ...] | None = None,
+    source_type: str = SUMMARY_SOURCE_CONVERSATION_TURN,
+) -> _AcceptedSummaryPayload:
+    """解析一次模型输出并验证来源、预算和 inheritance。"""
+
     llm_result = _normalize_llm_result(raw)
     payload = parse_llm_summary_response(llm_result.content)
     _validate_summary_response_budget(
@@ -891,21 +937,422 @@ def _accept_summary_batch_payload(
         normalized_count=normalization.normalized_count,
     )
     business_payload = strip_summary_inheritance(payload)
-    _audit_intermediate_summary_payload(
-        business_payload,
-        _source_turns_for_batch(prepared, batch),
-        source_type=prepared.source_type,
-    )
+    if source_turns is not None:
+        _audit_intermediate_summary_payload(
+            business_payload,
+            source_turns,
+            source_type=source_type,
+        )
     state = canonical_summary_state(
         business_payload,
         max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
     )
-    return (
-        business_payload,
+    return _AcceptedSummaryPayload(
+        business_payload=business_payload,
+        state=state,
+        obligations=build_summary_obligations(state),
+        inheritance=tuple(
+            item for item in payload.get("inheritance", [])
+            if isinstance(item, dict)
+        ),
+        inheritance_audit=inheritance_audit,
+        llm_result=llm_result,
+        quality_immutable=True,
+    )
+
+
+def _build_summary_repair_field_limits(
+    field_counts: Mapping[str, int],
+) -> dict[str, int]:
+    """为局部修复生成确定性的逐字段目标配额。"""
+
+    counts = {
+        field: max(0, int(field_counts.get(field, 0) or 0))
+        for field in _SESSION_SUMMARY_REPAIRABLE_FIELDS
+    }
+    limits = {
+        field: 1 if counts[field] else 0
+        for field in _SESSION_SUMMARY_REPAIRABLE_FIELDS
+    }
+    remaining = max(
+        0,
+        SESSION_SUMMARY_REPAIR_TARGET_OBLIGATIONS - sum(limits.values()),
+    )
+    field_order = {
+        field: index
+        for index, field in enumerate(_SESSION_SUMMARY_REPAIRABLE_FIELDS)
+    }
+    while remaining:
+        candidates = [
+            field
+            for field in _SESSION_SUMMARY_REPAIRABLE_FIELDS
+            if limits[field] < counts[field]
+        ]
+        if not candidates:
+            break
+        field = max(
+            candidates,
+            key=lambda item: (
+                counts[item] - limits[item],
+                counts[item],
+                -field_order[item],
+            ),
+        )
+        limits[field] += 1
+        remaining -= 1
+    return limits
+
+
+def _state_inheritance_audit(
+    state: Mapping[str, Any],
+    obligations: tuple[SummaryObligation, ...],
+) -> InheritanceAudit:
+    canonical = canonical_summary_state(
         state,
-        _build_bounded_summary_obligations(state),
-        inheritance_audit,
-        llm_result,
+        max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
+    )
+    state_json = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return InheritanceAudit(
+        obligation_count=len(obligations),
+        carried_count=0,
+        updated_count=0,
+        resolved_count=0,
+        state_sha256=hashlib.sha256(state_json.encode("utf-8")).hexdigest(),
+    )
+
+
+def _previous_repair_quality(previous: Any | None) -> dict[str, Any]:
+    """读取旧摘要质量；旧记录缺失时使用数据库中的保守默认值。"""
+
+    quality: Any = None
+    raw_summary = getattr(previous, "summary_json", None) if previous is not None else None
+    if isinstance(raw_summary, str) and raw_summary.strip():
+        try:
+            parsed = json.loads(raw_summary)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise NonRetryableSessionSummaryError("json_schema_invalid") from exc
+        if isinstance(parsed, dict) and "quality" in parsed:
+            quality = parsed.get("quality")
+    if quality is None:
+        raw_issues = getattr(previous, "issues_json", "[]") if previous is not None else "[]"
+        try:
+            issues = json.loads(raw_issues or "[]")
+        except (TypeError, json.JSONDecodeError):
+            issues = []
+        if not isinstance(issues, list) or any(type(item) is not str for item in issues):
+            issues = []
+        raw_score = getattr(previous, "quality_score", 0.0) if previous is not None else 0.0
+        try:
+            score = float(raw_score or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            score = 0.0
+        if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+            score = 0.0
+        return {"score": score, "issues": issues}
+    if type(quality) is not dict or set(quality) - _SESSION_SUMMARY_QUALITY_FIELDS:
+        raise NonRetryableSessionSummaryError("json_schema_invalid")
+    score = quality.get("score", 0.0)
+    issues = quality.get("issues", [])
+    if type(score) not in (int, float) or type(issues) is not list:
+        raise NonRetryableSessionSummaryError("json_schema_invalid")
+    try:
+        score = float(score)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise NonRetryableSessionSummaryError("json_schema_invalid") from exc
+    if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+        raise NonRetryableSessionSummaryError("json_schema_invalid")
+    if any(type(item) is not str for item in issues):
+        raise NonRetryableSessionSummaryError("json_schema_invalid")
+    return {"score": score, "issues": list(issues)}
+
+
+def _build_summary_repair_messages(
+    overflow: _AcceptedSummaryPayload,
+    *,
+    repair_kind: str = "state_obligation_budget",
+) -> list[dict[str, str]]:
+    """只回传失败状态和脱敏索引账本，不重发 ConversationTurn。"""
+
+    field_indexes: dict[str, int] = {}
+    field_counts: dict[str, int] = {}
+    ledger: list[dict[str, Any]] = []
+    for obligation in overflow.obligations:
+        source_index = field_indexes.get(obligation.field, 0)
+        field_indexes[obligation.field] = source_index + 1
+        field_counts[obligation.field] = field_counts.get(obligation.field, 0) + 1
+        ledger.append({
+            "source_id": obligation.source_id,
+            "field": obligation.field,
+            "source_index": source_index,
+        })
+
+    violation_json = json.dumps({
+        "code": "summary_state_obligation_budget_exceeded",
+        "kind": str(repair_kind or "state_obligation_budget"),
+        "actual_count": len(overflow.obligations),
+        "target_count": SESSION_SUMMARY_REPAIR_TARGET_OBLIGATIONS,
+        "hard_limit": SESSION_SUMMARY_MAX_STATE_OBLIGATIONS,
+        "field_counts": field_counts,
+        "field_target_limits": _build_summary_repair_field_limits(field_counts),
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    state_json = json.dumps(
+        overflow.business_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    ledger_json = json.dumps(
+        ledger,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    user_prompt = (
+        "<summary_repair>\n"
+        "<contract_violation>\n"
+        f"{html.escape(violation_json, quote=False)}\n"
+        "</contract_violation>\n\n"
+        "<failed_summary_state>\n"
+        f"{html.escape(state_json, quote=False)}\n"
+        "</failed_summary_state>\n\n"
+        "<repair_obligation_ledger>\n"
+        f"{html.escape(ledger_json, quote=False)}\n"
+        "</repair_obligation_ledger>\n\n"
+        "请执行本次摘要合同局部修复。\n"
+        "</summary_repair>"
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": _render_session_summary_prompt(
+                "tasks/session_summary_system"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                _render_session_summary_prompt("tasks/session_summary_output")
+                + "\n\n"
+                + user_prompt
+            ),
+        },
+    ]
+    request_limit = (
+        int(config.SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS)
+        - int(config.SESSION_SUMMARY_LLM_REQUEST_SAFETY_CHARS)
+    )
+    if request_limit <= 0 or request_char_count(messages) > request_limit:
+        raise NonRetryableSessionSummaryError("summary_request_budget_exceeded")
+    return messages
+
+
+_SESSION_SUMMARY_REPAIRABLE_FIELDS = (
+    "open_threads",
+    "decisions",
+    "important_user_requests",
+    "artifacts",
+)
+_SESSION_SUMMARY_REPAIR_IMMUTABLE_FIELDS = (
+    "summary",
+    "resolved_items",
+    "participants",
+    "keywords",
+    "quality",
+)
+
+
+def _accept_summary_repair_payload(
+    *,
+    raw: Any,
+    overflow: _AcceptedSummaryPayload,
+    source_turns: tuple[SessionSummaryTurnSnapshot, ...] = (),
+) -> _AcceptedSummaryPayload:
+    """验证单次局部修复没有改变不可变状态或凭空增加目标项。"""
+
+    try:
+        repaired = _accept_summary_payload(
+            raw=raw,
+            obligations=overflow.obligations,
+            source_turns=None,
+        )
+    except NonRetryableSessionSummaryError:
+        raise
+    except (TypeError, ValueError) as exc:
+        safe_error = _safe_session_summary_error(exc)
+        if safe_error in {
+            "json_parse_failed",
+            "json_schema_invalid",
+            "summary_inheritance_invalid",
+            "summary_state_budget_exceeded",
+            "summary_state_output_budget_exceeded",
+            "summary_state_output_token_budget_exceeded",
+        }:
+            raise NonRetryableSessionSummaryError(safe_error) from exc
+        raise NonRetryableSessionSummaryError(
+            "summary_state_repair_invalid"
+        ) from exc
+
+    immutable_fields = (
+        _SESSION_SUMMARY_REPAIR_IMMUTABLE_FIELDS
+        if overflow.quality_immutable
+        else tuple(
+            field
+            for field in _SESSION_SUMMARY_REPAIR_IMMUTABLE_FIELDS
+            if field != "quality"
+        )
+    )
+    if any(
+        repaired.business_payload.get(field)
+        != overflow.business_payload.get(field)
+        for field in immutable_fields
+    ):
+        raise NonRetryableSessionSummaryError("summary_state_repair_invalid")
+    if repaired.inheritance_audit.resolved_count:
+        raise NonRetryableSessionSummaryError("summary_state_repair_invalid")
+
+    field_counts = {
+        field: sum(1 for obligation in overflow.obligations if obligation.field == field)
+        for field in _SESSION_SUMMARY_REPAIRABLE_FIELDS
+    }
+    limits = _build_summary_repair_field_limits(field_counts)
+    for field in _SESSION_SUMMARY_REPAIRABLE_FIELDS:
+        values = repaired.business_payload.get(field)
+        if not isinstance(values, list) or len(values) > limits[field]:
+            raise NonRetryableSessionSummaryError("summary_state_repair_invalid")
+
+    expected_targets = {
+        (field, index)
+        for field in _SESSION_SUMMARY_REPAIRABLE_FIELDS
+        for index, _item in enumerate(
+            repaired.business_payload.get(field, [])
+        )
+    }
+    inherited_targets = {
+        (str(item.get("target_field")), int(item.get("target_index")))
+        for item in repaired.inheritance
+        if item.get("disposition") in {"carried", "updated"}
+        and isinstance(item.get("target_index"), int)
+        and not isinstance(item.get("target_index"), bool)
+    }
+    if inherited_targets != expected_targets:
+        raise NonRetryableSessionSummaryError("summary_state_repair_invalid")
+    if len(repaired.obligations) > SESSION_SUMMARY_REPAIR_TARGET_OBLIGATIONS:
+        raise NonRetryableSessionSummaryError(
+            "summary_state_obligation_budget_exceeded"
+        )
+
+    # repair 没有新的来源证据；如果调用方提供快照，只做一次常规内容门禁。
+    if source_turns:
+        _audit_intermediate_summary_payload(
+            repaired.business_payload,
+            source_turns,
+            source_type=SUMMARY_SOURCE_CONVERSATION_TURN,
+        )
+    return _with_bounded_summary_obligations(
+        repaired,
+        repair_response=True,
+    )
+
+
+def _call_summary_repair_sync(
+    *,
+    overflow: _AcceptedSummaryPayload,
+    summarizer: Callable[[list[dict[str, str]]], Any],
+    repair_kind: str,
+) -> _AcceptedSummaryPayload:
+    messages = _build_summary_repair_messages(
+        overflow,
+        repair_kind=repair_kind,
+    )
+    try:
+        raw = _call_summarizer(summarizer, messages)
+    except Exception as exc:
+        raise NonRetryableSessionSummaryError(
+            "summary_state_repair_failed"
+        ) from exc
+    return _accept_summary_repair_payload(raw=raw, overflow=overflow)
+
+
+async def _call_summary_repair_async(
+    *,
+    overflow: _AcceptedSummaryPayload,
+    summarizer: Callable[[list[dict[str, str]]], Any],
+    repair_kind: str,
+) -> _AcceptedSummaryPayload:
+    messages = _build_summary_repair_messages(
+        overflow,
+        repair_kind=repair_kind,
+    )
+    try:
+        raw = await _call_summarizer_async(summarizer, messages)
+    except Exception as exc:
+        raise NonRetryableSessionSummaryError(
+            "summary_state_repair_failed"
+        ) from exc
+    return _accept_summary_repair_payload(raw=raw, overflow=overflow)
+
+
+def _accept_summary_batch_payload(
+    *,
+    raw: Any,
+    obligations: tuple[SummaryObligation, ...],
+    prepared: PreparedSessionSummaryJob,
+    batch: SummaryRequestBatch,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    tuple[SummaryObligation, ...],
+    InheritanceAudit,
+    SessionSummaryLLMResult,
+]:
+    accepted = _accept_summary_payload(
+        raw=raw,
+        obligations=obligations,
+        source_turns=_source_turns_for_batch(prepared, batch),
+        source_type=prepared.source_type,
+    )
+    accepted = _with_bounded_summary_obligations(accepted)
+    return (
+        accepted.business_payload,
+        accepted.state,
+        accepted.obligations,
+        accepted.inheritance_audit,
+        accepted.llm_result,
+    )
+
+
+def _previous_overflow_payload(
+    prepared: PreparedSessionSummaryJob,
+) -> _AcceptedSummaryPayload:
+    business_payload = {
+        **prepared.previous_state,
+        "quality": {
+            "score": float(prepared.previous_quality.get("score", 0.0) or 0.0),
+            "issues": list(prepared.previous_quality.get("issues", [])),
+        },
+    }
+    return _AcceptedSummaryPayload(
+        business_payload=business_payload,
+        state=prepared.previous_state,
+        obligations=prepared.previous_obligations,
+        inheritance=(),
+        inheritance_audit=_state_inheritance_audit(
+            prepared.previous_state,
+            prepared.previous_obligations,
+        ),
+        llm_result=SessionSummaryLLMResult(
+            content=business_payload,
+            model="previous_summary",
+            requested_model="previous_summary",
+            request_log_id=None,
+        ),
+        quality_immutable=prepared.previous_quality_present,
     )
 
 
@@ -924,6 +1371,23 @@ def _summarize_prepared_sync(
     final_payload: dict[str, Any] | None = None
     final_result: SessionSummaryLLMResult | None = None
     batch_index = 0
+    repair_attempts = 0
+    pending_repair: tuple[str, _AcceptedSummaryPayload] | None = None
+    if len(obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
+        repair_attempts += 1
+        if renew_lease is not None and not renew_lease():
+            raise ValueError("summary_job_lease_lost")
+        repaired_previous = _call_summary_repair_sync(
+            overflow=_previous_overflow_payload(prepared),
+            summarizer=summarizer,
+            repair_kind="previous_state_obligation_budget",
+        )
+        state = repaired_previous.state
+        obligations = repaired_previous.obligations
+        pending_repair = (
+            "previous_state_obligation_budget",
+            repaired_previous,
+        )
     while remaining:
         batch = _build_next_request_batch(
             state=state,
@@ -935,26 +1399,63 @@ def _summarize_prepared_sync(
             summarizer,
             [dict(message) for message in batch.messages],
         )
-        (
-            final_payload,
-            state,
-            obligations,
-            inheritance_audit,
-            final_result,
-        ) = _accept_summary_batch_payload(
+        source_turns = _source_turns_for_batch(prepared, batch)
+        primary = _accept_summary_payload(
             raw=raw,
             obligations=obligations,
-            prepared=prepared,
-            batch=batch,
+            source_turns=source_turns,
+            source_type=prepared.source_type,
         )
+        batch_repair: tuple[str, _AcceptedSummaryPayload] | None = None
+        if len(primary.obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
+            if repair_attempts >= SESSION_SUMMARY_MAX_REPAIR_ATTEMPTS:
+                raise NonRetryableSessionSummaryError(
+                    "summary_state_obligation_budget_exceeded"
+                )
+            repair_attempts += 1
+            if renew_lease is not None and not renew_lease():
+                raise ValueError("summary_job_lease_lost")
+            repaired = _call_summary_repair_sync(
+                overflow=primary,
+                summarizer=summarizer,
+                repair_kind="state_obligation_budget",
+            )
+            accepted = repaired
+            batch_repair = ("state_obligation_budget", repaired)
+        else:
+            accepted = _with_bounded_summary_obligations(primary)
+
+        final_payload = accepted.business_payload
+        state = accepted.state
+        obligations = accepted.obligations
+        final_result = accepted.llm_result
+        trace_repair = batch_repair or pending_repair
         prepared.batch_traces.append(SummaryBatchTrace(
             batch_index=batch.batch_index,
             fragment_hashes=batch.fragment_hashes,
-            inheritance_audit=inheritance_audit,
-            model=final_result.model,
-            requested_model=final_result.requested_model,
-            request_log_id=final_result.request_log_id,
+            inheritance_audit=primary.inheritance_audit,
+            model=primary.llm_result.model,
+            requested_model=primary.llm_result.requested_model,
+            request_log_id=primary.llm_result.request_log_id,
+            repair_kind=(trace_repair[0] if trace_repair is not None else ""),
+            repair_inheritance_audit=(
+                trace_repair[1].inheritance_audit
+                if trace_repair is not None else None
+            ),
+            repair_model=(
+                trace_repair[1].llm_result.model
+                if trace_repair is not None else ""
+            ),
+            repair_requested_model=(
+                trace_repair[1].llm_result.requested_model
+                if trace_repair is not None else ""
+            ),
+            repair_request_log_id=(
+                trace_repair[1].llm_result.request_log_id
+                if trace_repair is not None else None
+            ),
         ))
+        pending_repair = None
         if renew_lease is not None and not renew_lease():
             raise ValueError("summary_job_lease_lost")
         completed_hashes.extend(batch.fragment_hashes)
@@ -989,6 +1490,27 @@ async def _summarize_prepared_async(
     final_payload: dict[str, Any] | None = None
     final_result: SessionSummaryLLMResult | None = None
     batch_index = 0
+    repair_attempts = 0
+    pending_repair: tuple[str, _AcceptedSummaryPayload] | None = None
+    if len(obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
+        repair_attempts += 1
+        if renew_lease is not None:
+            renewed = renew_lease()
+            if inspect.isawaitable(renewed):
+                renewed = await renewed
+            if not renewed:
+                raise ValueError("summary_job_lease_lost")
+        repaired_previous = await _call_summary_repair_async(
+            overflow=_previous_overflow_payload(prepared),
+            summarizer=summarizer,
+            repair_kind="previous_state_obligation_budget",
+        )
+        state = repaired_previous.state
+        obligations = repaired_previous.obligations
+        pending_repair = (
+            "previous_state_obligation_budget",
+            repaired_previous,
+        )
     while remaining:
         batch = _build_next_request_batch(
             state=state,
@@ -1000,26 +1522,67 @@ async def _summarize_prepared_async(
             summarizer,
             [dict(message) for message in batch.messages],
         )
-        (
-            final_payload,
-            state,
-            obligations,
-            inheritance_audit,
-            final_result,
-        ) = _accept_summary_batch_payload(
+        source_turns = _source_turns_for_batch(prepared, batch)
+        primary = _accept_summary_payload(
             raw=raw,
             obligations=obligations,
-            prepared=prepared,
-            batch=batch,
+            source_turns=source_turns,
+            source_type=prepared.source_type,
         )
+        batch_repair: tuple[str, _AcceptedSummaryPayload] | None = None
+        if len(primary.obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
+            if repair_attempts >= SESSION_SUMMARY_MAX_REPAIR_ATTEMPTS:
+                raise NonRetryableSessionSummaryError(
+                    "summary_state_obligation_budget_exceeded"
+                )
+            repair_attempts += 1
+            if renew_lease is not None:
+                renewed = renew_lease()
+                if inspect.isawaitable(renewed):
+                    renewed = await renewed
+                if not renewed:
+                    raise ValueError("summary_job_lease_lost")
+            repaired = await _call_summary_repair_async(
+                overflow=primary,
+                summarizer=summarizer,
+                repair_kind="state_obligation_budget",
+            )
+            accepted = repaired
+            batch_repair = ("state_obligation_budget", repaired)
+        else:
+            accepted = _with_bounded_summary_obligations(primary)
+
+        final_payload = accepted.business_payload
+        state = accepted.state
+        obligations = accepted.obligations
+        final_result = accepted.llm_result
+        trace_repair = batch_repair or pending_repair
         prepared.batch_traces.append(SummaryBatchTrace(
             batch_index=batch.batch_index,
             fragment_hashes=batch.fragment_hashes,
-            inheritance_audit=inheritance_audit,
-            model=final_result.model,
-            requested_model=final_result.requested_model,
-            request_log_id=final_result.request_log_id,
+            inheritance_audit=primary.inheritance_audit,
+            model=primary.llm_result.model,
+            requested_model=primary.llm_result.requested_model,
+            request_log_id=primary.llm_result.request_log_id,
+            repair_kind=(trace_repair[0] if trace_repair is not None else ""),
+            repair_inheritance_audit=(
+                trace_repair[1].inheritance_audit
+                if trace_repair is not None else None
+            ),
+            repair_model=(
+                trace_repair[1].llm_result.model
+                if trace_repair is not None else ""
+            ),
+            repair_requested_model=(
+                trace_repair[1].llm_result.requested_model
+                if trace_repair is not None else ""
+            ),
+            repair_request_log_id=(
+                trace_repair[1].llm_result.request_log_id
+                if trace_repair is not None else None
+            ),
         ))
+        pending_repair = None
         if renew_lease is not None:
             renewed = renew_lease()
             if inspect.isawaitable(renewed):
@@ -1059,6 +1622,40 @@ def _summary_stable_hash(
             "summary": payload.get("summary") or "",
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+def _inheritance_audit_meta(audit: InheritanceAudit) -> dict[str, Any]:
+    return {
+        "obligation_count": audit.obligation_count,
+        "carried_count": audit.carried_count,
+        "updated_count": audit.updated_count,
+        "resolved_count": audit.resolved_count,
+        "normalized_count": audit.normalized_count,
+        "state_sha256": audit.state_sha256,
+    }
+
+
+def _batch_trace_meta(trace: SummaryBatchTrace) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "batch_index": trace.batch_index,
+        "fragment_hashes": list(trace.fragment_hashes),
+        "model": trace.model,
+        "requested_model": trace.requested_model,
+        "request_log_id": trace.request_log_id,
+        "inheritance": _inheritance_audit_meta(trace.inheritance_audit),
+    }
+    if trace.repair_inheritance_audit is not None:
+        result["repair"] = {
+            "attempt_count": 1,
+            "kind": trace.repair_kind or "state_obligation_budget",
+            "model": trace.repair_model,
+            "requested_model": trace.repair_requested_model,
+            "request_log_id": trace.repair_request_log_id,
+            "inheritance": _inheritance_audit_meta(
+                trace.repair_inheritance_audit
+            ),
+        }
+    return result
 
 
 def save_llm_session_summary(
@@ -1221,36 +1818,7 @@ def save_llm_session_summary(
             "previous_summary_id": int(getattr(previous, "id", 0) or 0),
             "requested_model": requested_model or "unknown",
             "superseded_document_ids": superseded_document_ids,
-            "batch_traces": [
-                {
-                    "batch_index": trace.batch_index,
-                    "fragment_hashes": list(trace.fragment_hashes),
-                    "model": trace.model,
-                    "requested_model": trace.requested_model,
-                    "request_log_id": trace.request_log_id,
-                    "inheritance": {
-                        "obligation_count": (
-                            trace.inheritance_audit.obligation_count
-                        ),
-                        "carried_count": (
-                            trace.inheritance_audit.carried_count
-                        ),
-                        "updated_count": (
-                            trace.inheritance_audit.updated_count
-                        ),
-                        "resolved_count": (
-                            trace.inheritance_audit.resolved_count
-                        ),
-                        "normalized_count": (
-                            trace.inheritance_audit.normalized_count
-                        ),
-                        "state_sha256": (
-                            trace.inheritance_audit.state_sha256
-                        ),
-                    },
-                }
-                for trace in batch_traces
-            ],
+            "batch_traces": [_batch_trace_meta(trace) for trace in batch_traces],
         }, ensure_ascii=False),
         created_at=now,
         updated_at=now,
@@ -1279,6 +1847,9 @@ def _build_prepared_summary_contract(
     dict[str, Any],
     tuple[SummaryObligation, ...],
     tuple[SummaryRequestBatch, ...],
+    bool,
+    dict[str, Any],
+    bool,
 ]:
     """构建首批纯输入合同，并把确定性失败标为不可自动重试。"""
 
@@ -1293,16 +1864,85 @@ def _build_prepared_summary_contract(
             previous,
             max_state_chars=config.SESSION_SUMMARY_LLM_MAX_STATE_CHARS,
         )
-        _validate_previous_obligation_budget(previous_obligations)
-        batch_contracts = build_summary_request_batches(
-            system_prompt=_render_session_summary_prompt("tasks/session_summary_system"),
-            previous_state=previous_state,
-            available_obligations=previous_obligations,
-            fragments=fragments,
-            output_instruction=_render_session_summary_prompt("tasks/session_summary_output"),
-            max_request_chars=config.SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS,
-            safety_chars=config.SESSION_SUMMARY_LLM_REQUEST_SAFETY_CHARS,
+        system_prompt = _render_session_summary_prompt(
+            "tasks/session_summary_system"
         )
+        output_instruction = _render_session_summary_prompt(
+            "tasks/session_summary_output"
+        )
+        try:
+            batch_contracts = build_summary_request_batches(
+                system_prompt=system_prompt,
+                previous_state=previous_state,
+                available_obligations=previous_obligations,
+                fragments=fragments,
+                output_instruction=output_instruction,
+                max_request_chars=config.SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS,
+                safety_chars=config.SESSION_SUMMARY_LLM_REQUEST_SAFETY_CHARS,
+            )
+        except ValueError as exc:
+            # 超限 previous 仍需进入一次局部修复；这里的 batch_contracts
+            # 只用于 coverage 校验，实际请求会在 repair 后重新构建。
+            if (
+                len(previous_obligations) <= SESSION_SUMMARY_MAX_STATE_OBLIGATIONS
+                or str(exc) != "summary_request_budget_exceeded"
+            ):
+                raise
+            batch_contracts = build_summary_request_batches(
+                system_prompt=system_prompt,
+                previous_state=previous_state,
+                available_obligations=(),
+                fragments=fragments,
+                output_instruction=output_instruction,
+                max_request_chars=config.SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS,
+                safety_chars=config.SESSION_SUMMARY_LLM_REQUEST_SAFETY_CHARS,
+            )
+        legacy_summary = False
+        raw_summary = getattr(previous, "summary_json", None) if previous is not None else None
+        if isinstance(raw_summary, str) and raw_summary.strip():
+            try:
+                parsed_summary = json.loads(raw_summary)
+            except (TypeError, json.JSONDecodeError):
+                parsed_summary = None
+            legacy_summary = not (
+                isinstance(parsed_summary, Mapping)
+                and any(
+                    field_name in parsed_summary
+                    for field_name in (
+                        "summary",
+                        "open_threads",
+                        "decisions",
+                        "important_user_requests",
+                        "resolved_items",
+                        "artifacts",
+                        "participants",
+                        "keywords",
+                    )
+                )
+            )
+        previous_quality = (
+            _previous_repair_quality(previous)
+            if len(previous_obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS
+            else {"score": 0.0, "issues": []}
+        )
+        previous_quality_present = False
+        if len(previous_obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
+            raw_quality_summary = (
+                getattr(previous, "summary_json", None)
+                if previous is not None else None
+            )
+            try:
+                parsed_quality_summary = (
+                    json.loads(raw_quality_summary)
+                    if isinstance(raw_quality_summary, str)
+                    else {}
+                )
+            except (TypeError, json.JSONDecodeError):
+                parsed_quality_summary = {}
+            previous_quality_present = (
+                isinstance(parsed_quality_summary, Mapping)
+                and "quality" in parsed_quality_summary
+            )
     except NonRetryableSessionSummaryError:
         raise
     except (TypeError, ValueError) as exc:
@@ -1315,6 +1955,9 @@ def _build_prepared_summary_contract(
         previous_state,
         previous_obligations,
         batch_contracts,
+        legacy_summary,
+        previous_quality,
+        previous_quality_present,
     )
 
 
@@ -1366,6 +2009,9 @@ def prepare_claimed_session_summary_job(
         previous_state,
         previous_obligations,
         batch_contracts,
+        previous_legacy_summary,
+        previous_quality,
+        previous_quality_present,
     ) = _build_prepared_summary_contract(
         previous=previous,
         source_turn_snapshots=source_turn_snapshots,
@@ -1379,6 +2025,9 @@ def prepare_claimed_session_summary_job(
         batch_contracts=batch_contracts,
         previous_state=previous_state,
         previous_obligations=previous_obligations,
+        previous_legacy_summary=previous_legacy_summary,
+        previous_quality=previous_quality,
+        previous_quality_present=previous_quality_present,
         source_type=source_type,
     )
 
@@ -1674,6 +2323,7 @@ def process_claimed_session_summary_job_short_transactions(
             session_factory,
             lease=lease,
             error=safe_error,
+            retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
         return False
 
@@ -1698,6 +2348,7 @@ def process_claimed_session_summary_job_short_transactions(
             session_factory,
             lease=lease,
             error=safe_error,
+            retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
         return False
     finally:
@@ -1749,6 +2400,7 @@ async def process_claimed_session_summary_job_short_transactions_async(
             session_factory,
             lease=lease,
             error=safe_error,
+            retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
         return False
     if preflight_decision == "obsolete":
@@ -1776,6 +2428,7 @@ async def process_claimed_session_summary_job_short_transactions_async(
             session_factory,
             lease=lease,
             error=safe_error,
+            retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
         return False
 
@@ -1800,6 +2453,7 @@ async def process_claimed_session_summary_job_short_transactions_async(
             session_factory,
             lease=lease,
             error=safe_error,
+            retryable=not isinstance(exc, NonRetryableSessionSummaryError),
         )
         return False
     finally:

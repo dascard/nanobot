@@ -102,6 +102,11 @@ class SummaryBatchTrace:
     model: str = "custom_summarizer"
     requested_model: str = "custom_summarizer"
     request_log_id: int | None = None
+    repair_kind: str = ""
+    repair_inheritance_audit: InheritanceAudit | None = None
+    repair_model: str = ""
+    repair_requested_model: str = ""
+    repair_request_log_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

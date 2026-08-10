@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.session_memory import config
 from app.session_memory.jobs import enqueue_session_summary_job
+from app.session_memory.summary_contract import (
+    SESSION_SUMMARY_CONTRACT_VERSION,
+    session_summary_contract_fingerprint,
+)
 from app.session_memory.rolling_summary import (
     SUMMARY_SOURCE_CHAT_LOG,
     get_best_session_summary,
@@ -246,9 +250,19 @@ def _has_failed_same_coverage(
     session_id: str,
     first_source_id: int,
     last_source_id: int,
+    now: datetime | None = None,
 ) -> bool:
-    return (
-        db.query(SessionSummaryJob.id)
+    """判断同覆盖摘要是否仍被失败账本阻断。
+
+    失败不是永久状态：合同或模板指纹变化时允许一次迁移式恢复；同一合同
+    仍遵守冷却和一次自动恢复上限。管理端的显式 ``retry`` 继续直接重置任务。
+    """
+
+    checked_at = to_db_naive(now) or db_now_naive()
+    current_version = SESSION_SUMMARY_CONTRACT_VERSION
+    current_fingerprint = session_summary_contract_fingerprint()
+    failed_rows = (
+        db.query(SessionSummaryJob)
         .filter(
             SessionSummaryJob.session_id == session_id,
             SessionSummaryJob.source_type == SUMMARY_SOURCE_CHAT_LOG,
@@ -256,9 +270,65 @@ def _has_failed_same_coverage(
             SessionSummaryJob.covered_until_source_id == last_source_id,
             SessionSummaryJob.status == "failed",
         )
-        .first()
-        is not None
+        .order_by(SessionSummaryJob.id.desc())
+        .all()
     )
+    if not failed_rows:
+        return False
+
+    # 以最近一次失败为准，避免旧合同失败记录遮蔽当前合同的状态。
+    row = failed_rows[0]
+    try:
+        meta = json.loads(row.meta_json or "{}")
+        if not isinstance(meta, dict):
+            meta = {}
+    except (TypeError, json.JSONDecodeError):
+        meta = {}
+    stored_version = meta.get("summary_contract_version")
+    stored_fingerprint = str(meta.get("summary_prompt_fingerprint") or "").strip()
+    try:
+        recovery_count = max(0, int(meta.get("auto_recovery_count", 0) or 0))
+    except (TypeError, ValueError):
+        recovery_count = 0
+    contract_changed = (
+        stored_version != current_version
+        or stored_fingerprint != current_fingerprint
+    )
+    max_recovery = max(0, int(
+        getattr(config, "GROUP_SUMMARY_AUTO_RECOVERY_MAX", 1)
+    ))
+    if recovery_count >= max_recovery:
+        return True
+
+    failed_at = (
+        getattr(row, "finished_at", None)
+        or getattr(row, "updated_at", None)
+        or getattr(row, "created_at", None)
+    )
+    if not contract_changed:
+        cooldown = max(0, int(getattr(
+            config,
+            "GROUP_SUMMARY_FAILURE_COOLDOWN_SECONDS",
+            config.GROUP_ROLLING_COOLDOWN_SECONDS,
+        )))
+        if failed_at is None or checked_at < failed_at + timedelta(seconds=cooldown):
+            return True
+
+    # 允许本次扫描创建一个新任务，并把迁移/恢复证据写回旧失败行。这样即使
+    # 新任务再次失败，也能由最新行的计数继续受到同一上限保护。
+    meta.update({
+        "summary_contract_version": current_version,
+        "summary_prompt_fingerprint": current_fingerprint,
+        "auto_recovery_count": recovery_count + 1,
+        "auto_recovery_at": checked_at.isoformat(),
+        "auto_recovery_reason": (
+            "summary_contract_changed" if contract_changed else "failure_cooldown_elapsed"
+        ),
+    })
+    row.meta_json = json.dumps(meta, ensure_ascii=False)
+    row.updated_at = checked_at
+    db.flush()
+    return False
 
 
 def _candidate_group_session_ids(

@@ -4,7 +4,7 @@
     "registry": {
       "generation": 1,
       "namespace": "admin_table_view",
-      "sha256": "d14c59ade8189fb54b6a9f438bab31f1369a6d25f56c89a09cb9b556ee3caf6f"
+      "sha256": "a8d68f9c3cc55384cc3996d938ff01fd68ac027aa3df33560b5bd4604fea2010"
     },
     "request_fields": [
       "cursor",
@@ -60,6 +60,8 @@
           "cache_hit",
           "cache_hit_tokens",
           "cache_miss_tokens",
+          "cache_input_tokens",
+          "cache_miss_source",
           "cache_write_tokens",
           "cache_details_json",
           "input_tokens",

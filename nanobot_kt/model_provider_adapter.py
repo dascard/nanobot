@@ -195,6 +195,10 @@ def create_kt_provider(
         )
 
     provider.provider_name = transport.provider_name or transport.provider_id
+    # ToolPlanProviderAdapter 只对明确声明为 OpenAI Chat Completions 的
+    # Provider 注入 tool_choice=required；Anthropic/Codex 的工具合同不同，
+    # 不能通过同一个字段强行覆盖。
+    provider.nanobot_driver_type = driver_type
     provider.provider_native_tools = frozenset(transport.provider_native_tools or ())
     provider.nanobot_profile_id = transport.profile_id
     provider.nanobot_provider_id = transport.provider_id

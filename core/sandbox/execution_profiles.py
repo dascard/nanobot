@@ -22,6 +22,59 @@ from core.sandbox.profile_catalog import (
 )
 
 
+_READINESS_ERROR_CODES = frozenset({
+    SandboxErrorCode.PROJECT_QUOTA_UNAVAILABLE.value,
+    SandboxErrorCode.RUNTIME_UNAVAILABLE.value,
+    SandboxErrorCode.DISK_PRESSURE.value,
+})
+
+
+def _readiness_error(raw_state: Mapping[str, Any]) -> SandboxServiceError:
+    """把 sandboxd readiness 的受限错误语义映射为服务端合同。"""
+
+    raw_code = str(raw_state.get("error_code") or "").strip()
+    code = (
+        SandboxErrorCode(raw_code)
+        if raw_code in _READINESS_ERROR_CODES
+        else SandboxErrorCode.RUNTIME_UNAVAILABLE
+    )
+    if code is SandboxErrorCode.PROJECT_QUOTA_UNAVAILABLE:
+        summary = "Sandbox 项目配额控制面尚未就绪"
+        default_hint = "项目配额恢复后重试"
+        default_retryable = True
+        default_stop = False
+    elif code is SandboxErrorCode.DISK_PRESSURE:
+        summary = "Sandbox 宿主磁盘压力过高"
+        default_hint = "释放磁盘空间后重试"
+        default_retryable = True
+        default_stop = False
+    else:
+        summary = "目标 Sandbox Profile 尚未就绪"
+        default_hint = "稍后重试；持续失败时联系运维检查 sandboxd"
+        default_retryable = True
+        default_stop = False
+
+    retryable = raw_state.get("retryable")
+    retryable = (
+        retryable if isinstance(retryable, bool) else default_retryable
+    )
+    stop = raw_state.get("stop")
+    stop = stop if isinstance(stop, bool) else default_stop
+    hint = raw_state.get("hint")
+    hint = (
+        str(hint)[:256]
+        if isinstance(hint, str) and hint.strip()
+        else default_hint
+    )
+    return SandboxServiceError(
+        code,
+        summary,
+        retryable=retryable,
+        hint=hint,
+        stop=stop,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionProfileDescriptor:
     profile_id: str
@@ -157,10 +210,7 @@ class ExecutionProfileRegistry:
                 "sandboxd 未返回目标 Profile readiness",
             )
         if raw_state.get("ready") is not True:
-            raise SandboxServiceError(
-                SandboxErrorCode.RUNTIME_UNAVAILABLE,
-                "目标 Sandbox Profile 尚未就绪",
-            )
+            raise _readiness_error(raw_state)
         execution_mode = str(raw_state.get("execution_mode") or "")
         image_id = str(raw_state.get("image_id") or "").lower()
         apparmor_profile = str(raw_state.get("apparmor_profile") or "")

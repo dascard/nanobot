@@ -245,6 +245,8 @@ export function LLMApiLogViewer({ log }) {
             { label: '缓存命中 tokens', value: log.cache_hit_tokens ?? 0 },
             { label: '缓存未命中 tokens', value: log.cache_miss_tokens ?? 0 },
             { label: '缓存写入 tokens', value: log.cache_write_tokens ?? 0 },
+            { label: '缓存输入分母', value: log.cache_input_tokens == null ? '未知/未上报' : log.cache_input_tokens, className: log.cache_input_tokens == null ? 'text-amber-300' : 'text-slate-300' },
+            { label: 'miss 来源', value: log.cache_miss_source || 'unknown' },
             { label: 'response_status', value: log.response_status || 0 },
             { label: 'latency', value: log.latency_ms ? `${log.latency_ms}ms` : '-' },
             { label: 'run_id', value: log.run_id ? log.run_id.slice(0, 16) : '未绑定 run', className: log.run_id ? 'text-slate-300' : 'text-amber-300' },

@@ -1,6 +1,6 @@
 # Nanobot Server — TODO 完成清单
 
-> 最近更新：2026-06-18
+> 最近更新：2026-08-10
 > 依据：`docs/todo.md` 全部条目 + 逐项代码核验（`git show` diff / grep / 语法检查 / 本次全项目审查）。
 > 标记说明：
 > - ✅ 已完成且经代码核验落地
@@ -124,9 +124,9 @@
 | 状态 | 严重度 | 条目 | 说明 |
 |---|---|---|---|
 | ✅ 已修 | CRITICAL | `core/group_runtime/runtime.py` IndentationError | 2026-06-18 核验：`ast.parse` 通过（SYNTAX_OK），`if action=="continue": response.update(payload)` 缩进已恢复，`_cooldown_scoring_shortcut` 已正确接入。文件从 1143→1286 行 |
-| 🐛 待修 | HIGH | `api/admin_routes.py:2432` `CLASSIFIER_API_URL` 未 import | `models_status`（现 2415 行）函数内局部 import（2417-2419）只有 `NEW_API_BASE_URL/NEW_API_KEY`，缺 `CLASSIFIER_API_URL`，但 2432-2433 用了它。DB 无 local_llama provider 时 NameError 500。ruff F821 仍检出，**未修** |
-| 🐛 待修 | MEDIUM | `core/evolution.py:104` `_run_async` 未定义 | `a79e7b8` 收敛时漏改，`model_scout_task` 仍用已删除的 `_run_async`（75 行已改 `run_awaitable_sync`，104 行未改）。仅 `__main__` 触发，生产未调度，死路径 NameError。**未修** |
-| 🐛 待修 | MEDIUM | 私聊 `timing_scoring` 决策已接入但未持久化 | 路线项10 私聊 `PrivateDecision.timing_scoring` 已算出（决策已接入 shared scoring），但 `api/routes.py` 私聊三个持久化点（2197/2203/2207）调 `_persist_chat_turn` 时**未传 timing**，`_persist_chat_turn` 签名也不接收 timing。todo 路线项10 称"timing_scoring 已写入 ChatLog meta"对**群聊成立**（`_annotate_group_timing_event` 1442）、**对私聊不成立**。前端 `/timing-gate/events` 仍看不到私聊 scoring |
+| ✅ 已修 | HIGH | `api/admin_routes.py` `CLASSIFIER_API_URL` 未 import | `models_status` 已通过 `api.admin.model_routes` 统一导入并覆盖无 `local_llama` provider 的分支；历史 NameError 回归测试已纳入定向验证 |
+| ✅ 已修 | MEDIUM | `core/evolution.py` `_run_async` 未定义 | `model_scout_task` 已统一调用 `run_awaitable_sync`；模块入口和异步桥接定向测试通过 |
+| ✅ 已修 | MEDIUM | 私聊 `timing_scoring` 决策已接入但未持久化 | `_persist_chat_turn` 已接收并写入 `timing_gate` 元数据，user/assistant ChatLog 与 ConversationTurn 均保留 scoring；私聊持久化回归测试通过 |
 
 ---
 
@@ -141,6 +141,6 @@
 | 路线项 1-10 | 10 | 10 | 0 | 0 | 0 |
 | **新发现 bug** | 4 | 4(全修) | 0 | 0 | 0 |
 
-**总体（2026-06-18 最新）**：todo 原始 38 条目（缺陷 28 + 路线项 10）**全部 ✅ 完成**；4 个审查新发现 bug 全部修复。缺陷清单 P0-P3 清零（E2 stop 超时、H7 push session 复用本轮补齐）；架构路线 1-10 全完成（只剩运营项）；新发现 bug 4/4 全修（runtime 语法、admin NameError、evolution 漏改、私聊 timing 持久化）。全量测试 `1809 passed, 6 skipped`。
+**总体（2026-08-10 最新）**：todo 原始 38 条目（缺陷 28 + 路线项 10）**全部 ✅ 完成**；4 个审查新发现 bug 全部修复。缺陷清单 P0-P3 清零（E2 stop 超时、H7 push session 复用本轮补齐）；架构路线 1-10 全完成（只剩运营项）；新发现 bug 4/4 全修（runtime 语法、admin NameError、evolution 漏改、私聊 timing 持久化）。全量测试 `6987 passed, 12 skipped`。
 
 **残余（非 todo 范围）**：全仓仍有 9 个 >800 行历史大文件（bridge 2409、classifier 1298、eval_sampling/store 1237、admin/model_routes 1175、new_api 1057、legacy 1040、database 1036、rag_benchmark_routes 908、daily_digest 847）未纳入 todo P3 拆分队列；todo P3「超大文件」按其定义范围（原列 5 个优先文件）已 ✅，全仓治理另立计划。

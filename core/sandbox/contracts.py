@@ -19,6 +19,7 @@ class SandboxErrorCode(str, Enum):
     DISK_PRESSURE = "disk_pressure"
     SANDBOX_BUSY = "sandbox_busy"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"
+    PROJECT_QUOTA_UNAVAILABLE = "project_quota_unavailable"
     EXECUTION_TIMEOUT = "execution_timeout"
     OUTPUT_LIMIT_EXCEEDED = "output_limit_exceeded"
     PROCESS_OOM_KILLED = "process_oom_killed"

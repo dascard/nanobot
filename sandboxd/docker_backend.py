@@ -371,6 +371,9 @@ class LocalDockerBackend:
                 "network_policy_id": profile.network_policy_id,
                 "network_proxy_image_id": "",
                 "error_code": "",
+                "retryable": False,
+                "stop": True,
+                "hint": "",
             }
             if not profile.grantable:
                 state["error_code"] = "profile_disabled"
@@ -387,7 +390,12 @@ class LocalDockerBackend:
                 state["error_code"] = exc.code.value
             else:
                 if profile.execution_mode == "lease" and not project_quota_ready:
-                    state["error_code"] = "project_quota_unavailable"
+                    state.update({
+                        "error_code": "project_quota_unavailable",
+                        "retryable": True,
+                        "stop": False,
+                        "hint": "项目配额控制面恢复后重试",
+                    })
                 else:
                     try:
                         network_state = (
