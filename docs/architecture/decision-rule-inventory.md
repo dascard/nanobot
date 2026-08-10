@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`57f62781d671df0aaefc7feb145d747a8c351843`
-- 规则总数：8891
+- 源提交：`f19de92d98d019a084cf7b011a4604c3dde82108`
+- 规则总数：8950
 - 扫描错误：0
 - 人工复核队列：723
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,18 +12,18 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1736 |
-| `data_consistency` | 521 |
+| `configurable_policy` | 1749 |
+| `data_consistency` | 522 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4716 |
-| `security_invariant` | 1745 |
+| `protocol_syntax` | 4757 |
+| `security_invariant` | 1749 |
 
 ## 文件汇总
 
 | 文件 | 命中数 |
 |---|---:|
-| `core/schema_migrations.py` | 253 |
+| `core/schema_migrations.py` | 257 |
 | `scripts/manage-sandbox-production.sh` | 179 |
 | `core/scheduled_workflow.py` | 143 |
 | `webui/src/App.jsx` | 128 |
@@ -39,9 +39,10 @@
 | `core/semantic/backfill.py` | 68 |
 | `core/outbound/delivery_claims.py` | 65 |
 | `core/prompt_v2/audit.py` | 65 |
+| `core/sandbox/lease_reconciler.py` | 65 |
 | `core/outbound_delivery_schema.py` | 64 |
 | `core/llm_request_linter.py` | 63 |
-| `core/sandbox/lease_reconciler.py` | 63 |
+| `core/prompt_v2/flow_migrations.py` | 63 |
 | `core/outbound/settlement.py` | 59 |
 | `core/tracing.py` | 57 |
 | `core/prompt_v2/template_migration.py` | 55 |
@@ -52,6 +53,7 @@
 | `clients/model_registry.py` | 50 |
 | `core/run_recovery/service.py` | 50 |
 | `api/admin/model_preset_routes.py` | 49 |
+| `app/session_memory/llm_summarizer.py` | 49 |
 | `core/skill_candidates/extraction.py` | 49 |
 | `api/admin/reply_routes.py` | 48 |
 | `core/daily_digest.py` | 47 |
@@ -60,21 +62,19 @@
 | `clients/classifier_client.py` | 46 |
 | `scripts/sandbox-coordinated-backup.sh` | 46 |
 | `api/admin/sticker_routes.py` | 45 |
-| `core/prompt_v2/flow_migrations.py` | 45 |
 | `api/admin/tool_routes.py` | 44 |
 | `core/observability/run_view.py` | 43 |
 | `app/memory_digest/builder.py` | 42 |
+| `app/session_memory/admin_browser.py` | 42 |
 | `core/persona_preprocess.py` | 41 |
 | `sandboxd/network_policy.py` | 41 |
 | `core/agent_orchestration/contracts.py` | 40 |
 | `core/context_engine.py` | 40 |
 | `api/admin/chat_config_routes.py` | 39 |
-| `app/session_memory/llm_summarizer.py` | 39 |
 | `core/memory_cleanup.py` | 39 |
 | `nanobot_kt/bridge.py` | 39 |
 | `creatures/nanobot/prompts/skills/news_search/evidence.py` | 38 |
 | `scripts/assign-sandbox-project-quota.sh` | 38 |
-| `app/session_memory/admin_browser.py` | 37 |
 | `app/group_analysis/preprocess.py` | 36 |
 | `core/release/deployment.py` | 36 |
 | `core/run_ledger/contracts.py` | 36 |
@@ -103,7 +103,9 @@
 | `core/mcp/contracts.py` | 29 |
 | `core/skill_candidates/contracts.py` | 29 |
 | `api/admin/rag_benchmark_routes.py` | 28 |
+| `app/group_ingress/helpers.py` | 28 |
 | `app/memory_digest/jobs.py` | 28 |
+| `app/session_memory/jobs.py` | 28 |
 | `core/group_memory.py` | 28 |
 | `core/runtime_tool_service.py` | 28 |
 | `core/sandbox/profile_catalog.py` | 28 |
@@ -111,8 +113,6 @@
 | `core/sandbox/admin_service.py` | 27 |
 | `nanobot_kt/image_pipeline.py` | 27 |
 | `api/admin/rag_routes.py` | 26 |
-| `app/group_ingress/helpers.py` | 26 |
-| `app/session_memory/jobs.py` | 26 |
 | `core/evolution_control/contracts.py` | 26 |
 | `core/prompt_v2/template_registry.py` | 26 |
 | `sandboxd/environment_manager.py` | 26 |
@@ -137,6 +137,7 @@
 | `core/sandbox/access_policy.py` | 22 |
 | `core/sandbox/tool_service.py` | 22 |
 | `app/persona/retrieval_service.py` | 21 |
+| `app/session_memory/windowing.py` | 21 |
 | `core/db/group_learning_command_adapter.py` | 21 |
 | `core/prompt_v2/task_contracts.py` | 21 |
 | `core/semantic/indexer.py` | 21 |
@@ -153,7 +154,7 @@
 | `nanobot_kt/tools/sandbox.py` | 20 |
 | `scripts/build_context_manifest.py` | 20 |
 | `webui/src/features/evals/EvalsPage.jsx` | 20 |
-| `app/session_memory/windowing.py` | 19 |
+| `api/admin/trace_routes.py` | 19 |
 | `app/tool_services/schedule_task.py` | 19 |
 | `core/inbound_idempotency.py` | 19 |
 | `core/memory_governance.py` | 19 |
@@ -172,7 +173,6 @@
 | `core/trigger_runtime.py` | 18 |
 | `core/web_search/url_policy.py` | 18 |
 | `creatures/nanobot/prompts/skills/news_search/legacy_report.py` | 18 |
-| `api/admin/trace_routes.py` | 17 |
 | `api/admin_routes.py` | 17 |
 | `api/history_log_routes.py` | 17 |
 | `app/group_analysis/analyzer.py` | 17 |
@@ -184,6 +184,7 @@
 | `core/skills/service.py` | 17 |
 | `scripts/migrate-sandbox-project-map.py` | 17 |
 | `workers/semantic_index_worker.py` | 17 |
+| `api/admin/session_memory_routes.py` | 16 |
 | `api/chat_recovery.py` | 16 |
 | `app/group_learning/pipeline_service.py` | 16 |
 | `core/proactive/model_policy.py` | 16 |
@@ -197,7 +198,6 @@
 | `scripts/generate_openapi_client.py` | 16 |
 | `webui/src/features/sandbox/SandboxPage.jsx` | 16 |
 | `api/admin/outbound_delivery_routes.py` | 15 |
-| `api/admin/session_memory_routes.py` | 15 |
 | `app/group_ingress/recovery.py` | 15 |
 | `core/config_registry.py` | 15 |
 | `core/db/group_learning_legacy_adapter.py` | 15 |
@@ -207,6 +207,7 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/tool.py` | 15 |
 | `foundation/llm/request_sanitizer.py` | 15 |
 | `foundation/llm/safe_diagnostics.py` | 15 |
+| `nanobot_kt/tool_runtime.py` | 15 |
 | `scripts/benchmark_classifier.py` | 15 |
 | `scripts/cleanup-sandbox-runtime.sh` | 15 |
 | `webui/src/features/sandbox/SandboxFilesPage.test.jsx` | 15 |
@@ -243,6 +244,7 @@
 | `app/group_analysis/repository.py` | 12 |
 | `app/group_memory/retrieval_service.py` | 12 |
 | `app/memory_digest/retrieval_service.py` | 12 |
+| `clients/provider_runtime_evidence.py` | 12 |
 | `core/agent_runtime/service_ports.py` | 12 |
 | `core/db/group_learning_adapter.py` | 12 |
 | `core/group_learning/prompt_injection.py` | 12 |
@@ -350,7 +352,6 @@
 | `scripts/render-sandbox-profile-manifest.py` | 8 |
 | `api/admin/web_search_routes.py` | 7 |
 | `api/memory_routes.py` | 7 |
-| `clients/provider_runtime_evidence.py` | 7 |
 | `core/agent_link/protocol.py` | 7 |
 | `core/artifact_port.py` | 7 |
 | `core/client_meta.py` | 7 |
@@ -378,7 +379,6 @@
 | `creatures/nanobot/prompts/skills/news_search/runtime_cache.py` | 7 |
 | `creatures/nanobot/prompts/skills/news_search/search_backend.py` | 7 |
 | `foundation/message_contract/contracts.py` | 7 |
-| `nanobot_kt/tool_runtime.py` | 7 |
 | `nanobot_kt/tools/image_summary.py` | 7 |
 | `sandboxd/process_output.py` | 7 |
 | `scripts/manage_prompt_templates.py` | 7 |
@@ -391,7 +391,6 @@
 | `api/telemetry_middleware.py` | 6 |
 | `app/group_analysis/local_rag.py` | 6 |
 | `app/session_memory/blocks.py` | 6 |
-| `app/session_memory/group_rollup.py` | 6 |
 | `app/tool_services/skill.py` | 6 |
 | `core/admin/idempotency.py` | 6 |
 | `core/agent_orchestration/persistence.py` | 6 |
@@ -420,6 +419,7 @@
 | `app/group_ingress/message_adapter.py` | 5 |
 | `app/group_memory/injection_service.py` | 5 |
 | `app/session_memory/block_episodes.py` | 5 |
+| `app/session_memory/group_rollup.py` | 5 |
 | `app/tool_services/image_summary.py` | 5 |
 | `clients/provider_adapter.py` | 5 |
 | `clients/task_runtime_adapter.py` | 5 |
@@ -482,7 +482,6 @@
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/normalize.py` | 4 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/rank.py` | 4 |
 | `foundation/identity/contracts.py` | 4 |
-| `foundation/llm/cache_usage.py` | 4 |
 | `nanobot_kt/message_adapter.py` | 4 |
 | `nanobot_kt/model_provider_adapter.py` | 4 |
 | `nanobot_kt/runtime_context_adapter.py` | 4 |
@@ -531,6 +530,7 @@
 | `core/telemetry/runtime.py` | 3 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/pipeline/dedup.py` | 3 |
 | `creatures/nanobot/prompts/skills/news_search/news_daily/sources/rss.py` | 3 |
+| `foundation/llm/cache_usage.py` | 3 |
 | `foundation/llm/model_options.py` | 3 |
 | `nanobot_kt/bridge_runtime_support.py` | 3 |
 | `nanobot_kt/direct_tool_execution.py` | 3 |
@@ -1115,55 +1115,55 @@
 | `decision.2650cad6573be55a3a47` | `app/persona/retrieval_service.py:210` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：relevance <= 0 |  |  |  |  |  |
 |  | 原因：人工复核：非正相关度是检索结果有效性边界 |  |  |  |  |  |
-| `decision.af88d31aed6bfa0ced76` | `app/session_memory/jobs.py:46` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.af88d31aed6bfa0ced76` | `app/session_memory/jobs.py:50` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：self.job_id <= 0 |  |  |  |  |  |
 |  | 原因：人工复核：Session Summary 租约必须引用正整数 Job ID |  |  |  |  |  |
-| `decision.1a75897e116913a36720` | `app/session_memory/jobs.py:48` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+| `decision.1a75897e116913a36720` | `app/session_memory/jobs.py:52` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
 |  | 摘要：len(worker_id) > 128 |  |  |  |  |  |
 |  | 原因：人工复核：Session Summary worker 标识长度是租约身份边界 |  |  |  |  |  |
-| `decision.522439ed9bcfaa72612a` | `app/session_memory/jobs.py:50` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.522439ed9bcfaa72612a` | `app/session_memory/jobs.py:54` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：len(owner_token) > 128 |  |  |  |  |  |
 |  | 原因：人工复核：Session Summary owner token 长度是租约身份边界 |  |  |  |  |  |
-| `decision.098b9f4a28efbe32ae1e` | `app/session_memory/jobs.py:52` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.098b9f4a28efbe32ae1e` | `app/session_memory/jobs.py:56` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：self.generation <= 0 |  |  |  |  |  |
 |  | 原因：人工复核：Session Summary 租约 generation 必须为正整数 |  |  |  |  |  |
-| `decision.f968a3ff01c2d16f5998` | `app/session_memory/jobs.py:54` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.f968a3ff01c2d16f5998` | `app/session_memory/jobs.py:58` | `python.numeric_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：self.attempt_no <= 0 |  |  |  |  |  |
 |  | 原因：人工复核：Session Summary 租约 attempt 必须为正整数 |  |  |  |  |  |
-| `decision.406932fd9dc169cdc889` | `app/session_memory/jobs.py:101` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+| `decision.406932fd9dc169cdc889` | `app/session_memory/jobs.py:105` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
 |  | 摘要：len(normalized) > 128 |  |  |  |  |  |
 |  | 原因：人工复核：Session Summary owner 标识长度是租约身份边界 |  |  |  |  |  |
-| `decision.317d03057a1893b1e705` | `app/session_memory/jobs.py:103` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
+| `decision.317d03057a1893b1e705` | `app/session_memory/jobs.py:107` | `python.numeric_control_flow` | `security_invariant` | `preserve` | 阶段 3／4 | `reviewed` |
 |  | 摘要：ord(character) < 32 |  |  |  |  |  |
 |  | 原因：人工复核：Session Summary owner 标识拒绝控制字符以保护日志和租约字段 |  |  |  |  |  |
-| `decision.791e19451dfebfc53171` | `app/session_memory/jobs.py:396` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.791e19451dfebfc53171` | `app/session_memory/jobs.py:434` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：SessionSummaryJob.status == "running" |  |  |  |  |  |
 |  | 原因：人工复核：只有 running Session Summary 才能被活动租约结算 |  |  |  |  |  |
-| `decision.3992c0a53f0ba068fb65` | `app/session_memory/jobs.py:398` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.3992c0a53f0ba068fb65` | `app/session_memory/jobs.py:436` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：SessionSummaryJob.lease_token == "" |  |  |  |  |  |
 |  | 原因：人工复核：历史 running 记录不得伪造空 lease token 为活动租约 |  |  |  |  |  |
-| `decision.8a32ab1d64e852342f00` | `app/session_memory/jobs.py:615` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
+| `decision.8a32ab1d64e852342f00` | `app/session_memory/jobs.py:653` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
 |  | 摘要：SessionSummaryJob.status == "running" |  |  |  |  |  |
 |  | 原因：人工复核：Session Summary 迁移只重排历史 running 状态 |  |  |  |  |  |
-| `decision.874839ca1aeebc331744` | `app/session_memory/jobs.py:618` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.874839ca1aeebc331744` | `app/session_memory/jobs.py:656` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：SessionSummaryJob.lease_token != "" |  |  |  |  |  |
 |  | 原因：人工复核：只有携带 lease token 的历史 running 记录才可能表示活动租约 |  |  |  |  |  |
-| `decision.639f0598afb68d1fe512` | `app/session_memory/jobs.py:624` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
+| `decision.639f0598afb68d1fe512` | `app/session_memory/jobs.py:662` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
 |  | 摘要：SessionSummaryJob.lease_token == "" |  |  |  |  |  |
 |  | 原因：人工复核：迁移后历史 running 记录不得保留空 token 的伪租约 |  |  |  |  |  |
-| `decision.217155e7170bb1d1bcc8` | `app/session_memory/llm_contract.py:397` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.217155e7170bb1d1bcc8` | `app/session_memory/llm_contract.py:402` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：obligation.field == "legacy_summary" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.329904dc288d8670c4ba` | `app/session_memory/llm_contract.py:444` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.329904dc288d8670c4ba` | `app/session_memory/llm_contract.py:449` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：obligation.field == "legacy_summary" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.47de2bab1b938e209292` | `app/session_memory/llm_contract.py:534` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.47de2bab1b938e209292` | `app/session_memory/llm_contract.py:539` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：obligation.field == "legacy_summary" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.cb3c1381ce97c1b7f6ee` | `app/session_memory/llm_contract.py:536` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.cb3c1381ce97c1b7f6ee` | `app/session_memory/llm_contract.py:541` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：obligation.field == "legacy_summary" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.32d9b0f806a347d6cf94` | `app/session_memory/llm_summarizer.py:638` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.32d9b0f806a347d6cf94` | `app/session_memory/llm_summarizer.py:661` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：str(item).lower().startswith(("warning", "warn:", "警告")) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.3b51f163bd542c06679e` | `app/session_memory/rolling_summary.py:332` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
@@ -1184,7 +1184,7 @@
 | `decision.ecb02dfba6b3deafcf16` | `app/session_memory/summarizer.py:83` | `python.regex_call` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：re.sub( r"(?m)^\s*本轮新增\s+\d+\s+条消息" r"（用户\s+\d+\s+条、助手\s+\d+\s+条）。\s*$", "", value, ) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.a5a23ccaf8fafa403eff` | `app/session_memory/windowing.py:31` | `python.regex_call` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.a5a23ccaf8fafa403eff` | `app/session_memory/windowing.py:46` | `python.regex_call` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：re.compile(r"\[用户名\]\s*([^\r\n\[]+)") |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
 | `decision.f1e1ec136afe7c4efb48` | `bootstrap/job_adapters.py:119` | `python.string_control_flow` | `data_consistency` | `policy` | 阶段 3／4 | `reviewed` |
@@ -2027,13 +2027,13 @@
 | `decision.43a59c138f4a6b7ee85f` | `core/scheduled_task_outbound.py:924` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：OutboundRun.delivery_mode == "legacy_direct" |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
-| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:741` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.0830480d746a45b603ce` | `core/schema_migrations.py:742` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "可能" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:741` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
+| `decision.53e276e59b27b959f6e3` | `core/schema_migrations.py:742` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：confidence == "确认" |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
-| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2554` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+| `decision.277a1cc40c89500a8a8b` | `core/schema_migrations.py:2606` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
 |  | 摘要：str(row[0] or "").strip() not in legacy_values |  |  |  |  |  |
 |  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.87908051fec41570f536` | `core/semantic/jobs.py:362` | `python.string_control_flow` | `security_invariant` | `preserve` | 阶段 4 | `reviewed` |
