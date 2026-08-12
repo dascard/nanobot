@@ -9,7 +9,7 @@ from functools import lru_cache
 
 # 该版本同时覆盖解析器字段集合、继承审计语义和摘要任务模板。合同发生
 # 不兼容变化时必须递增，旧失败任务才可以走一次迁移式自动恢复。
-SESSION_SUMMARY_CONTRACT_VERSION = 3
+SESSION_SUMMARY_CONTRACT_VERSION = 4
 
 
 @lru_cache(maxsize=1)

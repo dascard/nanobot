@@ -751,7 +751,10 @@ _MEMORY_DIGEST_OUTPUT_SCHEMA = {
 
 
 _SESSION_SUMMARY_STRING_LIST = _string_array_schema(
-    max_items=16,
+    # 这里只是 Task Runtime 的传输层护栏。真正的摘要规模、继承义务与局部
+    # 修复由 app.session_memory.llm_summarizer 统一收口；群聊参与者超过 16 人
+    # 时不能在到达业务修复层之前丢弃整次模型响应。
+    max_items=128,
     max_length=400,
 )
 _SESSION_SUMMARY_OUTPUT_SCHEMA = {

@@ -3384,6 +3384,157 @@ async def test_async_summary_output_budget_overflow_uses_local_repair(
     assert prepared.batch_traces[0].repair_kind == "state_output_budget"
 
 
+def test_summary_output_budget_repair_tolerates_bounded_model_deviation(
+    db_session,
+):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_contract import build_summary_obligations
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    turn = _turn(db_session, content="线上模型局部压缩偏差")
+    fallback = RollingSessionSummary(
+        session_id="summary-output-budget-tolerance",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="summary-output-budget-tolerance",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    oversized_state = {
+        "summary": "摘" * 521,
+        "open_threads": [],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": ["用户"],
+        "keywords": ["摘要"],
+    }
+    summary_obligation = build_summary_obligations(
+        oversized_state,
+        legacy_summary=True,
+    )[0]
+
+    def summarizer(messages):
+        inheritance = []
+        if "<summary_repair>" in messages[-1]["content"]:
+            inheritance = [{
+                "source_id": summary_obligation.source_id,
+                "disposition": "carried",
+                "target_field": "summary",
+                "target_index": 0,
+            }]
+        return {
+            **oversized_state,
+            "inheritance": inheritance,
+            "quality": {"score": 0.9, "issues": []},
+        }
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=summarizer,
+        owner="output-budget-tolerance-worker",
+    )
+
+    db_session.refresh(job)
+    assert result["done"] == 1
+    assert job.status == "done"
+    saved = db_session.get(RollingSessionSummary, job.result_summary_id)
+    trace = json.loads(saved.meta_json)["batch_traces"][0]["repair"]
+    assert trace["kind"] == "state_output_budget"
+    assert trace["output_budget_tolerance"] == {
+        "applied": True,
+        "summary_chars": 521,
+        "target_chars": 400,
+        "hard_limit_chars": 800,
+    }
+
+
+def test_summary_output_budget_repair_rejects_hard_limit_overflow(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_contract import build_summary_obligations
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    turn = _turn(db_session, content="线上模型拒绝压缩")
+    fallback = RollingSessionSummary(
+        session_id="summary-output-budget-hard-limit",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="summary-output-budget-hard-limit",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    oversized_state = {
+        "summary": "摘" * 801,
+        "open_threads": [],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": ["用户"],
+        "keywords": ["摘要"],
+    }
+    summary_obligation = build_summary_obligations(
+        oversized_state,
+        legacy_summary=True,
+    )[0]
+
+    def summarizer(messages):
+        inheritance = []
+        if "<summary_repair>" in messages[-1]["content"]:
+            inheritance = [{
+                "source_id": summary_obligation.source_id,
+                "disposition": "carried",
+                "target_field": "summary",
+                "target_index": 0,
+            }]
+        return {
+            **oversized_state,
+            "inheritance": inheritance,
+            "quality": {"score": 0.9, "issues": []},
+        }
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=summarizer,
+        owner="output-budget-hard-limit-worker",
+    )
+
+    db_session.refresh(job)
+    assert result["failed"] == 1
+    assert job.status == "failed"
+    assert job.error == "summary_state_output_budget_exceeded"
+    assert job.result_summary_id is None
+
+
 def test_summary_previous_state_over_budget_is_non_retryable_prepare_error(db_session):
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (

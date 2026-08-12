@@ -79,6 +79,9 @@ SESSION_SUMMARY_MAX_STATE_OBLIGATIONS = 8
 SESSION_SUMMARY_REPAIR_TARGET_OBLIGATIONS = 7
 SESSION_SUMMARY_MAX_REPAIR_ATTEMPTS = 1
 SESSION_SUMMARY_MAX_SUMMARY_CHARS = 400
+# 模型已经完成一次受审计局部修复后，允许有限偏离 400 字目标。超过该硬上限
+# 仍拒绝保存，避免把不受控输出带入下一轮 Prompt Cache 前缀。
+SESSION_SUMMARY_REPAIR_MAX_SUMMARY_CHARS = 800
 # Prompt 目标仍为 60 字；硬门禁保留 4 字格式容差，避免轻微越界导致整单重试。
 SESSION_SUMMARY_MAX_OBLIGATION_CHARS = 64
 SESSION_SUMMARY_MAX_ESTIMATED_OUTPUT_TOKENS = 3000
@@ -275,6 +278,7 @@ class _AcceptedSummaryPayload:
     inheritance_audit: InheritanceAudit
     llm_result: SessionSummaryLLMResult
     quality_immutable: bool = True
+    output_budget_tolerated: bool = False
 
 
 def _reject_json_constant(value: str) -> None:
@@ -761,6 +765,8 @@ def _source_turns_for_batch(
 
 def _build_bounded_summary_obligations(
     state: dict[str, Any],
+    *,
+    summary_max_chars: int = SESSION_SUMMARY_MAX_SUMMARY_CHARS,
 ) -> tuple[SummaryObligation, ...]:
     """限制下一批 inheritance 合同规模，避免 1200 tokens 被审计结构耗尽。"""
 
@@ -769,7 +775,7 @@ def _build_bounded_summary_obligations(
     if len(obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
         raise ValueError("summary_state_obligation_budget_exceeded")
     if (
-        len(summary) > SESSION_SUMMARY_MAX_SUMMARY_CHARS
+        len(summary) > int(summary_max_chars)
         or any(
             len(obligation.normalized_text) > SESSION_SUMMARY_MAX_OBLIGATION_CHARS
             for obligation in obligations
@@ -886,9 +892,21 @@ def _with_bounded_summary_obligations(
     accepted: _AcceptedSummaryPayload,
     *,
     repair_response: bool = False,
+    allow_summary_tolerance: bool = False,
 ) -> _AcceptedSummaryPayload:
+    summary_chars = len(str(accepted.state.get("summary") or ""))
+    summary_target_exceeded = (
+        summary_chars > SESSION_SUMMARY_MAX_SUMMARY_CHARS
+    )
     try:
-        obligations = _build_bounded_summary_obligations(accepted.state)
+        obligations = _build_bounded_summary_obligations(
+            accepted.state,
+            summary_max_chars=(
+                SESSION_SUMMARY_REPAIR_MAX_SUMMARY_CHARS
+                if repair_response and allow_summary_tolerance
+                else SESSION_SUMMARY_MAX_SUMMARY_CHARS
+            ),
+        )
     except ValueError as exc:
         if (
             repair_response
@@ -906,6 +924,14 @@ def _with_bounded_summary_obligations(
         inheritance_audit=accepted.inheritance_audit,
         llm_result=accepted.llm_result,
         quality_immutable=accepted.quality_immutable,
+        output_budget_tolerated=(
+            accepted.output_budget_tolerated
+            or (
+                repair_response
+                and allow_summary_tolerance
+                and summary_target_exceeded
+            )
+        ),
     )
 
 
@@ -929,6 +955,7 @@ def _output_budget_repair_overflow(
         inheritance_audit=accepted.inheritance_audit,
         llm_result=accepted.llm_result,
         quality_immutable=accepted.quality_immutable,
+        output_budget_tolerated=accepted.output_budget_tolerated,
     )
 
 
@@ -1327,6 +1354,7 @@ def _accept_summary_repair_payload(
     return _with_bounded_summary_obligations(
         repaired,
         repair_response=True,
+        allow_summary_tolerance=(repair_kind == "state_output_budget"),
     )
 
 
@@ -1549,6 +1577,14 @@ def _summarize_prepared_sync(
                 trace_repair[1].llm_result.request_log_id
                 if trace_repair is not None else None
             ),
+            repair_output_budget_tolerated=(
+                trace_repair[1].output_budget_tolerated
+                if trace_repair is not None else False
+            ),
+            repair_summary_chars=(
+                len(str(trace_repair[1].state.get("summary") or ""))
+                if trace_repair is not None else 0
+            ),
         ))
         pending_repair = None
         if renew_lease is not None and not renew_lease():
@@ -1697,6 +1733,14 @@ async def _summarize_prepared_async(
                 trace_repair[1].llm_result.request_log_id
                 if trace_repair is not None else None
             ),
+            repair_output_budget_tolerated=(
+                trace_repair[1].output_budget_tolerated
+                if trace_repair is not None else False
+            ),
+            repair_summary_chars=(
+                len(str(trace_repair[1].state.get("summary") or ""))
+                if trace_repair is not None else 0
+            ),
         ))
         pending_repair = None
         if renew_lease is not None:
@@ -1771,6 +1815,13 @@ def _batch_trace_meta(trace: SummaryBatchTrace) -> dict[str, Any]:
                 trace.repair_inheritance_audit
             ),
         }
+        if trace.repair_output_budget_tolerated:
+            result["repair"]["output_budget_tolerance"] = {
+                "applied": True,
+                "summary_chars": int(trace.repair_summary_chars),
+                "target_chars": SESSION_SUMMARY_MAX_SUMMARY_CHARS,
+                "hard_limit_chars": SESSION_SUMMARY_REPAIR_MAX_SUMMARY_CHARS,
+            }
     return result
 
 

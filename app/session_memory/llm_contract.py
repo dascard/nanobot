@@ -107,6 +107,8 @@ class SummaryBatchTrace:
     repair_model: str = ""
     repair_requested_model: str = ""
     repair_request_log_id: int | None = None
+    repair_output_budget_tolerated: bool = False
+    repair_summary_chars: int = 0
 
 
 @dataclass(frozen=True, slots=True)

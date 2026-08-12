@@ -115,6 +115,9 @@ AGENT_HARNESS_PLAN_MODE_REGISTRY_BASELINE_SHA256 = (
 AGENT_HARNESS_PROACTIVE_TRIGGER_REGISTRY_BASELINE_SHA256 = (
     "7a3b03d3e418c061aaded2c6a9d8515670641cbe4b5acf8b0aa22a0055736cb4"
 )
+SESSION_SUMMARY_TRANSPORT_REGISTRY_BASELINE_SHA256 = (
+    "a4aba568bf2609133ca4a7d9bebaeb60608e4f1ab10c654b82c1e40cb237321e"
+)
 
 SNAPSHOT_CLASSIFICATIONS = {
     "agent_runtime": "preserve",
@@ -1609,13 +1612,29 @@ def _manifest(
                 "before_sha256": (
                     AGENT_HARNESS_PROACTIVE_TRIGGER_REGISTRY_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["runtime_registries"]
+                "after_sha256": (
+                    SESSION_SUMMARY_TRANSPORT_REGISTRY_BASELINE_SHA256
                 ),
                 "reason": (
                     "登记主动外呼每日投递配额，并把定时、事件与"
                     "心跳入口收敛到冻结 Trigger 权限和硬预算；"
                     "新的主动行为仍默认关闭。"
+                ),
+            },
+            {
+                "id": "session_summary_transport_guard_registry",
+                "snapshot_id": "runtime_registries",
+                "stage": "会话摘要缓存优化",
+                "before_sha256": (
+                    SESSION_SUMMARY_TRANSPORT_REGISTRY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["runtime_registries"]
+                ),
+                "reason": (
+                    "把 Session Summary 的 Task Runtime 数组上限改为传输层"
+                    "有界护栏，允许大型群聊参与者与关键词集合进入应用层的"
+                    "继承审计和局部压缩；业务层 7/8 项义务预算保持不变。"
                 ),
             },
         ],

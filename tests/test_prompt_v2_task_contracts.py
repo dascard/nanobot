@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -171,6 +172,41 @@ def test_timing_proactive_output_contract_is_strict():
         parse_task_output(
             "timing_proactive",
             '{"should_speak":false,"reason":"沉默","extra":1}',
+        )
+
+
+def test_session_summary_transport_contract_allows_large_participant_set():
+    from core.prompt_v2.task_contracts import (
+        TaskOutputContractError,
+        parse_task_output,
+    )
+
+    payload = {
+        "summary": "群聊阶段摘要",
+        "open_threads": [],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": [f"参与者 {index}" for index in range(24)],
+        "keywords": [f"关键词 {index}" for index in range(24)],
+        "quality": {"score": 0.9, "issues": []},
+        "inheritance": [],
+    }
+
+    parsed = parse_task_output(
+        "session_summary_output",
+        json.dumps(payload, ensure_ascii=False),
+    )
+
+    assert parsed["participants"] == payload["participants"]
+    assert parsed["keywords"] == payload["keywords"]
+
+    payload["participants"] = [f"参与者 {index}" for index in range(129)]
+    with pytest.raises(TaskOutputContractError, match="field_out_of_range"):
+        parse_task_output(
+            "session_summary_output",
+            json.dumps(payload, ensure_ascii=False),
         )
 
 

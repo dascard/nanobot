@@ -269,13 +269,22 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     proactive_trigger_registry_change = approved[
         "agent_harness_proactive_trigger_registry"
     ]
+    summary_transport_registry_change = approved[
+        "session_summary_transport_guard_registry"
+    ]
     assert proactive_trigger_registry_change["snapshot_id"] == (
         "runtime_registries"
     )
     assert managed_skills_registry_change["after_sha256"] == (
         proactive_trigger_registry_change["before_sha256"]
     )
-    assert proactive_trigger_registry_change["after_sha256"] == _sha256(
+    assert proactive_trigger_registry_change["after_sha256"] == (
+        summary_transport_registry_change["before_sha256"]
+    )
+    assert summary_transport_registry_change["snapshot_id"] == (
+        "runtime_registries"
+    )
+    assert summary_transport_registry_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "runtime_registries.json"
     )
     news_registry_change = approved["stage6_news_registry"]

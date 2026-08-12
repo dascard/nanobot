@@ -9431,7 +9431,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "decisions": {
@@ -9439,7 +9439,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "important_user_requests": {
@@ -9447,7 +9447,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "inheritance": {
@@ -9488,7 +9488,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "open_threads": {
@@ -9496,7 +9496,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "participants": {
@@ -9504,7 +9504,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "quality": {
@@ -9535,7 +9535,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "summary": {
@@ -9582,7 +9582,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "decisions": {
@@ -9590,7 +9590,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "important_user_requests": {
@@ -9598,7 +9598,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "inheritance": {
@@ -9639,7 +9639,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "open_threads": {
@@ -9647,7 +9647,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "participants": {
@@ -9655,7 +9655,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "quality": {
@@ -9686,7 +9686,7 @@
               "maxLength": 400,
               "type": "string"
             },
-            "maxItems": 16,
+            "maxItems": 128,
             "type": "array"
           },
           "summary": {

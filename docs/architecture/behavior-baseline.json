@@ -239,9 +239,17 @@
       "reason": "登记主动外呼每日投递配额，并把定时、事件与心跳入口收敛到冻结 Trigger 权限和硬预算；新的主动行为仍默认关闭。",
       "snapshot_id": "runtime_registries",
       "stage": "Agent Harness 阶段 9.2"
+    },
+    {
+      "after_sha256": "209e53200d22993dd16d3c79f62a1322d7f20579b3dbc6aa713f5908ad0f006d",
+      "before_sha256": "a4aba568bf2609133ca4a7d9bebaeb60608e4f1ab10c654b82c1e40cb237321e",
+      "id": "session_summary_transport_guard_registry",
+      "reason": "把 Session Summary 的 Task Runtime 数组上限改为传输层有界护栏，允许大型群聊参与者与关键词集合进入应用层的继承审计和局部压缩；业务层 7/8 项义务预算保持不变。",
+      "snapshot_id": "runtime_registries",
+      "stage": "会话摘要缓存优化"
     }
   ],
-  "baseline_git_commit": "47f916804d045f5c4b751753251a4741876e479b",
+  "baseline_git_commit": "8c8dc9becb27c6e29521c2ab0f75646f0f42c613",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -302,7 +310,7 @@
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "a4aba568bf2609133ca4a7d9bebaeb60608e4f1ab10c654b82c1e40cb237321e"
+      "sha256": "209e53200d22993dd16d3c79f62a1322d7f20579b3dbc6aa713f5908ad0f006d"
     },
     {
       "classification": "security_invariant",
