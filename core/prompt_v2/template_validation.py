@@ -50,6 +50,28 @@ def _validate_frontmatter(template_key: str, raw: str) -> tuple[dict[str, Any], 
     return frontmatter, body
 
 
+def _validate_historical_flow_structure(
+    template_key: str,
+    value: dict[str, Any],
+) -> None:
+    nodes = value.get("nodes")
+    edges = value.get("edges")
+    if (
+        not isinstance(nodes, list)
+        or not nodes
+        or any(not isinstance(node, dict) for node in nodes)
+    ):
+        raise TemplateContentValidationError(
+            f"模板内容无效 {template_key}: 历史 flow.nodes 必须是非空对象数组"
+        )
+    if not isinstance(edges, list) or any(
+        not isinstance(edge, dict) for edge in edges
+    ):
+        raise TemplateContentValidationError(
+            f"模板内容无效 {template_key}: 历史 flow.edges 必须是对象数组"
+        )
+
+
 def validate_template_bytes(
     template_key: str,
     content: bytes,
@@ -70,9 +92,11 @@ def validate_template_bytes(
                 raise TemplateContentValidationError(
                     f"模板内容无效 {key}: flow 顶层必须是对象"
                 )
+            if not require_runtime_contract:
+                _validate_historical_flow_structure(key, value)
+                return
             normalized = validate_flow(value)
-            if require_runtime_contract:
-                validate_runtime_contract(normalized)
+            validate_runtime_contract(normalized)
             return
 
         _frontmatter, body = _validate_frontmatter(key, raw)

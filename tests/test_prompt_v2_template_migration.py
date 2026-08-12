@@ -212,6 +212,25 @@ def test_historical_baseline_does_not_need_to_match_current_runtime_contract(
             and edge["to"] == "private_policy"
         )
         private_edge["platforms"].remove("external_private")
+        legacy_flow["nodes"].append(
+            {
+                "id": "effort_constraint",
+                "type": "runtime",
+                "label": "system: effort_constraint",
+                "runtime_key": "effort_constraint",
+                "optional": True,
+            }
+        )
+        history_edge = next(
+            edge
+            for edge in legacy_flow["edges"]
+            if edge["from"] == "history_messages"
+            and edge["to"] == "persona_reference"
+        )
+        history_edge["to"] = "effort_constraint"
+        legacy_flow["edges"].append(
+            {"from": "effort_constraint", "to": "persona_reference"}
+        )
         legacy = (
             json.dumps(
                 legacy_flow,
