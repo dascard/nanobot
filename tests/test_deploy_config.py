@@ -399,6 +399,7 @@ def test_runtime_image_excludes_kt_source_and_local_patches():
     assert "stream-message-flag.patch" not in dockerfile
     assert "git apply" not in dockerfile
     assert "!patches/kohakuterrarium" not in dockerignore
+    assert "vendor/" in dockerignore
 
 
 def test_runtime_directory_preparer_is_executable():
@@ -474,7 +475,7 @@ def test_runtime_release_workflow_builds_sbom_and_manifest_after_both_gates():
     assert "build_release_manifest.py release" in workflow
     assert (
         "--schema-migration-head "
-        "20260730_llm_request_execution_phase"
+        "20260809_prompt_context_manifest_json"
     ) in workflow
     assert "scripts/build_context_manifest.py" in workflow
     assert '--input-sha "build_context=${BUILD_CONTEXT_SHA256}"' in workflow
@@ -492,8 +493,8 @@ def test_webui_production_dependencies_are_patched_and_router_stays_client_only(
     packages = lock["packages"]
     assert packages["node_modules/axios"]["version"] == "1.18.1"
     assert packages["node_modules/form-data"]["version"] == "4.0.6"
-    assert packages["node_modules/react-router"]["version"] == "7.18.1"
-    assert packages["node_modules/react-router-dom"]["version"] == "7.18.1"
+    assert packages["node_modules/react-router"]["version"] == "7.18.2"
+    assert packages["node_modules/react-router-dom"]["version"] == "7.18.2"
 
     source = "\n".join(
         path.read_text(encoding="utf-8")

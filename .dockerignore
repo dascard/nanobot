@@ -38,6 +38,8 @@ goal.md
 prompt-v2-*-snapshot.md
 requirements-kt.in
 requirements-kt.lock
+# 旧 KT 源码残留不得进入默认 Native 镜像构建上下文
+vendor/
 
 # 运行数据、模型、凭据和生成产物不得进入构建上下文
 .env
