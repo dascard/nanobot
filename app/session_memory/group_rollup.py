@@ -297,6 +297,10 @@ def _has_failed_same_coverage(
     max_recovery = max(0, int(
         getattr(config, "GROUP_SUMMARY_AUTO_RECOVERY_MAX", 1)
     ))
+    # 自动恢复次数只在同一合同内累计。合同或模板已经变化时，旧失败不能
+    # 永久阻断新合同的首次迁移式恢复。
+    if contract_changed:
+        recovery_count = 0
     if recovery_count >= max_recovery:
         return True
 

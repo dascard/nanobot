@@ -1,22 +1,22 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`46c5928cfd9b4644041ec416772f1a21de21525d`
-- 规则总数：8958
+- 源提交：`47f916804d045f5c4b751753251a4741876e479b`
+- 规则总数：8967
 - 扫描错误：0
-- 人工复核队列：723
+- 人工复核队列：726
 - 完整逐项记录：`decision-rule-inventory.json`
 
 ## 分类汇总
 
 | 分类 | 数量 |
 |---|---:|
-| `compatibility` | 138 |
+| `compatibility` | 141 |
 | `configurable_policy` | 1752 |
 | `data_consistency` | 522 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4760 |
+| `protocol_syntax` | 4766 |
 | `security_invariant` | 1751 |
 
 ## 文件汇总
@@ -44,6 +44,7 @@
 | `core/llm_request_linter.py` | 63 |
 | `core/prompt_v2/flow_migrations.py` | 63 |
 | `core/outbound/settlement.py` | 59 |
+| `app/session_memory/llm_summarizer.py` | 58 |
 | `core/tracing.py` | 57 |
 | `core/prompt_v2/template_migration.py` | 55 |
 | `clients/new_api_client.py` | 53 |
@@ -53,7 +54,6 @@
 | `clients/model_registry.py` | 50 |
 | `core/run_recovery/service.py` | 50 |
 | `api/admin/model_preset_routes.py` | 49 |
-| `app/session_memory/llm_summarizer.py` | 49 |
 | `core/skill_candidates/extraction.py` | 49 |
 | `api/admin/reply_routes.py` | 48 |
 | `core/daily_digest.py` | 47 |
@@ -1167,6 +1167,15 @@
 | `decision.32d9b0f806a347d6cf94` | `app/session_memory/llm_summarizer.py:661` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要：str(item).lower().startswith(("warning", "warn:", "警告")) |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |
+| `decision.02bfa37b813b48aca826` | `app/session_memory/llm_summarizer.py:1128` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+|  | 摘要：obligation.field == "legacy_summary" |  |  |  |  |  |
+|  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
+| `decision.914d13fb5ace814c20b9` | `app/session_memory/llm_summarizer.py:1135` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+|  | 摘要：obligation.field != "legacy_summary" |  |  |  |  |  |
+|  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
+| `decision.23c7684e0fc52a023b75` | `app/session_memory/llm_summarizer.py:1261` | `python.string_control_flow` | `compatibility` | `compatibility_migration` | 阶段 3／7D | `reviewed` |
+|  | 摘要：obligation.field == "legacy_summary" |  |  |  |  |  |
+|  | 原因：人工复核：属于旧身份、旧路由、旧交付模式或兼容模块，必须经有期限的迁移门禁退役 |  |  |  |  |  |
 | `decision.3b51f163bd542c06679e` | `app/session_memory/rolling_summary.py:332` | `python.string_control_flow` | `configurable_policy` | `policy` | 阶段 3／4 | `auto_classified` |
 |  | 摘要："必须调用" in text |  |  |  |  |  |
 |  | 原因：包含中文业务枚举或展示值，需人工确认其属于协议、资源还是语义信号。 |  |  |  |  |  |

@@ -3206,6 +3206,184 @@ def test_summary_previous_obligation_over_budget_repairs_once_before_normal_batc
     assert trace["repair"]["inheritance"]["obligation_count"] == 9
 
 
+def test_summary_output_budget_overflow_uses_audited_local_repair(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_contract import build_summary_obligations
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    turn = _turn(db_session, content="需要进入累计摘要的新内容")
+    fallback = RollingSessionSummary(
+        session_id="summary-output-budget-repair",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="summary-output-budget-repair",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    oversized_state = {
+        "summary": "摘" * 401,
+        "open_threads": [],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": ["用户"],
+        "keywords": ["摘要"],
+    }
+    summary_obligation = build_summary_obligations(
+        oversized_state,
+        legacy_summary=True,
+    )[0]
+    repaired_state = {
+        **oversized_state,
+        "summary": "已压缩累计摘要，并保留本批新增事实。",
+    }
+    calls: list[str] = []
+
+    def summarizer(messages):
+        prompt = messages[-1]["content"]
+        calls.append(prompt)
+        if "<summary_repair>" in prompt:
+            return {
+                **repaired_state,
+                "inheritance": [{
+                    "source_id": summary_obligation.source_id,
+                    "disposition": "updated",
+                    "target_field": "summary",
+                    "target_index": 0,
+                }],
+                "quality": {"score": 0.9, "issues": []},
+            }
+        return {
+            **oversized_state,
+            "inheritance": [],
+            "quality": {"score": 0.9, "issues": []},
+        }
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=summarizer,
+        owner="output-budget-worker",
+    )
+
+    db_session.refresh(job)
+    assert result["done"] == 1
+    assert len(calls) == 2
+    assert '"kind":"state_output_budget"' in calls[1]
+    assert '"summary_editable":true' in calls[1]
+    assert "<pending_fragments>" not in calls[1]
+    assert job.status == "done"
+    saved = db_session.get(RollingSessionSummary, job.result_summary_id)
+    assert json.loads(saved.summary_json)["summary"] == repaired_state["summary"]
+    trace = json.loads(saved.meta_json)["batch_traces"][0]
+    assert trace["repair"]["kind"] == "state_output_budget"
+    assert trace["repair"]["inheritance"]["obligation_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_async_summary_output_budget_overflow_uses_local_repair(
+    db_session,
+):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_contract import build_summary_obligations
+    from app.session_memory.llm_summarizer import (
+        _summarize_prepared_async,
+        prepare_claimed_session_summary_job,
+    )
+
+    turn = _turn(db_session, content="异步摘要长度修复内容")
+    fallback = RollingSessionSummary(
+        session_id="async-summary-output-budget-repair",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turn.id,
+        covered_until_turn_id=turn.id,
+        source_turn_ids_json=json.dumps([turn.id]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="async-summary-output-budget-repair",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=[turn],
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    lease = _claim_summary_lease(
+        db_session,
+        job.id,
+        owner="async-output-budget-worker",
+    )
+    prepared = prepare_claimed_session_summary_job(
+        db_session,
+        lease=lease,
+    )
+    oversized_state = {
+        "summary": "摘" * 401,
+        "open_threads": [],
+        "decisions": [],
+        "important_user_requests": [],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": ["用户"],
+        "keywords": ["摘要"],
+    }
+    summary_obligation = build_summary_obligations(
+        oversized_state,
+        legacy_summary=True,
+    )[0]
+    calls: list[str] = []
+
+    async def summarizer(messages):
+        prompt = messages[-1]["content"]
+        calls.append(prompt)
+        if "<summary_repair>" in prompt:
+            return {
+                **oversized_state,
+                "summary": "异步路径已压缩累计摘要。",
+                "inheritance": [{
+                    "source_id": summary_obligation.source_id,
+                    "disposition": "updated",
+                    "target_field": "summary",
+                    "target_index": 0,
+                }],
+                "quality": {"score": 0.9, "issues": []},
+            }
+        return {
+            **oversized_state,
+            "inheritance": [],
+            "quality": {"score": 0.9, "issues": []},
+        }
+
+    result = await _summarize_prepared_async(
+        prepared,
+        summarizer,
+    )
+
+    assert result.content["summary"] == "异步路径已压缩累计摘要。"
+    assert len(calls) == 2
+    assert prepared.batch_traces[0].repair_kind == "state_output_budget"
+
+
 def test_summary_previous_state_over_budget_is_non_retryable_prepare_error(db_session):
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (

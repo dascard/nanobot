@@ -195,6 +195,57 @@ def test_group_rollup_discovery_deduplicates_inflight_and_failed_coverage(
     assert job.fallback_summary_id is None
 
 
+def test_group_rollup_contract_change_resets_automatic_recovery_budget(
+    db_session,
+    monkeypatch,
+):
+    from app.session_memory.group_rollup import discover_group_summary_jobs
+    from app.session_memory.summary_contract import (
+        SESSION_SUMMARY_CONTRACT_VERSION,
+    )
+
+    _small_thresholds(monkeypatch)
+    started_at = datetime(2026, 7, 31, 12, 15, 0)
+    rows = _add_group_logs(
+        db_session,
+        session_id="group_contract_recovery",
+        count=14,
+        started_at=started_at,
+    )
+    checked_at = rows[-1].created_at + timedelta(seconds=61)
+    first = discover_group_summary_jobs(db_session, now=checked_at)
+    failed = db_session.query(SessionSummaryJob).one()
+    failed.status = "failed"
+    failed.meta_json = json.dumps({
+        "summary_contract_version": SESSION_SUMMARY_CONTRACT_VERSION - 1,
+        "summary_prompt_fingerprint": "旧合同",
+        "auto_recovery_count": 1,
+    }, ensure_ascii=False)
+    db_session.flush()
+
+    recovered = discover_group_summary_jobs(db_session, now=checked_at)
+    jobs = db_session.query(SessionSummaryJob).order_by(
+        SessionSummaryJob.id.asc()
+    ).all()
+
+    assert first["created"] == 1
+    assert recovered["created"] == 1
+    assert len(jobs) == 2
+    assert jobs[-1].status == "pending"
+    recovered_meta = json.loads(jobs[-1].meta_json)
+    assert recovered_meta["summary_contract_version"] == (
+        SESSION_SUMMARY_CONTRACT_VERSION
+    )
+    assert recovered_meta["auto_recovery_count"] == 1
+
+    jobs[-1].status = "failed"
+    db_session.flush()
+    blocked = discover_group_summary_jobs(db_session, now=checked_at)
+
+    assert blocked["failed_same_coverage"] == 1
+    assert db_session.query(SessionSummaryJob).count() == 2
+
+
 def test_group_rollup_discovery_accepts_canonical_group_identity(
     db_session,
     monkeypatch,

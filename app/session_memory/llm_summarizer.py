@@ -909,6 +909,29 @@ def _with_bounded_summary_obligations(
     )
 
 
+def _output_budget_repair_overflow(
+    accepted: _AcceptedSummaryPayload,
+) -> _AcceptedSummaryPayload:
+    """为长度修复补上 summary 继承义务，防止压缩时丢失累计事实。"""
+
+    summary_oversized = (
+        len(str(accepted.state.get("summary") or ""))
+        > SESSION_SUMMARY_MAX_SUMMARY_CHARS
+    )
+    return _AcceptedSummaryPayload(
+        business_payload=accepted.business_payload,
+        state=accepted.state,
+        obligations=build_summary_obligations(
+            accepted.state,
+            legacy_summary=summary_oversized,
+        ),
+        inheritance=accepted.inheritance,
+        inheritance_audit=accepted.inheritance_audit,
+        llm_result=accepted.llm_result,
+        quality_immutable=accepted.quality_immutable,
+    )
+
+
 def _accept_summary_payload(
     *,
     raw: Any,
@@ -1091,15 +1114,49 @@ def _build_summary_repair_messages(
             "source_index": source_index,
         })
 
-    violation_json = json.dumps({
-        "code": "summary_state_obligation_budget_exceeded",
-        "kind": str(repair_kind or "state_obligation_budget"),
-        "actual_count": len(overflow.obligations),
-        "target_count": SESSION_SUMMARY_REPAIR_TARGET_OBLIGATIONS,
-        "hard_limit": SESSION_SUMMARY_MAX_STATE_OBLIGATIONS,
-        "field_counts": field_counts,
-        "field_target_limits": _build_summary_repair_field_limits(field_counts),
-    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    normalized_repair_kind = str(
+        repair_kind or "state_obligation_budget"
+    )
+    output_budget_repair = normalized_repair_kind == "state_output_budget"
+    if output_budget_repair:
+        violation = {
+            "code": "summary_state_output_budget_exceeded",
+            "kind": normalized_repair_kind,
+            "summary_chars": len(str(overflow.state.get("summary") or "")),
+            "summary_max_chars": SESSION_SUMMARY_MAX_SUMMARY_CHARS,
+            "summary_editable": any(
+                obligation.field == "legacy_summary"
+                for obligation in overflow.obligations
+            ),
+            "obligation_max_chars": SESSION_SUMMARY_MAX_OBLIGATION_CHARS,
+            "oversized_fields": sorted({
+                obligation.field
+                for obligation in overflow.obligations
+                if obligation.field != "legacy_summary"
+                and len(obligation.normalized_text)
+                > SESSION_SUMMARY_MAX_OBLIGATION_CHARS
+            }),
+            "field_counts": field_counts,
+            "field_target_limits": field_counts,
+        }
+    else:
+        violation = {
+            "code": "summary_state_obligation_budget_exceeded",
+            "kind": normalized_repair_kind,
+            "actual_count": len(overflow.obligations),
+            "target_count": SESSION_SUMMARY_REPAIR_TARGET_OBLIGATIONS,
+            "hard_limit": SESSION_SUMMARY_MAX_STATE_OBLIGATIONS,
+            "field_counts": field_counts,
+            "field_target_limits": _build_summary_repair_field_limits(
+                field_counts
+            ),
+        }
+    violation_json = json.dumps(
+        violation,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     state_json = json.dumps(
         overflow.business_payload,
         ensure_ascii=False,
@@ -1172,6 +1229,7 @@ def _accept_summary_repair_payload(
     raw: Any,
     overflow: _AcceptedSummaryPayload,
     source_turns: tuple[SessionSummaryTurnSnapshot, ...] = (),
+    repair_kind: str = "state_obligation_budget",
 ) -> _AcceptedSummaryPayload:
     """验证单次局部修复没有改变不可变状态或凭空增加目标项。"""
 
@@ -1198,14 +1256,16 @@ def _accept_summary_repair_payload(
             "summary_state_repair_invalid"
         ) from exc
 
-    immutable_fields = (
-        _SESSION_SUMMARY_REPAIR_IMMUTABLE_FIELDS
-        if overflow.quality_immutable
-        else tuple(
-            field
-            for field in _SESSION_SUMMARY_REPAIR_IMMUTABLE_FIELDS
-            if field != "quality"
-        )
+    output_budget_repair = repair_kind == "state_output_budget"
+    summary_editable = output_budget_repair and any(
+        obligation.field == "legacy_summary"
+        for obligation in overflow.obligations
+    )
+    immutable_fields = tuple(
+        field
+        for field in _SESSION_SUMMARY_REPAIR_IMMUTABLE_FIELDS
+        if (overflow.quality_immutable or field != "quality")
+        and (not summary_editable or field != "summary")
     )
     if any(
         repaired.business_payload.get(field)
@@ -1220,10 +1280,14 @@ def _accept_summary_repair_payload(
         field: sum(1 for obligation in overflow.obligations if obligation.field == field)
         for field in _SESSION_SUMMARY_REPAIRABLE_FIELDS
     }
-    limits = _build_summary_repair_field_limits(field_counts)
-    for field in _SESSION_SUMMARY_REPAIRABLE_FIELDS:
-        values = repaired.business_payload.get(field)
-        if not isinstance(values, list) or len(values) > limits[field]:
+    limits = (
+        field_counts
+        if output_budget_repair
+        else _build_summary_repair_field_limits(field_counts)
+    )
+    for field_name in _SESSION_SUMMARY_REPAIRABLE_FIELDS:
+        values = repaired.business_payload.get(field_name)
+        if not isinstance(values, list) or len(values) > limits[field_name]:
             raise NonRetryableSessionSummaryError("summary_state_repair_invalid")
 
     expected_targets = {
@@ -1233,6 +1297,8 @@ def _accept_summary_repair_payload(
             repaired.business_payload.get(field, [])
         )
     }
+    if summary_editable:
+        expected_targets.add(("summary", 0))
     inherited_targets = {
         (str(item.get("target_field")), int(item.get("target_index")))
         for item in repaired.inheritance
@@ -1242,7 +1308,11 @@ def _accept_summary_repair_payload(
     }
     if inherited_targets != expected_targets:
         raise NonRetryableSessionSummaryError("summary_state_repair_invalid")
-    if len(repaired.obligations) > SESSION_SUMMARY_REPAIR_TARGET_OBLIGATIONS:
+    if (
+        not output_budget_repair
+        and len(repaired.obligations)
+        > SESSION_SUMMARY_REPAIR_TARGET_OBLIGATIONS
+    ):
         raise NonRetryableSessionSummaryError(
             "summary_state_obligation_budget_exceeded"
         )
@@ -1276,7 +1346,11 @@ def _call_summary_repair_sync(
         raise NonRetryableSessionSummaryError(
             "summary_state_repair_failed"
         ) from exc
-    return _accept_summary_repair_payload(raw=raw, overflow=overflow)
+    return _accept_summary_repair_payload(
+        raw=raw,
+        overflow=overflow,
+        repair_kind=repair_kind,
+    )
 
 
 async def _call_summary_repair_async(
@@ -1295,7 +1369,11 @@ async def _call_summary_repair_async(
         raise NonRetryableSessionSummaryError(
             "summary_state_repair_failed"
         ) from exc
-    return _accept_summary_repair_payload(raw=raw, overflow=overflow)
+    return _accept_summary_repair_payload(
+        raw=raw,
+        overflow=overflow,
+        repair_kind=repair_kind,
+    )
 
 
 def _accept_summary_batch_payload(
@@ -1371,10 +1449,8 @@ def _summarize_prepared_sync(
     final_payload: dict[str, Any] | None = None
     final_result: SessionSummaryLLMResult | None = None
     batch_index = 0
-    repair_attempts = 0
     pending_repair: tuple[str, _AcceptedSummaryPayload] | None = None
     if len(obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
-        repair_attempts += 1
         if renew_lease is not None and not renew_lease():
             raise ValueError("summary_job_lease_lost")
         repaired_previous = _call_summary_repair_sync(
@@ -1406,6 +1482,7 @@ def _summarize_prepared_sync(
             source_turns=source_turns,
             source_type=prepared.source_type,
         )
+        repair_attempts = 0
         batch_repair: tuple[str, _AcceptedSummaryPayload] | None = None
         if len(primary.obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
             if repair_attempts >= SESSION_SUMMARY_MAX_REPAIR_ATTEMPTS:
@@ -1423,7 +1500,25 @@ def _summarize_prepared_sync(
             accepted = repaired
             batch_repair = ("state_obligation_budget", repaired)
         else:
-            accepted = _with_bounded_summary_obligations(primary)
+            try:
+                accepted = _with_bounded_summary_obligations(primary)
+            except NonRetryableSessionSummaryError as exc:
+                if (
+                    str(exc) != "summary_state_output_budget_exceeded"
+                    or repair_attempts
+                    >= SESSION_SUMMARY_MAX_REPAIR_ATTEMPTS
+                ):
+                    raise
+                repair_attempts += 1
+                if renew_lease is not None and not renew_lease():
+                    raise ValueError("summary_job_lease_lost")
+                repaired = _call_summary_repair_sync(
+                    overflow=_output_budget_repair_overflow(primary),
+                    summarizer=summarizer,
+                    repair_kind="state_output_budget",
+                )
+                accepted = repaired
+                batch_repair = ("state_output_budget", repaired)
 
         final_payload = accepted.business_payload
         state = accepted.state
@@ -1490,10 +1585,8 @@ async def _summarize_prepared_async(
     final_payload: dict[str, Any] | None = None
     final_result: SessionSummaryLLMResult | None = None
     batch_index = 0
-    repair_attempts = 0
     pending_repair: tuple[str, _AcceptedSummaryPayload] | None = None
     if len(obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
-        repair_attempts += 1
         if renew_lease is not None:
             renewed = renew_lease()
             if inspect.isawaitable(renewed):
@@ -1529,6 +1622,7 @@ async def _summarize_prepared_async(
             source_turns=source_turns,
             source_type=prepared.source_type,
         )
+        repair_attempts = 0
         batch_repair: tuple[str, _AcceptedSummaryPayload] | None = None
         if len(primary.obligations) > SESSION_SUMMARY_MAX_STATE_OBLIGATIONS:
             if repair_attempts >= SESSION_SUMMARY_MAX_REPAIR_ATTEMPTS:
@@ -1550,7 +1644,29 @@ async def _summarize_prepared_async(
             accepted = repaired
             batch_repair = ("state_obligation_budget", repaired)
         else:
-            accepted = _with_bounded_summary_obligations(primary)
+            try:
+                accepted = _with_bounded_summary_obligations(primary)
+            except NonRetryableSessionSummaryError as exc:
+                if (
+                    str(exc) != "summary_state_output_budget_exceeded"
+                    or repair_attempts
+                    >= SESSION_SUMMARY_MAX_REPAIR_ATTEMPTS
+                ):
+                    raise
+                repair_attempts += 1
+                if renew_lease is not None:
+                    renewed = renew_lease()
+                    if inspect.isawaitable(renewed):
+                        renewed = await renewed
+                    if not renewed:
+                        raise ValueError("summary_job_lease_lost")
+                repaired = await _call_summary_repair_async(
+                    overflow=_output_budget_repair_overflow(primary),
+                    summarizer=summarizer,
+                    repair_kind="state_output_budget",
+                )
+                accepted = repaired
+                batch_repair = ("state_output_budget", repaired)
 
         final_payload = accepted.business_payload
         state = accepted.state

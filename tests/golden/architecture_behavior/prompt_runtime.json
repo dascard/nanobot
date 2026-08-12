@@ -267,13 +267,13 @@
     },
     {
       "path": "prompts.v2.default/tasks/session_summary_output.md",
-      "sha256": "744eb3869591e04a8593b29647d43b250b1b6e8a423570f5a134b7035b9ccc43",
-      "size_bytes": 2605
+      "sha256": "cd928010b985b994a15bbfac789cdd0f6502694e39c1a7998bda4c30a6631599",
+      "size_bytes": 2931
     },
     {
       "path": "prompts.v2.default/tasks/session_summary_system.md",
-      "sha256": "290299fcb995734cee8526c582992dce0268c1f7fd13edd75578780794ae7212",
-      "size_bytes": 1850
+      "sha256": "e6832fd062306d9435b1ba5692e07627d1f42171f669a127db2df814463cc4ec",
+      "size_bytes": 2127
     },
     {
       "path": "prompts.v2.default/tasks/timing_gate.md",
