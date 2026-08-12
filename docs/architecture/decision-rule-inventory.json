@@ -119057,7 +119057,7 @@
       "excerpt": "key == \"chat/flow\"",
       "input_boundary": "Prompt Runtime 配置、模板或模型输出",
       "language": "python",
-      "line": 65,
+      "line": 87,
       "model_call": true,
       "normalized_fingerprint": "2ac1b6d077a3d11507757924da7bd0a8da4fb325a875e44f5ad7dae9620973d0",
       "owner": "prompt.runtime",
@@ -119077,7 +119077,7 @@
       "excerpt": "key.startswith(\"tasks/\")",
       "input_boundary": "Prompt Runtime 配置、模板或模型输出",
       "language": "python",
-      "line": 84,
+      "line": 108,
       "model_call": true,
       "normalized_fingerprint": "1388d1a2a8c0967376476f9b3b7a8538ac56639e9b8dd0b73c5d7016497cd7bc",
       "owner": "prompt.runtime",
@@ -235898,7 +235898,7 @@
     "server.py"
   ],
   "schema_version": 1,
-  "source_revision": "f19de92d98d019a084cf7b011a4604c3dde82108",
+  "source_revision": "681e1f8d4bb38a4e19e13295b2ea5d0dc424c311",
   "summary": {
     "by_category": {
       "compatibility": 138,
