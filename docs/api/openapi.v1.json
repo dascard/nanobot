@@ -19039,6 +19039,26 @@
           },
           {
             "in": "query",
+            "name": "include_stats",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Include Stats",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stats_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Stats Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
             "name": "run_id",
             "required": false,
             "schema": {

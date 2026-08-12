@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import { api } from '../../api'
 import {
@@ -21,6 +21,8 @@ const CACHE_STATUS_META = {
   error: { label: '调用失败', className: 'bg-red-500/10 text-red-300' },
 }
 
+const FILTER_DEBOUNCE_MS = 350
+
 // ── LLM API 日志独立页面 ──
 export function LLMApiLogsPage() {
   const [items, setItems] = useState([])
@@ -39,9 +41,62 @@ export function LLMApiLogsPage() {
   const [detailsById, setDetailsById] = useState({})
   const [loadingDetailId, setLoadingDetailId] = useState(null)
   const [detailErrors, setDetailErrors] = useState({})
+  const [appliedFilters, setAppliedFilters] = useState({
+    runFilter: '',
+    traceFilter: '',
+    sourceFilter: '',
+    providerFilter: '',
+    modelFilter: '',
+    statusFilter: '',
+    cacheFilter: '',
+    errorCategoryFilter: '',
+  })
+  const [refreshVersion, setRefreshVersion] = useState(0)
+  const appliedFilterKey = useRef(JSON.stringify(Array(8).fill('')))
   const limit = 30
-  const load = useCallback(() => {
-    const params = { page, limit }
+  useEffect(() => {
+    const filterKey = JSON.stringify([
+      runFilter,
+      traceFilter,
+      sourceFilter,
+      providerFilter,
+      modelFilter,
+      statusFilter,
+      cacheFilter,
+      errorCategoryFilter,
+    ])
+    if (filterKey === appliedFilterKey.current) {
+      return undefined
+    }
+    const timer = setTimeout(() => {
+      appliedFilterKey.current = filterKey
+      setStats(null)
+      setAppliedFilters({
+        runFilter,
+        traceFilter,
+        sourceFilter,
+        providerFilter,
+        modelFilter,
+        statusFilter,
+        cacheFilter,
+        errorCategoryFilter,
+      })
+      setPage(1)
+    }, FILTER_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [runFilter, traceFilter, sourceFilter, providerFilter, modelFilter, statusFilter, cacheFilter, errorCategoryFilter])
+  const buildFilterParams = useCallback(() => {
+    const {
+      runFilter,
+      traceFilter,
+      sourceFilter,
+      providerFilter,
+      modelFilter,
+      statusFilter,
+      cacheFilter,
+      errorCategoryFilter,
+    } = appliedFilters
+    const params = {}
     if (runFilter) params.run_id = runFilter
     if (traceFilter) params.trace_id = traceFilter
     if (sourceFilter) params.source = sourceFilter
@@ -50,9 +105,42 @@ export function LLMApiLogsPage() {
     if (statusFilter) params.status = statusFilter
     if (cacheFilter) params.cache_status = cacheFilter
     if (errorCategoryFilter) params.error_category = errorCategoryFilter
-    api.get('/llm-api-logs', { params }).then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0); setStats(r.data.stats || null) }).catch(() => {})
-  }, [page, runFilter, traceFilter, sourceFilter, providerFilter, modelFilter, statusFilter, cacheFilter, errorCategoryFilter])
-  useEffect(() => { load() }, [load])
+    return params
+  }, [appliedFilters])
+  const load = useCallback(() => {
+    setRefreshVersion(value => value + 1)
+  }, [])
+  useEffect(() => {
+    const controller = new AbortController()
+    const params = {
+      page,
+      limit,
+      include_stats: false,
+      ...buildFilterParams(),
+    }
+    api.get('/llm-api-logs', {
+      params,
+      signal: controller.signal,
+    }).then(r => {
+      setItems(r.data.items || [])
+      setTotal(r.data.total || 0)
+    }).catch(() => {})
+    return () => controller.abort()
+  }, [page, buildFilterParams, refreshVersion])
+  useEffect(() => {
+    const controller = new AbortController()
+    const params = {
+      stats_only: true,
+      ...buildFilterParams(),
+    }
+    api.get('/llm-api-logs', {
+      params,
+      signal: controller.signal,
+    }).then(r => {
+      setStats(r.data.stats || null)
+    }).catch(() => {})
+    return () => controller.abort()
+  }, [buildFilterParams, refreshVersion])
   const openLog = (logId) => {
     if (openId === logId) {
       setOpenId(null)
@@ -105,27 +193,27 @@ export function LLMApiLogsPage() {
       />
       <Toolbar className="shrink-0">
         <Field id="llm-log-run-filter" label="run_id" className="w-full sm:w-44">
-          <input id="llm-log-run-filter" value={runFilter} onChange={e => { setRunFilter(e.target.value); setPage(1) }}
+          <input id="llm-log-run-filter" value={runFilter} onChange={e => setRunFilter(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
         </Field>
         <Field id="llm-log-trace-filter" label="trace_id" className="w-full sm:w-44">
-          <input id="llm-log-trace-filter" value={traceFilter} onChange={e => { setTraceFilter(e.target.value); setPage(1) }}
+          <input id="llm-log-trace-filter" value={traceFilter} onChange={e => setTraceFilter(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
         </Field>
         <Field id="llm-log-source-filter" label="source" className="w-full sm:w-32">
-          <input id="llm-log-source-filter" value={sourceFilter} onChange={e => { setSourceFilter(e.target.value); setPage(1) }}
+          <input id="llm-log-source-filter" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
         </Field>
         <Field id="llm-log-provider-filter" label="Provider" className="w-full sm:w-32">
-          <input id="llm-log-provider-filter" value={providerFilter} onChange={e => { setProviderFilter(e.target.value); setPage(1) }}
+          <input id="llm-log-provider-filter" value={providerFilter} onChange={e => setProviderFilter(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
         </Field>
         <Field id="llm-log-model-filter" label="model" className="w-full sm:w-44">
-          <input id="llm-log-model-filter" value={modelFilter} onChange={e => { setModelFilter(e.target.value); setPage(1) }}
+          <input id="llm-log-model-filter" value={modelFilter} onChange={e => setModelFilter(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-emerald-500" />
         </Field>
         <Field id="llm-log-status-filter" label="status" className="w-full sm:w-40">
-          <select id="llm-log-status-filter" value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1) }}
+          <select id="llm-log-status-filter" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm">
             <option value="">全部状态</option>
             <option value="created">created</option>
@@ -138,7 +226,7 @@ export function LLMApiLogsPage() {
           </select>
         </Field>
         <Field id="llm-log-cache-filter" label="缓存" className="w-full sm:w-32">
-          <select id="llm-log-cache-filter" value={cacheFilter} onChange={e => { setCacheFilter(e.target.value); setPage(1) }}
+          <select id="llm-log-cache-filter" value={cacheFilter} onChange={e => setCacheFilter(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm">
             <option value="">全部缓存状态</option>
             <option value="hit">命中</option>
@@ -149,7 +237,7 @@ export function LLMApiLogsPage() {
           </select>
         </Field>
         <Field id="llm-log-error-category-filter" label="错误类别" className="w-full sm:w-40">
-          <select id="llm-log-error-category-filter" value={errorCategoryFilter} onChange={e => { setErrorCategoryFilter(e.target.value); setPage(1) }}
+          <select id="llm-log-error-category-filter" value={errorCategoryFilter} onChange={e => setErrorCategoryFilter(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm">
             <option value="">全部错误类别</option>
             {['none', 'configuration', 'dns', 'connect', 'tls', 'authentication', 'not_found', 'rate_limit', 'invalid_request', 'capability', 'timeout', 'upstream', 'response_protocol', 'circuit_open', 'cancelled', 'unknown'].map(category => <option key={category} value={category}>{category}</option>)}

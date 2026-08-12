@@ -1,8 +1,8 @@
 # 决策规则审计清单
 
 - Schema 版本：1
-- 源提交：`681e1f8d4bb38a4e19e13295b2ea5d0dc424c311`
-- 规则总数：8950
+- 源提交：`46c5928cfd9b4644041ec416772f1a21de21525d`
+- 规则总数：8958
 - 扫描错误：0
 - 人工复核队列：723
 - 完整逐项记录：`decision-rule-inventory.json`
@@ -12,12 +12,12 @@
 | 分类 | 数量 |
 |---|---:|
 | `compatibility` | 138 |
-| `configurable_policy` | 1749 |
+| `configurable_policy` | 1752 |
 | `data_consistency` | 522 |
 | `natural_language_semantic` | 30 |
 | `presentation` | 5 |
-| `protocol_syntax` | 4757 |
-| `security_invariant` | 1749 |
+| `protocol_syntax` | 4760 |
+| `security_invariant` | 1751 |
 
 ## 文件汇总
 
@@ -123,6 +123,7 @@
 | `core/run_ledger/projection.py` | 25 |
 | `core/timing_score.py` | 25 |
 | `sandboxd/process_manager.py` | 25 |
+| `api/admin/trace_routes.py` | 24 |
 | `core/outbound_transport.py` | 24 |
 | `core/model_provider/preset_config.py` | 23 |
 | `core/outbound/run_claims.py` | 23 |
@@ -154,7 +155,6 @@
 | `nanobot_kt/tools/sandbox.py` | 20 |
 | `scripts/build_context_manifest.py` | 20 |
 | `webui/src/features/evals/EvalsPage.jsx` | 20 |
-| `api/admin/trace_routes.py` | 19 |
 | `app/tool_services/schedule_task.py` | 19 |
 | `core/inbound_idempotency.py` | 19 |
 | `core/memory_governance.py` | 19 |
@@ -491,6 +491,7 @@
 | `scripts/check-loopback-image-allocation.sh` | 4 |
 | `scripts/manage_models.py` | 4 |
 | `scripts/prepare-runtime-directories.sh` | 4 |
+| `webui/src/features/agent-runs/LLMApiLogsPage.jsx` | 4 |
 | `webui/src/features/rag/RagDebugPage.jsx` | 4 |
 | `webui/src/features/sandbox/SandboxFilesPage.jsx` | 4 |
 | `webui/src/features/web-search/api.js` | 4 |
@@ -539,7 +540,6 @@
 | `scripts/migrate_group_learning_legacy.py` | 3 |
 | `webui/src/features/agent-runs/AgentRunDetailPage.jsx` | 3 |
 | `webui/src/features/agent-runs/AgentRunsPage.jsx` | 3 |
-| `webui/src/features/agent-runs/LLMApiLogsPage.jsx` | 3 |
 | `api/admin/common.py` | 2 |
 | `api/admin/db_browser_routes.py` | 2 |
 | `api/chat_streaming_helpers.py` | 2 |
@@ -588,6 +588,7 @@
 | `scripts/deploy-production.sh` | 2 |
 | `scripts/rag_write_test_report.py` | 2 |
 | `server.py` | 2 |
+| `webui/src/features/agent-runs/LLMApiLogsPage.test.jsx` | 2 |
 | `webui/src/features/manifestValidation.js` | 2 |
 | `webui/src/features/models/RouteBindingsPanel.jsx` | 2 |
 | `webui/src/features/tools/ToolsPage.jsx` | 2 |

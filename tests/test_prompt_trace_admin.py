@@ -3,7 +3,7 @@ from tests.async_helpers import run_async
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from tests.sqlite_test_utils import install_base_schema
@@ -696,6 +696,64 @@ def test_admin_prompt_and_trace_endpoints(
     assert "request_json" not in llm_list_item
     assert "response_json" not in llm_list_item
 
+    llm_queries: list[str] = []
+
+    def track_llm_queries(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        if "FROM llm_api_request_logs" in statement:
+            llm_queries.append(statement)
+
+    event.listen(db_session.bind, "before_cursor_execute", track_llm_queries)
+    try:
+        llm_summary_only_resp = client.get(
+            "/api/v1/admin/llm-api-logs",
+            params={
+                "trace_id": "trace-admin",
+                "include_stats": False,
+            },
+            headers=auth_header,
+        )
+    finally:
+        event.remove(
+            db_session.bind,
+            "before_cursor_execute",
+            track_llm_queries,
+        )
+    assert llm_summary_only_resp.status_code == 200
+    assert llm_summary_only_resp.json()["total"] == 1
+    assert len(llm_summary_only_resp.json()["items"]) == 1
+    assert llm_summary_only_resp.json()["stats"] is None
+    assert len(llm_queries) == 2
+
+    llm_queries.clear()
+    event.listen(db_session.bind, "before_cursor_execute", track_llm_queries)
+    try:
+        llm_stats_only_resp = client.get(
+            "/api/v1/admin/llm-api-logs",
+            params={
+                "trace_id": "trace-admin",
+                "stats_only": True,
+            },
+            headers=auth_header,
+        )
+    finally:
+        event.remove(
+            db_session.bind,
+            "before_cursor_execute",
+            track_llm_queries,
+        )
+    assert llm_stats_only_resp.status_code == 200
+    assert llm_stats_only_resp.json()["total"] == 1
+    assert llm_stats_only_resp.json()["items"] == []
+    assert llm_stats_only_resp.json()["stats"] == llm_logs_resp.json()["stats"]
+    assert len(llm_queries) == 4
+
     cache_filtered_resp = client.get(
         "/api/v1/admin/llm-api-logs",
         params={"cache_status": "hit"},
@@ -729,6 +787,83 @@ def test_admin_prompt_and_trace_endpoints(
     tools_resp = client.get("/api/v1/admin/tool-calls", headers=auth_header)
     assert tools_resp.status_code == 200, tools_resp.text
     assert tools_resp.json()["items"][0]["status"] == "error"
+
+
+def test_admin_agent_run_list_pages_legacy_rows_without_ledger_projection(
+    client,
+    auth_header,
+    db_session,
+    monkeypatch,
+):
+    from api.admin import trace_routes
+    from core import database
+
+    db_session.add_all([
+        database.AgentRun(
+            run_id=f"legacy-run-{index}",
+            trace_id="trace-legacy-list",
+            session_id="session-legacy",
+            user_id="user-legacy",
+            status="success" if index != 1 else "error",
+            started_at=datetime(2026, 8, 12, 10, index),
+        )
+        for index in range(4)
+    ])
+    db_session.commit()
+
+    def reject_legacy_projection(*_args, **_kwargs):
+        raise AssertionError("迁移前 AgentRun 不应逐条读取 Run Ledger")
+
+    monkeypatch.setattr(trace_routes, "_load_run_view", reject_legacy_projection)
+
+    run_queries: list[str] = []
+
+    def track_run_queries(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        if (
+            "FROM agent_runs" in statement
+            or "FROM run_ledger_stream_heads" in statement
+        ):
+            run_queries.append(statement)
+
+    event.listen(db_session.bind, "before_cursor_execute", track_run_queries)
+    try:
+        response = client.get(
+            "/api/v1/admin/agent-runs",
+            params={"trace_id": "trace-legacy-list", "page": 1, "limit": 2},
+            headers=auth_header,
+        )
+    finally:
+        event.remove(
+            db_session.bind,
+            "before_cursor_execute",
+            track_run_queries,
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 4
+    assert [item["run_id"] for item in response.json()["items"]] == [
+        "legacy-run-3",
+        "legacy-run-2",
+    ]
+    assert len(run_queries) == 3
+
+    failed_response = client.get(
+        "/api/v1/admin/agent-runs",
+        params={
+            "trace_id": "trace-legacy-list",
+            "status": "failed",
+        },
+        headers=auth_header,
+    )
+    assert failed_response.status_code == 200, failed_response.text
+    assert failed_response.json()["total"] == 1
+    assert failed_response.json()["items"][0]["run_id"] == "legacy-run-1"
 
 
 def test_admin_reads_independent_delivery_run_without_legacy_header(

@@ -137,6 +137,15 @@ def test_llm_api_logs_expose_cache_result_and_token_counts():
     assert "缓存写入 tokens" in detail_source
 
 
+def test_llm_api_logs_debounce_filters_and_split_list_from_stats():
+    page_source = LLM_LOGS_JS.read_text(encoding="utf-8")
+
+    assert "const FILTER_DEBOUNCE_MS = 350" in page_source
+    assert "new AbortController()" in page_source
+    assert "include_stats: false" in page_source
+    assert "stats_only: true" in page_source
+
+
 def test_model_routes_page_links_task_and_output_contracts():
     source = read_models_sources()
 

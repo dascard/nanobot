@@ -184,6 +184,65 @@ def _run_started_sort_value(item: dict[str, object]) -> float:
     return value.timestamp()
 
 
+def _legacy_run_status_values(status: str) -> tuple[str, ...]:
+    """返回与目标 Ledger 状态等价的迁移前状态值。"""
+
+    target = canonical_run_status(status)
+    known_values = {
+        status,
+        target,
+        "success",
+        "stream_success",
+        "no_reply",
+        "cancel",
+        "canceled",
+        "timeout",
+        "error",
+        "failure",
+        "empty",
+        "suppressed",
+    }
+    return tuple(
+        value
+        for value in known_values
+        if value and canonical_run_status(value) == target
+    )
+
+
+def _filter_legacy_agent_runs(
+    query,
+    *,
+    status: str,
+    session_id: str,
+    group_id: str,
+    chat_type: str,
+    trace_id: str,
+    user_id: str,
+    prompt_key: str,
+    prompt_mode: str,
+    run_type: str,
+):
+    """把迁移前 AgentRun 的等值筛选下推到数据库。"""
+
+    if status:
+        query = query.filter(
+            AgentRun.status.in_(_legacy_run_status_values(status)),
+        )
+    for column, expected in (
+        (AgentRun.session_id, session_id),
+        (AgentRun.group_id, group_id),
+        (AgentRun.chat_type, chat_type),
+        (AgentRun.trace_id, trace_id),
+        (AgentRun.user_id, user_id),
+        (AgentRun.prompt_key, prompt_key),
+        (AgentRun.prompt_mode, prompt_mode),
+        (AgentRun.run_type, run_type),
+    ):
+        if expected:
+            query = query.filter(column == expected)
+    return query
+
+
 @router.get("/agent-runs")
 def list_agent_runs(
     limit: int = Query(50, ge=1, le=200),
@@ -203,23 +262,28 @@ def list_agent_runs(
 ):
     row_offset = offset if offset is not None else (page - 1) * limit
     ledger = SqlAlchemyRunEventLedger(db)
-    legacy_rows = db.query(AgentRun).all()
-    rows_by_run_id = {str(row.run_id): row for row in legacy_rows}
     ledger_run_ids = {
         str(run_id)
         for run_id, in db.query(RunLedgerStreamHead.run_id).all()
     }
-    all_run_ids = set(rows_by_run_id) | ledger_run_ids
-    projected_rows = [
-        _run_read_model(
+
+    ledger_rows = (
+        db.query(AgentRun)
+        .join(
+            RunLedgerStreamHead,
+            RunLedgerStreamHead.run_id == AgentRun.run_id,
+        )
+        .all()
+        if ledger_run_ids
+        else []
+    )
+    rows_by_run_id = {str(row.run_id): row for row in ledger_rows}
+    ledger_items = []
+    for run_id in ledger_run_ids:
+        item = _run_read_model(
             rows_by_run_id.get(run_id),
             _load_run_view(ledger, run_id),
         )
-        for run_id in all_run_ids
-    ]
-    matched = [
-        item
-        for item in projected_rows
         if _matches_run_filters(
             item,
             status=status,
@@ -231,11 +295,50 @@ def list_agent_runs(
             prompt_key=prompt_key,
             prompt_mode=prompt_mode,
             run_type=run_type,
+        ):
+            ledger_items.append(item)
+
+    legacy_query = (
+        db.query(AgentRun)
+        .outerjoin(
+            RunLedgerStreamHead,
+            RunLedgerStreamHead.run_id == AgentRun.run_id,
         )
-    ]
-    matched.sort(key=_run_started_sort_value, reverse=True)
-    total = len(matched)
-    items = matched[row_offset:row_offset + limit]
+        .filter(RunLedgerStreamHead.run_id.is_(None))
+    )
+    legacy_query = _filter_legacy_agent_runs(
+        legacy_query,
+        status=status,
+        session_id=session_id,
+        group_id=group_id,
+        chat_type=chat_type,
+        trace_id=trace_id,
+        user_id=user_id,
+        prompt_key=prompt_key,
+        prompt_mode=prompt_mode,
+        run_type=run_type,
+    )
+    legacy_total = int(
+        legacy_query.with_entities(func.count(AgentRun.run_id)).scalar() or 0
+    )
+    total = legacy_total + len(ledger_items)
+    ordered_legacy_query = legacy_query.order_by(AgentRun.started_at.desc())
+    if ledger_items:
+        legacy_rows = ordered_legacy_query.limit(row_offset + limit).all()
+        candidates = [
+            _run_read_model(row, None)
+            for row in legacy_rows
+        ] + ledger_items
+        candidates.sort(key=_run_started_sort_value, reverse=True)
+        items = candidates[row_offset:row_offset + limit]
+    else:
+        legacy_rows = (
+            ordered_legacy_query
+            .offset(row_offset)
+            .limit(limit)
+            .all()
+        )
+        items = [_run_read_model(row, None) for row in legacy_rows]
     return {
         "items": items,
         "total": total,
@@ -466,12 +569,253 @@ def get_tool_call(tool_call_id: str, db: Session = Depends(get_db), _auth=Depend
     return row_to_dict(row)
 
 
+def _build_llm_log_stats(query) -> dict[str, object]:
+    """用四次聚合扫描生成完整统计，避免重复遍历大日志表。"""
+
+    by_status = {
+        str(row[0] or "created"): int(row[1] or 0)
+        for row in query.with_entities(
+            LLMApiRequestLog.status,
+            func.count(LLMApiRequestLog.id),
+        )
+        .group_by(LLMApiRequestLog.status)
+        .all()
+    }
+    by_cache_status = {
+        str(row[0] or "pending"): int(row[1] or 0)
+        for row in query.with_entities(
+            LLMApiRequestLog.cache_status,
+            func.count(LLMApiRequestLog.id),
+        )
+        .group_by(LLMApiRequestLog.cache_status)
+        .all()
+    }
+    provider_name_expr = func.coalesce(
+        func.nullif(LLMApiRequestLog.provider, ""),
+        "unknown",
+    )
+    provider_rows = query.with_entities(
+        provider_name_expr,
+        func.count(LLMApiRequestLog.id),
+        func.sum(case((LLMApiRequestLog.status.in_((
+            "success",
+            "stream_success",
+        )), 1), else_=0)),
+        func.sum(case((LLMApiRequestLog.status.in_((
+            "failed",
+            "error",
+            "stream_error",
+        )), 1), else_=0)),
+        func.sum(LLMApiRequestLog.cache_hit_tokens),
+        func.sum(LLMApiRequestLog.cache_miss_tokens),
+        func.sum(LLMApiRequestLog.cache_write_tokens),
+        func.sum(LLMApiRequestLog.cache_input_tokens),
+        func.sum(case(
+            (
+                LLMApiRequestLog.cache_status.in_(("hit", "miss"))
+                & LLMApiRequestLog.cache_input_tokens.is_(None),
+                1,
+            ),
+            else_=0,
+        )),
+        func.sum(case(
+            (
+                LLMApiRequestLog.first_token_latency_ms > 0,
+                LLMApiRequestLog.first_token_latency_ms,
+            ),
+            else_=0,
+        )),
+        func.sum(case(
+            (LLMApiRequestLog.first_token_latency_ms > 0, 1),
+            else_=0,
+        )),
+        func.sum(case(
+            (
+                LLMApiRequestLog.latency_ms > 0,
+                LLMApiRequestLog.latency_ms,
+            ),
+            else_=0,
+        )),
+        func.sum(case(
+            (LLMApiRequestLog.latency_ms > 0, 1),
+            else_=0,
+        )),
+        func.sum(LLMApiRequestLog.input_tokens),
+        func.sum(LLMApiRequestLog.output_tokens),
+        func.sum(LLMApiRequestLog.cost_microusd),
+        func.sum(case(
+            (
+                (LLMApiRequestLog.run_id.is_(None))
+                | (LLMApiRequestLog.run_id == ""),
+                1,
+            ),
+            else_=0,
+        )),
+    ).group_by(provider_name_expr).all()
+    provider_error_rows = query.with_entities(
+        provider_name_expr,
+        LLMApiRequestLog.error_category,
+        func.count(LLMApiRequestLog.id),
+    ).group_by(
+        provider_name_expr,
+        LLMApiRequestLog.error_category,
+    ).all()
+
+    provider_error_counts: dict[str, dict[str, int]] = {}
+    by_error_category: dict[str, int] = {}
+    for provider_name, category, count in provider_error_rows:
+        normalized_provider = str(provider_name or "unknown")
+        normalized_category = str(category or "none")
+        normalized_count = int(count or 0)
+        provider_error_counts.setdefault(normalized_provider, {})[
+            normalized_category
+        ] = normalized_count
+        by_error_category[normalized_category] = (
+            by_error_category.get(normalized_category, 0)
+            + normalized_count
+        )
+
+    by_provider: dict[str, dict[str, object]] = {}
+    total = 0
+    cache_hit_token_total = 0
+    cache_miss_token_total = 0
+    cache_write_token_total = 0
+    cache_input_token_total = 0
+    cache_denominator_unknown = 0
+    first_token_latency_total = 0
+    first_token_latency_count = 0
+    latency_total = 0
+    latency_count = 0
+    input_token_total = 0
+    output_token_total = 0
+    cost_microusd_total = 0
+    unbound_run_count = 0
+    for provider_row in provider_rows:
+        provider_name = str(provider_row[0] or "unknown")
+        requests = int(provider_row[1] or 0)
+        successful_requests = int(provider_row[2] or 0)
+        failed_requests = int(provider_row[3] or 0)
+        hit_tokens = int(provider_row[4] or 0)
+        miss_tokens = int(provider_row[5] or 0)
+        write_tokens = int(provider_row[6] or 0)
+        provider_cache_input_tokens = int(provider_row[7] or 0)
+        provider_cache_denominator_unknown = int(provider_row[8] or 0)
+        provider_first_latency_total = int(provider_row[9] or 0)
+        provider_first_latency_count = int(provider_row[10] or 0)
+        provider_latency_total = int(provider_row[11] or 0)
+        provider_latency_count = int(provider_row[12] or 0)
+        provider_input_tokens = int(provider_row[13] or 0)
+        provider_output_tokens = int(provider_row[14] or 0)
+        provider_cost_microusd = int(provider_row[15] or 0)
+        provider_unbound_runs = int(provider_row[16] or 0)
+        by_provider[provider_name] = {
+            "requests": requests,
+            "successful_requests": successful_requests,
+            "failed_requests": failed_requests,
+            "incomplete_requests": max(
+                0,
+                requests - successful_requests - failed_requests,
+            ),
+            "success_rate": (
+                round(successful_requests / requests, 6)
+                if requests > 0 else None
+            ),
+            "cache_hit_tokens": hit_tokens,
+            "cache_miss_tokens": miss_tokens,
+            "cache_write_tokens": write_tokens,
+            "cache_input_tokens": provider_cache_input_tokens,
+            "cache_denominator_unknown_requests": (
+                provider_cache_denominator_unknown
+            ),
+            "cache_hit_token_ratio": (
+                round(hit_tokens / provider_cache_input_tokens, 6)
+                if provider_cache_input_tokens > 0 else None
+            ),
+            "avg_first_token_latency_ms": (
+                int(provider_first_latency_total / provider_first_latency_count)
+                if provider_first_latency_count > 0 else 0
+            ),
+            "avg_total_latency_ms": (
+                int(provider_latency_total / provider_latency_count)
+                if provider_latency_count > 0 else 0
+            ),
+            "input_tokens": provider_input_tokens,
+            "output_tokens": provider_output_tokens,
+            "cost_microusd": provider_cost_microusd,
+            "by_error_category": provider_error_counts.get(provider_name, {}),
+        }
+        total += requests
+        cache_hit_token_total += hit_tokens
+        cache_miss_token_total += miss_tokens
+        cache_write_token_total += write_tokens
+        cache_input_token_total += provider_cache_input_tokens
+        cache_denominator_unknown += provider_cache_denominator_unknown
+        first_token_latency_total += provider_first_latency_total
+        first_token_latency_count += provider_first_latency_count
+        latency_total += provider_latency_total
+        latency_count += provider_latency_count
+        input_token_total += provider_input_tokens
+        output_token_total += provider_output_tokens
+        cost_microusd_total += provider_cost_microusd
+        unbound_run_count += provider_unbound_runs
+
+    success_count = sum(
+        by_status.get(value, 0)
+        for value in ("success", "stream_success")
+    )
+    failed_error_count = sum(
+        by_status.get(value, 0)
+        for value in ("failed", "error", "stream_error")
+    )
+    created_count = sum(
+        by_status.get(value, 0)
+        for value in ("created", "stream_created")
+    )
+    return {
+        "total": total,
+        "success": success_count,
+        "failed_error": failed_error_count,
+        "created": created_count,
+        "avg_latency_ms": (
+            int(latency_total / latency_count) if latency_count > 0 else 0
+        ),
+        "avg_first_token_latency_ms": (
+            int(first_token_latency_total / first_token_latency_count)
+            if first_token_latency_count > 0 else 0
+        ),
+        "unbound_run_count": unbound_run_count,
+        "by_status": by_status,
+        "by_error_category": by_error_category,
+        "cache_hit": by_cache_status.get("hit", 0),
+        "cache_miss": by_cache_status.get("miss", 0),
+        "cache_not_reported": by_cache_status.get("not_reported", 0),
+        "cache_pending": by_cache_status.get("pending", 0),
+        "cache_error": by_cache_status.get("error", 0),
+        "cache_hit_tokens": cache_hit_token_total,
+        "cache_miss_tokens": cache_miss_token_total,
+        "cache_write_tokens": cache_write_token_total,
+        "cache_input_tokens": cache_input_token_total,
+        "cache_denominator_unknown_requests": cache_denominator_unknown,
+        "cache_hit_token_ratio": (
+            round(cache_hit_token_total / cache_input_token_total, 6)
+            if cache_input_token_total > 0 else None
+        ),
+        "by_cache_status": by_cache_status,
+        "input_tokens": input_token_total,
+        "output_tokens": output_token_total,
+        "cost_microusd": cost_microusd_total,
+        "by_provider": by_provider,
+    }
+
+
 @router.get("/llm-api-logs")
 def list_llm_api_logs(
     limit: int = Query(50, ge=1, le=200),
     page: int = Query(1, ge=1),
     offset: int | None = Query(None, ge=0),
     include_payload: bool = False,
+    include_stats: bool = True,
+    stats_only: bool = False,
     run_id: str = "",
     trace_id: str = "",
     source: str = "",
@@ -500,163 +844,22 @@ def list_llm_api_logs(
         q = q.filter(LLMApiRequestLog.cache_status == cache_status)
     if error_category:
         q = q.filter(LLMApiRequestLog.error_category == error_category)
-    total = q.count()
-    by_status = {
-        str(row[0] or "created"): int(row[1] or 0)
-        for row in q.with_entities(LLMApiRequestLog.status, func.count(LLMApiRequestLog.id))
-        .group_by(LLMApiRequestLog.status)
-        .all()
-    }
-    success_count = sum(by_status.get(s, 0) for s in ("success", "stream_success"))
-    failed_error_count = sum(by_status.get(s, 0) for s in ("failed", "error", "stream_error"))
-    created_count = sum(by_status.get(s, 0) for s in ("created", "stream_created"))
-    by_cache_status = {
-        str(row[0] or "pending"): int(row[1] or 0)
-        for row in q.with_entities(
-            LLMApiRequestLog.cache_status,
-            func.count(LLMApiRequestLog.id),
-        )
-        .group_by(LLMApiRequestLog.cache_status)
-        .all()
-    }
-    by_error_category = {
-        str(row[0] or "none"): int(row[1] or 0)
-        for row in q.with_entities(
-            LLMApiRequestLog.error_category,
-            func.count(LLMApiRequestLog.id),
-        )
-        .group_by(LLMApiRequestLog.error_category)
-        .all()
-    }
-    cache_token_totals = q.with_entities(
-        func.sum(LLMApiRequestLog.cache_hit_tokens),
-        func.sum(LLMApiRequestLog.cache_miss_tokens),
-        func.sum(LLMApiRequestLog.cache_write_tokens),
-        func.sum(LLMApiRequestLog.cache_input_tokens),
-        func.sum(case(
-            (
-                LLMApiRequestLog.cache_status.in_(('hit', 'miss'))
-                & LLMApiRequestLog.cache_input_tokens.is_(None),
-                1,
-            ),
-            else_=0,
-        )),
-    ).one()
-    cache_hit_token_total = int(cache_token_totals[0] or 0)
-    cache_miss_token_total = int(cache_token_totals[1] or 0)
-    cache_input_token_total = (
-        int(cache_token_totals[3]) if cache_token_totals[3] is not None else 0
+    stats = (
+        _build_llm_log_stats(q)
+        if include_stats or stats_only
+        else None
     )
-    cache_denominator_unknown = int(cache_token_totals[4] or 0)
-    avg_latency = (
-        q.filter(LLMApiRequestLog.latency_ms > 0)
-        .with_entities(func.avg(LLMApiRequestLog.latency_ms))
-        .scalar()
-    )
-    avg_first_token_latency = q.with_entities(
-        func.avg(func.nullif(LLMApiRequestLog.first_token_latency_ms, 0))
-    ).scalar()
-    performance_totals = q.with_entities(
-        func.sum(LLMApiRequestLog.input_tokens),
-        func.sum(LLMApiRequestLog.output_tokens),
-        func.sum(LLMApiRequestLog.cost_microusd),
-    ).one()
-    provider_name_expr = func.coalesce(
-        func.nullif(LLMApiRequestLog.provider, ""),
-        "unknown",
-    )
-    provider_rows = q.with_entities(
-        provider_name_expr,
-        func.count(LLMApiRequestLog.id),
-        func.sum(case((LLMApiRequestLog.status.in_((
-            "success",
-            "stream_success",
-        )), 1), else_=0)),
-        func.sum(case((LLMApiRequestLog.status.in_((
-            "failed",
-            "error",
-            "stream_error",
-        )), 1), else_=0)),
-        func.sum(LLMApiRequestLog.cache_hit_tokens),
-        func.sum(LLMApiRequestLog.cache_miss_tokens),
-        func.sum(LLMApiRequestLog.cache_write_tokens),
-        func.sum(LLMApiRequestLog.cache_input_tokens),
-        func.sum(case(
-            (
-                LLMApiRequestLog.cache_status.in_(('hit', 'miss'))
-                & LLMApiRequestLog.cache_input_tokens.is_(None),
-                1,
-            ),
-            else_=0,
-        )),
-        func.avg(func.nullif(LLMApiRequestLog.first_token_latency_ms, 0)),
-        func.avg(func.nullif(LLMApiRequestLog.latency_ms, 0)),
-        func.sum(LLMApiRequestLog.input_tokens),
-        func.sum(LLMApiRequestLog.output_tokens),
-        func.sum(LLMApiRequestLog.cost_microusd),
-    ).group_by(provider_name_expr).all()
-    provider_error_rows = q.with_entities(
-        provider_name_expr,
-        LLMApiRequestLog.error_category,
-        func.count(LLMApiRequestLog.id),
-    ).group_by(
-        provider_name_expr,
-        LLMApiRequestLog.error_category,
-    ).all()
-    provider_error_counts: dict[str, dict[str, int]] = {}
-    for provider_name, category, count in provider_error_rows:
-        provider_error_counts.setdefault(
-            str(provider_name or "unknown"),
-            {},
-        )[str(category or "none")] = int(count or 0)
-    by_provider = {}
-    for provider_row in provider_rows:
-        provider_name = str(provider_row[0] or "unknown")
-        requests = int(provider_row[1] or 0)
-        successful_requests = int(provider_row[2] or 0)
-        failed_requests = int(provider_row[3] or 0)
-        hit_tokens = int(provider_row[4] or 0)
-        miss_tokens = int(provider_row[5] or 0)
-        provider_cache_input_tokens = (
-            int(provider_row[7]) if provider_row[7] is not None else 0
+    total = (
+        int(stats["total"])
+        if stats is not None
+        else int(
+            q.with_entities(func.count(LLMApiRequestLog.id)).scalar() or 0
         )
-        provider_cache_denominator_unknown = int(provider_row[8] or 0)
-        by_provider[provider_name] = {
-            "requests": requests,
-            "successful_requests": successful_requests,
-            "failed_requests": failed_requests,
-            "incomplete_requests": max(
-                0,
-                requests - successful_requests - failed_requests,
-            ),
-            "success_rate": (
-                round(successful_requests / requests, 6)
-                if requests > 0 else None
-            ),
-            "cache_hit_tokens": hit_tokens,
-            "cache_miss_tokens": miss_tokens,
-            "cache_write_tokens": int(provider_row[6] or 0),
-            "cache_input_tokens": provider_cache_input_tokens,
-            "cache_denominator_unknown_requests": provider_cache_denominator_unknown,
-            "cache_hit_token_ratio": (
-                round(hit_tokens / provider_cache_input_tokens, 6)
-                if provider_cache_input_tokens > 0 else None
-            ),
-            "avg_first_token_latency_ms": int(provider_row[9] or 0),
-            "avg_total_latency_ms": int(provider_row[10] or 0),
-            "input_tokens": int(provider_row[11] or 0),
-            "output_tokens": int(provider_row[12] or 0),
-            "cost_microusd": int(provider_row[13] or 0),
-            "by_error_category": provider_error_counts.get(
-                provider_name,
-                {},
-            ),
-        }
-    unbound_run_count = q.filter(
-        (LLMApiRequestLog.run_id.is_(None)) | (LLMApiRequestLog.run_id == "")
-    ).count()
+    )
     row_offset = offset if offset is not None else (page - 1) * limit
-    if include_payload:
+    if stats_only:
+        items = []
+    elif include_payload:
         rows = (
             q.order_by(LLMApiRequestLog.created_at.desc())
             .offset(row_offset)
@@ -723,36 +926,7 @@ def list_llm_api_logs(
         "page": page,
         "limit": limit,
         "offset": row_offset,
-        "stats": {
-            "total": total,
-            "success": success_count,
-            "failed_error": failed_error_count,
-            "created": created_count,
-            "avg_latency_ms": int(avg_latency or 0),
-            "avg_first_token_latency_ms": int(avg_first_token_latency or 0),
-            "unbound_run_count": unbound_run_count,
-            "by_status": by_status,
-            "by_error_category": by_error_category,
-            "cache_hit": by_cache_status.get("hit", 0),
-            "cache_miss": by_cache_status.get("miss", 0),
-            "cache_not_reported": by_cache_status.get("not_reported", 0),
-            "cache_pending": by_cache_status.get("pending", 0),
-            "cache_error": by_cache_status.get("error", 0),
-            "cache_hit_tokens": cache_hit_token_total,
-            "cache_miss_tokens": cache_miss_token_total,
-            "cache_write_tokens": int(cache_token_totals[2] or 0),
-            "cache_input_tokens": cache_input_token_total,
-            "cache_denominator_unknown_requests": cache_denominator_unknown,
-            "cache_hit_token_ratio": (
-                round(cache_hit_token_total / cache_input_token_total, 6)
-                if cache_input_token_total > 0 else None
-            ),
-            "by_cache_status": by_cache_status,
-            "input_tokens": int(performance_totals[0] or 0),
-            "output_tokens": int(performance_totals[1] or 0),
-            "cost_microusd": int(performance_totals[2] or 0),
-            "by_provider": by_provider,
-        },
+        "stats": stats,
     }
 
 
