@@ -1931,6 +1931,55 @@ def test_summary_request_budget_counts_complete_messages_and_covers_manifest():
     assert all("<turn_fragment" in batch.messages[-1]["content"] for batch in batches)
 
 
+def test_default_summary_request_budget_keeps_group_job_in_one_batch():
+    from app.session_memory import config
+    from app.session_memory.llm_contract import (
+        build_summary_request_batches,
+        fragment_summary_turn,
+        request_char_count,
+    )
+    from app.session_memory.llm_summarizer import (
+        SessionSummaryTurnSnapshot,
+        _render_session_summary_prompt,
+    )
+
+    fragments = tuple(
+        fragment
+        for index in range(500)
+        for fragment in fragment_summary_turn(
+            SessionSummaryTurnSnapshot(
+                id=index + 1,
+                role="ambient",
+                content=f"[群成员]: 第 {index + 1} 条群消息",
+                created_at=None,
+                meta_json="{}",
+            ),
+            max_fragment_chars=1000,
+        )
+    )
+
+    batches = build_summary_request_batches(
+        system_prompt=_render_session_summary_prompt(
+            "tasks/session_summary_system"
+        ),
+        previous_state={},
+        available_obligations=(),
+        fragments=fragments,
+        output_instruction=_render_session_summary_prompt(
+            "tasks/session_summary_output"
+        ),
+        max_request_chars=config.SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS,
+        safety_chars=config.SESSION_SUMMARY_LLM_REQUEST_SAFETY_CHARS,
+    )
+
+    assert len(batches) == 1
+    assert len(batches[0].fragments) == 500
+    assert request_char_count(batches[0].messages) <= (
+        config.SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS
+        - config.SESSION_SUMMARY_LLM_REQUEST_SAFETY_CHARS
+    )
+
+
 def test_summary_request_char_count_includes_roles_contents_and_structure():
     from app.session_memory.llm_contract import request_char_count
 
@@ -2995,11 +3044,16 @@ def test_summary_worker_records_normalized_single_target_merge_trace(db_session)
     assert trace["normalized_count"] == 2
 
 
-def test_summary_long_previous_state_is_compacted_before_second_batch(db_session):
+def test_summary_long_previous_state_is_compacted_before_second_batch(
+    db_session,
+    monkeypatch,
+):
+    from app.session_memory import config
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_contract import build_summary_obligations
     from app.session_memory.llm_summarizer import run_session_summary_worker_once
 
+    monkeypatch.setattr(config, "SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS", 12000)
     tail_marker = "完整结构化状态尾标记"
     open_thread = "线" * 2100 + tail_marker
     previous_state = {
@@ -3415,7 +3469,7 @@ def test_summary_output_budget_repair_tolerates_bounded_model_deviation(
         fallback_summary=fallback,
     )
     oversized_state = {
-        "summary": "摘" * 521,
+        "summary": "摘" * 1185,
         "open_threads": [],
         "decisions": [],
         "important_user_requests": [],
@@ -3458,16 +3512,21 @@ def test_summary_output_budget_repair_tolerates_bounded_model_deviation(
     assert trace["kind"] == "state_output_budget"
     assert trace["output_budget_tolerance"] == {
         "applied": True,
-        "summary_chars": 521,
+        "summary_chars": 1185,
         "target_chars": 400,
-        "hard_limit_chars": 800,
+        "hard_limit_chars": 1800,
     }
 
 
-def test_summary_output_budget_repair_rejects_hard_limit_overflow(db_session):
+def test_summary_output_budget_repair_rejects_hard_limit_overflow(
+    db_session,
+    monkeypatch,
+):
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_contract import build_summary_obligations
     from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    from app.session_memory import config
 
     turn = _turn(db_session, content="线上模型拒绝压缩")
     fallback = RollingSessionSummary(
@@ -3493,7 +3552,7 @@ def test_summary_output_budget_repair_rejects_hard_limit_overflow(db_session):
         fallback_summary=fallback,
     )
     oversized_state = {
-        "summary": "摘" * 801,
+        "summary": "摘" * 1801,
         "open_threads": [],
         "decisions": [],
         "important_user_requests": [],
@@ -3506,6 +3565,8 @@ def test_summary_output_budget_repair_rejects_hard_limit_overflow(db_session):
         oversized_state,
         legacy_summary=True,
     )[0]
+    # 单独验证修复硬上限；最终摘要的 1800 字门禁由其他测试覆盖。
+    monkeypatch.setattr(config, "ROLLING_SUMMARY_MAX_CHARS", 1801)
 
     def summarizer(messages):
         inheritance = []
@@ -4131,10 +4192,13 @@ def test_llm_summary_audit_uses_rollup_recent_ids_and_current_input(db_session):
 
 def test_llm_summary_worker_batches_full_request_budget_without_silent_truncation(
     db_session,
+    monkeypatch,
 ):
+    from app.session_memory import config
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import run_session_summary_worker_once
 
+    monkeypatch.setattr(config, "SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS", 12000)
     turns = [_turn(db_session, content=f"轮次 {idx} " + "甲" * 2400) for idx in range(6)]
     fallback = RollingSessionSummary(
         session_id="s1",
@@ -5031,13 +5095,18 @@ def test_renew_summary_job_lease_is_owner_fenced(db_session):
     assert job.locked_at == renewed_at
 
 
-def test_summary_batch_stops_when_lease_renewal_is_lost(db_session):
+def test_summary_batch_stops_when_lease_renewal_is_lost(
+    db_session,
+    monkeypatch,
+):
+    from app.session_memory import config
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import (
         _summarize_prepared_sync,
         prepare_claimed_session_summary_job,
     )
 
+    monkeypatch.setattr(config, "SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS", 12000)
     turns = [
         _turn(db_session, content=f"续租批次 {index} " + "甲" * 2400)
         for index in range(6)
@@ -5104,10 +5173,12 @@ def test_short_transaction_processor_renews_lease_after_each_batch(
     db_session,
     monkeypatch,
 ):
+    from app.session_memory import config
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory import llm_summarizer
     from core import database
 
+    monkeypatch.setattr(config, "SESSION_SUMMARY_LLM_MAX_REQUEST_CHARS", 12000)
     turns = [
         _turn(db_session, content=f"生产续租批次 {index} " + "乙" * 2400)
         for index in range(6)
