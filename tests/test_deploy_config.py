@@ -437,6 +437,38 @@ def test_runtime_mutable_paths_stay_under_data_or_temp(monkeypatch, tmp_path):
     assert paths.rag_benchmark_generated_dir.is_relative_to(paths.temp_dir)
 
 
+def test_prepare_rag_benchmark_runtime_seeds_new_bundled_cases_once(tmp_path):
+    from core.runtime_paths import RuntimePaths, prepare_rag_benchmark_runtime
+
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    (bundled / "memory_case.json").write_text(
+        '{"id":"memory_case"}',
+        encoding="utf-8",
+    )
+    paths = RuntimePaths(
+        data_dir=tmp_path / "data",
+        temp_dir=tmp_path / "temp",
+    )
+
+    first = prepare_rag_benchmark_runtime(
+        paths,
+        bundled_manual_dir=bundled,
+    )
+    target = paths.rag_benchmark_manual_dir / "memory_case.json"
+    target.write_text('{"id":"operator_version"}', encoding="utf-8")
+    second = prepare_rag_benchmark_runtime(
+        paths,
+        bundled_manual_dir=bundled,
+    )
+
+    assert first == {"directories": 5, "seeded_cases": 1}
+    assert second == {"directories": 5, "seeded_cases": 0}
+    assert target.read_text(encoding="utf-8") == '{"id":"operator_version"}'
+    assert paths.rag_benchmark_report_dir.is_dir()
+    assert paths.rag_benchmark_generated_dir.is_dir()
+
+
 def test_production_deploy_requires_digest_and_never_builds_in_place():
     script = Path("scripts/deploy-production.sh").read_text(encoding="utf-8")
     deployer = Path("scripts/deploy_release.py").read_text(encoding="utf-8")

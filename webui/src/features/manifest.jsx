@@ -7,6 +7,7 @@ import {
   FileStack,
   FolderTree,
   Shield,
+  ShieldCheck,
   Wrench,
 } from 'lucide-react'
 
@@ -185,6 +186,31 @@ const FEATURE_DEFINITIONS = [
     featureFlag: '',
     owner: 'runtime.modules',
     order: 35,
+  },
+  {
+    featureId: 'system.self-check',
+    route: '/self-check',
+    navGroup: 'system',
+    label: '系统自检',
+    icon: ShieldCheck,
+    component: lazy(() => import('./self-check/SelfcheckPage').then(module => ({
+      default: module.SelfcheckPage,
+    }))),
+    requiredCapability: 'admin.runtime.read',
+    lifecycle: 'active',
+    backendOperationIds: [
+      'get_api_v1_admin_self_check_capabilities',
+      'get_api_v1_admin_self_check_probes',
+      'post_api_v1_admin_self_check_runs',
+      'get_api_v1_admin_self_check_runs',
+      'get_api_v1_admin_self_check_runs_run_id',
+      'get_api_v1_admin_settings',
+      'put_api_v1_admin_settings_key',
+    ],
+    requiredRegistryGeneration: 1,
+    featureFlag: '',
+    owner: 'runtime.self-check',
+    order: 36,
   },
 ]
 

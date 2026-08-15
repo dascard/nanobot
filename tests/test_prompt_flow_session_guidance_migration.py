@@ -883,6 +883,52 @@ def test_migrate_flow_is_idempotent_for_current_contract():
     assert migrated is not flow
 
 
+def test_runtime_flow_migrates_old_canonical_context_order():
+    from core.prompt_v2.flow import validate_runtime_contract
+    from core.prompt_v2.flow_migrations import migrate_runtime_flow
+
+    flow = _canonical_flow()
+    flow["edges"] = [
+        edge
+        for edge in flow["edges"]
+        if (edge["from"], edge["to"])
+        not in {
+            ("session_guidance", "summary_context"),
+            ("history_messages", "group_context"),
+            ("history_messages", "project_context"),
+            ("project_context", "persona_reference"),
+        }
+    ]
+    flow["edges"].extend([
+        {
+            "from": "session_guidance",
+            "to": "group_context",
+            "chat_types": ["group"],
+        },
+        {
+            "from": "session_guidance",
+            "to": "project_context",
+            "chat_types": ["private"],
+        },
+        {"from": "project_context", "to": "summary_context"},
+        {"from": "history_messages", "to": "persona_reference"},
+    ])
+
+    migrated, changed = migrate_runtime_flow(flow)
+
+    assert changed is True
+    validate_runtime_contract(migrated)
+    assert {
+        (edge["from"], edge["to"])
+        for edge in migrated["edges"]
+    } >= {
+        ("session_guidance", "summary_context"),
+        ("history_messages", "group_context"),
+        ("history_messages", "project_context"),
+        ("project_context", "persona_reference"),
+    }
+
+
 @pytest.mark.asyncio
 async def test_migrated_runtime_flow_strict_compiles_all_live_branches(
     tmp_path,

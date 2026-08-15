@@ -86,8 +86,14 @@ class _FakeCallbacks:
     def mark_prompt_runtime_ready(self) -> None:
         self._record("prompt_ready")
 
-    def start_schedulers(self, testing: bool, logger: object) -> object:
+    def start_schedulers(
+        self,
+        testing: bool,
+        logger: object,
+        application: object,
+    ) -> object:
         assert logger is not None
+        assert application is not None
         self._record(f"start_schedulers:{testing}")
         return self.schedulers
 
@@ -305,6 +311,7 @@ async def test_builtin_modules_start_and_stop_owned_resources():
         "outbound_delivery",
     )
     assert app.state.telemetry_runtime is fake.telemetry_runtime
+    assert app.state.scheduler_handles is fake.schedulers
     assert fake.calls == [
         "init_db",
         "reconcile_skill_candidates:False",
@@ -345,6 +352,7 @@ async def test_builtin_modules_start_and_stop_owned_resources():
     assert app.state.new_api_session is None
     assert app.state.job_lease_adapters is None
     assert app.state.telemetry_runtime is None
+    assert app.state.scheduler_handles is None
 
 
 @pytest.mark.asyncio

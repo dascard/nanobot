@@ -430,9 +430,30 @@ def install_openapi_contracts(
     registry_sha256 = getattr(descriptors, "sha256", "")
     frozen_descriptors = tuple(descriptors)
 
+    def materialize_included_routes(
+        routes: Iterable[object],
+        seen: set[int] | None = None,
+    ) -> None:
+        """兼容 FastAPI 延迟 include_router，避免首份 OpenAPI 漏掉嵌套路由。"""
+
+        visited = seen if seen is not None else set()
+        for route in routes:
+            marker = id(route)
+            if marker in visited:
+                continue
+            visited.add(marker)
+            original_router = getattr(route, "original_router", None)
+            nested_routes = getattr(original_router, "routes", None)
+            if isinstance(nested_routes, list):
+                materialize_included_routes(nested_routes, visited)
+            resolve_candidates = getattr(route, "effective_candidates", None)
+            if callable(resolve_candidates):
+                resolve_candidates()
+
     def custom_openapi() -> dict[str, Any]:
         if app.openapi_schema is not None:
             return app.openapi_schema
+        materialize_included_routes(app.routes)
         schema = get_openapi(
             title=app.title,
             version=app.version,

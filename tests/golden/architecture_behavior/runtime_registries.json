@@ -1696,6 +1696,21 @@
     },
     {
       "category": "agent",
+      "dangerous": true,
+      "default": "pabot",
+      "env_name": "NANOBOT_AGENT_RUNTIME_ADDITIONAL_IDS",
+      "key": "agent.runtime.additional_ids",
+      "owner_module": "runtime.agent",
+      "restart_required": true,
+      "safety_class": "invariant",
+      "source_precedence": [
+        "environment",
+        "default"
+      ],
+      "value_type": "str"
+    },
+    {
+      "category": "agent",
       "dangerous": false,
       "default": "native",
       "env_name": "NANOBOT_AGENT_RUNTIME_DEFAULT",
@@ -6762,6 +6777,60 @@
       "env_name": "NANOBOT_SANDBOX_WORKSPACE_QUOTA_BYTES",
       "key": "sandbox.workspace_quota_bytes",
       "owner_module": "core.sandbox",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "int"
+    },
+    {
+      "category": "system",
+      "dangerous": false,
+      "default": false,
+      "env_name": "NANOBOT_SELFCHECK_MODEL_CANARY_ENABLED",
+      "key": "selfcheck.model_canary_enabled",
+      "owner_module": "runtime.self-check",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "bool"
+    },
+    {
+      "category": "system",
+      "dangerous": false,
+      "default": true,
+      "env_name": "NANOBOT_SELFCHECK_WATCHDOG_ENABLED",
+      "key": "selfcheck.watchdog_enabled",
+      "owner_module": "runtime.self-check",
+      "restart_required": false,
+      "safety_class": "ordinary",
+      "source_precedence": [
+        "database",
+        "environment",
+        "legacy_database",
+        "legacy_environment",
+        "default"
+      ],
+      "value_type": "bool"
+    },
+    {
+      "category": "system",
+      "dangerous": false,
+      "default": 900,
+      "env_name": "NANOBOT_SELFCHECK_WATCHDOG_INTERVAL_SECONDS",
+      "key": "selfcheck.watchdog_interval_seconds",
+      "owner_module": "runtime.self-check",
       "restart_required": false,
       "safety_class": "ordinary",
       "source_precedence": [

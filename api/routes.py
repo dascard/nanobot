@@ -5,9 +5,11 @@ FastAPI 路由模块。
 import logging
 import json
 import asyncio
+import inspect
 import time as _time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -31,6 +33,7 @@ from core.context_builder import (
     build_chat_context as _build_chat_context,  # noqa: F401 - 旧 api.routes 导入路径兼容
     build_structured_chat_context as _build_structured_chat_context,
     build_session_memory as _build_session_memory,  # noqa: F401 - 旧 api.routes 导入路径兼容
+    format_group_canonical_message as _format_group_canonical_message,
 )
 from core.evolution import evolution_task
 from core.inbound_claim_lifecycle import InboundClaimOwner
@@ -46,6 +49,10 @@ from core import user_block_rules
 from core.agent_runtime.gateway import get_agent_gateway as get_bridge
 from clients.classifier_client import get_guardrail
 from app.group_ingress import helpers as group_ingress_helpers
+from app.session_config import (
+    is_database_only_enabled,
+    resolve_session_agent_id,
+)
 from api import (
     chat_content_helpers,
     chat_guardrail_facade,
@@ -154,6 +161,22 @@ router = APIRouter(prefix="/api/v1")
 EMPTY_ASSISTANT_PLACEHOLDER = "（无回复内容）"
 SAFE_STREAM_ERROR_MESSAGE = "系统暂时不可用，请稍后再试"
 CHAT_STREAM_QUEUE_MAXSIZE = 128
+
+
+def _resolve_chat_agent_gateway(agent_id: str) -> Any:
+    """调用多 Agent Gateway，并兼容旧的无参测试／嵌入适配器。"""
+
+    provider = get_bridge
+    try:
+        signature = inspect.signature(provider)
+    except (TypeError, ValueError):
+        return provider(agent_id, entrypoint="chat")
+    try:
+        signature.bind(agent_id, entrypoint="chat")
+    except TypeError:
+        signature.bind()
+        return provider()
+    return provider(agent_id, entrypoint="chat")
 
 
 def _safe_log(method_name: str, message: str, *args: Any, **kwargs: Any) -> None:
@@ -524,6 +547,12 @@ def _chat_persistence_input(req: ChatProxyRequest) -> chat_persistence.ChatTurnP
             ).get("event_time")
             or ""
         ),
+        prompt_event_content=str(
+            getattr(req, "_prompt_event_content", "") or ""
+        ),
+        prompt_effort_constraint=str(
+            getattr(req, "_prompt_effort_constraint", "") or ""
+        ),
     )
 
 
@@ -719,6 +748,35 @@ def _chat_runtime_route_services(db: Session) -> chat_runtime_route_context.Chat
     def build_persona_context(**kwargs: Any) -> Any:
         return _build_persona_injection_context(db, **kwargs)
 
+    def build_group_prompt_event(
+        *,
+        sender_name: str,
+        content: str,
+        event_time: str,
+        message_id: str,
+    ) -> str:
+        timestamp = db_now_naive()
+        normalized_event_time = str(event_time or "").strip()
+        if normalized_event_time.endswith(" CST"):
+            normalized_event_time = normalized_event_time[:-4]
+        if normalized_event_time:
+            try:
+                timestamp = datetime.strptime(
+                    normalized_event_time,
+                    "%Y-%m-%d %H:%M:%S",
+                )
+            except ValueError:
+                logger.warning(
+                    "[/chat] 无法解析服务端群消息 event_time=%r",
+                    event_time,
+                )
+        return _format_group_canonical_message(
+            sender_name=sender_name,
+            content=content,
+            timestamp=timestamp,
+            message_id=message_id,
+        )
+
     return chat_runtime_route_context.ChatRuntimeRouteServices(
         build_multimodal_user_input_text=_build_multimodal_user_input_text,
         max_query_chars=MAX_QUERY_CHARS,
@@ -727,6 +785,7 @@ def _chat_runtime_route_services(db: Session) -> chat_runtime_route_context.Chat
         chat_request_platform=_chat_request_platform,
         build_runtime_payload=chat_runtime_facade.build_chat_runtime_payload,
         build_persona_context=build_persona_context,
+        build_group_prompt_event=build_group_prompt_event,
         logger=logger,
     )
 
@@ -883,6 +942,8 @@ class _ChatDatabasePreparation:
     summary_context: str = ""
     memory_recall_context: str = ""
     project_context: str = ""
+    database_only_completion: Any | None = None
+    agent_id: str = "nanobot"
 
 
 def _prepare_chat_database_phase(
@@ -981,6 +1042,33 @@ def _prepare_chat_database_phase(
             context_debug={},
         )
 
+    if is_database_only_enabled(
+        db,
+        platform=_chat_request_platform(req),
+        chat_type=_chat_request_type(req),
+        session_id=req.session_id,
+    ):
+        database_only_completion = (
+            chat_response_contract.build_completed_inbound_response(
+                outcome="no_reply",
+                reason="database_only",
+            )
+        )
+        stored_completion = chat_persistence.persist_database_only_message(
+            db,
+            _chat_persistence_input(req),
+            completion=database_only_completion,
+            key=private_claim_key,
+            request_sha256=private_request_sha256,
+        )
+        return _ChatDatabasePreparation(
+            blocked_completion=None,
+            memory_header="",
+            history_messages=[],
+            context_debug={},
+            database_only_completion=stored_completion,
+        )
+
     structured_context = _build_structured_chat_context(
         db,
         req.session_id,
@@ -999,6 +1087,12 @@ def _prepare_chat_database_phase(
         summary_context=structured_context.summary_context,
         memory_recall_context=structured_context.memory_recall_context,
         project_context=structured_context.project_context,
+        agent_id=resolve_session_agent_id(
+            db,
+            platform=_chat_request_platform(req),
+            chat_type=_chat_request_type(req),
+            session_id=req.session_id,
+        ),
     )
 
 
@@ -1144,6 +1238,23 @@ async def proxy_chat(
                     raise RuntimeError("blocked claim complete 未成功")
             return blocked_payload
 
+        if db_preparation.database_only_completion is not None:
+            _safe_log(
+                "info",
+                "[/chat] database_only session=%s",
+                req.session_id,
+            )
+            if claim_owner is not None:
+                completed = await claim_owner.complete(
+                    db_preparation.database_only_completion
+                )
+                if completed is not True:
+                    raise RuntimeError("database_only claim complete 未成功")
+            return _completed_chat_route_response(
+                req,
+                db_preparation.database_only_completion,
+            )
+
         _schedule_image_precache(
             background_tasks,
             req.files,
@@ -1219,8 +1330,16 @@ async def proxy_chat(
         enriched_query = runtime_route_context.enriched_query
         bridge_meta = runtime_route_context.bridge_meta
         platform = runtime_route_context.platform
+        if is_group:
+            persist_req._prompt_event_content = (
+                runtime_route_context.prompt_event_content
+            )
+        else:
+            persist_req._prompt_effort_constraint = str(
+                bridge_meta.get("effort_constraint") or ""
+            )
         # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
-        bridge = get_bridge()
+        bridge = _resolve_chat_agent_gateway(db_preparation.agent_id)
         route_runner_context = _chat_route_runner_context(
             req=req,
             persist_req=persist_req,

@@ -38,9 +38,9 @@ GROUP_ROLLING_IDLE_SECONDS = 60
 GROUP_ROLLING_JOB_MAX_TOKENS = 16000
 GROUP_CONTEXT_MAX_TOKENS = 24000
 GROUP_CONTEXT_MAX_MESSAGE_CHARS = 12000
-# 无摘要兜底超过上下文预算时，最老边界按固定 ChatLog ID 块轮换，避免每条
-# 新消息都移动缓存前缀；正常 6000 tokens 原文窗口不会触发该裁剪。
-GROUP_CONTEXT_SOURCE_ID_BLOCK_SPAN = 8
+# 无摘要兜底超过上下文预算时，最老边界按当前会话内的固定来源块轮换。
+# 128 行约对应低水位窗口，避免全库 ChatLog ID 和其他群消息扰动本群前缀。
+GROUP_CONTEXT_SOURCE_ID_BLOCK_SPAN = 128
 GROUP_SUMMARY_DISCOVERY_BATCH_SIZE = 100
 # 同一摘要合同失败后，后台扫描只允许一次有界自动恢复；恢复前保留冷却，
 # 避免扫描热循环不断创建等价任务。管理端显式 retry 不受该门禁限制。

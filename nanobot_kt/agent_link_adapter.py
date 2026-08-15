@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from core.agent_link.runtime import (
@@ -27,11 +28,25 @@ from nanobot_kt.agent_link_tools import build_agent_link_tools
 class KtAgentLinkChatAdapter:
     """为每个 Agent Link 会话安装动态工具并运行 Nanobot Agent Loop。"""
 
-    def __init__(self, bridge_pool: Any) -> None:
+    def __init__(
+        self,
+        bridge_pool: Any = None,
+        *,
+        bridge_pool_resolver: Callable[[str], Any] | None = None,
+    ) -> None:
+        if bridge_pool is not None and bridge_pool_resolver is not None:
+            raise ValueError("bridge_pool 与 bridge_pool_resolver 只能提供一个")
+        if bridge_pool is None and bridge_pool_resolver is None:
+            raise ValueError("必须提供 BridgePool 或 resolver")
         self._bridge_pool = bridge_pool
+        self._bridge_pool_resolver = bridge_pool_resolver
 
     @staticmethod
     def _install_runtime_tools(bridge: Any, tools: tuple[Any, ...]) -> None:
+        # Native Runtime 可以直接处理不带前端动态工具的 Agent Link 对话；
+        # 只有确实存在动态工具时才要求 KT 的 Registry/Executor 扩展面。
+        if not tools:
+            return
         agent = getattr(bridge, "agent", None)
         registry = getattr(agent, "registry", None)
         executor = getattr(agent, "executor", None)
@@ -58,7 +73,11 @@ class KtAgentLinkChatAdapter:
         request: AgentLinkChatRequest,
         tool_caller: AgentLinkToolCaller,
     ) -> str:
-        pool = self._bridge_pool
+        pool = (
+            self._bridge_pool_resolver(request.target_agent_id)
+            if self._bridge_pool_resolver is not None
+            else self._bridge_pool
+        )
         pool_key = pool._session_key(
             user_id=request.key.bridge_user_id,
             session_id=request.key.bridge_session_id,
@@ -78,6 +97,7 @@ class KtAgentLinkChatAdapter:
             client_id = request.client.platform_id
             metadata = {
                 "platform": client_id,
+                "agent_id": request.target_agent_id,
                 "gateway_transport": "agent_link",
                 "policy_profile": request.policy_profile,
                 "chat_type": "private",

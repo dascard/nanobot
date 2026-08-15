@@ -76,9 +76,17 @@ def build_identity_vars(
         if is_super_user is None
         else is_super_user is True
     )
-    aliases = bot_aliases or _configured_aliases()
+    aliases = bot_aliases if bot_aliases else _configured_aliases()
     if isinstance(aliases, (list, tuple, set)):
-        alias_text = "\n".join(str(x) for x in aliases if str(x).strip())
+        normalized_aliases = list(dict.fromkeys(
+            str(item).strip()
+            for item in aliases
+            if str(item).strip()
+        ))
+        # 显式请求列表可能来自无序 JSON；配置中心返回的列表则保留管理员顺序。
+        if bot_aliases:
+            normalized_aliases.sort(key=lambda item: (item.casefold(), item))
+        alias_text = "\n".join(normalized_aliases)
     else:
         alias_text = str(aliases or "")
 

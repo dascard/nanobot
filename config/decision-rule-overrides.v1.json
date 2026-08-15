@@ -7,7 +7,7 @@
         "category": "natural_language_semantic"
       },
       "expected_count": 86,
-      "expected_rule_ids_sha256": "3fda79fb485201c04e745db9e18af01ae6e1fc784ea0ee781d275c9176caf334",
+      "expected_rule_ids_sha256": "d6779d5ae67b8a9efc0d77e52c5f6877f5b51cb36dfccff031ace570cdba0b41",
       "override": {
         "category": "natural_language_semantic",
         "disposition": "model_signal_only",
@@ -21,7 +21,7 @@
         "category": "compatibility"
       },
       "expected_count": 147,
-      "expected_rule_ids_sha256": "0158bbacd0e9bc89b365349a9ba1628aaa16cb76b30f057cc7ea774dee28bc45",
+      "expected_rule_ids_sha256": "7d487dcaeb2c1990891857b374c000e1553e4c0fcd6e8d24477b68f19fd86d79",
       "override": {
         "category": "compatibility",
         "disposition": "compatibility_migration",
@@ -266,8 +266,8 @@
         "path": "core/config_registry.py",
         "category": "protocol_syntax"
       },
-      "expected_count": 13,
-      "expected_rule_ids_sha256": "f2d592916ada949da1762cd953248271ec4d30827833137a92faa93ea5c13cd2",
+      "expected_count": 14,
+      "expected_rule_ids_sha256": "0521ceceb1a8d0f84bd8812c0d3acaf3553a9788943b660708e11d183c691ea9",
       "override": {
         "category": "protocol_syntax",
         "disposition": "policy",
@@ -844,13 +844,13 @@
       "review_status": "reviewed",
       "reason": "人工复核：评测标签是版本化数据枚举"
     },
-    "decision.b7f8eca4a6a55434cf4b": {
+    "decision.8544cf43f4a292fdd5e3": {
       "category": "data_consistency",
       "disposition": "policy",
       "review_status": "reviewed",
       "reason": "人工复核：允许更新字段属于配置写入合同"
     },
-    "decision.5cf5ed11ac072f47bbb8": {
+    "decision.885f1f24480d3964b2b3": {
       "category": "data_consistency",
       "disposition": "policy",
       "review_status": "reviewed",
@@ -1707,6 +1707,12 @@
       "disposition": "model_signal_only",
       "review_status": "reviewed",
       "reason": "人工复核：群学习正则匹配只能生成 candidate/evidence 信号，不能自动激活正式记忆"
+    },
+    "decision.3570a828c27f4dc72891": {
+      "category": "protocol_syntax",
+      "disposition": "policy",
+      "review_status": "reviewed",
+      "reason": "人工复核：Provider Doctor 仅对已有独立 HTTP Adapter 的 OpenAI-compatible 协议绕过 KT Driver 依赖检查"
     },
     "decision.eb262f3261a75de7e428": {
       "category": "protocol_syntax",

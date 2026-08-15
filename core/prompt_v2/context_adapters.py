@@ -109,6 +109,8 @@ def build_template_values(request, *, current_time: str | None = None) -> dict[s
         "sender_name": str(request.sender_name or "").strip(),
         "bot_name": identity_vars.get("character_name", ""),
         "bot_aliases": aliases_text,
+        "agent_id": _bounded_text(request.agent_id, _ID_MAX_CHARS),
+        "agent_profile": _bounded_text(request.agent_profile, 8000),
         "current_time": _current_time_text(current_time),
         "timezone": "Asia/Shanghai",
     }

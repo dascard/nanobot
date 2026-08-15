@@ -69,3 +69,30 @@ def test_cache_shape_miss_reason_identifies_prefix_breaks():
     assert infer_cache_miss_reason(previous, previous) == (
         "upstream_or_cache_eviction"
     )
+
+
+def test_cache_shape_uses_manifest_history_range_after_dynamic_user_context():
+    from foundation.llm.cache_shape import build_llm_cache_shape
+
+    request = {
+        "messages": [
+            {"role": "system", "content": "固定策略"},
+            {"role": "user", "content": "摘要"},
+            {"role": "system", "content": "历史说明"},
+            {"role": "user", "content": "历史问题"},
+            {"role": "assistant", "content": "历史回答"},
+            {"role": "user", "content": "动态画像"},
+            {"role": "user", "content": "当前问题"},
+        ]
+    }
+
+    shape = build_llm_cache_shape(
+        request,
+        cache_context={
+            "history_message_start_index": 3,
+            "history_message_end_index": 5,
+        },
+    )
+
+    assert shape["history_source"] == "manifest"
+    assert shape["history_messages"] == 2

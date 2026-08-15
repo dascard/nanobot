@@ -427,7 +427,15 @@ def run_provider_doctor(
     configuration_errors: list[str] = []
     if not provider.enabled:
         configuration_errors.append("Provider 已禁用")
-    if not provider.runtime_available:
+    # OpenAI-compatible Doctor 走本模块自己的受控 HTTP Adapter，不依赖
+    # KT/OpenAI SDK。Native Runtime 同样可以在未安装 ``openai`` 包时执行
+    # Chat Completions，因此不能把 KT Driver 的可用性误判为 Provider
+    # 连通性失败。其他协议尚无独立 Doctor Adapter，仍按 Driver 依赖
+    # fail closed。
+    if (
+        not provider.runtime_available
+        and descriptor.request_protocol.value != "openai_chat_completions"
+    ):
         configuration_errors.append(
             provider.runtime_unavailable_reason or "Provider Driver 不可用"
         )
@@ -466,10 +474,16 @@ def run_provider_doctor(
 
     checks.append(_passed(
         ProviderDiagnosticLayer.CONFIGURATION,
-        summary="Provider 配置与 Driver 依赖可用",
+        summary="Provider 配置可用于当前 Doctor Adapter",
         metadata={
             "credential_configured": bool(provider.credential_configured),
             "anonymous_auth_probe": not bool(provider.credential_configured),
+            "agent_runtime_available": bool(provider.runtime_available),
+            "agent_runtime_unavailable_reason": (
+                str(provider.runtime_unavailable_reason or "")
+                if not provider.runtime_available
+                else ""
+            ),
         },
     ))
     if provider.driver_type == "codex":

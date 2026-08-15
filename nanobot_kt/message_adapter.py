@@ -55,6 +55,11 @@ class MessageContractBridgeMixin:
             metadata=metadata,
             stream=stream,
             trusted_gateway_transport=trusted_gateway_transport,
+            agent_id=str(
+                getattr(self, "_agent_id", "")
+                or getattr(self, "agent_id", "")
+                or "nanobot"
+            ),
         )
         runtime_request = invocation.runtime_request
         return await self.handle_message(
@@ -94,6 +99,7 @@ def _build_runtime_request(
     *,
     content: str,
     stream: bool,
+    agent_id: str,
 ) -> AgentTurnRequest:
     chat_type = (
         RuntimeChatType.GROUP
@@ -103,7 +109,7 @@ def _build_runtime_request(
     request_id = _runtime_request_id(message, content=content)
     context = RequestRuntimeContext(
         request_id=request_id,
-        agent_id="nanobot",
+        agent_id=agent_id,
         principal=RuntimePrincipal(
             platform=str(message.principal.platform),
             owner_type=RuntimeOwnerType(message.principal.owner_type),
@@ -148,6 +154,7 @@ def build_kt_message_invocation(
     metadata: Mapping[str, Any] | None = None,
     stream: bool = False,
     trusted_gateway_transport: str = "",
+    agent_id: str = "nanobot",
 ) -> KTMessageInvocation:
     """用受信合同覆盖所有身份字段，兼容元数据不能反向改写身份。"""
 
@@ -161,6 +168,12 @@ def build_kt_message_invocation(
         raise ValueError("runtime_user_id 不能为空")
     if not session_id:
         raise ValueError("runtime_session_id 不能为空")
+    from core.registry.validation import validate_identifier
+
+    normalized_agent_id = validate_identifier(
+        str(agent_id or "").strip(),
+        field_name="agent_id",
+    )
 
     normalized_meta = dict(metadata or {})
     is_group = message.chat_stream.chat_type == "group"
@@ -238,6 +251,7 @@ def build_kt_message_invocation(
             message,
             content=content,
             stream=stream,
+            agent_id=normalized_agent_id,
         ),
         content=content,
         user_id=user_id,

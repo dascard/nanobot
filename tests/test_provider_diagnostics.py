@@ -73,6 +73,43 @@ def test_provider_doctor_stops_after_configuration_failure(monkeypatch):
     )
 
 
+def test_openai_compatible_doctor_does_not_require_kt_sdk(monkeypatch):
+    from clients.provider_doctor import (
+        ProviderDoctorOptions,
+        run_provider_doctor,
+    )
+
+    provider = _provider()
+    provider.runtime_available = False
+    provider.runtime_unavailable_reason = "缺少 Python 依赖：openai"
+    monkeypatch.setattr("clients.provider_doctor._probe_dns", lambda *_args: 1)
+    monkeypatch.setattr("clients.provider_doctor._probe_tcp", lambda *_args: 1)
+    monkeypatch.setattr("clients.provider_doctor._probe_tls", lambda *_args: 1)
+    monkeypatch.setattr(
+        "clients.provider_doctor.discover_provider_models",
+        lambda *_args, **_kwargs: ["model-a"],
+    )
+    monkeypatch.setattr(
+        "clients.provider_doctor._probe_chat_request",
+        lambda *_args, **_kwargs: (1, {"choices": [{}]}),
+    )
+
+    report = run_provider_doctor(
+        provider,
+        ProviderDoctorOptions(model="model-a"),
+    )
+    configuration = report.checks[0]
+
+    assert report.ok is True
+    assert configuration.status.value == "passed"
+    assert configuration.metadata == {
+        "credential_configured": True,
+        "anonymous_auth_probe": False,
+        "agent_runtime_available": False,
+        "agent_runtime_unavailable_reason": "缺少 Python 依赖：openai",
+    }
+
+
 def test_provider_doctor_runs_layered_and_explicit_capability_probes(
     monkeypatch,
 ):

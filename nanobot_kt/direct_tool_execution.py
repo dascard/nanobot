@@ -43,6 +43,7 @@ def _build_tool_execution_request(
     tool_plan_sha256: str,
     timeout_seconds: float,
     governance: Any,
+    agent_id: str,
 ):
     from core.agent_runtime import (
         RequestRuntimeContext,
@@ -65,7 +66,7 @@ def _build_tool_execution_request(
     return RuntimeToolExecutionRequest(
         context=RequestRuntimeContext(
             request_id=request_id,
-            agent_id="nanobot",
+            agent_id=agent_id,
             principal=RuntimePrincipal(
                 platform=platform,
                 owner_type=(
@@ -339,6 +340,7 @@ async def execute_registered_tool(
             tool_plan_sha256=tool_plan.sha256,
             timeout_seconds=timeout_seconds,
             governance=governance,
+            agent_id=str(getattr(bridge, "_agent_id", "") or "nanobot"),
         )
         from core.permissions import authorize_tool_execution
         from core import database

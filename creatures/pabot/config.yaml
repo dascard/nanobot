@@ -1,0 +1,46 @@
+name: pabot
+version: "1.0"
+max_iterations: 16
+
+controller:
+  provider: openai
+  model: ${LLM_MODEL_SMART:-deepseek-chat}
+  base_url: ${NEW_API_BASE_URL:-https://api.new-api.com/v1}
+  api_key_env: NEW_API_KEY
+  temperature: 0.3
+  max_retries: 0
+  tool_format: native
+  include_tools_in_prompt: false
+  include_hints_in_prompt: false
+  max_messages: 0
+  ephemeral: false
+
+memory:
+  path: ./memory
+
+tools:
+  - {name: sql_analysis, type: package, module: nanobot_kt.tools.sql_analysis, class: SQLAnalysisTool}
+  - {name: ai_daily, type: package, module: nanobot_kt.tools.ai_daily, class: AiDailyTool}
+  - {name: memory_query, type: package, module: nanobot_kt.tools.memory_query, class: MemoryQueryTool}
+  - {name: knowledge_query, type: package, module: nanobot_kt.tools.knowledge_query, class: KnowledgeQueryTool}
+  - {name: web_search, type: package, module: nanobot_kt.tools.web_search, class: WebSearchTool}
+  - {name: skill, type: package, module: nanobot_kt.tools.skill, class: SkillTool}
+  - {name: session_plan_read, type: package, module: nanobot_kt.tools.session_plan, class: SessionPlanReadTool}
+  - {name: session_plan_write, type: package, module: nanobot_kt.tools.session_plan, class: SessionPlanWriteTool}
+  - {name: sandbox_exec, type: package, module: nanobot_kt.tools.sandbox, class: SandboxExecTool}
+  - {name: sandbox_poll, type: package, module: nanobot_kt.tools.sandbox, class: SandboxPollTool}
+  - {name: sandbox_write_stdin, type: package, module: nanobot_kt.tools.sandbox, class: SandboxWriteStdinTool}
+  - {name: sandbox_terminate, type: package, module: nanobot_kt.tools.sandbox, class: SandboxTerminateTool}
+  - {name: workspace_read, type: package, module: nanobot_kt.tools.sandbox, class: WorkspaceReadTool}
+  - {name: workspace_search, type: package, module: nanobot_kt.tools.sandbox, class: WorkspaceSearchTool}
+  - {name: workspace_write, type: package, module: nanobot_kt.tools.sandbox, class: WorkspaceWriteTool}
+  - {name: workspace_edit, type: package, module: nanobot_kt.tools.sandbox, class: WorkspaceEditTool}
+  - {name: asset_import, type: package, module: nanobot_kt.tools.sandbox, class: AssetImportTool}
+  - {name: asset_publish, type: package, module: nanobot_kt.tools.sandbox, class: AssetPublishTool}
+  - {name: reply, type: package, module: nanobot_kt.tools.reply, class: ReplyTool}
+  - {name: no_reply, type: package, module: nanobot_kt.tools.reply, class: NoReplyTool}
+
+output:
+  type: custom
+  module: nanobot_kt.output
+  class: BufferedOutput

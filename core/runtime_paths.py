@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import shutil
 
 from core.config_registry import SETTING_DEFS
 from core.settings_specs import resolve_boot_setting_value
@@ -70,3 +71,59 @@ class RuntimePaths:
 
 
 RUNTIME_PATHS = RuntimePaths.from_environment()
+
+
+def prepare_rag_benchmark_runtime(
+    paths: RuntimePaths | None = None,
+    *,
+    bundled_manual_dir: Path | None = None,
+) -> dict[str, int]:
+    """初始化 RAG Benchmark 可写目录，并一次性投影新增内置案例。"""
+
+    resolved = paths or RUNTIME_PATHS
+    directories = (
+        resolved.rag_benchmark_manual_dir,
+        resolved.rag_benchmark_report_dir,
+        resolved.rag_benchmark_generated_dir,
+        resolved.rag_benchmark_backup_dir,
+        resolved.rag_benchmark_trash_dir,
+    )
+    for directory in directories:
+        directory.mkdir(parents=True, exist_ok=True)
+
+    source_dir = bundled_manual_dir or (
+        Path(__file__).resolve().parents[1]
+        / "evals"
+        / "cases"
+        / "rag_benchmark"
+        / "manual"
+    )
+    marker = resolved.rag_benchmark_manual_dir / ".bundled_cases.seeded"
+    seeded_names = {
+        line.strip()
+        for line in marker.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    } if marker.exists() else set()
+    seeded_count = 0
+    if source_dir.is_dir():
+        for source in sorted(source_dir.glob("*.json")):
+            if source.name in seeded_names:
+                continue
+            target = resolved.rag_benchmark_manual_dir / source.name
+            if not target.exists():
+                temporary = target.with_suffix(".json.seed.tmp")
+                shutil.copyfile(source, temporary)
+                os.replace(temporary, target)
+                seeded_count += 1
+            seeded_names.add(source.name)
+
+    marker_tmp = marker.with_suffix(".tmp")
+    marker_tmp.write_text(
+        "".join(f"{name}\n" for name in sorted(seeded_names)),
+        encoding="utf-8",
+    )
+    os.replace(marker_tmp, marker)
+    return {
+        "directories": len(directories),
+        "seeded_cases": seeded_count,
+    }

@@ -31,6 +31,8 @@ class ChatRuntimeInput:
     memory_recall_context: str = ""
     project_context: str = ""
     goal_id: str = ""
+    # 群聊可提供与下一轮历史完全一致的规范化事件；raw_query 仍保留原问题。
+    prompt_user_input: str = ""
 
 
 @dataclass(frozen=True)
@@ -97,7 +99,8 @@ def build_chat_runtime_payload(
     if injection_mode:
         enriched_query = _injection_enriched_query()
     else:
-        enriched_query = f"<user_input>\n{safe_user_input}\n</user_input>"
+        prompt_user_input = str(runtime_input.prompt_user_input or safe_user_input)
+        enriched_query = f"<user_input>\n{prompt_user_input}\n</user_input>"
 
     decision = runtime_input.private_decision
     if decision is None:

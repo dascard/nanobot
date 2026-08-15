@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -570,7 +571,13 @@ async def _run_outreach_once_acquired(
         grounding_kwargs: dict[str, Any] = {"db": session, "now": current}
         if thread_extractor is not None:
             grounding_kwargs["thread_extractor"] = thread_extractor
-        grounding = grounding_builder(user_id, **grounding_kwargs)
+        # Grounding 会调用同步模型路由提炼近期话题；必须整体移出事件循环，
+        # 否则单个候选超时会连带阻塞健康检查和其它 HTTP 请求。
+        grounding = await asyncio.to_thread(
+            grounding_builder,
+            user_id,
+            **grounding_kwargs,
+        )
         persistence_grounding = grounding
         if trigger_runtime is not None:
             persistence_grounding = dict(grounding)
@@ -595,7 +602,8 @@ async def _run_outreach_once_acquired(
         idempotency_key = _outreach_key(user_id, schedule_anchor, forced=False)
         if trigger_runtime is not None:
             trigger_runtime.reserve_model("proactive_judge")
-        evaluation = evaluate_outreach_judgement(
+        evaluation = await asyncio.to_thread(
+            evaluate_outreach_judgement,
             grounding=grounding,
             now=current,
             judge_fn=judge_fn or judge_service,

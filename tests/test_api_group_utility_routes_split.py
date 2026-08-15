@@ -9,6 +9,16 @@ from tests.http_test_utils import open_test_client_without_lifespan
 from core.database import User
 
 
+@pytest.fixture(autouse=True)
+def _enable_model_path_for_group_utility_tests(monkeypatch):
+    """本模块验证 Timing 模型路径，显式关闭默认仅入库策略。"""
+
+    monkeypatch.setattr(
+        "api.group_utility_routes.is_database_only_enabled",
+        lambda *_args, **_kwargs: False,
+    )
+
+
 _GROUP_UTILITY_ROUTE_SIGNATURES = (
     ("POST", "/api/v1/update_group_name"),
     ("POST", "/api/v1/group_timing"),
@@ -211,3 +221,42 @@ async def test_group_timing_timer_uses_legacy_routes_get_bridge_monkeypatch(monk
     assert result["reply"] == ""
     assert result["reply_meta"] is None
     assert result["group_id"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_group_timing_timer_does_not_retruncate_canonical_pending_batch(
+    monkeypatch,
+    db_session,
+):
+    from api import group_utility_routes
+    from api import routes
+
+    pending_text = "定时批次正文" * 400
+
+    class FakeRuntime:
+        _states = {}
+
+        async def handle_timer_fired(self, *args, **kwargs):
+            return {
+                "action": "continue",
+                "pending_text": pending_text,
+            }
+
+        def note_bot_replied(self, group_id):
+            raise AssertionError("empty fake bridge reply should not mark bot replied")
+
+    class FakeBridge:
+        async def handle_message(self, message, *, session_id, user_id, metadata):
+            assert message == f"<user_input>\n{pending_text}\n</user_input>"
+            return ""
+
+    monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FakeRuntime())
+    monkeypatch.setattr(routes, "get_bridge", lambda: FakeBridge())
+
+    result = await group_utility_routes.group_timing_timer(
+        group_utility_routes.GroupTimingTimerRequest(group_id="123", generation=1),
+        db=db_session,
+        _auth=None,
+    )
+
+    assert result["action"] == "continue"

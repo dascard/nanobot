@@ -53,7 +53,9 @@ async def test_lifespan_calls_bootstrap_facades(monkeypatch):
     monkeypatch.setattr(
         bootstrap_lifespan,
         "start_schedulers",
-        lambda *, testing, logger: calls.append(f"start_schedulers:{testing}") or Handles(),
+        lambda *, testing, logger, application: (
+            calls.append(f"start_schedulers:{testing}") or Handles()
+        ),
     )
     async def fake_run_startup_network_check(logger, *, session):
         assert session is new_api_session
@@ -159,7 +161,9 @@ async def test_lifespan_startup_failure_releases_started_resources(monkeypatch):
     monkeypatch.setattr(
         bootstrap_lifespan,
         "start_schedulers",
-        lambda *, testing, logger: calls.append("start_schedulers") or Handles(),
+        lambda *, testing, logger, application: (
+            calls.append("start_schedulers") or Handles()
+        ),
     )
 
     async def fake_init_new_api_session():
@@ -432,6 +436,45 @@ def test_start_schedulers_starts_embedded_session_summary_worker(monkeypatch):
 
     assert "session-summary-worker" in calls
     assert handles.session_summary is not None
+
+
+def test_start_schedulers_wires_selfcheck_watchdog_when_application_available(
+    monkeypatch,
+):
+    import bootstrap.schedulers as schedulers
+
+    calls: list[tuple[str, object]] = []
+    application = object()
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    class Handle:
+        stop_timeout = 5.0
+
+    def fake_start_thread(*, name, target):
+        calls.append((name, target))
+        return Handle()
+
+    monkeypatch.setenv("NANOBOT_SESSION_SUMMARY_WORKER_MODE", "disabled")
+    monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
+    monkeypatch.setattr(schedulers, "_preload_sentinel", lambda _logger: None)
+
+    handles = schedulers.start_schedulers(
+        testing=False,
+        logger=Logger(),
+        application=application,
+    )
+
+    target = next(
+        target for name, target in calls if name == "selfcheck-watchdog"
+    )
+    assert handles.selfcheck is not None
+    assert callable(target)
 
 
 def test_start_schedulers_never_restores_retired_expression_writer(monkeypatch):
@@ -751,8 +794,9 @@ async def test_lifespan_testing_mode_skips_bridge_network_and_scheduler_work(mon
         def stop_all(self):
             calls.append("stop_schedulers")
 
-    def start_schedulers(*, testing, logger):
+    def start_schedulers(*, testing, logger, application=None):
         assert testing is True
+        assert application is not None
         calls.append("start_schedulers_testing")
         return Handles()
 

@@ -1,0 +1,36 @@
+schema_version: 1
+agent_id: pabot
+display_name: PAbot
+description: 面向专业研究、数据分析和受控操作的领域 Agent。
+profile_file: profile.md
+config_file: config.yaml
+allowed_tools:
+  - sql_analysis
+  - ai_daily
+  - memory_query
+  - knowledge_query
+  - web_search
+  - skill
+  - session_plan_read
+  - session_plan_write
+  - sandbox_exec
+  - sandbox_poll
+  - sandbox_write_stdin
+  - sandbox_terminate
+  - workspace_read
+  - workspace_search
+  - workspace_write
+  - workspace_edit
+  - asset_import
+  - asset_publish
+  - reply
+  - no_reply
+allow_dynamic_tools: true
+allowed_entrypoints:
+  - chat
+  - agent_link
+  - research
+  - scheduled
+  - a2a
+default: false
+model_profile_id: ""

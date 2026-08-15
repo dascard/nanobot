@@ -51,6 +51,9 @@ class ChatProxyRequest(BaseModel):
     _message_contract: InboundMessageContract | None = PrivateAttr(
         default=None
     )
+    # 仅由服务端在 Bridge 前写入，禁止从 client_meta 信任同名字段。
+    _prompt_event_content: str = PrivateAttr(default="")
+    _prompt_effort_constraint: str = PrivateAttr(default="")
 
 
 def clone_chat_request(req: ChatProxyRequest, **updates) -> ChatProxyRequest:

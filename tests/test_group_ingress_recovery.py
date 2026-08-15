@@ -277,6 +277,9 @@ def test_persist_group_bridge_reply_atomically_stores_message_and_recovery(
     assistant = db_session.query(ChatLog).filter_by(role="assistant").one()
     assert assistant.message_id == "persisted-message"
     assert assistant.content == "数据库中的原始回复"
+    assert json.loads(assistant.source_message_ids_json) == [
+        "persisted-message"
+    ]
     assert safe_meta(assistant.meta_json)["reply_meta"] == {"quote": "引用"}
     decoded = decode_group_completion_recovery(
         safe_meta(assistant.meta_json),

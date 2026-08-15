@@ -5,6 +5,16 @@ import pytest
 from tests.sqlite_test_utils import install_base_schema
 
 
+@pytest.fixture(autouse=True)
+def _enable_model_path_for_group_idempotency_tests(monkeypatch):
+    """本模块验证模型路径，显式关闭默认仅入库策略。"""
+
+    monkeypatch.setattr(
+        "app.group_ingress.service.is_database_only_enabled",
+        lambda *_args, **_kwargs: False,
+    )
+
+
 def _request(
     *,
     group_id: str,
@@ -287,6 +297,47 @@ async def test_real_timing_business_terminal_completes_and_replays_without_side_
     assert replay["meta"]["sender_id"] == "replay-sender"
     assert runtime.calls == 1
     assert db_session.query(ChatLog).filter_by(role="ambient").count() == 1
+
+
+@pytest.mark.asyncio
+async def test_timing_and_persisted_group_content_use_same_sanitized_bytes(
+    db_session,
+    monkeypatch,
+):
+    from app.group_ingress.service import GroupIngressService
+    from core.database import ChatLog
+    from core.persisted_content import sanitize_persisted_content
+
+    raw_message = (
+        "数据 data:text/plain;base64,QUJDREVGR0g= "
+        "路径 /srv/nanobot/private.txt "
+        f"令牌 [asset_download:{'a' * 32}]"
+    )
+    captured: dict = {}
+
+    class Runtime:
+        async def process_message(self, _group_id, message, **_kwargs):
+            captured.update(message)
+            return {
+                "action": "no_reply",
+                "generation": 1,
+                "reason": "test",
+            }
+
+    monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: Runtime())
+    service = GroupIngressService(db=db_session)
+
+    result = await service.handle(_request(
+        group_id="sanitize-cache",
+        message_id="sanitize-cache-1",
+        message=raw_message,
+    ))
+
+    expected = sanitize_persisted_content(raw_message)
+    ambient = db_session.query(ChatLog).filter_by(role="ambient").one()
+    assert result["action"] == "no_reply"
+    assert captured["message"] == expected
+    assert ambient.content == f"[幂等测试]: {expected}"
 
 
 @pytest.mark.asyncio

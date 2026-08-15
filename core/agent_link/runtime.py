@@ -260,6 +260,7 @@ class AgentLinkChatRequest:
     frontend_context: dict[str, Any]
     files: tuple[str, ...]
     tools: tuple[AgentLinkToolDefinition, ...]
+    target_agent_id: str = "nanobot"
     client: AgentLinkClientIdentity = _DEFAULT_CLIENT_IDENTITY
     policy_profile: str = DEFAULT_EXTERNAL_POLICY_PROFILE
 
@@ -1220,6 +1221,19 @@ class AgentLinkRuntime:
                 "INVALID_CHAT_REQUEST",
                 "chat.submit user_text 必须是字符串",
             )
+        target_agent_id = payload.get("target_agent_id", "nanobot")
+        try:
+            from core.registry.validation import validate_identifier
+
+            target_agent_id = validate_identifier(
+                target_agent_id,
+                field_name="chat.submit target_agent_id",
+            )
+        except (TypeError, ValueError) as exc:
+            raise AgentLinkProtocolError(
+                "INVALID_CHAT_REQUEST",
+                "chat.submit target_agent_id 非法",
+            ) from exc
         if response_format != "meapet-segments-v1":
             raise AgentLinkProtocolError(
                 "UNSUPPORTED_RESPONSE_FORMAT",
@@ -1239,6 +1253,7 @@ class AgentLinkRuntime:
         normalized = dict(payload)
         normalized["content"] = content
         normalized["user_text"] = user_text
+        normalized["target_agent_id"] = target_agent_id
         normalized["history"] = _normalize_history(payload.get("history"))
         normalized["attachments"] = list(payload.get("attachments") or [])
         return normalized
@@ -1270,6 +1285,9 @@ class AgentLinkRuntime:
                 ),
                 files=tuple(files),
                 tools=definitions,
+                target_agent_id=str(
+                    state.payload.get("target_agent_id") or "nanobot"
+                ),
                 client=peer.client,
                 policy_profile=peer.policy_profile,
             )

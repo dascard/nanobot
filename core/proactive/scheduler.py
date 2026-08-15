@@ -132,6 +132,16 @@ def proactive_outreach_scheduler(
                         **outreach_due_threshold_kwargs(settings_port),
                     ))
                     status = str((result or {}).get("status") or "")
+                    logger.info(
+                        "Proactive outreach evaluation completed: "
+                        "user_id=%s status=%s next_check_at=%s "
+                        "forced=%s log_id=%s",
+                        user_id,
+                        status or "unknown",
+                        str((result or {}).get("next_check_at") or ""),
+                        bool((result or {}).get("forced", False)),
+                        (result or {}).get("log_id"),
+                    )
                     if status in {
                         "judge_error",
                         "generation_error",

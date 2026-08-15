@@ -1,6 +1,8 @@
 import pytest
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -11,6 +13,10 @@ from sqlalchemy.pool import StaticPool
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
+    config.addinivalue_line(
+        "markers",
+        "database_only_runtime: 使用生产默认的仅入库会话模式",
+    )
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -22,16 +28,58 @@ os.environ["NANOBOT_API_TOKEN"] = "" # 测试环境禁用 API Token
 os.environ["NEW_API_KEY"] = "test-key-for-ci"  # Prevent KT init crash
 os.environ["NANOBOT_TESTING"] = "1"  # 测试环境跳过生产启动副作用
 os.environ.setdefault("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
-# 不继承开发机 .env 的 Prompt Runtime 路径，保证临时目录测试可重复。
-# 空值仍会走代码默认目录，也允许兼容变量测试显式覆盖。
+# 不继承开发机 .env 的生产路径，避免测试写入运行时目录或读取宿主开关。
+_TEST_RUNTIME_DIR = tempfile.TemporaryDirectory(prefix="nanobot-pytest-")
+_TEST_RUNTIME_ROOT = Path(_TEST_RUNTIME_DIR.name)
+shutil.copytree(
+    ROOT_DIR / "prompts.v2.default",
+    _TEST_RUNTIME_ROOT / "prompts_v2",
+)
+os.environ["LOG_DIR"] = str(_TEST_RUNTIME_ROOT / "logs")
+os.environ["NANOBOT_DATA_DIR"] = str(_TEST_RUNTIME_ROOT / "data")
+os.environ["NANOBOT_TEMP_DIR"] = str(_TEST_RUNTIME_ROOT / "tmp")
 os.environ["NANOBOT_PROMPT_DEFAULT_DIR"] = ""
 os.environ["NANOBOT_PROMPT_RUNTIME_DIR"] = ""
+os.environ["NANOBOT_PROMPT_TEMPLATE_STATE_DIR"] = ""
+os.environ["NANOBOT_PROMPT_V2_DIR"] = str(ROOT_DIR / "prompts.v2.default")
+os.environ["NANOBOT_PROMPT_V2_RUNTIME_DIR"] = str(
+    _TEST_RUNTIME_ROOT / "prompts_v2"
+)
+os.environ["NANOBOT_SANDBOX_PROFILE_MANIFEST_FILE"] = str(
+    ROOT_DIR / "config" / "sandbox-execution-profiles.v1.json"
+)
+os.environ["NANOBOT_SANDBOX_INFRASTRUCTURE_ENABLE_ALLOWED"] = "false"
+os.environ["NANOBOT_SANDBOX_SESSION_EXECUTION_ALLOWED"] = "false"
+os.environ["NANOBOT_SANDBOX_DEVELOPER_NETWORK_ALLOWED"] = "false"
+os.environ["NANOBOT_SANDBOX_ENABLED"] = "false"
+os.environ["NANOBOT_SANDBOX_EXEC_ENABLED"] = "false"
+os.environ["NANOBOT_SANDBOX_GROUP_ENABLED"] = "false"
 
 from core.database import get_db  # noqa: E402
 from core.db import get_db as canonical_get_db  # noqa: E402
 from core import database  # noqa: E402
 from server import app  # noqa: E402
 from tests.sqlite_test_utils import restore_in_memory_base_schema  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def legacy_tests_use_model_runtime(request, monkeypatch):
+    """旧用例显式使用模型模式；仅入库契约用例保留生产默认行为。"""
+    if request.node.get_closest_marker("database_only_runtime") is not None:
+        yield
+        return
+
+    model_runtime = lambda *_args, **_kwargs: False
+    monkeypatch.setattr("api.routes.is_database_only_enabled", model_runtime)
+    monkeypatch.setattr(
+        "app.group_ingress.service.is_database_only_enabled",
+        model_runtime,
+    )
+    monkeypatch.setattr(
+        "api.group_utility_routes.is_database_only_enabled",
+        model_runtime,
+    )
+    yield
 
 
 @pytest.fixture(scope="function", autouse=True)

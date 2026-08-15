@@ -150,12 +150,22 @@ async def run_forever_async(
 ) -> None:
     """轮询 outbox；收到停止信号后不再领取新任务。"""
 
+    from core.selfcheck.heartbeat import record_worker_cycle_with_factory
+
     factory = _session_factory_or_default(session_factory)
     poll_interval = max(0.05, float(interval))
     batch_size = max(1, int(limit))
     logger.info("Chat delivery worker started interval=%ss", poll_interval)
     async with _publisher_scope(publisher) as resolved_publisher:
         while not stop_event.is_set():
+            stats = {
+                "processed": 0,
+                "delivered": 0,
+                "failed": 0,
+                "ambiguous": 0,
+            }
+            cycle_success = False
+            error_code = ""
             try:
                 stats = await _run_once_with_publisher(
                     publisher=resolved_publisher,
@@ -165,10 +175,21 @@ async def run_forever_async(
                     limit=batch_size,
                     should_stop=stop_event.is_set,
                 )
+                cycle_success = True
                 if stats["processed"]:
                     logger.info("Chat delivery worker processed: %s", stats)
             except Exception as exc:
+                error_code = "chat_delivery_cycle_failed"
                 logger.exception("Chat delivery worker loop error: %s", exc)
+            record_worker_cycle_with_factory(
+                factory,
+                worker_id="chat-delivery-worker",
+                instance_id=owner,
+                mode="embedded",
+                success=cycle_success,
+                error_code=error_code,
+                metadata=stats,
+            )
             remaining = poll_interval
             while remaining > 0 and not stop_event.is_set():
                 step = min(0.25, remaining)

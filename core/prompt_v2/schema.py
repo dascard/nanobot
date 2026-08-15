@@ -146,6 +146,8 @@ class PromptCompileRequest:
     bot_id: str = ""
     bot_name: str = ""
     bot_aliases: list[str] = field(default_factory=list)
+    agent_id: str = "nanobot"
+    agent_profile: str = ""
     user_input: Any = ""
     persona_text: str = ""
     session_guidance: str = field(default="", repr=False)

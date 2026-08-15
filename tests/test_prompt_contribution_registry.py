@@ -254,7 +254,7 @@ def test_group_memory_uses_untrusted_data_contribution_contract():
     assert descriptor.phase == "context"
     assert descriptor.authority == "data"
     assert descriptor.trust == "untrusted_data"
-    assert descriptor.after == ("session_guidance",)
+    assert descriptor.after == ("history_messages",)
     assert descriptor.chat_types == frozenset({"group"})
     assert descriptor.required_variables == frozenset({
         "group_profile_context",

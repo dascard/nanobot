@@ -100,6 +100,17 @@ def build_llm_cache_shape(
     tools = list(raw_tools) if isinstance(raw_tools, (list, tuple)) else []
     context = dict(cache_context or {})
     leading_system, history = _split_prompt_messages(messages)
+    explicit_history_start = context.get("history_message_start_index")
+    explicit_history_end = context.get("history_message_end_index")
+    if (
+        type(explicit_history_start) is int
+        and type(explicit_history_end) is int
+        and 0 <= explicit_history_start <= explicit_history_end <= len(messages)
+    ):
+        history = messages[explicit_history_start:explicit_history_end]
+        history_source = "manifest"
+    else:
+        history_source = "derived"
     explicit_prefix_count = context.get("stable_prefix_message_count")
     if (
         type(explicit_prefix_count) is int
@@ -161,6 +172,7 @@ def build_llm_cache_shape(
         ),
         "tool_count": len(tools),
         "history_sha256": _sha256(history),
+        "history_source": history_source,
         "history_head_sha256": history_head,
         "history_tail_sha256": history_tail,
         "history_messages": len(history),

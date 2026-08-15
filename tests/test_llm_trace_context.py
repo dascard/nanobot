@@ -42,6 +42,39 @@ def test_build_llm_cache_context_filters_debug_fields():
     }
 
 
+def test_attach_prompt_prefix_cache_context_includes_history_range():
+    from core.llm_trace_context import attach_prompt_prefix_cache_context
+    from core.prompt_v2.prefix_cache import PromptPrefixCacheManifest
+
+    manifest = PromptPrefixCacheManifest(
+        policy_id="prompt-prefix-cache-v1",
+        stable_entry_ids=("base_contract",),
+        stable_message_count=1,
+        dynamic_suffix_start_index=1,
+        stable_prefix_sha256="a" * 64,
+        stable_prefix_token_estimate=10,
+        tool_schema_sha256="b" * 64,
+        tool_names=(),
+        canonical_order_sha256="c" * 64,
+        cache_key="d" * 64,
+    ).to_dict()
+
+    result = attach_prompt_prefix_cache_context(
+        {"session_id": "private_1"},
+        manifest,
+        flow_sections=[
+            {
+                "node_id": "history_messages",
+                "origin": "flow",
+                "message_indexes": [3, 4],
+            }
+        ],
+    )
+
+    assert result["history_message_start_index"] == 3
+    assert result["history_message_end_index"] == 5
+
+
 def test_contextvar_default_empty():
     assert llm_trace_id.get() == ""
     assert llm_run_id.get() == ""

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import threading
 from datetime import datetime, timedelta
@@ -79,6 +80,248 @@ def test_build_outreach_grounding_includes_persona_recent_chat_and_intent(db_ses
     ]
     assert grounding["recent_messages"][0]["role"] == "user"
     assert grounding["recent_messages"][1]["role"] == "assistant"
+
+
+def test_frozen_model_usage_can_enter_generation_grounding():
+    from core.model_provider.contracts import ModelProviderResponse
+    from core.outbound.contracts import PROACTIVE_GENERATION_METADATA_KEY
+    from core.outbound.policy import prepare_proactive_generation_grounding
+    from core.proactive.model_policy import parse_outreach_judge_contract
+
+    now = datetime(2026, 8, 15, 12, 0, 0)
+    response = ModelProviderResponse(
+        content=json.dumps({
+            "should_reach_out": True,
+            "reason": "跟进明确事项",
+            "next_check_in_hours": 2,
+            "next_intent": "继续跟进",
+            "outreach_kind": "message",
+            "research_query": "",
+            "topic_type": "follow_up",
+            "topic": "接口联调",
+            "evidence_ids": ["message:1"],
+        }, ensure_ascii=False),
+        finish_reason="stop",
+        usage={"prompt_tokens": 12, "completion_tokens": 8},
+    )
+
+    judge = parse_outreach_judge_contract(
+        response,
+        now=now,
+        min_interval_min=30,
+        max_check_interval_min=1440,
+    )
+    grounding = prepare_proactive_generation_grounding(
+        grounding={"user_id": "mapping-user"},
+        kind="message",
+        judge=judge,
+    )
+
+    frozen_judge = grounding[PROACTIVE_GENERATION_METADATA_KEY]["judge"]
+    assert frozen_judge["usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 8,
+    }
+
+
+@pytest.mark.asyncio
+async def test_outreach_judge_does_not_block_event_loop(db_session):
+    from core import proactive_outreach
+
+    now = datetime(2026, 8, 15, 12, 0, 0)
+    event_loop_tick = threading.Event()
+    observed: dict[str, bool] = {}
+
+    async def tick_event_loop() -> None:
+        await asyncio.sleep(0.01)
+        event_loop_tick.set()
+
+    def slow_judge(*_args, **_kwargs):
+        observed["tick_during_judge"] = event_loop_tick.wait(0.2)
+        return {
+            "should_reach_out": False,
+            "reason": "稍后再看",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "稍后检查",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
+    ticker = asyncio.create_task(tick_event_loop())
+    result = await proactive_outreach.run_outreach_once(
+        "nonblocking-judge-user",
+        db=db_session,
+        now=now,
+        max_silence_min=999999,
+        judge_fn=slow_judge,
+    )
+    await ticker
+
+    assert result["status"] == "pending"
+    assert observed["tick_during_judge"] is True
+
+
+@pytest.mark.asyncio
+async def test_outreach_grounding_does_not_block_event_loop(db_session):
+    from core import proactive_outreach
+
+    now = datetime(2026, 8, 15, 12, 0, 0)
+    event_loop_tick = threading.Event()
+    observed: dict[str, bool] = {}
+    db_session.add(ConversationTurn(
+        user_id="nonblocking-grounding-user",
+        session_id="private_nonblocking-grounding-user",
+        role="user",
+        content="接口联调还没完成。",
+        created_at=now - timedelta(minutes=10),
+    ))
+    db_session.commit()
+
+    async def tick_event_loop() -> None:
+        await asyncio.sleep(0.01)
+        event_loop_tick.set()
+
+    def slow_thread_extractor(_messages):
+        observed["tick_during_grounding"] = event_loop_tick.wait(0.2)
+        return []
+
+    def no_candidate_judge(*_args, **_kwargs):
+        return {
+            "should_reach_out": False,
+            "reason": "稍后再看",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "稍后检查",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
+    ticker = asyncio.create_task(tick_event_loop())
+    result = await proactive_outreach.run_outreach_once(
+        "nonblocking-grounding-user",
+        db=db_session,
+        now=now,
+        max_silence_min=999999,
+        thread_extractor=slow_thread_extractor,
+        judge_fn=no_candidate_judge,
+    )
+    await ticker
+
+    assert result["status"] == "pending"
+    assert observed["tick_during_grounding"] is True
+
+
+@pytest.mark.asyncio
+async def test_outreach_dry_run_grounding_does_not_block_event_loop(db_session):
+    from core.proactive.simulation import run_outreach_dry_run_once
+
+    now = datetime(2026, 8, 15, 12, 0, 0)
+    event_loop_tick = threading.Event()
+    observed: dict[str, bool] = {}
+
+    async def tick_event_loop() -> None:
+        await asyncio.sleep(0.01)
+        event_loop_tick.set()
+
+    def slow_grounding_builder(user_id, **_kwargs):
+        observed["tick_during_dry_run_grounding"] = event_loop_tick.wait(0.2)
+        return {"user_id": user_id}
+
+    def no_candidate_judge(*_args, **_kwargs):
+        return {
+            "should_reach_out": False,
+            "reason": "没有需要跟进的事项",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
+    ticker = asyncio.create_task(tick_event_loop())
+    result = await run_outreach_dry_run_once(
+        "nonblocking-dry-run-grounding-user",
+        db=db_session,
+        now=now,
+        grounding_builder=slow_grounding_builder,
+        judge_fn=no_candidate_judge,
+    )
+    await ticker
+
+    assert result["status"] == "no_candidate"
+    assert observed["tick_during_dry_run_grounding"] is True
+
+
+@pytest.mark.asyncio
+async def test_outreach_candidate_judge_does_not_block_event_loop():
+    from core.proactive_candidate import evaluate_outreach_candidate
+
+    now = datetime(2026, 8, 15, 12, 0, 0)
+    event_loop_tick = threading.Event()
+    observed: dict[str, bool] = {}
+
+    async def tick_event_loop() -> None:
+        await asyncio.sleep(0.01)
+        event_loop_tick.set()
+
+    def slow_judge(*_args, **_kwargs):
+        observed["tick_during_candidate_judge"] = event_loop_tick.wait(0.2)
+        return {
+            "should_reach_out": False,
+            "reason": "没有需要跟进的事项",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        }
+
+    ticker = asyncio.create_task(tick_event_loop())
+    result = await evaluate_outreach_candidate(
+        user_id="nonblocking-candidate-judge-user",
+        request_id="nonblocking-candidate-judge-request",
+        grounding={"user_id": "nonblocking-candidate-judge-user"},
+        now=now,
+        judge_fn=slow_judge,
+        generator_fn=lambda *_args, **_kwargs: "不会执行",
+    )
+    await ticker
+
+    assert result["status"] == "no_candidate"
+    assert observed["tick_during_candidate_judge"] is True
+
+
+@pytest.mark.asyncio
+async def test_outreach_generator_does_not_block_event_loop():
+    from core.proactive_candidate import materialize_outreach_candidate
+
+    event_loop_tick = threading.Event()
+    observed: dict[str, bool] = {}
+
+    async def tick_event_loop() -> None:
+        await asyncio.sleep(0.01)
+        event_loop_tick.set()
+
+    def slow_generator(_grounding, _judge):
+        observed["tick_during_generator"] = event_loop_tick.wait(0.2)
+        return "想来问问接口联调进展。"
+
+    ticker = asyncio.create_task(tick_event_loop())
+    result = await materialize_outreach_candidate(
+        user_id="nonblocking-generator-user",
+        request_id="nonblocking-generator-request",
+        grounding={"user_id": "nonblocking-generator-user"},
+        judge={
+            "should_reach_out": True,
+            "outreach_kind": "message",
+        },
+        generator_fn=slow_generator,
+    )
+    await ticker
+
+    assert result["status"] == "candidate"
+    assert observed["tick_during_generator"] is True
 
 
 def test_build_outreach_grounding_includes_precomputed_time_anchors(db_session):
@@ -1940,7 +2183,10 @@ async def test_legacy_forced_candidate_is_cancelled_and_rejudged(
     assert stored.status == "cancelled"
 
 
-def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
+def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(
+    monkeypatch,
+    caplog,
+):
     from core import proactive_outreach
 
     stop_event = threading.Event()
@@ -1992,7 +2238,8 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
         raising=False,
     )
 
-    proactive_outreach.proactive_outreach_scheduler(stop_event)
+    with caplog.at_level("INFO", logger="nanobot.proactive.scheduler"):
+        proactive_outreach.proactive_outreach_scheduler(stop_event)
 
     assert legacy_drain_calls == []
     assert calls == [(
@@ -2011,6 +2258,10 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
             "surge_max_prob": proactive_outreach.DEFAULT_SURGE_MAX_PROB,
         },
     )]
+    assert (
+        "user_id=scheduler-user status=pending"
+        in caplog.text
+    )
 
 
 def test_disabled_scheduler_does_not_load_worker_poll_or_drain(monkeypatch):

@@ -33,6 +33,7 @@ DAILY_DIGEST_KEYWORDS = {
     "ai daily",
     "morning briefing",
     "简报",
+    "汇总",
     "digest",
 }
 

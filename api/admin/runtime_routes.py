@@ -7,7 +7,7 @@ import json
 import os
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -18,6 +18,31 @@ from core.database import ChatLog, ChatStreamConfig, StickerMemory, User, UserBl
 from core.time_utils import db_now_naive
 
 router = APIRouter(tags=["admin-runtime"])
+
+
+@router.get("/agent-runtimes")
+def agent_runtimes(_auth=Depends(verify_admin)):
+    """返回当前进程已冻结的可选 Agent，不暴露路径或凭据。"""
+
+    from core.agent_runtime import AgentRuntimeStateError
+    from core.agent_runtime.gateway import get_agent_runtime_registry
+
+    try:
+        registry = get_agent_runtime_registry()
+    except AgentRuntimeStateError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": exc.code,
+                "message": "Agent 注册表当前不可用",
+            },
+        ) from exc
+    return {
+        "default_agent_id": registry.default_agent_id,
+        "generation": registry.snapshot.generation,
+        "sha256": registry.snapshot.sha256,
+        "items": [item.to_public_dict() for item in registry.descriptors()],
+    }
 
 
 def _safe_dict(raw) -> dict:

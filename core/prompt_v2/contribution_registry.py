@@ -681,21 +681,21 @@ _CANONICAL_ORDERING = MappingProxyType({
         ("group_policy", "private_policy", "qq_group_policy"),
     ),
     "session_guidance": (100, (), ("identity_context",)),
-    "group_context": (200, (), ("session_guidance",)),
-    "project_context": (
-        250,
-        (),
-        ("session_guidance", "group_context"),
-    ),
-    "summary_context": (275, (), ("project_context",)),
+    "summary_context": (200, (), ("session_guidance",)),
     "conversation_context_header": (
         300,
         (),
         ("summary_context",),
     ),
     "history_messages": (400, (), ("conversation_context_header",)),
-    "persona_reference": (500, (), ("history_messages",)),
-    "runtime_context": (600, (), ("persona_reference",)),
+    "group_context": (500, (), ("history_messages",)),
+    "project_context": (
+        550,
+        (),
+        ("history_messages", "group_context"),
+    ),
+    "persona_reference": (600, (), ("project_context",)),
+    "runtime_context": (700, (), ("persona_reference",)),
     "current_user_event": (
         800,
         (),
@@ -711,6 +711,8 @@ _CANONICAL_SCOPES = MappingProxyType({
 })
 _CANONICAL_REQUIRED_VARIABLES = MappingProxyType({
     "identity_context": frozenset({
+        "agent_id",
+        "agent_profile",
         "alias_names",
         "character_name",
         "name_hint",

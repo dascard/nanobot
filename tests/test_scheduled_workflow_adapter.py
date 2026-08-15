@@ -230,3 +230,59 @@ def test_model_step_passes_frozen_typed_trigger_constraint(
     assert captured["constraint"].binding == envelope.run_binding()
     assert captured["constraint"].principal == envelope.principal
     assert captured["constraint"].allowed_tool_names == frozenset({"reply"})
+
+
+def test_native_runtime_tool_step_does_not_require_kt_registry(monkeypatch):
+    from core.agent_runtime import AgentRuntimeKind
+
+    calls: list[dict[str, object]] = []
+
+    class NativeBridge:
+        runtime_kind = AgentRuntimeKind.NATIVE
+        agent = None
+
+        async def start(self) -> None:
+            calls.append({"phase": "started"})
+
+        async def stop(self) -> None:
+            calls.append({"phase": "stopped"})
+
+        async def execute_registered_tool(self, tool_name, args, **kwargs):
+            calls.append({
+                "phase": "executed",
+                "tool_name": tool_name,
+                "args": args,
+                "kwargs": kwargs,
+            })
+            return SimpleNamespace(
+                success=True,
+                output="完成",
+                error="",
+                metadata={},
+                tool_call_id="tool-native",
+                run_id="run-native",
+            )
+
+    bridge = NativeBridge()
+    monkeypatch.setattr(
+        "core.agent_runtime.gateway.create_isolated_agent_gateway",
+        lambda: bridge,
+    )
+    callbacks = KtScheduledWorkflowCallbacks(session_factory=lambda: None)
+
+    result = run_async(callbacks.execute_tool(
+        _context(),
+        tool_name="sandbox_exec",
+        args={"command": "true"},
+        idempotency_key="native-tool-step",
+    ))
+
+    assert result.success is True
+    assert result.output == "完成"
+    assert result.tool_call_id == "tool-native"
+    assert result.agent_run_id == "run-native"
+    assert [item["phase"] for item in calls] == [
+        "started",
+        "executed",
+        "stopped",
+    ]

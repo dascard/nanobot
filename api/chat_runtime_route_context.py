@@ -18,6 +18,7 @@ class ChatRuntimeRouteServices:
     chat_request_platform: Callable[[Any], str]
     build_runtime_payload: Callable[..., chat_runtime_facade.ChatRuntimePayload]
     build_persona_context: Callable[..., Any]
+    build_group_prompt_event: Callable[..., str]
     logger: Any
 
 
@@ -49,6 +50,7 @@ class ChatRuntimeRouteContext:
     persona_text: str
     ctx_debug: dict[str, Any]
     injection_mode: bool
+    prompt_event_content: str = ""
 
 
 def _empty_effort_constraint(_effort: str | None) -> str:
@@ -127,6 +129,19 @@ def build_chat_runtime_route_context(
         services=services,
         safe_user_input=safe_user_input,
     )
+    prompt_event_content = ""
+    if runtime_input.is_group:
+        client_meta = (
+            getattr(runtime_input.req, "client_meta", None)
+            if isinstance(getattr(runtime_input.req, "client_meta", None), dict)
+            else {}
+        )
+        prompt_event_content = services.build_group_prompt_event(
+            sender_name=runtime_input.req.sender_name or "",
+            content=safe_user_input,
+            event_time=str(client_meta.get("event_time") or ""),
+            message_id=runtime_input.req.message_id or "",
+        )
     get_effort_constraint = (
         services.get_effort_constraint
         if runtime_input.private_decision
@@ -166,6 +181,7 @@ def build_chat_runtime_route_context(
             memory_recall_context=runtime_input.memory_recall_context,
             project_context=runtime_input.project_context,
             goal_id=str(getattr(runtime_input.req, "goal_id", "") or ""),
+            prompt_user_input=prompt_event_content,
         ),
         build_multimodal_user_input_text=services.build_multimodal_user_input_text,
         max_query_chars=services.max_query_chars,
@@ -190,4 +206,7 @@ def build_chat_runtime_route_context(
         persona_text=persona_text,
         ctx_debug=ctx_debug,
         injection_mode=runtime_payload.injection_mode,
+        prompt_event_content=(
+            "" if runtime_payload.injection_mode else prompt_event_content
+        ),
     )

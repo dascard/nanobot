@@ -298,9 +298,14 @@ def normalize_turn_for_prompt(
     from core.context_builder import LONG_USER_MESSAGE_CHARS, sanitize_prompt_text
 
     raw_content = str(getattr(turn, "content", "") or "")
-    # 长消息判定必须基于原文长度：先按 max_per_msg 截断再判会让该分支
-    # 永远不可达（真实链路 max_per_msg=300 < 2000）。
-    if turn.role == "user" and len(raw_content) > LONG_USER_MESSAGE_CHARS:
+    # 长消息判定必须基于原文长度，但不能低于本次历史窗口的
+    # 单消息上限。当前用户事件按 2000 字符规范化后会带截断标记，
+    # 总长度可略超 2000；若下一轮再摘要，同一消息会破坏 prompt cache 前缀。
+    long_message_threshold = max(
+        LONG_USER_MESSAGE_CHARS,
+        max(0, int(max_per_msg or 0)),
+    )
+    if turn.role == "user" and len(raw_content) > long_message_threshold:
         preview = sanitize_prompt_text(raw_content[:200]).rstrip()
         content = (
             f"[长消息摘要] 用户发送了约 {len(raw_content)} 字符的长消息，"

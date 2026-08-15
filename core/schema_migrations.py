@@ -42,6 +42,16 @@ from core.time_utils import db_now_naive
 MigrationFn = Callable[[Any, Any, str | None], None]
 _CHAT_LOG_METADATA_VERSION = "20260523_chat_log_metadata_columns"
 _SESSION_GUIDANCE_COLUMNS_VERSION = "20260712_chat_stream_session_guidance_columns"
+_CHAT_STREAM_DATABASE_ONLY_VERSION = (
+    "20260814_chat_stream_database_only"
+)
+_CHAT_STREAM_DATABASE_ONLY_DEFAULT_ENABLED_VERSION = (
+    "20260814_chat_stream_database_only_default_enabled"
+)
+_CHAT_STREAM_DATABASE_ONLY_DEFAULT_CONSTRAINT_VERSION = (
+    "20260815_chat_stream_database_only_default_constraint"
+)
+_CHAT_STREAM_AGENT_ID_VERSION = "20260814_chat_stream_agent_id"
 _CHAT_STREAM_IDENTITY_VERSION = "20260712_chat_stream_identity_normalization"
 _GROUP_MEMORY_CANONICAL_IDENTITY_VERSION = (
     "20260723_group_memory_canonical_identity"
@@ -135,6 +145,7 @@ _AGENT_ORCHESTRATION_GOVERNANCE_V1_VERSION = (
 )
 _AGENT_COLLABORATION_V1_VERSION = "20260805_agent_collaboration_v1"
 _GATEWAY_SESSION_CONTROL_V1_VERSION = "20260805_gateway_session_control_v1"
+_SELFCHECK_RUNTIME_V1_VERSION = "20260815_selfcheck_runtime_v1"
 _SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
 _SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
@@ -622,6 +633,186 @@ def _chat_stream_session_guidance_columns(
         "session_guidance": "TEXT NOT NULL DEFAULT ''",
         "session_guidance_updated_at": "TIMESTAMP",
     })
+
+
+def _chat_stream_database_only_column(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    _add_missing_columns(
+        conn,
+        "chat_stream_configs",
+        {"database_only": "INTEGER NOT NULL DEFAULT 1"},
+    )
+
+
+def _chat_stream_database_only_default_enabled(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    if "chat_stream_configs" not in _table_names(conn):
+        return
+    _chat_stream_database_only_column(conn, engine, db_path)
+    conn.execute(text(
+        "UPDATE chat_stream_configs SET database_only = 1 "
+        "WHERE database_only = 0 OR database_only IS NULL"
+    ))
+
+
+_DATABASE_ONLY_DEFAULT_ZERO_PATTERN = re.compile(
+    r"(?P<prefix>"
+    r"(?:database_only|\"database_only\"|`database_only`|\[database_only\])"
+    r"\s+INTEGER\s+NOT\s+NULL\s+DEFAULT\s+)"
+    r"(?:\(\s*['\"]?0['\"]?\s*\)|['\"]?0['\"]?)",
+    re.IGNORECASE,
+)
+
+
+def _sqlite_identifier(value: str) -> str:
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _chat_stream_database_only_default_is_enabled(conn: Any) -> bool:
+    if "chat_stream_configs" not in _table_names(conn):
+        return True
+    column = next(
+        (
+            item
+            for item in inspect(conn).get_columns("chat_stream_configs")
+            if str(item.get("name")) == "database_only"
+        ),
+        None,
+    )
+    if column is None:
+        return False
+    default = str(column.get("default") or "").strip("()'\" ")
+    return default == "1" and not bool(column.get("nullable"))
+
+
+def _chat_stream_database_only_default_constraint(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    """修复旧 SQLite 表的 DEFAULT 0，同时保留显式会话选择。"""
+
+    if "chat_stream_configs" not in _table_names(conn):
+        return
+    _chat_stream_database_only_column(conn, engine, db_path)
+    if _chat_stream_database_only_default_is_enabled(conn):
+        return
+    if str(getattr(conn.dialect, "name", "")) != "sqlite":
+        raise SchemaMigrationValidationError(
+            "database_only 默认约束迁移当前只支持 SQLite"
+        )
+
+    table_name = "chat_stream_configs"
+    temporary_table = (
+        "chat_stream_configs__database_only_default_migration"
+    )
+    if temporary_table in _table_names(conn):
+        raise SchemaMigrationValidationError(
+            f"迁移临时表已存在：{temporary_table}"
+        )
+    table_sql = conn.execute(text(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'table' AND name = :table_name"
+    ), {"table_name": table_name}).scalar_one_or_none()
+    if not isinstance(table_sql, str):
+        raise SchemaMigrationValidationError(
+            "chat_stream_configs 缺少可重建的建表 DDL"
+        )
+    corrected_sql, replacement_count = (
+        _DATABASE_ONLY_DEFAULT_ZERO_PATTERN.subn(
+            lambda match: f"{match.group('prefix')}1",
+            table_sql,
+            count=1,
+        )
+    )
+    if replacement_count != 1:
+        raise SchemaMigrationValidationError(
+            "chat_stream_configs.database_only 不是受支持的 DEFAULT 0 旧定义"
+        )
+
+    columns = [
+        str(item["name"])
+        for item in inspect(conn).get_columns(table_name)
+    ]
+    if "chat_stream_id" not in columns or "database_only" not in columns:
+        raise SchemaMigrationValidationError(
+            "chat_stream_configs 缺少重建所需列"
+        )
+    quoted_columns = ", ".join(
+        _sqlite_identifier(column) for column in columns
+    )
+    order_columns = ["chat_stream_id"]
+    source_rows = [
+        tuple(row)
+        for row in conn.exec_driver_sql(
+            f"SELECT {quoted_columns} FROM {_sqlite_identifier(table_name)} "
+            f"ORDER BY {_sqlite_identifier(order_columns[0])}"
+        ).fetchall()
+    ]
+    schema_objects = [
+        (str(row[0]), str(row[1]), str(row[2]))
+        for row in conn.execute(text(
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE tbl_name = :table_name "
+            "AND type IN ('index', 'trigger') AND sql IS NOT NULL "
+            "ORDER BY type, name"
+        ), {"table_name": table_name}).fetchall()
+    ]
+
+    conn.exec_driver_sql(
+        f"ALTER TABLE {_sqlite_identifier(table_name)} "
+        f"RENAME TO {_sqlite_identifier(temporary_table)}"
+    )
+    conn.exec_driver_sql(corrected_sql)
+    conn.exec_driver_sql(
+        f"INSERT INTO {_sqlite_identifier(table_name)} ({quoted_columns}) "
+        f"SELECT {quoted_columns} FROM {_sqlite_identifier(temporary_table)}"
+    )
+    copied_rows = [
+        tuple(row)
+        for row in conn.exec_driver_sql(
+            f"SELECT {quoted_columns} FROM {_sqlite_identifier(table_name)} "
+            f"ORDER BY {_sqlite_identifier(order_columns[0])}"
+        ).fetchall()
+    ]
+    if copied_rows != source_rows:
+        raise SchemaMigrationValidationError(
+            "chat_stream_configs 重建前后数据不一致"
+        )
+    conn.exec_driver_sql(
+        f"DROP TABLE {_sqlite_identifier(temporary_table)}"
+    )
+    for _object_type, _object_name, object_sql in schema_objects:
+        conn.exec_driver_sql(object_sql)
+    violations = conn.exec_driver_sql(
+        "PRAGMA foreign_key_check(chat_stream_configs)"
+    ).fetchall()
+    if violations:
+        raise SchemaMigrationValidationError(
+            "chat_stream_configs 重建后外键校验失败"
+        )
+    if not _chat_stream_database_only_default_is_enabled(conn):
+        raise SchemaMigrationValidationError(
+            "chat_stream_configs.database_only DEFAULT 1 重建失败"
+        )
+
+
+def _chat_stream_agent_id_column(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    _add_missing_columns(
+        conn,
+        "chat_stream_configs",
+        {"agent_id": "VARCHAR(64) NOT NULL DEFAULT 'nanobot'"},
+    )
 
 
 def _chat_stream_identity_rename_candidates(conn: Any) -> list[tuple[str, str]]:
@@ -5291,6 +5482,83 @@ def _artifact_lifecycle_v1_needs_backup(conn: Any) -> bool:
     )
 
 
+def _selfcheck_runtime_v1(
+    conn: Any,
+    _engine: Any,
+    _db_path: str | None,
+) -> None:
+    """建立自检运行账本和跨进程 Worker 心跳。"""
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS selfcheck_runs ("
+        "run_id VARCHAR(64) PRIMARY KEY, "
+        "trigger VARCHAR(32) NOT NULL, "
+        "environment VARCHAR(32) NOT NULL, "
+        "status VARCHAR(24) NOT NULL DEFAULT 'running' "
+        "CHECK (status IN ('running','passed','degraded','failed','inconclusive')), "
+        "requested_by VARCHAR(128) NOT NULL DEFAULT '', "
+        "capability_registry_sha256 VARCHAR(64) NOT NULL, "
+        "probe_registry_sha256 VARCHAR(64) NOT NULL, "
+        "selected_check_ids_json TEXT NOT NULL DEFAULT '[]', "
+        "summary_json TEXT NOT NULL DEFAULT '{}', "
+        "started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "completed_at DATETIME"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS selfcheck_results ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "run_id VARCHAR(64) NOT NULL, "
+        "check_id VARCHAR(64) NOT NULL, "
+        "category VARCHAR(32) NOT NULL, "
+        "status VARCHAR(24) NOT NULL "
+        "CHECK (status IN ('passed','degraded','failed','inconclusive','skipped')), "
+        "severity VARCHAR(16) NOT NULL, "
+        "duration_ms INTEGER NOT NULL DEFAULT 0 CHECK (duration_ms >= 0), "
+        "detail_code VARCHAR(128) NOT NULL, "
+        "message VARCHAR(512) NOT NULL DEFAULT '', "
+        "capability_ids_json TEXT NOT NULL DEFAULT '[]', "
+        "metrics_json TEXT NOT NULL DEFAULT '{}', "
+        "evidence_json TEXT NOT NULL DEFAULT '{}', "
+        "started_at DATETIME NOT NULL, "
+        "completed_at DATETIME NOT NULL, "
+        "CONSTRAINT fk_selfcheck_result_run FOREIGN KEY (run_id) "
+        "REFERENCES selfcheck_runs(run_id) ON DELETE CASCADE, "
+        "CONSTRAINT uq_selfcheck_result_run_check UNIQUE (run_id, check_id)"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS worker_heartbeats ("
+        "worker_id VARCHAR(64) PRIMARY KEY, "
+        "instance_id VARCHAR(128) NOT NULL, "
+        "mode VARCHAR(32) NOT NULL, "
+        "state VARCHAR(16) NOT NULL DEFAULT 'running' "
+        "CHECK (state IN ('running','stopped','failed')), "
+        "cycle_count INTEGER NOT NULL DEFAULT 0, "
+        "success_count INTEGER NOT NULL DEFAULT 0, "
+        "failure_count INTEGER NOT NULL DEFAULT 0, "
+        "started_at DATETIME NOT NULL, "
+        "last_seen_at DATETIME NOT NULL, "
+        "last_success_at DATETIME, "
+        "last_error_at DATETIME, "
+        "last_error_code VARCHAR(128) NOT NULL DEFAULT '', "
+        "metadata_json TEXT NOT NULL DEFAULT '{}', "
+        "CONSTRAINT ck_worker_heartbeat_counts CHECK ("
+        "cycle_count >= 0 AND success_count >= 0 AND failure_count >= 0)"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS ix_selfcheck_run_started "
+        "ON selfcheck_runs(started_at, status)",
+        "CREATE INDEX IF NOT EXISTS ix_selfcheck_result_check_time "
+        "ON selfcheck_results(check_id, completed_at)",
+        "CREATE INDEX IF NOT EXISTS ix_selfcheck_result_status_time "
+        "ON selfcheck_results(status, completed_at)",
+        "CREATE INDEX IF NOT EXISTS ix_worker_heartbeat_seen "
+        "ON worker_heartbeats(last_seen_at, state)",
+    ])
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -5599,6 +5867,31 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         _PROMPT_CONTEXT_MANIFEST_VERSION,
         "prompt trace safe context manifest",
         _prompt_context_manifest_column,
+    ),
+    (
+        _CHAT_STREAM_DATABASE_ONLY_VERSION,
+        "chat stream database only switch",
+        _chat_stream_database_only_column,
+    ),
+    (
+        _CHAT_STREAM_DATABASE_ONLY_DEFAULT_ENABLED_VERSION,
+        "默认开启会话仅入库模式",
+        _chat_stream_database_only_default_enabled,
+    ),
+    (
+        _CHAT_STREAM_DATABASE_ONLY_DEFAULT_CONSTRAINT_VERSION,
+        "修复会话仅入库数据库默认约束",
+        _chat_stream_database_only_default_constraint,
+    ),
+    (
+        _CHAT_STREAM_AGENT_ID_VERSION,
+        "chat stream registered agent identity",
+        _chat_stream_agent_id_column,
+    ),
+    (
+        _SELFCHECK_RUNTIME_V1_VERSION,
+        "selfcheck run ledger and worker heartbeat",
+        _selfcheck_runtime_v1,
     ),
 ]
 

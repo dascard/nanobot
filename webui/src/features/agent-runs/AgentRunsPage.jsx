@@ -13,6 +13,7 @@ import {
   ViewportPage,
 } from '../../components/ui'
 import { LLMApiRequestLogsBlock } from '../../components/TraceView'
+import { runStatusTone } from './statusTone'
 
 // ── Agent Runs ──
 export function AgentRunsPage() {
@@ -50,8 +51,6 @@ export function AgentRunsPage() {
   const openTool = (id) => {
     api.get(`/tool-calls/${encodeURIComponent(id)}`).then(r => setToolDetail(r.data)).catch(() => setToolDetail(null))
   }
-  const tone = (s) => s === 'success' ? 'emerald' : s === 'error' ? 'red' : s === 'running' ? 'blue' : s === 'no_reply' ? 'slate' : 'amber'
-
   return (
     <ViewportPage>
       <PageHeader
@@ -86,7 +85,7 @@ export function AgentRunsPage() {
                   <tr key={r.run_id} onClick={() => setSelected(r.run_id)}
                     className={`border-b border-slate-800/50 cursor-pointer ${selected === r.run_id ? 'bg-emerald-500/10' : 'hover:bg-slate-800/40'}`}>
                     <td className="py-2 px-3 text-xs text-slate-400">{String(r.started_at || '').replace('T', ' ').slice(0, 19)}</td>
-                    <td className="py-2 px-3"><Badge tone={tone(r.status)}>{r.status}</Badge></td>
+                    <td className="py-2 px-3"><Badge tone={runStatusTone(r.status)}>{r.status}</Badge></td>
                     <td className="py-2 px-3 text-xs text-slate-400 max-w-32 truncate">{r.session_id || '-'}</td>
                     <td className="py-2 px-3 text-xs text-slate-500 max-w-40 truncate">{r.model || '-'}</td>
                   </tr>
@@ -109,7 +108,7 @@ export function AgentRunsPage() {
                     <h2 className="text-sm font-medium text-emerald-400 font-mono">{(detail.run || detail).run_id}</h2>
                     <div className="text-xs text-slate-600 font-mono">{(detail.run || detail).trace_id}</div>
                   </div>
-                  <Badge tone={tone((detail.run || detail).status)}>{(detail.run || detail).status}</Badge>
+                  <Badge tone={runStatusTone((detail.run || detail).status)}>{(detail.run || detail).status}</Badge>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
                   <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Prompt</div><div className="text-white font-medium truncate">{(detail.run || detail).prompt_key || '-'}</div></div>
@@ -136,7 +135,7 @@ export function AgentRunsPage() {
                       className="w-full text-left p-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800">
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-slate-200">{t.tool_name}</span>
-                        <Badge tone={tone(t.status)}>{t.status}</Badge>
+                        <Badge tone={runStatusTone(t.status)}>{t.status}</Badge>
                       </div>
                       <div className="text-xs text-slate-600 mt-1">{t.latency_ms || 0}ms · {t.tool_call_id}</div>
                     </button>

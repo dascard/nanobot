@@ -17,7 +17,7 @@
       "stage": "阶段 1.1"
     },
     {
-      "after_sha256": "fe272f0c3ec11febbf4f391d890427d4a65fd00b283b9e7341618dce2f16677a",
+      "after_sha256": "f6d50560cbec2cd3d7c5ab7a7bf07bc7aa913c9bd35b1b91be852280a344d5b8",
       "before_sha256": "04889c5b873921f3ca330e5803b7c5f3ed894f6c50acb7a32f773073491ba533",
       "id": "agent_harness_prefix_cache_provider_metrics",
       "reason": "为结构化 LLM 请求日志追加输入、输出、首 token 延迟、成本和成本来源列，以便按 Provider 审计前缀缓存效果；管理端仍只能访问登记的只读表视图。",
@@ -145,7 +145,7 @@
       "stage": "Agent Harness 阶段 6.2"
     },
     {
-      "after_sha256": "433b1592cb1e0e55706111674a3a2b7135ca6544dfc7f76ed8a8b5346b5ea9bf",
+      "after_sha256": "625bd86a65d356cabece1f066412e77501bf52f282b558a1173ab85906afe211",
       "before_sha256": "2bea17f21d71f93bf88174c1f0fdd56f624ca49f3227b02febd14a5cefed68e1",
       "id": "agent_harness_mcp_control_plane_prompt",
       "reason": "登记带 server namespace 的请求级 MCP 工具、冻结 schema、不可信结果信封和服务端秘密引用边界。",
@@ -241,15 +241,23 @@
       "stage": "Agent Harness 阶段 9.2"
     },
     {
-      "after_sha256": "209e53200d22993dd16d3c79f62a1322d7f20579b3dbc6aa713f5908ad0f006d",
+      "after_sha256": "32a3a5edc6d4075007c19fd0720d2ce117425bd056fb58da01231ebea88148a2",
       "before_sha256": "a4aba568bf2609133ca4a7d9bebaeb60608e4f1ab10c654b82c1e40cb237321e",
       "id": "session_summary_transport_guard_registry",
       "reason": "把 Session Summary 的 Task Runtime 数组上限改为传输层有界护栏，允许大型群聊参与者与关键词集合进入应用层的继承审计和局部压缩；业务层 7/8 项义务预算保持不变。",
       "snapshot_id": "runtime_registries",
       "stage": "会话摘要缓存优化"
+    },
+    {
+      "after_sha256": "96d40fc479ef06ef438f6ca986eabc2b4c7c72373a7ef8eb9ac8c3da8d8d32ae",
+      "before_sha256": "32a3a5edc6d4075007c19fd0720d2ce117425bd056fb58da01231ebea88148a2",
+      "id": "system_selfcheck_runtime_registry",
+      "reason": "登记周期确定性自检、执行间隔和付费模型 Canary 三项受管设置；周期自检默认启用，模型 Canary 默认关闭且只能显式开启。",
+      "snapshot_id": "runtime_registries",
+      "stage": "系统自检"
     }
   ],
-  "baseline_git_commit": "8c8dc9becb27c6e29521c2ab0f75646f0f42c613",
+  "baseline_git_commit": "34aed59a4883b42b9ed804da273e85002ac54813",
   "fixture": {
     "path": "tests/fixtures/architecture_behavior_cases.json",
     "sha256": "86f456568f4beb91f119675627ea4d272a084e48d503acd590393ae5b129dcb1"
@@ -303,21 +311,21 @@
       "id": "prompt_runtime",
       "note": "记录版本化 Prompt 文件及 section 权威描述符，防止无意漂移。",
       "path": "tests/golden/architecture_behavior/prompt_runtime.json",
-      "sha256": "433b1592cb1e0e55706111674a3a2b7135ca6544dfc7f76ed8a8b5346b5ea9bf"
+      "sha256": "625bd86a65d356cabece1f066412e77501bf52f282b558a1173ab85906afe211"
     },
     {
       "classification": "preserve",
       "id": "runtime_registries",
       "note": "记录 route、tool、setting 和 task 当前事实源，供后续收敛对账。",
       "path": "tests/golden/architecture_behavior/runtime_registries.json",
-      "sha256": "209e53200d22993dd16d3c79f62a1322d7f20579b3dbc6aa713f5908ad0f006d"
+      "sha256": "96d40fc479ef06ef438f6ca986eabc2b4c7c72373a7ef8eb9ac8c3da8d8d32ae"
     },
     {
       "classification": "security_invariant",
       "id": "security_invariants",
       "note": "Sandbox 路径、Admin 结构化视图、URL、CQ 和 Prompt 权威边界不得削弱。",
       "path": "tests/golden/architecture_behavior/security_invariants.json",
-      "sha256": "fe272f0c3ec11febbf4f391d890427d4a65fd00b283b9e7341618dce2f16677a"
+      "sha256": "f6d50560cbec2cd3d7c5ab7a7bf07bc7aa913c9bd35b1b91be852280a344d5b8"
     }
   ]
 }

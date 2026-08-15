@@ -115,6 +115,23 @@ def _validate_agent_runtime_settings(values: Mapping[str, object]) -> None:
         raise ValueError("agent.runtime.kt_session_allowlist 不能使用通配符")
     if not kt_enabled and (default_kind == "kt" or basis_points > 0 or bool(allowlist)):
         raise ValueError("KT 未启用时不能配置 KT 默认值或灰度范围")
+    additional_raw = str(
+        values.get("agent.runtime.additional_ids", "pabot") or ""
+    )
+    additional_ids = [
+        item.strip() for item in additional_raw.split(",") if item.strip()
+    ]
+    if len(additional_ids) != len(set(additional_ids)):
+        raise ValueError("agent.runtime.additional_ids 不能重复")
+    if "nanobot" in additional_ids:
+        raise ValueError("agent.runtime.additional_ids 不应重复默认 nanobot")
+    from core.registry.validation import validate_identifier
+
+    for agent_id in additional_ids:
+        validate_identifier(
+            agent_id,
+            field_name="agent.runtime.additional_ids",
+        )
 
 
 def _validate_context_compaction_settings(
@@ -245,6 +262,20 @@ SETTING_DEFS: dict[str, SettingDef] = {
         source_precedence=("environment", "default"),
         owner_module="runtime.agent",
         safety_class="invariant",
+    ),
+    "agent.runtime.additional_ids": SettingDef(
+        key="agent.runtime.additional_ids",
+        env_name="NANOBOT_AGENT_RUNTIME_ADDITIONAL_IDS",
+        default="pabot",
+        value_type="str",
+        category="agent",
+        description="启动时显式注册的附加 creature Agent ID，逗号分隔",
+        restart_required=True,
+        dangerous=True,
+        source_precedence=("environment", "default"),
+        owner_module="runtime.agent",
+        safety_class="invariant",
+        cross_field_validator=_validate_agent_runtime_settings,
     ),
     "agent.multi_agent.enabled": SettingDef(
         key="agent.multi_agent.enabled",
@@ -557,6 +588,35 @@ SETTING_DEFS: dict[str, SettingDef] = {
         value_type="bool",
         category="proactive",
         description="主动情感外呼总开关；单用户自用场景下为纯布尔开关",
+    ),
+    "selfcheck.watchdog_enabled": SettingDef(
+        key="selfcheck.watchdog_enabled",
+        env_name="NANOBOT_SELFCHECK_WATCHDOG_ENABLED",
+        default=True,
+        value_type="bool",
+        category="system",
+        description="是否周期执行无外部网络的系统自检",
+        owner_module="runtime.self-check",
+    ),
+    "selfcheck.watchdog_interval_seconds": SettingDef(
+        key="selfcheck.watchdog_interval_seconds",
+        env_name="NANOBOT_SELFCHECK_WATCHDOG_INTERVAL_SECONDS",
+        default=900,
+        value_type="int",
+        category="system",
+        description="周期系统自检间隔（秒）",
+        min_value=60,
+        max_value=86400,
+        owner_module="runtime.self-check",
+    ),
+    "selfcheck.model_canary_enabled": SettingDef(
+        key="selfcheck.model_canary_enabled",
+        env_name="NANOBOT_SELFCHECK_MODEL_CANARY_ENABLED",
+        default=False,
+        value_type="bool",
+        category="system",
+        description="周期系统自检是否额外执行一次 reply Route 模型 Canary",
+        owner_module="runtime.self-check",
     ),
     "proactive_outreach.fallback_interval_min": SettingDef(
         key="proactive_outreach.fallback_interval_min",

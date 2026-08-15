@@ -91,6 +91,7 @@ class KtScheduledWorkflowCallbacks:
         args: dict[str, Any],
         idempotency_key: str,
     ) -> ScheduledWorkflowStepOutcome:
+        from core.agent_runtime import AgentRuntimeKind
         from core.agent_runtime.gateway import create_isolated_agent_gateway
         from core.tool_plan import ToolPlanExecutionError
         from core.tracing import new_trace_id
@@ -103,23 +104,29 @@ class KtScheduledWorkflowCallbacks:
         additional_schemas: tuple[dict[str, Any], ...] = ()
         try:
             await bridge.start()
-            agent = getattr(bridge, "agent", None)
-            registry = getattr(agent, "registry", None)
-            if registry is None:
-                return ScheduledWorkflowStepOutcome.failed(
-                    "tool_registry_unavailable",
-                    "KT 工具注册表不可用",
-                    blocked=True,
-                )
-            if registry.get_tool(tool_name) is None:
-                dynamic = await self._install_agent_link_tool(
-                    bridge,
-                    context,
-                    tool_name,
-                )
-                if isinstance(dynamic, ScheduledWorkflowStepOutcome):
-                    return dynamic
-                additional_schemas = dynamic
+            runtime_kind = getattr(
+                bridge,
+                "runtime_kind",
+                AgentRuntimeKind.KT,
+            )
+            if runtime_kind is AgentRuntimeKind.KT:
+                agent = getattr(bridge, "agent", None)
+                registry = getattr(agent, "registry", None)
+                if registry is None:
+                    return ScheduledWorkflowStepOutcome.failed(
+                        "tool_registry_unavailable",
+                        "KT 工具注册表不可用",
+                        blocked=True,
+                    )
+                if registry.get_tool(tool_name) is None:
+                    dynamic = await self._install_agent_link_tool(
+                        bridge,
+                        context,
+                        tool_name,
+                    )
+                    if isinstance(dynamic, ScheduledWorkflowStepOutcome):
+                        return dynamic
+                    additional_schemas = dynamic
 
             metadata = _scheduled_task_metadata(context.task_snapshot)
             metadata.update({

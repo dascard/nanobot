@@ -95,6 +95,8 @@ class ContentBlockRuleTestRequest(BaseModel):
 class ConfigUpdate(BaseModel):
     talk_value: float | None = None
     mentioned_bot_reply: int | None = None
+    database_only: bool | None = None
+    agent_id: str | None = None
     use_expression: int | None = None
     enable_expression_learning: int | None = None
     enable_jargon_learning: int | None = None
@@ -197,6 +199,8 @@ def _config_dict(r: ChatStreamConfig) -> dict:
         "chat_stream_id": r.chat_stream_id,
         "talk_value": r.talk_value,
         "mentioned_bot_reply": bool(r.mentioned_bot_reply),
+        "database_only": bool(r.database_only),
+        "agent_id": str(r.agent_id or "nanobot"),
         "use_expression": group_profile_mode == "on",
         "enable_expression_learning": False,
         "enable_jargon_learning": False,
@@ -261,6 +265,8 @@ def _config_default(sid: str) -> dict:
         "chat_stream_id": sid,
         "talk_value": 0.5,
         "mentioned_bot_reply": True,
+        "database_only": True,
+        "agent_id": "nanobot",
         "use_expression": False,
         "enable_expression_learning": False,
         "enable_jargon_learning": False,
@@ -673,7 +679,41 @@ def _normalized_guidance_or_422(value: str) -> str:
         raise HTTPException(
             status_code=422,
             detail={"code": exc.code, "message": str(exc)},
+    ) from exc
+
+
+def _registered_agent_id_or_http_error(value: str) -> str:
+    from core.agent_runtime import (
+        AgentRuntimeCapabilityError,
+        AgentRuntimeNotFoundError,
+        AgentRuntimeStateError,
+    )
+    from core.agent_runtime.gateway import get_agent_runtime_registry
+    from core.registry.validation import RegistryValidationError, validate_identifier
+
+    try:
+        normalized = validate_identifier(value, field_name="agent_id")
+    except RegistryValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_agent_id", "message": str(exc)},
         ) from exc
+    try:
+        get_agent_runtime_registry().require_registration(
+            normalized,
+            entrypoint="chat",
+        )
+    except (AgentRuntimeNotFoundError, AgentRuntimeCapabilityError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except AgentRuntimeStateError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": "Agent 注册表当前不可用"},
+        ) from exc
+    return normalized
 
 
 def _apply_config_update(
@@ -702,6 +742,11 @@ def _apply_config_update(
     normalized_guidance = (
         _normalized_guidance_or_422(body.session_guidance)
         if body.session_guidance is not None
+        else None
+    )
+    normalized_agent_id = (
+        _registered_agent_id_or_http_error(body.agent_id)
+        if body.agent_id is not None
         else None
     )
     normalized_group_profile_mode: str | None = None
@@ -769,6 +814,7 @@ def _apply_config_update(
         int_fields = (
             "mentioned_bot_reply",
             "planner_smooth",
+            "database_only",
         )
         for field in ("talk_value",) + int_fields:
             value = getattr(body, field, None)
@@ -778,6 +824,11 @@ def _apply_config_update(
             setattr(row, field, stored_value)
             changed_fields.append(field)
             safe_values[field] = stored_value
+
+        if normalized_agent_id is not None:
+            row.agent_id = normalized_agent_id
+            changed_fields.append("agent_id")
+            safe_values["agent_id"] = normalized_agent_id
 
         if normalized_group_profile_mode is not None:
             row.group_profile_mode = normalized_group_profile_mode

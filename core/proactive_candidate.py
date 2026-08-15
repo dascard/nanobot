@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import Any, Callable
@@ -348,7 +349,7 @@ async def materialize_outreach_candidate(
         }
 
     try:
-        message = generator_fn(grounding, judge)
+        message = await asyncio.to_thread(generator_fn, grounding, judge)
     except OutreachModelContractError as exc:
         diagnostic = generation_failure_from_exception(exc)
         return {
@@ -398,7 +399,10 @@ async def evaluate_outreach_candidate(
 ) -> dict[str, Any]:
     """把 grounding 评估为 no-candidate、错误或可发布候选。"""
 
-    judgement = evaluate_outreach_judgement(
+    # ``judge_fn`` 是同步模型调用；该共享入口同时服务 live dry-run，
+    # 不能让慢候选占住 FastAPI 事件循环。
+    judgement = await asyncio.to_thread(
+        evaluate_outreach_judgement,
         grounding=grounding,
         now=now,
         judge_fn=judge_fn,

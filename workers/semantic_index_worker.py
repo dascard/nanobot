@@ -330,10 +330,32 @@ def run_forever(
     interval_seconds: float = 10.0,
     embedding_provider=None,
 ) -> None:
+    from core.selfcheck.heartbeat import record_worker_cycle_with_factory
+
     while True:
-        processed = run_once(
-            worker_id=worker_id,
-            embedding_provider=embedding_provider,
+        try:
+            processed = run_once(
+                worker_id=worker_id,
+                embedding_provider=embedding_provider,
+            )
+        except Exception:
+            record_worker_cycle_with_factory(
+                SessionLocal,
+                worker_id="semantic-index-worker",
+                instance_id=worker_id,
+                mode="external",
+                success=False,
+                error_code="semantic_index_cycle_failed",
+                metadata={"processed": 0},
+            )
+            raise
+        record_worker_cycle_with_factory(
+            SessionLocal,
+            worker_id="semantic-index-worker",
+            instance_id=worker_id,
+            mode="external",
+            success=True,
+            metadata={"processed": int(processed)},
         )
         if not processed:
             time.sleep(max(0.1, float(interval_seconds)))

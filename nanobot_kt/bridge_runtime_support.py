@@ -180,10 +180,27 @@ def build_child_bridge(
     bridge_type: Callable[..., object],
     creature_path: str,
     runtime_kind: AgentRuntimeKind,
+    *,
+    agent_id: str = "",
+    agent_profile: str = "",
+    allowed_tool_names: frozenset[str] | None = None,
+    allow_dynamic_tools: bool = False,
+    model_profile_id: str = "",
 ) -> object:
+    kwargs: dict[str, object] = {}
+    if agent_id:
+        kwargs["agent_id"] = agent_id
+    if agent_profile:
+        kwargs["agent_profile"] = agent_profile
+    if allowed_tool_names is not None:
+        kwargs["allowed_tool_names"] = allowed_tool_names
+    if allow_dynamic_tools:
+        kwargs["allow_dynamic_tools"] = True
+    if model_profile_id:
+        kwargs["model_profile_id"] = model_profile_id
     if runtime_kind is AgentRuntimeKind.KT:
-        return bridge_type(creature_path)
-    return bridge_type(creature_path, runtime_kind=runtime_kind)
+        return bridge_type(creature_path, **kwargs)
+    return bridge_type(creature_path, runtime_kind=runtime_kind, **kwargs)
 
 
 def build_bridge_agent_runtime(

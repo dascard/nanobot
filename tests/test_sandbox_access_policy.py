@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -500,3 +501,74 @@ def test_runtime_permission_decision_is_committed_before_tool_access(
         "reason_code": "allowed",
         "capability": "workspace",
     }
+
+
+def test_repeated_runtime_permission_decision_is_idempotent(
+    db_session,
+    infrastructure_allowed,
+    monkeypatch,
+):
+    from core.run_ledger.adapters import run_accepted_event
+    from core.run_ledger.persistence import SqlAlchemyRunEventLedger
+    from core.tracing_context import (
+        reset_runtime_correlation,
+        set_runtime_correlation,
+    )
+
+    _set_bool(db_session, "sandbox.enabled", True)
+    _set_bool(db_session, "sandbox.exec_enabled", False)
+    _grant_session(db_session, session_id="repeated-ledger-user")
+    ledger = SqlAlchemyRunEventLedger(db_session)
+    ledger.append(run_accepted_event(
+        run_id="run-repeated-permission-ledger",
+        trace_id="trace-repeated-permission-ledger",
+        session_id="qq:repeated-ledger-user:private",
+        user_id="repeated-ledger-user",
+        chat_type="private",
+        group_id="",
+        run_type="chat",
+        prompt_mode="prompt",
+        prompt_key="chat_private",
+        prompt_sha256="",
+        model="",
+        input_value="workspace read",
+    ))
+    db_session.commit()
+
+    first = datetime(2026, 8, 15, 11, 0, tzinfo=timezone.utc)
+    instants = iter((first, first + timedelta(seconds=1)))
+    monkeypatch.setattr(
+        "core.run_ledger.adapters._now",
+        lambda: next(instants),
+    )
+    tokens = set_runtime_correlation(
+        run_id="run-repeated-permission-ledger",
+        trace_id="trace-repeated-permission-ledger",
+        tool_call_id="tool-workspace-read",
+    )
+    try:
+        policy = SandboxAccessPolicy(db_session)
+        first_decision = policy.evaluate(
+            "workspace_read",
+            platform="qq",
+            chat_type="private",
+            session_id="private_repeated-ledger-user",
+        )
+        repeated_decision = policy.evaluate(
+            "workspace_read",
+            platform="qq",
+            chat_type="private",
+            session_id="private_repeated-ledger-user",
+        )
+    finally:
+        reset_runtime_correlation(tokens)
+
+    assert first_decision.allowed is True
+    assert repeated_decision == first_decision
+    permission_records = [
+        record
+        for record in ledger.read("run-repeated-permission-ledger")
+        if record.event_type == "permission.decided"
+    ]
+    assert len(permission_records) == 1
+    assert permission_records[0].event.occurred_at == first

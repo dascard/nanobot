@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from api import chat_content_helpers, chat_recovery
 from core.db import ChatPersistenceRepositoryPort, chat_persistence_repository
 from core.inbound_idempotency import CompletedInboundResponse, InboundClaimKey
+from core.persisted_content import sanitize_persisted_content
 from core.sqlite_retry import run_sqlite_locked_retry
 
 logger = logging.getLogger("nanobot.api")
@@ -31,6 +32,8 @@ class ChatTurnPersistenceInput:
     # 私聊/群聊;块式会话记忆仅对 private 归块,group 完全短路。
     chat_type: str = "private"
     event_time: str = ""
+    prompt_event_content: str = ""
+    prompt_effort_constraint: str = ""
 
 
 @dataclass(frozen=True)
@@ -141,6 +144,24 @@ def _prepare_chat_turn(
         guardrail_status,
     )
     user_meta = safe_meta(json.dumps(req.client_meta or {}, ensure_ascii=False))
+    # 历史渲染会读取这些模型可见字段；必须只保存本轮实际送模的服务端值，
+    # 不能让 client_meta 在下一轮历史中凭空增加当前请求没有的内容。
+    for internal_field in (
+        "bot_aliases",
+        "bot_id",
+        "bot_name",
+        "current_message_id",
+        "effort_constraint",
+        "event_time",
+        "prompt_event_contract",
+        "prompt_event_content",
+        "self_id",
+        "sender_name",
+        "session_name",
+        "timing_decision",
+        "trigger_reason",
+    ):
+        user_meta.pop(internal_field, None)
     user_meta["kind"] = user_kind
     if req.event_time:
         user_meta["event_time"] = str(req.event_time)
@@ -150,7 +171,12 @@ def _prepare_chat_turn(
         user_meta["session_name"] = str(req.session_name)
     if req.message_id:
         user_meta["current_message_id"] = str(req.message_id)
-    if timing_meta:
+    prompt_effort_constraint = str(
+        req.prompt_effort_constraint or ""
+    ).strip()
+    if prompt_effort_constraint:
+        user_meta["effort_constraint"] = prompt_effort_constraint
+    elif timing_meta:
         from core.private_timing import get_effort_constraint
 
         effort_constraint = get_effort_constraint(
@@ -160,6 +186,11 @@ def _prepare_chat_turn(
             user_meta["effort_constraint"] = effort_constraint
     if timing_meta:
         user_meta["timing_gate"] = timing_meta
+    if req.chat_type == "group" and str(req.prompt_event_content or "").strip():
+        user_meta["prompt_event_contract"] = "group_canonical_v1"
+        user_meta["prompt_event_content"] = sanitize_persisted_content(
+            req.prompt_event_content
+        )
 
     assistant_turn_meta: dict[str, Any] = {"kind": turn_answer_kind}
     if timing_meta:
@@ -537,6 +568,94 @@ def persist_private_claim_completion(
         raise
 
 
+def persist_database_only_message(
+    db: Session,
+    req: ChatTurnPersistenceInput,
+    *,
+    completion: CompletedInboundResponse,
+    key: InboundClaimKey | None = None,
+    request_sha256: str = "",
+) -> CompletedInboundResponse:
+    """只保存入站 user 日志，不生成 assistant 日志或会话工作记忆。"""
+
+    if type(completion) is not CompletedInboundResponse:
+        raise TypeError("completion 必须是 CompletedInboundResponse")
+    if completion.outcome == "respond":
+        raise ValueError("仅入库模式不能保存 respond completion")
+
+    client_meta = safe_meta(
+        json.dumps(req.client_meta or {}, ensure_ascii=False)
+    )
+    client_meta.update({
+        "database_only": True,
+        "model_invoked": False,
+        "context_policy": "exclude",
+        "no_context_reason": "database_only",
+    })
+    marked_req = replace(req, client_meta=client_meta)
+    archive_content = chat_content_helpers.build_chatlog_user_content(
+        req.query,
+        req.files,
+    )
+
+    if key is not None:
+        return persist_private_claim_completion(
+            db,
+            marked_req,
+            key=key,
+            request_sha256=request_sha256,
+            completion=completion,
+            journal_content=archive_content,
+            journal_processed=1,
+        )
+
+    repository = chat_persistence_repository(db)
+
+    def operation() -> None:
+        existing = ()
+        if req.message_id:
+            existing = repository.find_chat_logs(
+                session_id=req.session_id,
+                message_id=req.message_id,
+                role="user",
+            )
+        if existing:
+            row = existing[0]
+            row.user_id = req.user_id
+            row.content = archive_content
+            row.sender_name = req.sender_name or ""
+            row.session_name = req.session_name or ""
+            row.processed = 1
+            row.source_message_ids_json = _source_message_ids_json(req)
+            row.meta_json = json.dumps(client_meta, ensure_ascii=False)
+        else:
+            repository.add_chat_log(
+                user_id=req.user_id,
+                session_id=req.session_id,
+                role="user",
+                content=archive_content,
+                sender_name=req.sender_name or "",
+                session_name=req.session_name or "",
+                processed=1,
+                message_id=req.message_id,
+                source_message_ids_json=_source_message_ids_json(req),
+                meta_json=json.dumps(client_meta, ensure_ascii=False),
+            )
+        repository.commit()
+
+    try:
+        run_sqlite_locked_retry(
+            operation,
+            rollback=repository.rollback,
+            label="database_only_message_persist",
+            logger=logger,
+        )
+    except BaseException:
+        repository.rollback()
+        raise
+    return completion
+
+
 def persist_chat_turn(
     db: Session,
     req: ChatTurnPersistenceInput,
@@ -588,6 +707,12 @@ def persist_chat_turn(
             sender_name="nanobot",
             session_name=req.session_name or "",
             processed=prepared.assistant_processed_val,
+            message_id=(req.message_id if req.chat_type == "group" else None),
+            source_message_ids_json=(
+                prepared.source_ids_json
+                if req.chat_type == "group"
+                else "[]"
+            ),
             meta_json=json.dumps(prepared.assistant_chat_meta, ensure_ascii=False),
         )
         user_turn = repository.add_conversation_turn(

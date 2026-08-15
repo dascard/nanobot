@@ -221,13 +221,13 @@ def test_historical_baseline_does_not_need_to_match_current_runtime_contract(
                 "optional": True,
             }
         )
-        history_edge = next(
+        persona_edge = next(
             edge
             for edge in legacy_flow["edges"]
-            if edge["from"] == "history_messages"
+            if edge["from"] == "project_context"
             and edge["to"] == "persona_reference"
         )
-        history_edge["to"] = "effort_constraint"
+        persona_edge["to"] = "effort_constraint"
         legacy_flow["edges"].append(
             {"from": "effort_constraint", "to": "persona_reference"}
         )

@@ -274,6 +274,8 @@ async def run_forever_async(
 ) -> None:
     """常驻轮询；停止后不领取新记录，并等待当前记录完成。"""
 
+    from core.selfcheck.heartbeat import record_worker_cycle_with_factory
+
     resolved_config = config or OutboundWorkerConfig.from_env()
     factory = _session_factory_or_default(session_factory)
     logger.info(
@@ -286,6 +288,9 @@ async def run_forever_async(
         push_token=resolved_config.push_token,
     ) as resolved_transport:
         while not stop_event.is_set():
+            stats = _empty_stats()
+            cycle_success = False
+            error_code = ""
             try:
                 stats = await _run_worker_cycle(
                     transport=resolved_transport,
@@ -296,13 +301,24 @@ async def run_forever_async(
                     now=None,
                     lane_limit=resolved_config.batch_size,
                 )
+                cycle_success = True
                 if stats["processed"]:
                     logger.info("Outbound delivery worker processed: %s", stats)
             except Exception as exc:
+                error_code = "outbound_delivery_cycle_failed"
                 logger.error(
                     "Outbound delivery worker loop failed error_type=%s",
                     type(exc).__name__,
                 )
+            record_worker_cycle_with_factory(
+                factory,
+                worker_id="outbound-delivery-worker",
+                instance_id=owner,
+                mode="external",
+                success=cycle_success,
+                error_code=error_code,
+                metadata=stats,
+            )
             if not stop_event.is_set():
                 await _wait_for_stop(
                     stop_event,

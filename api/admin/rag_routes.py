@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import uuid
-from typing import Literal
 from typing import Any
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 from sqlalchemy.orm import Session
 
 from api.admin.common import verify_admin
@@ -22,13 +29,58 @@ from core.time_utils import db_datetime_to_utc_iso
 
 router = APIRouter(prefix="/rag", tags=["admin-rag"])
 router.include_router(rag_benchmark_router)
+logger = logging.getLogger("nanobot.api.admin.rag")
+
+
+RagDebugSourceType = Literal[
+    "memory",
+    "memory_digest",
+    "session_summary",
+    "group_memory",
+    "sticker",
+    "knowledge",
+    "group_analysis",
+    "all",
+]
 
 
 class RagDebugQueryRequest(BaseModel):
-    source_type: str = Field(default="all")
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: RagDebugSourceType = Field(default="all")
     query: str = Field(default="")
     limit: int = Field(default=10, ge=1, le=100)
     filters: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_source_context(self) -> "RagDebugQueryRequest":
+        filters = self.filters or {}
+        group_reference = str(
+            filters.get("group_id")
+            or filters.get("chat_stream_id")
+            or ""
+        ).strip()
+        raw_messages = filters.get("messages")
+        messages = raw_messages if isinstance(raw_messages, list) else []
+        if raw_messages is not None and not isinstance(raw_messages, list):
+            raise ValueError("filters.messages 必须是数组")
+        if messages and any(not isinstance(item, dict) for item in messages):
+            raise ValueError("filters.messages 的每一项必须是对象")
+        if self.source_type == "group_memory" and not group_reference:
+            raise ValueError(
+                "group_memory 调试必须提供 filters.group_id 或 "
+                "filters.chat_stream_id"
+            )
+        if (
+            self.source_type == "group_analysis"
+            and not group_reference
+            and not messages
+        ):
+            raise ValueError(
+                "group_analysis 调试必须提供群上下文或非空 "
+                "filters.messages"
+            )
+        return self
 
 
 class RagDebugBuildIndexRequest(BaseModel):
@@ -242,6 +294,29 @@ def _group_memory_candidate_to_debug(row: Any, components: dict[str, Any], *, sk
     }
 
 
+def _debug_group_reference(filters: dict[str, Any]) -> str:
+    return str(
+        filters.get("group_id")
+        or filters.get("chat_stream_id")
+        or ""
+    ).strip()
+
+
+def _bounded_filter_int(
+    filters: dict[str, Any],
+    key: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(filters.get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(value, maximum))
+
+
 def _build_group_memory_debug_response(
     body: RagDebugQueryRequest,
     db: Session,
@@ -252,7 +327,7 @@ def _build_group_memory_debug_response(
     from core.semantic.provider_factory import get_rag_runtime_config, get_reranker_provider
 
     filters = body.filters or {}
-    group_id = str(filters.get("group_id") or "")
+    group_id = _debug_group_reference(filters)
     current_user_input = str(filters.get("current_user_input") or body.query or "")
     recent_messages = filters.get("recent_messages") if isinstance(filters.get("recent_messages"), list) else []
     runtime = get_rag_runtime_config("group_memory")
@@ -264,8 +339,20 @@ def _build_group_memory_debug_response(
         group_id=group_id,
         current_user_input=current_user_input,
         recent_messages=recent_messages,
-        max_items=int(filters.get("max_items") or body.limit),
-        max_chars=int(filters.get("max_chars") or 1200),
+        max_items=_bounded_filter_int(
+            filters,
+            "max_items",
+            body.limit,
+            minimum=1,
+            maximum=100,
+        ),
+        max_chars=_bounded_filter_int(
+            filters,
+            "max_chars",
+            1200,
+            minimum=100,
+            maximum=20_000,
+        ),
     )
     candidate_ids = sorted({int(key) for key in selection.score_components if str(key).isdigit()})
     rows = {
@@ -322,29 +409,7 @@ def _build_group_memory_debug_response(
             "final_items": len(final),
         },
         "candidates": final,
-    }
-
-
-def _build_stub_debug_response(body: RagDebugQueryRequest, latency_ms: int) -> dict[str, Any]:
-    return {
-        "query": body.query,
-        "source_type": body.source_type,
-        "stages": {
-            "sql_filters": body.filters or {},
-            "fts_hits": [],
-            "embedding_hits": [],
-            "merged_candidates": [],
-            "reranker_input_pairs": [],
-            "final_candidates": [],
-        },
-        "score_breakdown": {
-            "degraded": True,
-            "fallback_reason": "rag_debug_stub",
-            "source_weights": {},
-            "latency_ms": latency_ms,
-        },
-        "candidates": [],
-    }
+}
 
 
 def _sticker_candidate_to_debug(item: dict[str, Any]) -> dict[str, Any]:
@@ -472,26 +537,129 @@ def _build_knowledge_debug_response(
 
 def _build_group_analysis_debug_response(
     body: RagDebugQueryRequest,
+    db: Session,
     latency_ms: int,
 ) -> dict[str, Any]:
     from app.group_analysis.local_rag import (
         select_group_analysis_context,
     )
+    from app.group_analysis.preprocess import (
+        build_clean_messages,
+        dedupe_group_logs,
+        filter_analyzable_logs,
+        resolve_analysis_window_hours,
+    )
+    from app.group_analysis.repository import GroupAnalysisRepository
     from core.semantic.provider_factory import get_embedding_provider, get_rag_runtime_config, get_reranker_provider
 
     filters = body.filters or {}
-    messages = filters.get("messages") if isinstance(filters.get("messages"), list) else []
+    supplied_messages = (
+        filters.get("messages")
+        if isinstance(filters.get("messages"), list)
+        else []
+    )
+    messages = [
+        dict(item)
+        for item in supplied_messages
+        if isinstance(item, dict)
+    ]
+    context: dict[str, Any] = {
+        "message_source": "request",
+        "group_id": "",
+        "group_name": "",
+        "window_hours": None,
+        "raw_message_count": len(messages),
+        "eligible_message_count": len(messages),
+        "deduped_message_count": len(messages),
+        "message_count": len(messages),
+    }
+    if not messages:
+        group_reference = _debug_group_reference(filters)
+        repository = GroupAnalysisRepository(db)
+        group = repository.resolve_group(group_reference)
+        if group is None:
+            candidates = repository.get_group_candidates(group_reference)
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "rag_debug_group_not_found",
+                    "message": "未找到唯一匹配的群，请提供精确群号或群会话标识。",
+                    "candidates": candidates,
+                },
+            )
+        window_hours = resolve_analysis_window_hours(
+            filters.get("window_hours"),
+        )
+        batch = repository.fetch_group_logs(
+            group,
+            window_hours=window_hours,
+            limit=_bounded_filter_int(
+                filters,
+                "message_limit",
+                1000,
+                minimum=1,
+                maximum=5000,
+            ),
+        )
+        eligible_logs = filter_analyzable_logs(batch.logs)
+        deduped_logs = dedupe_group_logs(eligible_logs)
+        messages = build_clean_messages(deduped_logs)
+        context = {
+            "message_source": "database",
+            "group_id": group.group_id,
+            "group_name": group.name,
+            "window_hours": window_hours,
+            "raw_message_count": batch.raw_count,
+            "eligible_message_count": len(eligible_logs),
+            "deduped_message_count": len(deduped_logs),
+            "message_count": len(messages),
+        }
     runtime = get_rag_runtime_config("group_analysis")
+    reranker_provider = (
+        get_reranker_provider()
+        if runtime.enabled and runtime.reranker_enabled
+        else None
+    )
     result = select_group_analysis_context(
         messages,
         query=body.query,
-        bundle_size=int(filters.get("bundle_size") or 8),
-        lexical_top_k=int(filters.get("lexical_top_k") or 300),
-        reranker_top_k=int(filters.get("reranker_top_k") or 40),
-        neighbor_radius=int(filters.get("neighbor_radius") or 1),
-        budget_chars=int(filters.get("budget_chars") or 0),
+        bundle_size=_bounded_filter_int(
+            filters,
+            "bundle_size",
+            8,
+            minimum=1,
+            maximum=100,
+        ),
+        lexical_top_k=_bounded_filter_int(
+            filters,
+            "lexical_top_k",
+            300,
+            minimum=1,
+            maximum=1000,
+        ),
+        reranker_top_k=_bounded_filter_int(
+            filters,
+            "reranker_top_k",
+            40,
+            minimum=1,
+            maximum=500,
+        ),
+        neighbor_radius=_bounded_filter_int(
+            filters,
+            "neighbor_radius",
+            1,
+            minimum=0,
+            maximum=10,
+        ),
+        budget_chars=_bounded_filter_int(
+            filters,
+            "budget_chars",
+            0,
+            minimum=0,
+            maximum=200_000,
+        ),
         embedding_provider=get_embedding_provider() if runtime.enabled else None,
-        reranker_provider=get_reranker_provider() if runtime.enabled and runtime.reranker_enabled else None,
+        reranker_provider=reranker_provider,
     )
     stats = result.get("stats_logs") or {}
     prompt_logs = result.get("prompt_logs") or {}
@@ -534,9 +702,19 @@ def _build_group_analysis_debug_response(
         }
         for item in prompt_logs.get("selected_bundles") or []
     ]
+    if not runtime.enabled:
+        degraded = True
+        fallback_reason = "rag_source_disabled"
+    elif runtime.reranker_enabled and reranker_provider is None:
+        degraded = True
+        fallback_reason = "reranker_unavailable"
+    else:
+        degraded = False
+        fallback_reason = ""
     return {
         "query": body.query,
         "source_type": "group_analysis",
+        "context": context,
         "stages": {
             "sql_filters": {key: value for key, value in filters.items() if key != "messages"},
             "stats_logs": stats,
@@ -548,13 +726,202 @@ def _build_group_analysis_debug_response(
             "final_candidates": final_candidates,
         },
         "score_breakdown": {
-            "degraded": not bool(prompt_logs.get("reranker_input_pairs")),
-            "fallback_reason": "" if prompt_logs.get("reranker_input_pairs") else "local_rag_debug_no_external_reranker",
+            "degraded": degraded,
+            "fallback_reason": fallback_reason,
             "source_weights": {"group_analysis": 1.0},
             "latency_ms": latency_ms,
             **stats,
         },
         "candidates": final_candidates,
+    }
+
+
+def _round_robin_debug_candidates(
+    source_responses: dict[str, dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    queues = {
+        source_type: list(response.get("candidates") or [])
+        for source_type, response in source_responses.items()
+    }
+    merged: list[dict[str, Any]] = []
+    while len(merged) < limit and any(queues.values()):
+        for source_type in source_responses:
+            queue = queues[source_type]
+            if not queue:
+                continue
+            candidate = dict(queue.pop(0))
+            candidate.setdefault("source_type", source_type)
+            merged.append(candidate)
+            if len(merged) >= limit:
+                break
+    return merged
+
+
+def _source_result_status(response: dict[str, Any]) -> str:
+    score_breakdown = response.get("score_breakdown") or {}
+    if score_breakdown.get("degraded"):
+        return "degraded"
+    if response.get("candidates"):
+        return "passed"
+    return "empty"
+
+
+def _build_all_debug_response(
+    body: RagDebugQueryRequest,
+    db: Session,
+    latency_ms: int,
+) -> dict[str, Any]:
+    filters = body.filters or {}
+    has_group_context = bool(_debug_group_reference(filters))
+    has_supplied_messages = bool(
+        isinstance(filters.get("messages"), list)
+        and filters.get("messages")
+    )
+    builders = (
+        ("memory", lambda: _build_memory_debug_response(body, db, 0)),
+        (
+            "group_memory",
+            lambda: _build_group_memory_debug_response(body, db, 0),
+        ),
+        ("sticker", lambda: _build_sticker_debug_response(body, db, 0)),
+        ("knowledge", lambda: _build_knowledge_debug_response(body, db, 0)),
+        (
+            "group_analysis",
+            lambda: _build_group_analysis_debug_response(body, db, 0),
+        ),
+    )
+    source_responses: dict[str, dict[str, Any]] = {}
+    source_results: dict[str, dict[str, Any]] = {}
+    for source_type, build in builders:
+        if (
+            source_type in {"group_memory", "group_analysis"}
+            and not has_group_context
+            and not (source_type == "group_analysis" and has_supplied_messages)
+        ):
+            source_results[source_type] = {
+                "status": "skipped",
+                "candidate_count": 0,
+                "degraded": False,
+                "fallback_reason": "group_context_required",
+                "latency_ms": 0,
+                "stages": {},
+                "score_breakdown": {},
+            }
+            continue
+        source_started = time.perf_counter()
+        try:
+            response = build()
+        except HTTPException as exc:
+            source_latency_ms = int(
+                (time.perf_counter() - source_started) * 1000
+            )
+            source_results[source_type] = {
+                "status": "failed",
+                "candidate_count": 0,
+                "degraded": True,
+                "fallback_reason": "source_request_invalid",
+                "latency_ms": source_latency_ms,
+                "error": _sanitize_debug_payload(exc.detail),
+                "stages": {},
+                "score_breakdown": {},
+            }
+            continue
+        except Exception:
+            source_latency_ms = int(
+                (time.perf_counter() - source_started) * 1000
+            )
+            logger.exception(
+                "RAG Debug all 来源执行失败 source_type=%s",
+                source_type,
+            )
+            source_results[source_type] = {
+                "status": "failed",
+                "candidate_count": 0,
+                "degraded": True,
+                "fallback_reason": "source_execution_failed",
+                "latency_ms": source_latency_ms,
+                "stages": {},
+                "score_breakdown": {},
+            }
+            continue
+        source_latency_ms = int(
+            (time.perf_counter() - source_started) * 1000
+        )
+        score_breakdown = response.setdefault("score_breakdown", {})
+        score_breakdown["latency_ms"] = source_latency_ms
+        source_responses[source_type] = response
+        source_results[source_type] = {
+            "status": _source_result_status(response),
+            "candidate_count": len(response.get("candidates") or []),
+            "degraded": bool(score_breakdown.get("degraded")),
+            "fallback_reason": str(
+                score_breakdown.get("fallback_reason") or ""
+            ),
+            "latency_ms": source_latency_ms,
+            "stages": response.get("stages") or {},
+            "score_breakdown": score_breakdown,
+        }
+
+    statuses = {
+        source_type: item["status"]
+        for source_type, item in source_results.items()
+    }
+    failing_statuses = {"failed", "degraded", "skipped"}
+    if source_results and all(
+        item["status"] == "failed" for item in source_results.values()
+    ):
+        overall_status = "failed"
+        fallback_reason = "all_sources_failed"
+    elif any(status in failing_statuses for status in statuses.values()):
+        overall_status = "partial"
+        fallback_reason = "partial_sources"
+    else:
+        overall_status = "passed"
+        fallback_reason = ""
+    candidates = _round_robin_debug_candidates(
+        source_responses,
+        limit=body.limit,
+    )
+    reranker_pairs = [
+        pair
+        for response in source_responses.values()
+        for pair in (response.get("stages") or {}).get(
+            "reranker_input_pairs",
+            [],
+        )
+    ]
+    return {
+        "query": body.query,
+        "source_type": "all",
+        "source_results": source_results,
+        "stages": {
+            "source_stages": {
+                source_type: response.get("stages") or {}
+                for source_type, response in source_responses.items()
+            },
+            "reranker_input_pairs": reranker_pairs,
+            "final_candidates": candidates,
+        },
+        "score_breakdown": {
+            "degraded": overall_status != "passed",
+            "fallback_reason": fallback_reason,
+            "overall_status": overall_status,
+            "source_statuses": statuses,
+            "source_weights": {
+                source_type: 1 / len(builders)
+                for source_type, _ in builders
+            },
+            "latency_ms": latency_ms,
+            "merged_candidates": sum(
+                len(response.get("candidates") or [])
+                for response in source_responses.values()
+            ),
+            "reranker_candidates": len(reranker_pairs),
+            "final_items": len(candidates),
+        },
+        "candidates": candidates,
     }
 
 
@@ -585,11 +952,19 @@ def run_rag_debug_query(
         latency_ms = int((time.perf_counter() - started) * 1000)
         response_json["score_breakdown"]["latency_ms"] = latency_ms
     elif body.source_type == "group_analysis":
-        response_json = _build_group_analysis_debug_response(body, latency_ms)
+        response_json = _build_group_analysis_debug_response(
+            body,
+            db,
+            latency_ms,
+        )
         latency_ms = int((time.perf_counter() - started) * 1000)
         response_json["score_breakdown"]["latency_ms"] = latency_ms
-    else:
-        response_json = _build_stub_debug_response(body, latency_ms)
+    elif body.source_type == "all":
+        response_json = _build_all_debug_response(body, db, latency_ms)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        response_json["score_breakdown"]["latency_ms"] = latency_ms
+    else:  # pragma: no cover - Pydantic Literal 已在入口拒绝未知来源
+        raise HTTPException(status_code=422, detail="不支持的 RAG Debug 来源")
     score_breakdown = response_json.get("score_breakdown") or {}
     request_payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
     request_json = json.dumps(_sanitize_debug_payload(request_payload), ensure_ascii=False)

@@ -43,6 +43,32 @@ _PREFIX_CACHE_MANIFEST_FIELDS = {
 }
 
 
+def _history_message_range(
+    flow_sections: Any,
+) -> tuple[int, int] | None:
+    """从已审计 Flow 读取 history_messages 的半开区间。"""
+
+    if not isinstance(flow_sections, list):
+        return None
+    matches = [
+        section
+        for section in flow_sections
+        if isinstance(section, dict)
+        and str(section.get("node_id") or "") == "history_messages"
+        and str(section.get("origin") or "") == "flow"
+    ]
+    if len(matches) != 1:
+        return None
+    indexes = matches[0].get("message_indexes")
+    if not isinstance(indexes, list) or not indexes:
+        return None
+    if any(type(index) is not int or index < 0 for index in indexes):
+        return None
+    if indexes != list(range(indexes[0], indexes[-1] + 1)):
+        return None
+    return indexes[0], indexes[-1] + 1
+
+
 def get_llm_trace_vars() -> tuple[str, str, str]:
     """返回当前上下文的 (trace_id, run_id, source)。"""
     return llm_trace_id.get(), llm_run_id.get(), llm_source.get()
@@ -82,6 +108,8 @@ def build_llm_cache_context(
 def attach_prompt_prefix_cache_context(
     cache_context: dict[str, Any],
     manifest: Any,
+    *,
+    flow_sections: Any = None,
 ) -> dict[str, Any]:
     """把已签名的 Prefix Cache Manifest 收窄为链路上下文。"""
 
@@ -93,6 +121,10 @@ def attach_prompt_prefix_cache_context(
     result = dict(cache_context or {})
     for target, source in _PREFIX_CACHE_MANIFEST_FIELDS.items():
         result[target] = manifest[source]
+    history_range = _history_message_range(flow_sections)
+    if history_range is not None:
+        result["history_message_start_index"] = history_range[0]
+        result["history_message_end_index"] = history_range[1]
     return result
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -174,7 +175,17 @@ class SandboxAccessPolicy:
             capability=decision.required_capability.value_name,
         )
         try:
-            SqlAlchemyRunEventLedger(self.db).append(event)
+            ledger = SqlAlchemyRunEventLedger(self.db)
+            existing = ledger.get(event.event_id)
+            if existing is not None:
+                # Lease 执行会在入口和创建进程前重复校验同一授权事实。
+                # 复用首次时间戳，使同一 event_id 保持严格幂等；其余字段
+                # 仍由 Ledger 摘要比对，任何事实漂移都会继续拒绝。
+                event = replace(
+                    event,
+                    occurred_at=existing.event.occurred_at,
+                )
+            ledger.append(event)
             # 权限决定是工具副作用前的权威屏障；拒绝路径随后即使回滚，
             # 也不能抹去已经向调用方生效的决定。
             self.db.commit()

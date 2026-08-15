@@ -1,0 +1,16 @@
+schema_version: 1
+agent_id: nanobot
+display_name: Nanobot
+description: 通用中文对话 Agent，负责日常对话、记忆、任务和工具调用。
+profile_file: profile.md
+config_file: config.yaml
+allowed_tools: "*"
+allow_dynamic_tools: true
+allowed_entrypoints:
+  - chat
+  - agent_link
+  - research
+  - scheduled
+  - a2a
+default: true
+model_profile_id: ""

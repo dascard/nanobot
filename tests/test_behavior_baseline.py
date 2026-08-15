@@ -272,6 +272,9 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     summary_transport_registry_change = approved[
         "session_summary_transport_guard_registry"
     ]
+    selfcheck_registry_change = approved[
+        "system_selfcheck_runtime_registry"
+    ]
     assert proactive_trigger_registry_change["snapshot_id"] == (
         "runtime_registries"
     )
@@ -284,7 +287,11 @@ def test_behavior_baseline_manifest_has_verified_hashes_and_classifications():
     assert summary_transport_registry_change["snapshot_id"] == (
         "runtime_registries"
     )
-    assert summary_transport_registry_change["after_sha256"] == _sha256(
+    assert summary_transport_registry_change["after_sha256"] == (
+        selfcheck_registry_change["before_sha256"]
+    )
+    assert selfcheck_registry_change["snapshot_id"] == "runtime_registries"
+    assert selfcheck_registry_change["after_sha256"] == _sha256(
         GOLDEN_ROOT / "runtime_registries.json"
     )
     news_registry_change = approved["stage6_news_registry"]

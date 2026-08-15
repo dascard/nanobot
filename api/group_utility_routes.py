@@ -11,10 +11,10 @@ from sqlalchemy.orm import Session
 
 from api.common_auth import verify_token
 from app.group_ingress import helpers as group_ingress_helpers
+from app.session_config import is_database_only_enabled
 from core.context_builder import (
     build_structured_chat_context,
     build_timing_recent_context,
-    sanitize_prompt_text,
 )
 from core.database import User, get_db, release_clean_session_transaction
 from core.group_runtime.ids import normalize_group_session_id as _normalize_group_session_id
@@ -27,9 +27,6 @@ from core.agent_runtime.gateway import get_agent_gateway as _default_get_bridge
 
 logger = logging.getLogger("nanobot.routes.group_utility")
 router = APIRouter(tags=["group-utility"])
-MAX_QUERY_CHARS = 2000
-
-
 def _current_bridge_provider():
     routes_module = sys.modules.get("api.routes")
     if routes_module is not None and hasattr(routes_module, "get_bridge"):
@@ -152,6 +149,19 @@ async def group_timing_timer(
     """Timing Gate timer 回调——wait 到期，若 continue 则内部生成回复。"""
     from core.timing_runtime import get_group_runtime
 
+    if is_database_only_enabled(
+        db,
+        platform="qq",
+        chat_type="group",
+        session_id=req.group_id,
+    ):
+        return {
+            "action": "no_reply",
+            "reason": "database_only",
+            "generation": req.generation,
+            "hard_rule": "database_only",
+        }
+
     group_user_id = _normalize_group_session_id(req.group_id)
     recent_ctx = build_timing_recent_context(db, group_user_id, limit=5)
     release_clean_session_transaction(db, label="group_timer_before_runtime", logger=logger)
@@ -190,6 +200,11 @@ async def group_timing_timer(
                     is_group=True,
                     group_id=req.group_id,
                     exclude_message_ids=source_message_ids,
+                )
+                group_ingress_helpers.record_group_prompt_batch(
+                    db,
+                    group_user_id=group_user_id,
+                    source_message_ids=source_message_ids,
                 )
                 history_messages = list(structured_context.recent_messages)
                 _ctx_debug = dict(structured_context.debug)
@@ -235,10 +250,10 @@ async def group_timing_timer(
                     "bot_aliases": timer_bot_aliases,
                     **timer_identity_vars,
                 }
-                chat_query = sanitize_prompt_text(
-                    str(result.get("pending_text") or ""),
-                    max_chars=MAX_QUERY_CHARS,
-                )
+                # pending_text 已由 GroupRuntime 按单条消息的 canonical
+                # 格式净化。这里不能再对整批截断，否则定时回调的
+                # 当前事件与下一轮从 ChatLog 重建的同一批历史不一致。
+                chat_query = str(result.get("pending_text") or "").strip()
                 if not chat_query.strip():
                     chat_query = "timer 触发回复"
                 enriched = f"<user_input>\n{chat_query}\n</user_input>"

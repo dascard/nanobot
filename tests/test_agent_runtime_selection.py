@@ -277,6 +277,7 @@ async def test_composition_root_builds_native_default_and_passes_frozen_policy(
             "agent.runtime.kt_enabled": True,
             "agent.runtime.kt_rollout_basis_points": 1250,
             "agent.runtime.kt_session_allowlist": "group_42,private_7",
+            "agent.runtime.additional_ids": "pabot",
         }
 
         def get_str(self, key: str, default: str = "") -> str:
@@ -290,8 +291,9 @@ async def test_composition_root_builds_native_default_and_passes_frozen_policy(
 
     captured: list[AgentRuntimeSelectionPolicy] = []
 
-    async def fake_init_bridge(*, selection_policy):
+    async def fake_init_bridge(*, selection_policy, agent_ids):
         captured.append(selection_policy)
+        assert agent_ids == ("nanobot", "pabot")
         return "bridge"
 
     monkeypatch.setattr(settings_module, "settings", _Settings())

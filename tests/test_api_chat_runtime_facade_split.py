@@ -317,7 +317,11 @@ def test_chat_runtime_facade_uses_api_routes_get_bridge_patch_point(client, monk
     assert response.status_code == 200
     assert response.json()["answer"] == "运行时回复"
     assert len(calls) == 1
-    assert calls[0]["query"] == "<user_input>\n你好\n</user_input>"
+    query = calls[0]["query"]
+    assert query.startswith("<user_input>\n")
+    assert "[用户名]未知用户" in query
+    assert "[发言内容]你好" in query
+    assert query.endswith("\n</user_input>")
     assert calls[0]["kwargs"]["stream"] is False
     assert calls[0]["kwargs"]["metadata"]["user_id"] == "u-runtime-http"
     assert calls[0]["kwargs"]["metadata"]["runtime_preset"] == "full"

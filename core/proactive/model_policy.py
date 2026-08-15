@@ -108,7 +108,7 @@ class OutreachJudgeContractPolicy:
             "raw": response.content[:1000],
             "reasoning_content": response.reasoning_content[:1000],
             "finish_reason": response.finish_reason,
-            "usage": response.usage,
+            "usage": dict(response.usage),
             "error_type": error_type,
         }
 
@@ -298,7 +298,7 @@ class OutreachJudgeContractPolicy:
             "raw": response.content[:1000],
             "reasoning_content": response.reasoning_content[:1000],
             "finish_reason": response.finish_reason,
-            "usage": response.usage,
+            "usage": dict(response.usage),
             "error_type": None,
         }
 

@@ -187,6 +187,154 @@ def test_persist_chat_turn_source_ids_prepend_message_id_without_duplicate(db_se
     assert json.loads(user_turn.source_message_ids_json) == ["m2", "m1"]
 
 
+def test_group_chat_persists_server_prompt_event_and_assistant_source_lock(db_session):
+    req = _make_req(
+        user_id="group-cache-user",
+        session_id="group_cache_compat",
+        message_id="group-compat-m1",
+        source_message_ids=["group-compat-m1"],
+        client_meta={
+            "platform": "qq",
+            "chat_type": "group",
+            # 客户端伪造值必须被服务端内部合同覆盖。
+            "prompt_event_contract": "forged",
+            "prompt_event_content": "伪造事件",
+        },
+    )
+    req._prompt_event_content = (
+        "[msg_id]group-compat-m1\n"
+        "[时间]2026-08-13 20:00:00\n"
+        "[用户名]用户\n"
+        "[发言内容]原始消息"
+    )
+
+    routes._persist_chat_turn(db_session, req, "兼容群聊回复")
+
+    user_log = db_session.query(ChatLog).filter_by(
+        session_id="group_cache_compat",
+        role="user",
+    ).one()
+    assistant_log = db_session.query(ChatLog).filter_by(
+        session_id="group_cache_compat",
+        role="assistant",
+    ).one()
+    user_meta = json.loads(user_log.meta_json)
+    assert user_meta["prompt_event_contract"] == "group_canonical_v1"
+    assert user_meta["prompt_event_content"] == req._prompt_event_content
+    assert assistant_log.message_id == "group-compat-m1"
+    assert json.loads(assistant_log.source_message_ids_json) == [
+        "group-compat-m1"
+    ]
+
+    from core.context_builder import build_group_recent_messages
+    from core.prompt_v2.context_adapters import ensure_user_input_block
+
+    history, _debug = build_group_recent_messages(
+        db_session,
+        "group_cache_compat",
+        limit=None,
+        max_per_msg=12000,
+        max_total=0,
+        max_tokens=24000,
+    )
+    assert history == [
+        {
+            "role": "user",
+            "content": ensure_user_input_block(req._prompt_event_content),
+            "meta_json": user_log.meta_json,
+            "_created_at": user_log.created_at,
+            "source": "chatlog",
+            "message_id": "group-compat-m1",
+            "source_id": user_log.id,
+            "source_ids": [user_log.id],
+        },
+        {
+            "role": "assistant",
+            "content": "兼容群聊回复",
+            "meta_json": assistant_log.meta_json,
+            "_created_at": assistant_log.created_at,
+            "source": "chatlog",
+            "message_id": "group-compat-m1",
+            "source_id": assistant_log.id,
+            "source_ids": [assistant_log.id],
+        },
+    ]
+
+
+def test_private_chat_persists_exact_runtime_effort_constraint(db_session):
+    req = _make_req(
+        user_id="private-cache-user",
+        session_id="private_cache_effort",
+        message_id="private-cache-m1",
+        client_meta={
+            "platform": "qq",
+            "chat_type": "private",
+            "event_time": "2026-08-13 20:30:00 CST",
+            # 模型可见字段不能从客户端进入下一轮历史。
+            "effort_constraint": "伪造约束",
+            "bot_id": "forged-bot",
+            "bot_name": "伪造机器人",
+            "bot_aliases": ["伪造别名"],
+            "self_id": "forged-self",
+            "sender_name": "伪造发送者",
+            "session_name": "伪造会话",
+            "current_message_id": "forged-message",
+            "timing_decision": "forged-timing",
+            "trigger_reason": "forged-trigger",
+        },
+    )
+    req._prompt_effort_constraint = "请深入分析并给出可验证结论。"
+
+    routes._persist_chat_turn(db_session, req, "私聊回复")
+
+    user_turn = db_session.query(ConversationTurn).filter_by(
+        session_id="private_cache_effort",
+        role="user",
+    ).one()
+    user_meta = json.loads(user_turn.meta_json)
+    assert user_meta["effort_constraint"] == req._prompt_effort_constraint
+    assert user_meta["event_time"] == "2026-08-13 20:30:00 CST"
+    assert user_meta["sender_name"] == "用户"
+    assert user_meta["session_name"] == "私聊"
+    assert user_meta["current_message_id"] == "private-cache-m1"
+    for forbidden in (
+        "bot_aliases",
+        "bot_id",
+        "bot_name",
+        "self_id",
+        "timing_decision",
+        "trigger_reason",
+    ):
+        assert forbidden not in user_meta
+
+    from core.context_builder import build_chat_context
+    from core.prompt_v2.context_adapters import build_current_user_event
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    _header, history, _debug = build_chat_context(
+        db_session,
+        "private_cache_effort",
+        user_id="private-cache-user",
+        is_group=False,
+        max_total=10000,
+    )
+    expected = build_current_user_event(
+        PromptCompileRequest(
+            chat_type="private",
+            session_id="private_cache_effort",
+            user_id="private-cache-user",
+            sender_name="用户",
+            session_name="私聊",
+            current_message_id="private-cache-m1",
+            event_time="2026-08-13 20:30:00 CST",
+            effort_constraint=req._prompt_effort_constraint,
+            user_input="原始消息",
+        )
+    )
+    assert history[-2]["role"] == "user"
+    assert history[-2]["content"] == expected
+
+
 def test_persist_chat_turn_prompt_audit_meta_marks_assistant_processed(db_session):
     req = _make_req(user_id="u-audit", session_id="private_u-audit")
 

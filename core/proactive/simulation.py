@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -39,7 +40,13 @@ async def run_outreach_dry_run_once(
         grounding_kwargs: dict[str, Any] = {"db": session, "now": current}
         if thread_extractor is not None:
             grounding_kwargs["thread_extractor"] = thread_extractor
-        grounding = grounding_builder(user_id, **grounding_kwargs)
+        # live dry-run 与正式外呼共用同步 Grounding／模型提炼链路，不能在
+        # FastAPI 事件循环中直接等待候选超时。
+        grounding = await asyncio.to_thread(
+            grounding_builder,
+            user_id,
+            **grounding_kwargs,
+        )
 
         from core.proactive_candidate import evaluate_outreach_candidate
         from core.proactive_research import run_proactive_research

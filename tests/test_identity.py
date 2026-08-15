@@ -25,6 +25,20 @@ def test_build_identity_vars():
     assert "机器人" in vars_["alias_names"]
 
 
+def test_build_identity_vars_canonicalizes_explicit_alias_order():
+    first = build_identity_vars(
+        bot_name="testbot",
+        bot_aliases=["机器人", "bot", "bot"],
+    )
+    second = build_identity_vars(
+        bot_name="testbot",
+        bot_aliases=["bot", "机器人"],
+    )
+
+    assert first["alias_names"] == second["alias_names"]
+    assert first["alias_names"] == "bot\n机器人"
+
+
 def test_build_identity_vars_has_non_empty_defaults(monkeypatch):
     monkeypatch.setattr("core.identity.NANOBOT_CHARACTER_NAME", "nanobot")
     monkeypatch.setattr("core.identity.NANOBOT_BOT_ALIASES", {"nanobot"})

@@ -620,6 +620,66 @@ def log_group_no_reply(db, user_id: str, query: str, agent_result: str, message_
     )
 
 
+def record_group_prompt_batch(
+    db,
+    *,
+    group_user_id: str,
+    source_message_ids: list[str] | None,
+) -> bool:
+    """在最后一条 ambient 上持久化本次实际送模的 user 批次边界。"""
+
+    source_ids: list[str] = []
+    for item in source_message_ids or []:
+        value = str(item or "").strip()
+        if value and value not in source_ids:
+            source_ids.append(value)
+    if len(source_ids) <= 1:
+        return False
+
+    changed = False
+
+    def operation() -> None:
+        nonlocal changed
+        rows = (
+            db.query(ChatLog)
+            .filter(
+                ChatLog.session_id == group_user_id,
+                ChatLog.role == "ambient",
+                ChatLog.message_id.in_(source_ids),
+            )
+            .order_by(ChatLog.id.asc())
+            .all()
+        )
+        rows_by_message_id = {
+            str(row.message_id or "").strip(): row
+            for row in rows
+            if str(row.message_id or "").strip()
+        }
+        if any(message_id not in rows_by_message_id for message_id in source_ids):
+            logger.warning(
+                "[GroupIngress] prompt batch source missing session=%s expected=%d found=%d",
+                group_user_id,
+                len(source_ids),
+                len(rows_by_message_id),
+            )
+            return
+        marker = rows_by_message_id[source_ids[-1]]
+        encoded = json.dumps(source_ids, ensure_ascii=False)
+        if str(marker.source_message_ids_json or "[]") == encoded:
+            return
+        marker.source_message_ids_json = encoded
+        db.commit()
+        changed = True
+
+    run_sqlite_locked_retry(
+        operation,
+        rollback=db.rollback,
+        label="group_prompt_batch",
+        logger=logger,
+    )
+    return changed
+
+
 def persist_group_bridge_reply(
     db,
     *,
@@ -682,6 +742,7 @@ def persist_group_bridge_reply(
             session_name=session_name or "",
             processed=1,
             message_id=message_id,
+            source_message_ids_json=source_ids_json,
             meta_json=json.dumps(meta, ensure_ascii=False),
         ))
         db.add(ConversationTurn(

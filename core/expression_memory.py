@@ -62,12 +62,14 @@ def get_stream_config(chat_stream_id: str) -> dict:
                 "enable_expression_learning": bool(cfg.enable_expression_learning),
                 "enable_jargon_learning": bool(cfg.enable_jargon_learning),
                 "planner_smooth": cfg.planner_smooth,
+                "database_only": bool(cfg.database_only),
                 "meta_json": _safe_json(cfg.meta_json, {}),
             }
         return {
             "talk_value": 0.5, "mentioned_bot_reply": True,
             "use_expression": True, "enable_expression_learning": True,
-            "enable_jargon_learning": True, "planner_smooth": 3, "meta_json": {},
+            "enable_jargon_learning": True, "planner_smooth": 3,
+            "database_only": True, "meta_json": {},
         }
     finally:
         db.close()
@@ -99,7 +101,8 @@ def _ensure_stream_config(db, chat_stream_id: str):
 
 def update_stream_config(chat_stream_id: str, **updates) -> dict | None:
     allowed = {"talk_value", "mentioned_bot_reply", "use_expression",
-               "enable_expression_learning", "enable_jargon_learning", "planner_smooth"}
+               "enable_expression_learning", "enable_jargon_learning",
+               "planner_smooth", "database_only"}
     updates = {k: v for k, v in updates.items() if k in allowed}
     if not updates:
         return None
@@ -108,7 +111,8 @@ def update_stream_config(chat_stream_id: str, **updates) -> dict | None:
         cfg = _ensure_stream_config(db, chat_stream_id)
         for k, v in updates.items():
             setattr(cfg, k, int(v) if k in ("mentioned_bot_reply", "use_expression",
-               "enable_expression_learning", "enable_jargon_learning") else v)
+               "enable_expression_learning", "enable_jargon_learning",
+               "database_only") else v)
         db.commit()
         return updates
     except Exception as e:

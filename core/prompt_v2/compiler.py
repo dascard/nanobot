@@ -55,6 +55,7 @@ from core.prompt_v2.section_descriptors import (
 from core.prompt_v2.section_renderer import (
     hash_section,
     sha256_text,
+    stable_json,
     system_message,
 )
 from core.prompt_v2.template_loader import load_template
@@ -104,6 +105,27 @@ def _extract_tagged_sections(text: str, tag: str) -> tuple[list[str], str]:
     return sections, rest
 
 
+def _compact_context_source_refs(
+    source_refs: tuple[str, ...],
+) -> tuple[str, ...]:
+    """把大量来源引用压缩到 Context Manifest 的固定上限内。"""
+
+    unique_refs = tuple(dict.fromkeys(source_refs))
+    max_refs = 64
+    if len(unique_refs) <= max_refs:
+        return unique_refs
+
+    marker_slots = 2
+    edge_size = (max_refs - marker_slots) // 2
+    digest = sha256_text(stable_json(unique_refs))
+    return (
+        *unique_refs[:edge_size],
+        f"source_refs:count:{len(unique_refs)}",
+        f"source_refs:sha256:{digest}",
+        *unique_refs[-edge_size:],
+    )
+
+
 def _context_provenance(
     request: PromptCompileRequest,
     context_debug: dict[str, Any],
@@ -141,13 +163,15 @@ def _context_provenance(
         "conversation_block",
         context_debug.get("block_memory_prev_block_id"),
     )
-    recent_refs = numeric_refs(
-        "conversation_turn",
-        context_debug.get("rolling_summary_recent_raw_turn_ids"),
-    ) + numeric_refs(
-        "chat_log",
-        context_debug.get("group_recent_source_ids"),
-        context_debug.get("rolling_summary_recent_raw_source_ids"),
+    recent_refs = _compact_context_source_refs(
+        numeric_refs(
+            "conversation_turn",
+            context_debug.get("rolling_summary_recent_raw_turn_ids"),
+        ) + numeric_refs(
+            "chat_log",
+            context_debug.get("group_recent_source_ids"),
+            context_debug.get("rolling_summary_recent_raw_source_ids"),
+        )
     )
     memory_refs = numeric_refs(
         "group_memory",

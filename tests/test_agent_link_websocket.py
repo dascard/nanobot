@@ -102,7 +102,11 @@ def _tool_snapshot() -> dict:
     )
 
 
-def _chat_submit(request_id: str = "turn-test") -> dict:
+def _chat_submit(
+    request_id: str = "turn-test",
+    *,
+    target_agent_id: str = "nanobot",
+) -> dict:
     return make_agent_link_frame(
         "chat.submit",
         {
@@ -113,6 +117,7 @@ def _chat_submit(request_id: str = "turn-test") -> dict:
             "attachments": [],
             "response_format": "meapet-segments-v1",
             "idempotent": True,
+            "target_agent_id": target_agent_id,
         },
         message_id=request_id,
         session_id="session-test",
@@ -340,7 +345,7 @@ def test_agent_link_chat_calls_frontend_tool_and_replays_terminal(
             }
 
             websocket.send_json(_tool_snapshot())
-            websocket.send_json(_chat_submit())
+            websocket.send_json(_chat_submit(target_agent_id="pabot"))
 
             terminal = None
             received_types: list[str] = []
@@ -380,7 +385,7 @@ def test_agent_link_chat_calls_frontend_tool_and_replays_terminal(
             assert "<MEAPET_SEGMENT>" in terminal["payload"]["text"]
             assert '"value":"ok"' in terminal["payload"]["text"]
 
-            websocket.send_json(_chat_submit())
+            websocket.send_json(_chat_submit(target_agent_id="pabot"))
             replay = websocket.receive_json()
             assert replay["type"] == "chat.final"
             assert replay["reply_to"] == "turn-test"
@@ -390,6 +395,7 @@ def test_agent_link_chat_calls_frontend_tool_and_replays_terminal(
     assert isinstance(request, AgentLinkChatRequest)
     assert request.client.platform_id == "meapet"
     assert request.policy_profile == "external_private"
+    assert request.target_agent_id == "pabot"
     assert request.tools[0].wire_schema()["function"]["name"] == "meapet.echo"
 
 
@@ -946,6 +952,7 @@ async def test_agent_link_dynamic_tool_enters_registry_and_tool_plan() -> None:
         frontend_context={},
         files=(),
         tools=(definition,),
+        target_agent_id="pabot",
         client=AgentLinkClientIdentity(
             platform_id="meapet",
             name="MeaPet",
@@ -953,12 +960,21 @@ async def test_agent_link_dynamic_tool_enters_registry_and_tool_plan() -> None:
         ),
         policy_profile="external_private",
     )
-    answer = await KtAgentLinkChatAdapter(_Pool()).run_chat(
+    resolved_agent_ids: list[str] = []
+
+    def resolve_pool(agent_id: str):
+        resolved_agent_ids.append(agent_id)
+        return _Pool()
+
+    answer = await KtAgentLinkChatAdapter(
+        bridge_pool_resolver=resolve_pool,
+    ).run_chat(
         request,
         _ToolCaller(),
     )
 
     assert answer == "完成"
+    assert resolved_agent_ids == ["pabot"]
     assert captured["message_contract"].gateway.source == "agent_link"
     assert captured["message_contract"].principal.owner_id == (
         key.bridge_user_id

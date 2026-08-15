@@ -99,13 +99,15 @@ function SessionConfigResults({ items, viewMode, deletingId, onEdit, onDelete })
   return (
     <>
       <Card className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[980px] text-sm">
+        <table className="w-full min-w-[1140px] text-sm">
           <thead>
             <tr className="border-b border-slate-800 text-left text-[11px] text-slate-500">
               <th className="px-3 py-2.5 font-medium">会话</th>
               <th className="px-3 py-2.5 font-medium">平台 / 类型</th>
               <th className="px-3 py-2.5 font-medium">身份</th>
               <th className="px-3 py-2.5 font-medium">专属指导</th>
+              <th className="px-3 py-2.5 font-medium">模型</th>
+              <th className="px-3 py-2.5 font-medium">Agent</th>
               <th className="px-3 py-2.5 font-medium">发言值</th>
               <th className="px-3 py-2.5 font-medium">群画像</th>
               <th className="px-3 py-2.5 font-medium">来源</th>
@@ -153,6 +155,16 @@ function SessionConfigResults({ items, viewMode, deletingId, onEdit, onDelete })
                     <div className="mt-1 text-[11px] text-slate-500">
                       {formatTime(config.session_guidance_updated_at)}
                     </div>
+                  </td>
+                  <td className="px-3 py-3">
+                    <Badge tone={config.database_only ? 'amber' : 'emerald'}>
+                      {config.database_only ? '仅入库' : '正常调用'}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-3">
+                    <Badge tone={config.agent_id === 'nanobot' ? 'slate' : 'blue'}>
+                      {config.agent_id || 'nanobot'}
+                    </Badge>
                   </td>
                   <td className="px-3 py-3 text-xs text-slate-300">{config.talk_value ?? '-'}</td>
                   <td className="px-3 py-3">
@@ -229,6 +241,22 @@ function SessionConfigResults({ items, viewMode, deletingId, onEdit, onDelete })
                     </Badge>
                   </div>
                 </div>
+                <div>
+                  <div className="text-[11px] text-slate-500">模型</div>
+                  <div className="mt-1">
+                    <Badge tone={config.database_only ? 'amber' : 'emerald'}>
+                      {config.database_only ? '仅入库' : '正常调用'}
+                    </Badge>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500">Agent</div>
+                  <div className="mt-1">
+                    <Badge tone={config.agent_id === 'nanobot' ? 'slate' : 'blue'}>
+                      {config.agent_id || 'nanobot'}
+                    </Badge>
+                  </div>
+                </div>
               </div>
               {(config.legacy_aliases || []).length > 0 && (
                 <div className="mt-2 break-all text-[11px] text-amber-300">
@@ -272,6 +300,8 @@ function SessionConfigEditor({ config, onClose, onSaved }) {
     session_id: config?.session_id || '',
     talk_value: config?.talk_value ?? 0.5,
     mentioned_bot_reply: config?.mentioned_bot_reply ?? true,
+    database_only: config?.database_only ?? true,
+    agent_id: config?.agent_id || 'nanobot',
     group_profile_mode: config?.group_profile_mode || 'off',
     planner_smooth: config?.planner_smooth ?? 3,
     session_guidance: '',
@@ -282,6 +312,31 @@ function SessionConfigEditor({ config, onClose, onSaved }) {
   const [previewing, setPreviewing] = useState(false)
   const [error, setError] = useState('')
   const [preview, setPreview] = useState(null)
+  const [agents, setAgents] = useState(() => [{
+    agent_id: config?.agent_id || 'nanobot',
+    display_name: config?.agent_id || 'Nanobot',
+  }])
+  const [agentLoadError, setAgentLoadError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await api.get('/agent-runtimes')
+        if (!active) return
+        const items = Array.isArray(response.data?.items) ? response.data.items : []
+        if (items.length > 0) setAgents(items)
+      } catch (requestError) {
+        if (active) {
+          setAgentLoadError(formatApiError(requestError, '加载 Agent 注册表失败'))
+        }
+      }
+    }, 0)
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [])
 
   useEffect(() => {
     if (creating) return undefined
@@ -300,6 +355,8 @@ function SessionConfigEditor({ config, onClose, onSaved }) {
           session_id: detail.session_id || config.session_id || '',
           talk_value: detail.talk_value ?? current.talk_value,
           mentioned_bot_reply: detail.mentioned_bot_reply ?? current.mentioned_bot_reply,
+          database_only: detail.database_only ?? current.database_only,
+          agent_id: detail.agent_id || current.agent_id,
           group_profile_mode: detail.group_profile_mode || current.group_profile_mode,
           planner_smooth: detail.planner_smooth ?? current.planner_smooth,
           session_guidance: detail.session_guidance || '',
@@ -374,6 +431,8 @@ function SessionConfigEditor({ config, onClose, onSaved }) {
         session_id: externalSessionId,
         talk_value: numbers.talkValue,
         mentioned_bot_reply: form.mentioned_bot_reply ? 1 : 0,
+        database_only: Boolean(form.database_only),
+        agent_id: form.agent_id,
         group_profile_mode: form.group_profile_mode,
         planner_smooth: numbers.plannerSmooth,
         session_guidance: guidance,
@@ -547,7 +606,30 @@ function SessionConfigEditor({ config, onClose, onSaved }) {
 
               <div className="grid gap-2">
                 <ToggleField id="session-config-mentioned-reply" label="被 @ 时回复" checked={Boolean(form.mentioned_bot_reply)} disabled={busy || !detailLoaded || !isEditableIdentity} onChange={value => setField('mentioned_bot_reply', value)} />
+                <ToggleField id="session-config-database-only" label="仅入库（不调用任何模型）" checked={Boolean(form.database_only)} disabled={busy || !detailLoaded || !isEditableIdentity} onChange={value => setField('database_only', value)} />
               </div>
+
+              <Field id="session-config-agent" label="对话 Agent" hint="切换后仅影响该会话后续进入 Agent Loop 的请求；仅入库模式下不会调用 Agent。">
+                <select
+                  id="session-config-agent"
+                  value={form.agent_id}
+                  disabled={busy || !detailLoaded || !isEditableIdentity}
+                  onChange={event => setField('agent_id', event.target.value)}
+                  className={INPUT_CLASS}
+                >
+                  {!agents.some(item => item.agent_id === form.agent_id) && (
+                    <option value={form.agent_id}>{form.agent_id}</option>
+                  )}
+                  {agents.map(agent => (
+                    <option key={agent.agent_id} value={agent.agent_id}>
+                      {agent.display_name || agent.agent_id} · {agent.agent_id}
+                    </option>
+                  ))}
+                </select>
+                {agentLoadError && (
+                  <div className="mt-1 text-[11px] text-amber-300">{agentLoadError}</div>
+                )}
+              </Field>
 
               <Field id="session-config-group-profile" label="群画像模式">
                 <select

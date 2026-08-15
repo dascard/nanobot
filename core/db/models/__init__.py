@@ -134,6 +134,11 @@ from core.db.models.semantic import (
     SemanticIndexItem,
     SemanticIndexJob,
 )
+from core.db.models.selfcheck import (
+    SelfcheckResultRow,
+    SelfcheckRunRow,
+    WorkerHeartbeat,
+)
 from core.db.models.sandbox import (
     Asset,
     SANDBOX_EXECUTION_PROFILES,
@@ -234,6 +239,8 @@ __all__ = [
     "SANDBOX_LEASE_TERMINAL_STATUSES",
     "SemanticIndexItem",
     "SemanticIndexJob",
+    "SelfcheckResultRow",
+    "SelfcheckRunRow",
     "SensitiveData",
     "RollingSessionSummary",
     "SessionSummaryJob",
@@ -271,4 +278,5 @@ __all__ = [
     "WorkspaceMaintenanceState",
     "WorkspaceQuotaBinding",
     "WorkspaceRuntimeQuotaBinding",
+    "WorkerHeartbeat",
 ]

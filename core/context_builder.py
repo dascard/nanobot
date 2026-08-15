@@ -787,12 +787,18 @@ def format_group_planner_message(
     timestamp: datetime | None = None,
     message_id: str = "",
     include_message_id: bool = True,
+    content_has_speaker_prefix: bool = False,
     max_content_chars: int = config.GROUP_CONTEXT_MAX_MESSAGE_CHARS,
 ) -> str:
     """生成 Maibot planner 风格的群消息文本块。"""
     safe_sender = sanitize_prompt_text(sender_name or "未知用户", 80)
+    normalized_content = (
+        _strip_speaker_prefix(content, sender_name)
+        if content_has_speaker_prefix
+        else str(content or "")
+    )
     safe_content = sanitize_prompt_text(
-        _strip_speaker_prefix(content, sender_name),
+        normalized_content,
         max_content_chars,
     )
     ts = timestamp or db_now_naive()
@@ -854,6 +860,7 @@ def format_group_canonical_message(
     directed: dict | None = None,
     mentions: list[dict] | None = None,
     reply_to: dict | None = None,
+    content_has_speaker_prefix: bool = False,
     max_chars: int = config.GROUP_CONTEXT_MAX_MESSAGE_CHARS,
 ) -> str:
     """统一渲染群聊当前事件、历史原文和摘要输入。"""
@@ -863,6 +870,7 @@ def format_group_canonical_message(
         content=content,
         timestamp=timestamp,
         message_id=message_id,
+        content_has_speaker_prefix=content_has_speaker_prefix,
         max_content_chars=max_chars,
     )
     direction_lines = format_group_direction_lines(
@@ -932,10 +940,21 @@ def _chatlog_source_ids(row) -> set[str]:
     ids: set[str] = set()
     if getattr(row, "message_id", None):
         ids.add(str(row.message_id))
+    ids.update(_chatlog_linked_source_message_ids(row))
+    return ids
+
+
+def _chatlog_linked_source_message_ids(row) -> list[str]:
+    """读取一次真实群回复覆盖的入站消息 ID，并保留原始顺序。"""
+
+    ids: list[str] = []
     try:
         raw = json.loads(getattr(row, "source_message_ids_json", "") or "[]")
         if isinstance(raw, list):
-            ids.update(str(x) for x in raw if str(x).strip())
+            for item in raw:
+                value = str(item or "").strip()
+                if value and value not in ids:
+                    ids.append(value)
     except (json.JSONDecodeError, TypeError):
         pass
     return ids
@@ -950,6 +969,281 @@ def _chatlog_context_skip(meta: dict) -> bool:
     if meta.get("kind", "chat") in _INTERNAL_KINDS:
         return True
     return bool(meta.get("no_context"))
+
+
+def _merge_group_user_batch(
+    messages: list[dict],
+    message_ids: list[str],
+    *,
+    stop_before: int | None = None,
+) -> tuple[list[dict], dict | None]:
+    """把一次实际送入模型的群消息批次恢复成同一个 user event。"""
+
+    from core.prompt_v2.context_adapters import ensure_user_input_block
+
+    normalized_ids: list[str] = []
+    for item in message_ids:
+        value = str(item or "").strip()
+        if value and value not in normalized_ids:
+            normalized_ids.append(value)
+    if not normalized_ids:
+        return messages, None
+
+    search_end = (
+        min(len(messages), max(0, int(stop_before)))
+        if stop_before is not None
+        else len(messages)
+    )
+    for item in messages[:search_end]:
+        if (
+            item.get("role") == "user"
+            and list(item.get("_group_message_ids") or []) == normalized_ids
+        ):
+            return messages, item
+
+    candidates_by_id: dict[str, tuple[int, dict]] = {}
+    for index, item in enumerate(messages[:search_end]):
+        item_message_ids = list(item.get("_group_message_ids") or [])
+        if item.get("role") != "user" or len(item_message_ids) != 1:
+            continue
+        message_id = str(item_message_ids[0] or "").strip()
+        if message_id in normalized_ids and message_id not in candidates_by_id:
+            candidates_by_id[message_id] = (index, item)
+    if any(message_id not in candidates_by_id for message_id in normalized_ids):
+        return messages, None
+
+    batch = [candidates_by_id[message_id][1] for message_id in normalized_ids]
+    insertion_index = min(
+        candidates_by_id[message_id][0]
+        for message_id in normalized_ids
+    )
+    blocks = [
+        block_text
+        for item in batch
+        for block_text in list(item.get("_group_blocks") or [])
+    ]
+    source_ids = [
+        int(source_id)
+        for item in batch
+        for source_id in list(item.get("source_ids") or [])
+    ]
+    first = batch[0]
+    last = batch[-1]
+    merged = {
+        "role": "user",
+        "content": ensure_user_input_block("\n\n".join(blocks)),
+        "meta_json": last.get("meta_json", "{}"),
+        "_created_at": first.get("_created_at"),
+        "source": "chatlog",
+        "message_id": normalized_ids[-1],
+        "source_id": source_ids[0] if source_ids else 0,
+        "source_ids": source_ids,
+        "_group_blocks": blocks,
+        "_group_message_ids": normalized_ids,
+    }
+    batch_identity = {id(item) for item in batch}
+    remaining = [item for item in messages if id(item) not in batch_identity]
+    remaining[insertion_index:insertion_index] = [merged]
+    return remaining, merged
+
+
+def _render_group_recent_messages(
+    selected_desc: list[tuple[object, str, str, int]],
+) -> list[dict]:
+    """按真实回复批次渲染群聊原文，禁止随新消息重写既有 user 消息。
+
+    assistant 可能在模型生成期间才落库，此时它回答的来源消息与自身之间已经
+    插入了新的 ambient。来源锁是实际因果顺序，渲染时把回复紧跟在对应批次
+    后，再把生成期间到达的消息留在其后，才能复原上一轮 wire 前缀。
+    """
+
+    from core.prompt_v2.context_adapters import ensure_user_input_block
+
+    messages: list[dict] = []
+    assistant_messages: list[dict] = []
+    prompt_batch_markers: list[tuple[dict, list[str]]] = []
+    for row, block, role, _token_cost in reversed(selected_desc):
+        if role == "user":
+            linked_message_ids = _chatlog_linked_source_message_ids(row)
+            message = {
+                "role": "user",
+                "content": ensure_user_input_block(block),
+                "meta_json": row.meta_json,
+                "_created_at": row.created_at,
+                "source": "chatlog",
+                "message_id": row.message_id or "",
+                "source_id": int(row.id or 0),
+                "source_ids": [int(row.id or 0)],
+                "_group_blocks": [block],
+                "_group_message_ids": (
+                    linked_message_ids
+                    if row.role == "user" and linked_message_ids
+                    else [str(row.message_id or "")]
+                ),
+            }
+            messages.append(message)
+            if (
+                row.role == "ambient"
+                and
+                len(linked_message_ids) > 1
+                and str(row.message_id or "") == linked_message_ids[-1]
+            ):
+                prompt_batch_markers.append((message, linked_message_ids))
+            continue
+
+        assistant_message = {
+            "role": "assistant",
+            "content": str(row.content or ""),
+            "meta_json": row.meta_json,
+            "_created_at": row.created_at,
+            "source": "chatlog",
+            "message_id": row.message_id or "",
+            "source_id": int(row.id or 0),
+            "source_ids": [int(row.id or 0)],
+            "_group_linked_message_ids": (
+                _chatlog_linked_source_message_ids(row)
+            ),
+        }
+        messages.append(assistant_message)
+        assistant_messages.append(assistant_message)
+
+    # 即使上一轮最终选择 no_reply，仍需恢复当时实际送入模型的批次边界。
+    # 批次锁写在最后一条 ambient 的 source_message_ids_json 中。
+    for marker, linked_message_ids in prompt_batch_markers:
+        try:
+            marker_index = next(
+                index
+                for index, item in enumerate(messages)
+                if item is marker
+            )
+        except StopIteration:
+            continue
+        messages, _merged = _merge_group_user_batch(
+            messages,
+            linked_message_ids,
+            stop_before=marker_index + 1,
+        )
+
+    for assistant in assistant_messages:
+        linked_message_ids = list(
+            assistant.get("_group_linked_message_ids") or []
+        )
+        if not linked_message_ids:
+            continue
+        try:
+            assistant_index = next(
+                index
+                for index, item in enumerate(messages)
+                if item is assistant
+            )
+        except StopIteration:  # pragma: no cover - 本函数内部对象恒存在
+            continue
+
+        messages, merged = _merge_group_user_batch(
+            messages,
+            linked_message_ids,
+            stop_before=assistant_index,
+        )
+        if merged is None:
+            continue
+        messages = [item for item in messages if item is not assistant]
+        insertion_index = next(
+            index for index, item in enumerate(messages) if item is merged
+        ) + 1
+        messages[insertion_index:insertion_index] = [assistant]
+
+    for message in messages:
+        message.pop("_group_blocks", None)
+        message.pop("_group_message_ids", None)
+        message.pop("_group_linked_message_ids", None)
+    return messages
+
+
+def _session_local_source_block_end_id(
+    query,
+    *,
+    source_id: int,
+    block_span: int,
+) -> int:
+    """返回来源消息所在的会话内固定块末尾 ID。"""
+
+    from core.database import ChatLog
+
+    normalized_source_id = int(source_id or 0)
+    normalized_span = max(0, int(block_span or 0))
+    if normalized_source_id <= 0 or normalized_span <= 1:
+        return 0
+    position = query.filter(ChatLog.id <= normalized_source_id).count()
+    if position <= 0:
+        return 0
+    block_end_position = (
+        ((int(position) - 1) // normalized_span) + 1
+    ) * normalized_span
+    row = (
+        query.order_by(ChatLog.id.asc())
+        .offset(block_end_position - 1)
+        .limit(1)
+        .first()
+    )
+    return int(getattr(row, "id", 0) or 0)
+
+
+def _selected_rows_through_source_id(
+    selected_desc: list[tuple[object, str, str, int]],
+    source_id: int,
+) -> int:
+    """统计已选窗口中不晚于固定块末尾的最老行数。"""
+
+    trim_count = 0
+    for selected_row, _block, _role, _cost in reversed(selected_desc):
+        if int(selected_row.id or 0) > int(source_id or 0):
+            break
+        trim_count += 1
+    return trim_count
+
+
+def _group_block_aligned_trim_count(
+    query,
+    selected_desc: list[tuple[object, str, str, int]],
+    *,
+    overflow_source_id: int,
+    block_span: int,
+) -> tuple[int, int]:
+    """选择能落在当前窗口内部的最大确定性来源子块。"""
+
+    candidate_span = max(0, int(block_span or 0))
+    while candidate_span > 1:
+        block_end_source_id = _session_local_source_block_end_id(
+            query,
+            source_id=overflow_source_id,
+            block_span=candidate_span,
+        )
+        trim_count = _selected_rows_through_source_id(
+            selected_desc,
+            block_end_source_id,
+        )
+        if 0 < trim_count < len(selected_desc):
+            return trim_count, candidate_span
+        candidate_span //= 2
+    return 0, 0
+
+
+def _group_recent_manifest_tokens(messages: list[dict]) -> int:
+    """使用 Context Manifest 的最终 JSON 口径估算群聊历史 token。"""
+
+    payload = [
+        {
+            "role": str(item.get("role") or "user"),
+            "content": item.get("content", ""),
+        }
+        for item in messages
+    ]
+    return estimate_tokens(json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    ))
 
 
 def build_group_recent_messages(
@@ -997,6 +1291,8 @@ def build_group_recent_messages(
     )
     normalized_block_span = max(0, int(source_id_block_span or 0))
     block_aligned = False
+    effective_block_span = 0
+    overflow_source_id = 0
     for row in rows:
         if excluded and _chatlog_source_ids(row) & excluded:
             skipped_excluded += 1
@@ -1006,10 +1302,16 @@ def build_group_recent_messages(
             skipped_no_context += 1
             continue
         sender = row.sender_name or ("nanobot" if row.role == "assistant" else "未知用户")
-        content = sanitize_prompt_text(row.content or "", max_per_msg)
+        content = str(row.content or "")
         if not content.strip():
             continue
-        block = format_group_canonical_message(
+        stored_prompt_event = ""
+        if (
+            row.role == "user"
+            and meta.get("prompt_event_contract") == "group_canonical_v1"
+        ):
+            stored_prompt_event = str(meta.get("prompt_event_content") or "").strip()
+        block = stored_prompt_event or format_group_canonical_message(
             sender_name=sender,
             content=content,
             timestamp=row.created_at,
@@ -1017,6 +1319,7 @@ def build_group_recent_messages(
             directed=meta.get("directed"),
             mentions=meta.get("mentions"),
             reply_to=meta.get("reply_to"),
+            content_has_speaker_prefix=(row.role == "ambient"),
             max_chars=max_per_msg,
         )
         token_cost = estimate_tokens(block)
@@ -1031,19 +1334,7 @@ def build_group_recent_messages(
             )
         ):
             truncated = True
-            if normalized_block_span > 1:
-                boundary_block = int(row.id or 0) // normalized_block_span
-                trim_count = 0
-                for selected_row, _block, _role, _cost in reversed(selected_desc):
-                    if int(selected_row.id or 0) // normalized_block_span != boundary_block:
-                        break
-                    trim_count += 1
-                if 0 < trim_count < len(selected_desc):
-                    removed = selected_desc[-trim_count:]
-                    del selected_desc[-trim_count:]
-                    total_chars -= sum(len(item[1]) for item in removed)
-                    total_tokens -= sum(item[3] for item in removed)
-                    block_aligned = True
+            overflow_source_id = int(row.id or 0)
             break
         role = "assistant" if row.role == "assistant" else "user"
         selected_desc.append((row, block, role, token_cost))
@@ -1053,41 +1344,51 @@ def build_group_recent_messages(
             truncated = True
             break
 
-    from core.prompt_v2.context_adapters import ensure_user_input_block
-
-    messages: list[dict] = []
-    for row, block, role, _token_cost in reversed(selected_desc):
-        if role == "user" and messages and messages[-1]["role"] == "user":
-            previous = messages[-1]
-            previous_content = str(previous.get("content") or "")
-            if (
-                previous_content.startswith("<user_input>\n")
-                and previous_content.endswith("\n</user_input>")
-            ):
-                previous_content = previous_content[
-                    len("<user_input>\n"):-len("\n</user_input>")
-                ]
-            previous["content"] = ensure_user_input_block(
-                f"{previous_content}\n\n{block}"
-            )
-            previous.setdefault("source_ids", []).append(int(row.id or 0))
-            continue
-        messages.append(
-            {
-                "role": role,
-                "content": (
-                    ensure_user_input_block(block)
-                    if role == "user"
-                    else str(row.content or "")
-                ),
-                "meta_json": row.meta_json,
-                "_created_at": row.created_at,
-                "source": "chatlog",
-                "message_id": row.message_id or "",
-                "source_id": int(row.id or 0),
-                "source_ids": [int(row.id or 0)],
-            }
+    if overflow_source_id and normalized_block_span > 1:
+        trim_count, aligned_span = _group_block_aligned_trim_count(
+            query,
+            selected_desc,
+            overflow_source_id=overflow_source_id,
+            block_span=normalized_block_span,
         )
+        if trim_count:
+            removed = selected_desc[-trim_count:]
+            del selected_desc[-trim_count:]
+            total_chars -= sum(len(item[1]) for item in removed)
+            total_tokens -= sum(item[3] for item in removed)
+            block_aligned = True
+            effective_block_span = aligned_span
+
+    messages = _render_group_recent_messages(selected_desc)
+    manifest_tokens = _group_recent_manifest_tokens(messages)
+    while (
+        normalized_max_tokens is not None
+        and selected_desc
+        and manifest_tokens > normalized_max_tokens
+    ):
+        truncated = True
+        trim_count = 1
+        if normalized_block_span > 1:
+            aligned_trim_count, aligned_span = _group_block_aligned_trim_count(
+                query,
+                selected_desc,
+                overflow_source_id=int(selected_desc[-1][0].id or 0),
+                block_span=normalized_block_span,
+            )
+            if aligned_trim_count:
+                trim_count = aligned_trim_count
+                block_aligned = True
+                effective_block_span = (
+                    min(effective_block_span, aligned_span)
+                    if effective_block_span
+                    else aligned_span
+                )
+        removed = selected_desc[-trim_count:]
+        del selected_desc[-trim_count:]
+        total_chars -= sum(len(item[1]) for item in removed)
+        total_tokens -= sum(item[3] for item in removed)
+        messages = _render_group_recent_messages(selected_desc)
+        manifest_tokens = _group_recent_manifest_tokens(messages)
 
     debug = {
         "context_source": "chatlog",
@@ -1095,6 +1396,7 @@ def build_group_recent_messages(
         "group_recent_messages": len(messages),
         "group_recent_chars": total_chars,
         "group_recent_tokens": total_tokens,
+        "group_recent_manifest_tokens": manifest_tokens,
         "group_recent_excluded": skipped_excluded,
         "group_recent_no_context_skipped": skipped_no_context,
         "group_recent_truncated": truncated,
@@ -1105,6 +1407,8 @@ def build_group_recent_messages(
         ],
         "group_recent_after_source_id": int(after_source_id or 0),
         "group_recent_source_id_block_span": normalized_block_span,
+        "group_recent_source_id_effective_block_span": effective_block_span,
+        "group_recent_source_id_block_scope": "session_local",
         "group_recent_block_aligned": block_aligned,
     }
     return messages, debug

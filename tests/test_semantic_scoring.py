@@ -112,7 +112,7 @@ def test_local_cross_encoder_downloads_model_before_loading(monkeypatch, tmp_pat
     calls = []
 
     def fake_snapshot_download(*, repo_id, local_dir, **_kwargs):
-        calls.append((repo_id, local_dir))
+        calls.append((repo_id, local_dir, _kwargs.get("cache_dir")))
         model_dir.mkdir(parents=True, exist_ok=True)
         (model_dir / "config.json").write_text("{}", encoding="utf-8")
         return local_dir
@@ -120,7 +120,7 @@ def test_local_cross_encoder_downloads_model_before_loading(monkeypatch, tmp_pat
     class FakeCrossEncoder:
         loaded_model_name = ""
 
-        def __init__(self, model_name):
+        def __init__(self, model_name, **_kwargs):
             FakeCrossEncoder.loaded_model_name = model_name
 
         def predict(self, pairs):
@@ -146,9 +146,75 @@ def test_local_cross_encoder_downloads_model_before_loading(monkeypatch, tmp_pat
         [SemanticCandidate(candidate_id="c1", source_type="memory", text="端口冲突处理")],
     )
 
-    assert calls == [("BAAI/bge-reranker-v2-m3", str(model_dir))]
+    assert calls == [(
+        "BAAI/bge-reranker-v2-m3",
+        str(model_dir),
+        str(model_dir.parent / ".cache" / "huggingface" / "hub"),
+    )]
     assert FakeCrossEncoder.loaded_model_name == str(model_dir)
     assert result[0].candidate_id == "c1"
+
+
+def test_local_cross_encoder_reuses_complete_local_model_without_hub_write(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import types
+
+    from core.semantic.reranker import (
+        LocalCrossEncoderRerankerProvider,
+        SemanticCandidate,
+    )
+
+    model_dir = tmp_path / "models" / "bge-reranker-v2-m3"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model.safetensors").write_bytes(b"weights")
+    (model_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+    loaded = {}
+
+    def fail_snapshot_download(**_kwargs):
+        raise AssertionError("完整本地模型不应访问 Hugging Face Hub")
+
+    class FakeCrossEncoder:
+        def __init__(self, model_name, **kwargs):
+            loaded["model_name"] = model_name
+            loaded["local_files_only"] = kwargs.get("local_files_only")
+
+        def predict(self, pairs):
+            return [0.8 for _pair in pairs]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        types.SimpleNamespace(snapshot_download=fail_snapshot_download),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        types.SimpleNamespace(CrossEncoder=FakeCrossEncoder),
+    )
+
+    provider = LocalCrossEncoderRerankerProvider(
+        str(model_dir),
+        download_repo_id="BAAI/bge-reranker-v2-m3",
+    )
+    provider.rerank(
+        "端口冲突",
+        [
+            SemanticCandidate(
+                candidate_id="c1",
+                source_type="memory",
+                text="端口冲突处理",
+            ),
+        ],
+    )
+
+    assert loaded == {
+        "model_name": str(model_dir),
+        "local_files_only": True,
+    }
 
 
 def test_reranker_none_triggers_degraded_mode():

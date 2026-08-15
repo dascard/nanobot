@@ -5,9 +5,14 @@
 Nanobot Server 默认使用框架无关的 Native Runtime。KohakuTerrarium（KT）只保留为显式启用的兼容
 Runtime，不属于核心生产依赖，也不再以 Git submodule 或仓库内 vendor 源码参与构建。
 
-当前验证版本为 KT `v1.4.0`，固定到 commit
-`9e4ff291814b65423df5e94f4fa3f84dbb82692d`。固定源记录位于 `requirements-kt.in`，可重放锁位于
+当前验证版本为 KT `v2.0.0`，固定到 commit
+`acc2423df7a3e213d7de19d70bc2e507a405a2f8`。固定源记录位于 `requirements-kt.in`，可重放锁位于
 `requirements-kt.lock`。不得把浮动 `main`、nightly 或未固定的 VCS 引用作为部署依赖。
+
+KT `v2.0.0` 要求 `pydantic>=2.12,<2.13` 及 `pydantic-core>=2.41,<2.42`。Nanobot 的
+Native、测试、KT 与 sandboxd 环境统一使用 Pydantic `2.12.5` / pydantic-core `2.41.5`，
+避免同一个进程出现不可求解的 ABI 组合。调整该基线时必须同时重生成四套相关锁并运行
+Native、KT 和 sandboxd 验证。
 
 默认生产镜像只安装 `requirements-prod.lock`，并通过 `.dockerignore` 排除 KT 的输入文件和锁文件。因此，
 默认镜像不能启用 KT，也不会因 KT 代码或依赖变化重建第三方依赖层。需要 KT 的兼容环境必须独立安装
@@ -103,6 +108,6 @@ CI 的顺序必须保持为“安装核心锁 → 验证 Native 无 KT → 安�
 
 ## 6. 许可证
 
-KT `v1.4.0` 使用 `KohakuTerrarium License 1.0`，不是标准 Apache-2.0。部署、分发或对外提供包含 KT 的
+KT `v2.0.0` 使用 `KohakuTerrarium License 1.0`，不是标准 Apache-2.0。部署、分发或对外提供包含 KT 的
 兼容镜像前，必须单独复核其命名、可见归属和其他许可证义务。默认 Native 镜像不打包 KT，但这不能替代
 对可选兼容环境的许可证审查。

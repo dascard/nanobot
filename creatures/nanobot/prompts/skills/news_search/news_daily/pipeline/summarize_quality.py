@@ -28,6 +28,9 @@ QUALITY_SYSTEM_PROMPT = """你是 AI/科技日报编辑。只能基于给定的�
 8. 没有足够信息宁愿少写，不要编。
 9. details 必须包含 known（已知2-3点）、unknown（缺失0-2点）、impact（一句话影响）。
 10. 如果卡片没有足够细节，就明确写"信息不足"，不要扩写。
+11. source_ids 必须是卡片“来源 #数字”对应的整数数组；禁止输出来源名、域名或字符串编号。
+12. importance 必须是 1-5 的整数；只有 confidence 使用 high/medium 字符串。
+13. title 不超过20个字符、subtitle 不超过30个字符、verdict 不超过90个字符、closing 不超过40个字符。
 
 输出严格 JSON：
 {
@@ -91,10 +94,11 @@ def build_quality_prompt(cards: list[dict]) -> str:
 {chr(10).join(card_texts)}
 
 ## 要求
-生成 3-6 条 highlights、2-3 条 details、1-2 条 watchlist。
+生成 1-6 条 highlights、1-3 条 details、0-2 条 watchlist；条目数不得超过候选卡片能独立支撑的事件数，候选不足时必须少写。
 每条 highlight 100-150字，必须写清楚：什么事、为什么重要、对谁有影响。要像新闻导语一样有信息量，不能只写标题。
 每条 detail 必须有 known（已知信息2-3点）、unknown（缺失信息0-2点）、impact（一句话影响）。
 details 的 source_labels 使用卡片中的 "来源名（组）" 格式。
+source_ids 只能填写“来源 #数字”中的整数，例如来源 #1 必须写 [1]；importance 只能填写 1-5 的整数。
 只输出 JSON，第一个字符必须是 {{，最后一个必须是 }}。"""
     from core.prompt_v2.tool_templates import render_tool_execution_template
 

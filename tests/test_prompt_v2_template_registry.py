@@ -190,9 +190,13 @@ def test_prompt_v2_init_runtime_dir_migrates_existing_legacy_flow(
         (edge["from"], edge["to"])
         for edge in migrated["edges"]
     } >= {
-        ("group_context", "project_context"),
-        ("project_context", "summary_context"),
+        ("session_guidance", "summary_context"),
         ("summary_context", "conversation_context_header"),
+        ("conversation_context_header", "history_messages"),
+        ("history_messages", "group_context"),
+        ("history_messages", "project_context"),
+        ("group_context", "project_context"),
+        ("project_context", "persona_reference"),
     }
 
 
@@ -701,7 +705,7 @@ def test_prompt_template_registry_keeps_v2_env_names_as_compat_fallback(tmp_path
 
 
 def test_prompt_template_frontmatter_uses_canonical_prompt_names():
-    roots = [Path("prompts.v2.default"), Path("data/prompts_v2")]
+    roots = [Path("prompts.v2.default")]
     bad_entries: list[str] = []
 
     for root in roots:

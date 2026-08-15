@@ -212,6 +212,18 @@ class ChatStreamConfig(Base):
     enable_jargon_learning = Column(Integer, default=1)
     group_profile_mode = Column(String, default="off")
     planner_smooth = Column(Integer, default=3)
+    database_only = Column(
+        Integer,
+        default=1,
+        server_default=text("1"),
+        nullable=False,
+    )
+    agent_id = Column(
+        String(64),
+        default="nanobot",
+        server_default=text("'nanobot'"),
+        nullable=False,
+    )
     session_guidance = Column(
         Text,
         default="",

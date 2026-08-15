@@ -423,6 +423,7 @@ def _snapshot_turn(
             directed=meta.get("directed"),
             mentions=meta.get("mentions"),
             reply_to=meta.get("reply_to"),
+            content_has_speaker_prefix=(role == "ambient"),
         )
         if role in {"ambient", "user"}:
             role = "user"

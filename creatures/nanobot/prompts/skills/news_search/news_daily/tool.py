@@ -20,6 +20,8 @@ from .. import runtime_cache
 
 logger = logging.getLogger("nanobot.news_daily")
 
+MIN_DAILY_DIGEST_CANDIDATES = 3
+
 
 class FallbackNeeded(Exception):
     """quality 管线失败或质量不足时触发 daily fallback。"""
@@ -369,8 +371,16 @@ def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
     )
 
     fallback_request = _latest_fallback_request(request)
-    if not items and fallback_request is not None:
+    fallback_threshold = min(
+        MIN_DAILY_DIGEST_CANDIDATES,
+        request.max_results,
+    )
+    if (
+        fallback_request is not None
+        and len(items) < fallback_threshold
+    ):
         today_candidate_count = candidate_count
+        today_unseen_count = len(items)
         today_skipped_seen = int(history_dedup.get("skipped_seen") or 0)
         effective_request = fallback_request
         items, candidate_count, history_dedup = _prepare_candidates(
@@ -379,9 +389,12 @@ def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
         )
         logger.info(
             "[daily] today→latest fallback: today_candidates=%d "
-            "today_skipped_seen=%d latest_candidates=%d latest_unseen=%d",
+            "today_unseen=%d today_skipped_seen=%d minimum=%d "
+            "latest_candidates=%d latest_unseen=%d",
             today_candidate_count,
+            today_unseen_count,
             today_skipped_seen,
+            fallback_threshold,
             candidate_count,
             len(items),
         )

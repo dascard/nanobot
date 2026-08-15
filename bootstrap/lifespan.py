@@ -56,7 +56,27 @@ async def init_bridge() -> Any:
 
     return await _init_bridge(
         selection_policy=build_agent_runtime_selection_policy(),
+        agent_ids=build_registered_agent_ids(),
     )
+
+
+def build_registered_agent_ids() -> tuple[str, ...]:
+    """从启动期显式 allowlist 构建确定性的 Agent 注册集。"""
+
+    from core.registry.validation import validate_identifier
+    from core.settings_service import settings
+
+    raw = settings.get_str("agent.runtime.additional_ids", "pabot")
+    additional = tuple(
+        item.strip() for item in str(raw or "").split(",") if item.strip()
+    )
+    if len(additional) != len(set(additional)):
+        raise ValueError("附加 Agent ID 不能重复")
+    if "nanobot" in additional:
+        raise ValueError("附加 Agent ID 不应重复默认 nanobot")
+    for agent_id in additional:
+        validate_identifier(agent_id, field_name="agent_id")
+    return ("nanobot", *additional)
 
 
 def build_agent_runtime_selection_policy():
@@ -112,6 +132,10 @@ def bind_agent_runtime(bridge: object) -> None:
     )
     from core.agent_runtime.gateway import bind_agent_runtime as _bind
     from core.agent_runtime.gateway import (
+        bind_agent_runtime_registry as _bind_registry,
+        get_agent_gateway,
+    )
+    from core.agent_runtime.gateway import (
         clear_agent_runtime_bindings as _clear,
     )
     from core.scheduled_workflow_runtime import (
@@ -141,23 +165,51 @@ def bind_agent_runtime(bridge: object) -> None:
         )
         if not callable(isolated_gateway_factory):
             isolated_gateway_factory = NanobotBridge
-        _bind(
-            gateway_provider=lambda: bridge,
-            isolated_gateway_factory=isolated_gateway_factory,
-            research_runtime_factory=build_research_runtime_factory(
-                isolated_gateway_factory
-            ),
-        )
+        from nanobot_kt.bridge import get_agent_runtime_manager
+
+        try:
+            manager = get_agent_runtime_manager()
+        except Exception:
+            manager = None
+        if manager is not None and manager.default_pool is bridge:
+            _bind_registry(manager.build_runtime_registry(
+                research_factory_builder=build_research_runtime_factory,
+            ))
+        else:
+            _bind(
+                gateway_provider=lambda: bridge,
+                isolated_gateway_factory=isolated_gateway_factory,
+                research_runtime_factory=build_research_runtime_factory(
+                    isolated_gateway_factory
+                ),
+            )
         bind_image_precache_port(KtImagePrecacheAdapter())
         bind_scheduled_workflow_callbacks(
             lambda: KtScheduledWorkflowCallbacks(
                 session_factory=database.SessionLocal,
             )
         )
-        model_profile_port = KtGatewayModelProfileAdapter()
+        configured_runtime_kind = getattr(bridge, "runtime_kind", None)
+        if configured_runtime_kind is None:
+            configured_runtime_kind = getattr(
+                bridge,
+                "default_runtime_kind",
+                "kt",
+            )
+        runtime_kind = str(
+            getattr(configured_runtime_kind, "value", configured_runtime_kind)
+        )
+        model_profile_port = KtGatewayModelProfileAdapter(
+            runtime_kind=runtime_kind,
+        )
         bind_gateway_model_profile_port(model_profile_port)
         agent_link_runtime = get_agent_link_runtime()
-        agent_link_runtime.bind_chat_port(KtAgentLinkChatAdapter(bridge))
+        agent_link_runtime.bind_chat_port(KtAgentLinkChatAdapter(
+            bridge_pool_resolver=lambda agent_id: get_agent_gateway(
+                agent_id,
+                entrypoint="agent_link",
+            )
+        ))
         agent_link_runtime.bind_collaboration_port(
             SqlAlchemyAgentLinkCollaborationAdapter(database.SessionLocal)
         )
@@ -253,8 +305,24 @@ def reconcile_skill_candidate_publications(testing: bool) -> None:
         return
     from core import database
     from core.admin_audit import reconcile_prepared_admin_audit_intents
-    from core.runtime_paths import RUNTIME_PATHS
+    from core.runtime_paths import (
+        RUNTIME_PATHS,
+        prepare_rag_benchmark_runtime,
+    )
     from core.skill_candidates import SkillCandidateStore
+
+    try:
+        rag_runtime = prepare_rag_benchmark_runtime()
+        logging.getLogger("nanobot.rag.benchmark").info(
+            "RAG Benchmark runtime ready: directories=%s seeded_cases=%s",
+            rag_runtime["directories"],
+            rag_runtime["seeded_cases"],
+        )
+    except Exception as exc:
+        logging.getLogger("nanobot.rag.benchmark").warning(
+            "RAG Benchmark runtime initialization failed: %s",
+            exc,
+        )
 
     db = database.SessionLocal()
     try:
@@ -329,9 +397,10 @@ def _application_module_dependencies() -> ApplicationModuleDependencies:
         stop_model_runtime=stop_model_runtime,
         init_prompt_runtimes=init_prompt_runtimes,
         mark_prompt_runtime_ready=mark_prompt_runtime_ready,
-        start_schedulers=lambda testing, logger: start_schedulers(
+        start_schedulers=lambda testing, logger, application: start_schedulers(
             testing=testing,
             logger=logger,
+            application=application,
         ),
         stop_schedulers=stop_schedulers,
         init_new_api_session=init_new_api_session,

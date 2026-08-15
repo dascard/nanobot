@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "feature_id": "dashboard.overview",
+      "route": "/",
+      "label": "首页总览",
+      "owner": "admin.dashboard",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "group.runtime.list",
+      "route": "/groups",
+      "label": "群聊运行",
+      "owner": "group.runtime",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "group.runtime.detail",
+      "route": "/groups/:groupId",
+      "label": "群聊详情",
+      "owner": "group.runtime",
+      "criticality": "high",
+      "route_kind": "detail",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "timing.gate",
+      "route": "/timing-gate",
+      "label": "TimingGate",
+      "owner": "timing.gate",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "proactive.outreach",
+      "route": "/proactive-outreach",
+      "label": "主动外呼",
+      "owner": "proactive.outreach",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "sticker.management",
+      "route": "/stickers",
+      "label": "表情包",
+      "owner": "sticker.runtime",
+      "criticality": "medium",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "sticker.duplicates",
+      "route": "/stickers/duplicates",
+      "label": "表情包去重工作台",
+      "owner": "sticker.runtime",
+      "criticality": "medium",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "content.blocks",
+      "route": "/blocks",
+      "label": "屏蔽规则",
+      "owner": "content.rules",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "session.configs",
+      "route": "/configs",
+      "label": "会话策略",
+      "owner": "session.config",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "system.settings",
+      "route": "/settings",
+      "label": "系统设置",
+      "owner": "system.settings",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "session.summary.recent",
+      "route": "/session-summaries/recent",
+      "label": "近期摘要",
+      "owner": "session.summary",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "session.summary.long",
+      "route": "/session-summaries/long",
+      "label": "长期摘要",
+      "owner": "session.summary",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "persona.management",
+      "route": "/persona",
+      "label": "用户画像",
+      "owner": "persona.runtime",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "image.generated",
+      "route": "/generated-images",
+      "label": "生成图片",
+      "owner": "image.runtime",
+      "criticality": "medium",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "reply.eval",
+      "route": "/reply-eval",
+      "label": "Reply 测试",
+      "owner": "reply.eval",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "rag.debug",
+      "route": "/rag-debug",
+      "label": "RAG Debug",
+      "owner": "semantic.runtime",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": [
+        "get_api_v1_admin_rag_debug_runs",
+        "get_api_v1_admin_rag_debug_status",
+        "post_api_v1_admin_rag_debug_build_index",
+        "post_api_v1_admin_rag_debug_query"
+      ]
+    },
+    {
+      "feature_id": "rag.benchmark",
+      "route": "/rag-benchmark",
+      "label": "RAG Benchmark",
+      "owner": "semantic.runtime",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "eval.management",
+      "route": "/evals",
+      "label": "Eval 评测",
+      "owner": "eval.runtime",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "database.browser",
+      "route": "/db",
+      "label": "数据库",
+      "owner": "admin.database",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "runtime.logs",
+      "route": "/logs",
+      "label": "日志",
+      "owner": "runtime.observability",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "prompt.preview.redirect",
+      "route": "/prompt",
+      "label": "旧 Prompt 预览入口",
+      "owner": "prompt.runtime",
+      "criticality": "low",
+      "route_kind": "redirect",
+      "manifest_managed": false,
+      "backend_operation_ids": [],
+      "coverage_policy": "exempt",
+      "exemption_reason": "仅保留到 /prompt-preview 的兼容重定向，不承载业务交互"
+    },
+    {
+      "feature_id": "prompt.templates.redirect",
+      "route": "/prompt-v2-templates",
+      "label": "旧 Prompt 模板入口",
+      "owner": "prompt.runtime",
+      "criticality": "low",
+      "route_kind": "redirect",
+      "manifest_managed": false,
+      "backend_operation_ids": [],
+      "coverage_policy": "exempt",
+      "exemption_reason": "仅保留到 /prompt-templates 的兼容重定向，不承载业务交互"
+    },
+    {
+      "feature_id": "agent.runs.detail",
+      "route": "/agent-runs/:runId",
+      "label": "Agent 运行详情",
+      "owner": "runtime.observability",
+      "criticality": "high",
+      "route_kind": "detail",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "agent.runs",
+      "route": "/agent-runs",
+      "label": "Agent 运行追踪",
+      "owner": "runtime.observability",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "llm.api.logs",
+      "route": "/llm-api-logs",
+      "label": "LLM API 日志",
+      "owner": "model.observability",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "tool.calls",
+      "route": "/tool-calls",
+      "label": "工具调用",
+      "owner": "tool.observability",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "web.search",
+      "route": "/web-search",
+      "label": "搜索 API",
+      "owner": "web.search",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "admin.audit",
+      "route": "/audit",
+      "label": "审计",
+      "owner": "admin.audit",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": false,
+      "backend_operation_ids": ["adminAuditLogsList"]
+    },
+    {
+      "feature_id": "trigger.management",
+      "route": "/triggers",
+      "label": "触发器",
+      "owner": "scheduled.workflow",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "prompt.runtime.preview",
+      "route": "/prompt-preview",
+      "label": "运行预览",
+      "owner": "prompt.runtime",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "prompt.runtime.templates",
+      "route": "/prompt-templates",
+      "label": "模板",
+      "owner": "prompt.runtime",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "model.routes",
+      "route": "/models",
+      "label": "模型",
+      "owner": "model.runtime",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "tool.management",
+      "route": "/tools",
+      "label": "工具管理",
+      "owner": "tool.runtime",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": [
+        "adminToolsList",
+        "adminToolTargetsList",
+        "adminToolDefaultsUpdate",
+        "adminToolOverrideSet",
+        "adminToolOverrideDelete"
+      ]
+    },
+    {
+      "feature_id": "sandbox.management",
+      "route": "/sandbox",
+      "label": "Sandbox 管理",
+      "owner": "sandbox.control-plane",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "sandbox.filesystem",
+      "route": "/sandbox-files",
+      "label": "Sandbox 文件",
+      "owner": "sandbox.control-plane",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": []
+    },
+    {
+      "feature_id": "group.learning",
+      "route": "/memory",
+      "label": "群学习与记忆",
+      "owner": "group.learning",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": [
+        "adminGroupLearningDescriptors",
+        "adminGroupLearningSessions",
+        "adminGroupLearningOverview",
+        "adminGroupLearningCandidates",
+        "adminGroupLearningCandidateDetail",
+        "adminGroupLearningRuns",
+        "adminGroupLearningSchedulePut",
+        "adminGroupLearningSchedulePause",
+        "adminGroupLearningCandidateReview",
+        "adminGroupLearningRulesDryRun",
+        "adminGroupLearningFeatureUpdate",
+        "adminGroupLearningRuleActivation",
+        "adminGroupLearningExtract"
+      ]
+    },
+    {
+      "feature_id": "runtime.module-diagnostics",
+      "route": "/runtime-modules",
+      "label": "模块诊断",
+      "owner": "runtime.modules",
+      "criticality": "high",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": ["adminRuntimeModulesDiagnostics"]
+    },
+    {
+      "feature_id": "system.self-check",
+      "route": "/self-check",
+      "label": "系统自检",
+      "owner": "runtime.self-check",
+      "criticality": "critical",
+      "route_kind": "page",
+      "manifest_managed": true,
+      "backend_operation_ids": [
+        "get_api_v1_admin_self_check_capabilities",
+        "get_api_v1_admin_self_check_probes",
+        "post_api_v1_admin_self_check_runs",
+        "get_api_v1_admin_self_check_runs",
+        "get_api_v1_admin_self_check_runs_run_id",
+        "get_api_v1_admin_settings",
+        "put_api_v1_admin_settings_key"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 ---
 name: AI 日报质量模式系统提示词
-version: 1
+version: 2
 kind: tool
 tool_name: ai_daily
 description: ai_daily quality 模式 LLM 的 system prompt。
@@ -18,6 +18,9 @@ description: ai_daily quality 模式 LLM 的 system prompt。
 8. 没有足够信息宁愿少写，不要编。
 9. details 必须包含 known（已知 2-3 点）、unknown（缺失 0-2 点）、impact（一句话影响）。
 10. 如果卡片没有足够细节，就明确写“信息不足”，不要扩写。
+11. source_ids 必须是卡片“来源 #数字”对应的整数数组；禁止输出来源名、域名或字符串编号。
+12. importance 必须是 1-5 的整数；只有 confidence 使用 high/medium 字符串。
+13. title 不超过 20 个字符、subtitle 不超过 30 个字符、verdict 不超过 90 个字符、closing 不超过 40 个字符。
 
 输出严格 JSON：
 {

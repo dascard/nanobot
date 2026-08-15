@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import inspect
 import logging
 import time as _time
 from collections.abc import Awaitable, Callable
@@ -15,6 +16,10 @@ from sqlalchemy.orm import Session
 from app.group_ingress import helpers as h
 from app.group_ingress import recovery
 from app.group_ingress import response_contract
+from app.session_config import (
+    is_database_only_enabled,
+    resolve_session_agent_id,
+)
 from core.database import (
     ChatLog,
     User,
@@ -34,6 +39,7 @@ from core.inbound_idempotency import (
 )
 from core.identity import build_identity_vars, is_super_user_id
 from core.moderation import check_message_moderation_db
+from core.persisted_content import sanitize_persisted_content
 from core.sqlite_retry import is_sqlite_locked_error
 from core.sqlite_retry import run_sqlite_locked_retry
 
@@ -96,6 +102,17 @@ class _GroupBridgePreparation:
     chat_query: str
     bridge_meta: dict[str, Any]
     enriched_query: str
+    agent_id: str = "nanobot"
+
+
+def _resolve_bridge_provider(provider: Callable[..., Any], agent_id: str) -> Any:
+    """兼容旧无参测试 Provider；生产 Provider 显式接收 agent_id。"""
+
+    try:
+        inspect.signature(provider).bind(agent_id=agent_id)
+    except (TypeError, ValueError):
+        return provider()
+    return provider(agent_id=agent_id)
 
 
 class GroupIngressService:
@@ -755,6 +772,12 @@ class GroupIngressService:
         """在一个工作线程内完成群聊 Timing Gate 前的数据库阶段。"""
 
         db = self._current_db()
+        database_only = is_database_only_enabled(
+            db,
+            platform=self._platform_from_request(req),
+            chat_type="group",
+            session_id=req.group_id,
+        )
         existing_ambient = None
         if req.message_id:
             existing_ambient = (
@@ -829,11 +852,12 @@ class GroupIngressService:
                     registered_stickers=[],
                 )
         else:
-            registered_stickers = h.register_group_stickers_from_message(
-                db,
-                req,
-                background_tasks=self.background_tasks,
-            )
+            if not database_only:
+                registered_stickers = h.register_group_stickers_from_message(
+                    db,
+                    req,
+                    background_tasks=self.background_tasks,
+                )
             try:
                 self._sync_group_user(group_user_id, req.session_name or "")
             except Exception as exc:
@@ -859,11 +883,12 @@ class GroupIngressService:
                     meta,
                     request_sha256,
                 )
-            self._schedule_image_precache(
-                meta.get("files"),
-                group_id=req.group_id,
-                message_id=req.message_id or "",
-            )
+            if not database_only:
+                self._schedule_image_precache(
+                    meta.get("files"),
+                    group_id=req.group_id,
+                    message_id=req.message_id or "",
+                )
             try:
                 ambient_log = self._save_ambient_log(
                     group_user_id=group_user_id,
@@ -884,6 +909,48 @@ class GroupIngressService:
                         registered_stickers=registered_stickers,
                     )
                 raise
+
+        if database_only:
+            meta.update({
+                "database_only": True,
+                "model_invoked": False,
+                "context_policy": "exclude",
+                "no_context_reason": "database_only",
+            })
+
+            def persist_database_only_meta() -> None:
+                ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)
+                db.commit()
+
+            run_sqlite_locked_retry(
+                persist_database_only_meta,
+                rollback=db.rollback,
+                label="group_database_only_meta",
+                logger=logger,
+            )
+            timing_result = {
+                "action": "no_reply",
+                "reason": "database_only",
+                "generation": 0,
+                "hard_rule": "database_only",
+            }
+            h.annotate_group_timing_event(
+                db,
+                ambient_log,
+                timing_result,
+                trigger_reason="database_only",
+                latency_ms=0,
+            )
+            return _GroupTimingPreparation(
+                early_result=self._business_result(
+                    req,
+                    outcome="no_reply",
+                    generation=0,
+                    reason="database_only",
+                    hard_rule="database_only",
+                ),
+                registered_stickers=[],
+            )
 
         from core.context_builder import build_timing_recent_context
 
@@ -999,7 +1066,9 @@ class GroupIngressService:
         timing_message = {
             "sender_id": req.sender_id,
             "sender_name": req.sender_name,
-            "message": message_text,
+            # ChatLog.content 的模型会执行相同清洗；当前事件必须使用同一
+            # 字节口径，才能在下一轮作为历史原样命中前缀缓存。
+            "message": sanitize_persisted_content(message_text),
             "message_id": req.message_id or "",
             "event_ts": (
                 ambient_log.created_at.timestamp()
@@ -1069,12 +1138,6 @@ class GroupIngressService:
         request_sha256: str,
     ) -> GroupIngressResult:
         try:
-            if self.bridge_provider is None:
-                from core.agent_runtime.gateway import get_agent_gateway
-
-                bridge = get_agent_gateway()
-            else:
-                bridge = self.bridge_provider()
             preparation = await self._run_db_phase(
                 lambda: self._prepare_bridge_phase(
                     req=req,
@@ -1085,6 +1148,18 @@ class GroupIngressService:
                     ambient_meta=ambient_meta,
                 )
             )
+            if self.bridge_provider is None:
+                from core.agent_runtime.gateway import get_agent_gateway
+
+                bridge = get_agent_gateway(
+                    preparation.agent_id,
+                    entrypoint="chat",
+                )
+            else:
+                bridge = _resolve_bridge_provider(
+                    self.bridge_provider,
+                    preparation.agent_id,
+                )
         except Exception as exc:
             logger.error("[GroupMsg] bridge failed group=%s: %s", req.group_id, exc)
             return self._technical_result(
@@ -1254,7 +1329,7 @@ class GroupIngressService:
         if not chat_query:
             chat_query = h.format_group_planner_message(
                 sender_name=req.sender_name,
-                content=message_text,
+                content=sanitize_persisted_content(message_text),
                 message_id=req.message_id or "",
             )
             source_message_ids = [req.message_id] if req.message_id else []
@@ -1266,6 +1341,11 @@ class GroupIngressService:
             group_id=req.group_id,
             exclude_message_ids=source_message_ids,
             current_user_input=chat_query,
+        )
+        h.record_group_prompt_batch(
+            db,
+            group_user_id=group_user_id,
+            source_message_ids=source_message_ids,
         )
         history_messages = list(structured_context.recent_messages)
         ctx_debug = dict(structured_context.debug)
@@ -1311,11 +1391,19 @@ class GroupIngressService:
             "bot_aliases": list(req.bot_aliases or []),
             **identity_vars,
         }
+        agent_id = resolve_session_agent_id(
+            db,
+            platform=platform,
+            chat_type="group",
+            session_id=req.group_id,
+        )
+        bridge_meta["agent_id"] = agent_id
         return _GroupBridgePreparation(
             source_message_ids=source_message_ids,
             chat_query=chat_query,
             bridge_meta=bridge_meta,
             enriched_query=f"<user_input>\n{chat_query}\n</user_input>",
+            agent_id=agent_id,
         )
 
     def _sync_group_user(self, group_user_id: str, session_name: str) -> None:

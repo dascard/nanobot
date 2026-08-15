@@ -112,6 +112,12 @@ def test_benchmark_status_reports_preflight_and_writable_dirs(client, tmp_path, 
     assert data["db_fingerprint"]["semantic_index_count"] == 1
 
 
+def test_benchmark_writable_probe_accepts_missing_nested_directory(tmp_path):
+    from api.admin.rag_benchmark_routes import _dir_writable
+
+    assert _dir_writable(tmp_path / "missing" / "nested") is True
+
+
 def test_benchmark_run_is_readonly_and_does_not_ensure_schema(client, tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     db_path = tmp_path / "benchmark.db"

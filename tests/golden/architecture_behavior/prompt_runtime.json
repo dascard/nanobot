@@ -12,13 +12,13 @@
     },
     {
       "path": "data/prompts_v2/chat/flow.json",
-      "sha256": "70b54970aa1cbf30162e0b18ce08f9ea4a0cba491e1f4c1740491b6dff00f71c",
+      "sha256": "04ff6ae4e14cd97f455699ac8e917cc7354c14b786cfdad23f3d317415662b02",
       "size_bytes": 3693
     },
     {
       "path": "data/prompts_v2/chat/main.md",
-      "sha256": "d3253db58100bfbd44d8be13204d31c9b2481afc785691bee8e58921433bfc85",
-      "size_bytes": 7145
+      "sha256": "705c5483aab1556b92c788118d45e0515768a4d2cfd4a529888ea0a25373d62f",
+      "size_bytes": 7417
     },
     {
       "path": "data/prompts_v2/chat/platform/qq/common.md",
@@ -87,8 +87,8 @@
     },
     {
       "path": "data/prompts_v2/tools/skill/usage.md",
-      "sha256": "b48c8988de56806158bb847239a58f670f320431922d2c4debe5b35e9dffbb3a",
-      "size_bytes": 1153
+      "sha256": "428b5a273eb8493839c013bf032f7e96482f15cf5a42d8b719f3374ef1a24ea0",
+      "size_bytes": 1312
     },
     {
       "path": "data/prompts_v2/tools/sql_analysis/usage.md",
@@ -137,18 +137,18 @@
     },
     {
       "path": "prompts.v2.default/chat/flow.json",
-      "sha256": "70b54970aa1cbf30162e0b18ce08f9ea4a0cba491e1f4c1740491b6dff00f71c",
+      "sha256": "04ff6ae4e14cd97f455699ac8e917cc7354c14b786cfdad23f3d317415662b02",
       "size_bytes": 3693
     },
     {
       "path": "prompts.v2.default/chat/identity_context.md",
-      "sha256": "e943c304c4373f93425fd2b870c457ecff2109663aaa40e95c4f49d98a215726",
-      "size_bytes": 326
+      "sha256": "aaee29052c46d2759a525681902550a93d6dc36950cf26fe6afd87b61fa29857",
+      "size_bytes": 386
     },
     {
       "path": "prompts.v2.default/chat/main.md",
-      "sha256": "d3253db58100bfbd44d8be13204d31c9b2481afc785691bee8e58921433bfc85",
-      "size_bytes": 7145
+      "sha256": "705c5483aab1556b92c788118d45e0515768a4d2cfd4a529888ea0a25373d62f",
+      "size_bytes": 7417
     },
     {
       "path": "prompts.v2.default/chat/platform/qq/common.md",
@@ -217,8 +217,8 @@
     },
     {
       "path": "prompts.v2.default/tasks/news_daily_quality.md",
-      "sha256": "33ad5b74352b7721bdd63c31c3fcaad50fac59df676825eaa6a6d41a2cddb959",
-      "size_bytes": 1097
+      "sha256": "862926f7c1606895a25040618daeb7b2cf74907350b5e3cb5ecc14952d3979ef",
+      "size_bytes": 2538
     },
     {
       "path": "prompts.v2.default/tasks/news_relevance_review.md",
@@ -297,13 +297,13 @@
     },
     {
       "path": "prompts.v2.default/tools/ai_daily/quality_system.md",
-      "sha256": "c2fcdb82354db6efec50dbead18bc7c987943c62e17ae3d7412925edd4b838c8",
-      "size_bytes": 1744
+      "sha256": "d2117c7ee5581412f198d73d89fb2e30fc15284f93aa681c80e972c6ae63e19c",
+      "size_bytes": 2097
     },
     {
       "path": "prompts.v2.default/tools/ai_daily/quality_user.md",
-      "sha256": "5853ed7208ba360f2ae528d922759c607943d17eed2e52055c87dc9c0b7cac99",
-      "size_bytes": 733
+      "sha256": "aac021f6f226cb96f3af8288348d66dc1421681c8a620a4b11fc942f3e9e3e8d",
+      "size_bytes": 957
     },
     {
       "path": "prompts.v2.default/tools/ai_daily/usage.md",
@@ -437,8 +437,8 @@
     },
     {
       "path": "prompts.v2.default/tools/skill/usage.md",
-      "sha256": "b48c8988de56806158bb847239a58f670f320431922d2c4debe5b35e9dffbb3a",
-      "size_bytes": 1153
+      "sha256": "428b5a273eb8493839c013bf032f7e96482f15cf5a42d8b719f3374ef1a24ea0",
+      "size_bytes": 1312
     },
     {
       "path": "prompts.v2.default/tools/sql_analysis/usage.md",

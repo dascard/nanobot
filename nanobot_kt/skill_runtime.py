@@ -77,7 +77,7 @@ class RequestExtensionBridgeBinding:
     persistence_pending: bool = False
 
 
-def _skill_schema(names: tuple[str, ...], *, db: Any) -> dict[str, Any]:
+def _skill_schema(*, db: Any) -> dict[str, Any]:
     schema = copy.deepcopy(
         build_tool_schema(
             "skill",
@@ -94,10 +94,8 @@ def _skill_schema(names: tuple[str, ...], *, db: Any) -> dict[str, Any]:
     properties = parameters.get("properties")
     if not isinstance(properties, dict):  # pragma: no cover - 注册表启动不变量
         raise RuntimeError("skill canonical schema 缺少 properties")
-    name_schema = properties.get("name")
-    if not isinstance(name_schema, dict):  # pragma: no cover - 注册表启动不变量
+    if not isinstance(properties.get("name"), dict):  # pragma: no cover - 注册表启动不变量
         raise RuntimeError("skill canonical schema 缺少 name")
-    name_schema["enum"] = list(names)
     return schema
 
 
@@ -121,7 +119,7 @@ def build_skill_bridge_binding(
     session_goal_mode: str = "",
     project_id: str = "",
 ) -> SkillBridgeBinding:
-    """解析可见 Skill；Plan Mode 与空目录均保持原 ToolPlan 不变。"""
+    """解析可见 Skill；查询只收窄版本锁，不改变静态工具 schema。"""
 
     if str(session_goal_mode or "").strip().lower() == "plan":
         return SkillBridgeBinding(
@@ -175,24 +173,10 @@ def build_skill_bridge_binding(
         runtime_chat_type=runtime_chat_type,
     )
     lock = selection.selected_lock
-    if not lock.entries:
-        return SkillBridgeBinding(
-            tool_plan=tool_plan,
-            project_context=project_context,
-            lock=None,
-            run_meta_update=MappingProxyType(
-                {
-                    "skill_count": 0,
-                    "skill_candidate_count": len(visible_lock.entries),
-                    "skill_registry_sha256": selection.registry.sha256,
-                    "skill_selection_mode": selection.retrieval_mode,
-                    "skill_indexed_count": selection.indexed_count,
-                    "skill_diagnostic_count": len(visible_lock.diagnostics),
-                }
-            ),
-        )
-    names = tuple(entry.name for entry in lock.entries)
-    schema = _skill_schema(names, db=db)
+    # 只要当前作用域存在可见 Skill，就固定发送同一个静态 schema。查询只决定
+    # 精确版本锁和位于历史之后的目录；未命中时使用空锁，执行层仍会拒绝任何
+    # name，避免工具列表随每轮话题变化而破坏长对话缓存。
+    schema = _skill_schema(db=db)
     catalog = render_skill_catalog(lock)
     skill_plan = enable_registered_tool(
         tool_plan,

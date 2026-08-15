@@ -54,6 +54,7 @@ from api.admin.group_learning_routes import (
 from api.admin.runtime_module_routes import (
     router as runtime_module_router,
 )
+from api.admin.selfcheck_routes import router as selfcheck_router
 from api.admin.run_evidence_routes import router as run_evidence_router
 from api.admin.collaboration_routes import router as collaboration_router
 from api.admin.gateway_control_routes import router as gateway_control_router
@@ -335,6 +336,7 @@ router.include_router(group_learning_router)
 router.include_router(group_memory_router)
 router.include_router(runtime_router)
 router.include_router(runtime_module_router)
+router.include_router(selfcheck_router)
 router.include_router(tool_router)
 router.include_router(model_router)
 router.include_router(model_preset_router)

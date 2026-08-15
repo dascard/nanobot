@@ -217,12 +217,11 @@ def migrate_context_sections_flow(
     *,
     validate_result: bool = True,
 ) -> tuple[dict[str, Any], bool]:
-    """为旧 runtime flow 补齐 project/summary 上下文链。
+    """为旧 runtime flow 补齐上下文链并迁移到缓存稳定顺序。
 
-    317c91a6 将两个运行时上下文段加入 canonical flow，但生产外置目录可能仍
-    保留旧的 ``session_guidance/group_context -> conversation_context_header``
-    结构。迁移只改写这两条受保留契约约束的边，保留其它节点、边和顶层字段，
-    并由调用方决定是否在中间状态执行最终契约校验。
+    查询相关的 group/project context 必须位于历史之后；否则检索结果变化会
+    使整个长历史失去前缀缓存。迁移仅改写可确认的旧 canonical 核心链，含
+    自定义分支的 Flow 保持原样并由运行契约校验决定是否可用。
     """
 
     migrated = copy.deepcopy(flow)
@@ -275,6 +274,155 @@ def migrate_context_sections_flow(
     migrated["nodes"] = nodes
 
     edges = list(migrated.get("edges") or [])
+
+    def edge_matches(
+        edge: dict[str, Any],
+        source: str,
+        target: str,
+        *,
+        chat_type: str = "",
+    ) -> bool:
+        if edge.get("from") != source or edge.get("to") != target:
+            return False
+        chat_types = _normalized_condition_values(edge.get("chat_types"))
+        platforms = _normalized_condition_values(edge.get("platforms"))
+        if platforms:
+            return False
+        if chat_type:
+            return chat_types == [chat_type]
+        return not chat_types
+
+    def has_core_edge(
+        source: str,
+        target: str,
+        *,
+        chat_type: str = "",
+        source_edges: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        return any(
+            edge_matches(
+                edge,
+                source,
+                target,
+                chat_type=chat_type,
+            )
+            for edge in (source_edges if source_edges is not None else edges)
+        )
+
+    # 新缓存稳定链已经存在时不得再追加旧 project -> summary 边。
+    cache_stable_tail = all((
+        has_core_edge("session_guidance", "summary_context"),
+        has_core_edge("summary_context", "conversation_context_header"),
+        has_core_edge("conversation_context_header", "history_messages"),
+        has_core_edge(
+            "history_messages",
+            "group_context",
+            chat_type="group",
+        ),
+        has_core_edge(
+            "history_messages",
+            "project_context",
+            chat_type="private",
+        ),
+        has_core_edge(
+            "group_context",
+            "project_context",
+            chat_type="group",
+        ),
+        has_core_edge("project_context", "persona_reference"),
+    ))
+    if cache_stable_tail:
+        if validate_result:
+            _validate_migrated_flow(migrated)
+        return migrated, changed
+
+    # 现存 canonical Flow 的旧顺序可以精确识别；只替换核心边，不猜测
+    # 管理员自定义分支。此分支也覆盖早期缺少 project/summary 节点的基线：
+    # 上面的节点补齐后，旧 header 入边仍可作为唯一迁移锚点。
+    old_core_edges = list(edges)
+    rewritten_old_edges: list[dict[str, Any]] = []
+    for edge in old_core_edges:
+        if (
+            edge.get("to") == "conversation_context_header"
+            and edge.get("from") in {"session_guidance", "group_context"}
+        ):
+            replacement = copy.deepcopy(edge)
+            replacement["to"] = "project_context"
+            rewritten_old_edges.append(replacement)
+        else:
+            rewritten_old_edges.append(edge)
+
+    def has_rewritten_core_edge(
+        source: str,
+        target: str,
+        *,
+        chat_type: str = "",
+    ) -> bool:
+        return has_core_edge(
+            source,
+            target,
+            chat_type=chat_type,
+            source_edges=rewritten_old_edges,
+        )
+
+    old_canonical_chain = all((
+        has_rewritten_core_edge(
+            "session_guidance",
+            "group_context",
+            chat_type="group",
+        ),
+        has_rewritten_core_edge(
+            "session_guidance",
+            "project_context",
+            chat_type="private",
+        ),
+        has_rewritten_core_edge(
+            "group_context",
+            "project_context",
+            chat_type="group",
+        ),
+        has_rewritten_core_edge("project_context", "summary_context"),
+        has_rewritten_core_edge(
+            "summary_context",
+            "conversation_context_header",
+        ),
+        has_rewritten_core_edge(
+            "conversation_context_header",
+            "history_messages",
+        ),
+        has_rewritten_core_edge("history_messages", "persona_reference"),
+    ))
+    if old_canonical_chain:
+        obsolete_edges = {
+            ("session_guidance", "group_context"),
+            ("session_guidance", "project_context"),
+            ("project_context", "summary_context"),
+            ("history_messages", "persona_reference"),
+        }
+        rewritten = [
+            edge
+            for edge in rewritten_old_edges
+            if (edge.get("from"), edge.get("to")) not in obsolete_edges
+        ]
+        rewritten.extend([
+            {"from": "session_guidance", "to": "summary_context"},
+            {
+                "from": "history_messages",
+                "to": "group_context",
+                "chat_types": ["group"],
+            },
+            {
+                "from": "history_messages",
+                "to": "project_context",
+                "chat_types": ["private"],
+            },
+            {"from": "project_context", "to": "persona_reference"},
+        ])
+        migrated["edges"] = rewritten
+        if validate_result:
+            _validate_migrated_flow(migrated)
+        return migrated, True
+
     rewritten: list[dict[str, Any]] = []
     for edge in edges:
         if (
@@ -293,6 +441,57 @@ def migrate_context_sections_flow(
             edge.get("from") == source and edge.get("to") == target
             for edge in rewritten
         )
+
+    # 缓存稳定核心链已经由管理员显式保存，但 guidance 仍经自定义节点进入
+    # persona 时，保留该自定义链，不能再补 project -> summary 造成分叉。
+    has_stable_downstream = all((
+        has_core_edge(
+            "history_messages",
+            "group_context",
+            chat_type="group",
+            source_edges=rewritten,
+        ),
+        has_core_edge(
+            "history_messages",
+            "project_context",
+            chat_type="private",
+            source_edges=rewritten,
+        ),
+        has_core_edge(
+            "group_context",
+            "project_context",
+            chat_type="group",
+            source_edges=rewritten,
+        ),
+        has_core_edge(
+            "project_context",
+            "persona_reference",
+            source_edges=rewritten,
+        ),
+    ))
+    if has_stable_downstream:
+        guidance_outgoing = [
+            edge
+            for edge in rewritten
+            if edge.get("from") == "session_guidance"
+        ]
+        if (
+            len(guidance_outgoing) == 1
+            and edge_matches(
+                guidance_outgoing[0],
+                "session_guidance",
+                "persona_reference",
+            )
+        ):
+            rewritten.remove(guidance_outgoing[0])
+            rewritten.append(
+                {"from": "session_guidance", "to": "summary_context"}
+            )
+            changed = True
+        migrated["edges"] = rewritten
+        if validate_result:
+            _validate_migrated_flow(migrated)
+        return migrated, changed
 
     # 如果旧 flow 的两条分支边已经被改写，下面的检查不会产生重复边；
     # 缺少某条分支时补上 canonical 条件，确保六个 live branch 都可达。
@@ -346,6 +545,7 @@ def migrate_context_sections_flow(
             }
         )
         changed = True
+
     migrated["edges"] = rewritten
 
     if validate_result:

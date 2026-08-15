@@ -95,6 +95,34 @@ def build_reranker_text(candidate: SemanticCandidate) -> str:
     return "\n".join(part for part in [candidate.title, candidate.text] if part).strip()
 
 
+def _nonempty_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _complete_local_cross_encoder(path: Path) -> bool:
+    """判断本地 CrossEncoder 是否已具备离线加载的最小文件集。"""
+    if not path.is_dir() or not _nonempty_file(path / "config.json"):
+        return False
+    weight_files = (
+        path / "model.safetensors",
+        path / "pytorch_model.bin",
+        path / "model.safetensors.index.json",
+        path / "pytorch_model.bin.index.json",
+    )
+    if not any(_nonempty_file(candidate) for candidate in weight_files):
+        return False
+    tokenizer_files = (
+        path / "tokenizer.json",
+        path / "tokenizer.model",
+        path / "sentencepiece.bpe.model",
+        path / "vocab.txt",
+    )
+    return any(_nonempty_file(candidate) for candidate in tokenizer_files)
+
+
 class LocalCrossEncoderRerankerProvider(RerankerProvider):
     def __init__(
         self,
@@ -116,12 +144,21 @@ class LocalCrossEncoderRerankerProvider(RerankerProvider):
         if self._download_checked or not self.download_repo_id:
             return
         target_dir = Path(self.model_name).expanduser()
+        if _complete_local_cross_encoder(target_dir):
+            self._download_checked = True
+            return
         target_dir.parent.mkdir(parents=True, exist_ok=True)
+        cache_dir = target_dir.parent / ".cache" / "huggingface" / "hub"
+        cache_dir.mkdir(parents=True, exist_ok=True)
         try:
             from huggingface_hub import snapshot_download
         except Exception as exc:  # pragma: no cover - 依赖缺失只在集成环境验证
             raise RuntimeError("huggingface_hub is required to download local reranker model") from exc
-        snapshot_download(repo_id=self.download_repo_id, local_dir=str(target_dir))
+        snapshot_download(
+            repo_id=self.download_repo_id,
+            local_dir=str(target_dir),
+            cache_dir=str(cache_dir),
+        )
         self._download_checked = True
 
     def _load_model(self) -> Any:
@@ -132,7 +169,10 @@ class LocalCrossEncoderRerankerProvider(RerankerProvider):
         except Exception as exc:  # pragma: no cover - 依赖缺失只在集成环境验证
             raise RuntimeError("sentence-transformers is required for LocalCrossEncoderRerankerProvider") from exc
         self._ensure_downloaded()
-        self.model = CrossEncoder(self.model_name)
+        self.model = CrossEncoder(
+            self.model_name,
+            local_files_only=Path(self.model_name).expanduser().is_dir(),
+        )
         return self.model
 
     def rerank(

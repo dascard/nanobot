@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
 from threading import RLock
 from typing import TypeVar, cast
 
@@ -16,18 +17,40 @@ from core.agent_runtime.gateway_contracts import (
     ManagedAgentGatewayPort,
     ResearchAgentRuntimePort,
 )
+from core.agent_runtime.registry import (
+    AgentGatewayProvider,
+    AgentRuntimeDescriptor,
+    AgentRuntimeRegistration,
+    AgentRuntimeRegistry,
+    IsolatedAgentGatewayFactory,
+    ResearchAgentRuntimeFactory,
+)
 
 
-AgentGatewayProvider = Callable[[], AgentMessageGatewayPort | None]
-IsolatedAgentGatewayFactory = Callable[[], ManagedAgentGatewayPort | None]
-ResearchAgentRuntimeFactory = Callable[[], ResearchAgentRuntimePort | None]
 GatewayPortT = TypeVar("GatewayPortT")
 
 
 _lock = RLock()
-_gateway_provider: AgentGatewayProvider | None = None
-_isolated_gateway_factory: IsolatedAgentGatewayFactory | None = None
-_research_runtime_factory: ResearchAgentRuntimeFactory | None = None
+_runtime_registry: AgentRuntimeRegistry | None = None
+
+
+def _compatibility_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def bind_agent_runtime_registry(registry: AgentRuntimeRegistry) -> None:
+    """原子绑定完整冻结注册表；禁止静默覆盖。"""
+
+    if not isinstance(registry, AgentRuntimeRegistry):
+        raise TypeError("registry 必须是 AgentRuntimeRegistry")
+    global _runtime_registry
+    with _lock:
+        if _runtime_registry is not None:
+            raise AgentRuntimeStateError(
+                "Agent Runtime 已绑定，禁止隐式替换",
+                runtime_id="process-agent-gateway",
+            )
+        _runtime_registry = registry
 
 
 def bind_agent_runtime(
@@ -45,43 +68,45 @@ def bind_agent_runtime(
     resolved_research_factory = research_runtime_factory or isolated_gateway_factory
     if not callable(resolved_research_factory):
         raise TypeError("research_runtime_factory 必须可调用")
-    global _gateway_provider
-    global _isolated_gateway_factory
-    global _research_runtime_factory
-    with _lock:
-        if (
-            _gateway_provider is not None
-            or _isolated_gateway_factory is not None
-            or _research_runtime_factory is not None
-        ):
-            raise AgentRuntimeStateError(
-                "Agent Runtime 已绑定，禁止隐式替换",
-                runtime_id="process-agent-gateway",
-            )
-        _gateway_provider = gateway_provider
-        _isolated_gateway_factory = isolated_gateway_factory
-        _research_runtime_factory = resolved_research_factory
+    descriptor = AgentRuntimeDescriptor(
+        agent_id="nanobot",
+        display_name="Nanobot",
+        description="兼容单 Agent Composition Root",
+        adapter="compatibility",
+        source_ref="process-agent-gateway",
+        source_sha256=_compatibility_sha256("nanobot:compatibility:source"),
+        runtime_policy_sha256=_compatibility_sha256(
+            "nanobot:compatibility:runtime-policy"
+        ),
+        allowed_entrypoints=(
+            "agent_link",
+            "chat",
+            "research",
+            "scheduled",
+        ),
+        default=True,
+    )
+    bind_agent_runtime_registry(AgentRuntimeRegistry.build((
+        AgentRuntimeRegistration(
+            descriptor=descriptor,
+            gateway_provider=gateway_provider,
+            isolated_gateway_factory=isolated_gateway_factory,
+            research_runtime_factory=resolved_research_factory,
+        ),
+    )))
 
 
 def clear_agent_runtime_bindings() -> None:
     """幂等清除绑定，使后续读取立即 fail closed。"""
 
-    global _gateway_provider
-    global _isolated_gateway_factory
-    global _research_runtime_factory
+    global _runtime_registry
     with _lock:
-        _gateway_provider = None
-        _isolated_gateway_factory = None
-        _research_runtime_factory = None
+        _runtime_registry = None
 
 
 def agent_runtime_binding_state() -> str:
     with _lock:
-        bound = (
-            _gateway_provider is not None
-            and _isolated_gateway_factory is not None
-            and _research_runtime_factory is not None
-        )
+        bound = _runtime_registry is not None
     return "running" if bound else "stopped"
 
 
@@ -90,11 +115,12 @@ def _resolve(
     expected_type: type[GatewayPortT],
     *,
     port_name: str,
+    runtime_id: str,
 ) -> GatewayPortT:
     if factory is None:
         raise AgentRuntimeStateError(
             "Agent Gateway 当前不可用",
-            runtime_id="process-agent-gateway",
+            runtime_id=runtime_id,
         )
     try:
         value = factory()
@@ -103,49 +129,98 @@ def _resolve(
     except Exception as exc:
         raise AgentRuntimeStateError(
             "Agent Gateway 当前不可用",
-            runtime_id="process-agent-gateway",
+            runtime_id=runtime_id,
         ) from exc
     if value is None:
         raise AgentRuntimeStateError(
             "Agent Gateway 当前不可用",
-            runtime_id="process-agent-gateway",
+            runtime_id=runtime_id,
         )
     if not isinstance(value, expected_type):
         raise AgentRuntimeStateError(
             f"{port_name} 未实现所需 Port",
-            runtime_id="process-agent-gateway",
+            runtime_id=runtime_id,
         )
     return cast(GatewayPortT, value)
 
 
-def get_agent_gateway() -> AgentMessageGatewayPort:
+def _require_registry() -> AgentRuntimeRegistry:
     with _lock:
-        provider = _gateway_provider
+        registry = _runtime_registry
+    if registry is None:
+        raise AgentRuntimeStateError(
+            "Agent Gateway 当前不可用",
+            runtime_id="process-agent-gateway",
+        )
+    return registry
+
+
+def get_agent_gateway(
+    agent_id: str = "",
+    *,
+    entrypoint: str = "chat",
+) -> AgentMessageGatewayPort:
+    registry = _require_registry()
+    registration = registry.require_registration(
+        agent_id,
+        entrypoint=entrypoint,
+    )
     return _resolve(
-        provider,
+        registration.gateway_provider,
         AgentMessageGatewayPort,
         port_name="Agent Message Gateway",
+        runtime_id=registration.descriptor.agent_id,
     )
 
 
-def create_isolated_agent_gateway() -> ManagedAgentGatewayPort:
-    with _lock:
-        factory = _isolated_gateway_factory
+def create_isolated_agent_gateway(
+    agent_id: str = "",
+    *,
+    entrypoint: str = "scheduled",
+) -> ManagedAgentGatewayPort:
+    registry = _require_registry()
+    registration = registry.require_registration(
+        agent_id,
+        entrypoint=entrypoint,
+    )
     return _resolve(
-        factory,
+        registration.isolated_gateway_factory,
         ManagedAgentGatewayPort,
         port_name="Isolated Agent Gateway",
+        runtime_id=registration.descriptor.agent_id,
     )
 
 
-def create_research_agent_runtime() -> ResearchAgentRuntimePort:
-    with _lock:
-        factory = _research_runtime_factory
+def create_research_agent_runtime(
+    agent_id: str = "",
+) -> ResearchAgentRuntimePort:
+    registry = _require_registry()
+    registration = registry.require_registration(
+        agent_id,
+        entrypoint="research",
+    )
+    factory = registration.research_runtime_factory
+    if factory is None:
+        raise AgentRuntimeStateError(
+            "Research Agent Runtime 当前不可用",
+            runtime_id=registration.descriptor.agent_id,
+        )
     return _resolve(
         factory,
         ResearchAgentRuntimePort,
         port_name="Research Agent Runtime",
+        runtime_id=registration.descriptor.agent_id,
     )
+
+
+def list_registered_agents() -> tuple[AgentRuntimeDescriptor, ...]:
+    return _require_registry().descriptors()
+
+
+def get_agent_runtime_registry() -> AgentRuntimeRegistry:
+    """返回当前冻结注册表，供诊断和受信 Composition Root 使用。"""
+
+    return _require_registry()
 
 
 __all__ = [
@@ -154,8 +229,11 @@ __all__ = [
     "ResearchAgentRuntimeFactory",
     "agent_runtime_binding_state",
     "bind_agent_runtime",
+    "bind_agent_runtime_registry",
     "clear_agent_runtime_bindings",
     "create_isolated_agent_gateway",
     "create_research_agent_runtime",
+    "get_agent_runtime_registry",
     "get_agent_gateway",
+    "list_registered_agents",
 ]

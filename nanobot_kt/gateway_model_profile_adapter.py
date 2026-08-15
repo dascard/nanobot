@@ -15,11 +15,15 @@ from nanobot_kt.model_runtime import (
 class KtGatewayModelProfileAdapter:
     """仅公开已通过 KT reply Route 校验的非敏感描述。"""
 
+    def __init__(self, *, runtime_kind: str = "kt") -> None:
+        self._runtime_kind = str(runtime_kind or "").strip().lower()
+
     def list_profiles(self) -> tuple[GatewayModelProfileDescriptor, ...]:
         plans = resolve_reply_route_plans(
             default_base_url=NEW_API_BASE_URL,
             default_api_key=NEW_API_KEY,
             session_id="gateway-control",
+            runtime_kind=self._runtime_kind,
         )
         return tuple(
             GatewayModelProfileDescriptor(

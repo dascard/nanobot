@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -545,6 +546,17 @@ def test_news_task_rejects_source_ids_outside_current_cards():
     assert result.validation_diagnostics[0].code == (
         "news_source_id_not_authorized"
     )
+
+
+def test_news_quality_canonical_prompt_declares_schema_sensitive_types():
+    prompt = Path(
+        "prompts.v2.default/tasks/news_daily_quality.md"
+    ).read_text(encoding="utf-8")
+
+    assert "source_ids 必须是整数数组" in prompt
+    assert "禁止输出来源名、域名或字符串编号" in prompt
+    assert "importance 必须是 1–5 的整数" in prompt
+    assert "title 不超过 20 个字符" in prompt
 
 
 def test_group_topics_task_rejects_evidence_outside_trusted_window():

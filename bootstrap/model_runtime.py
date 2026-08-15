@@ -40,6 +40,10 @@ from core.model_provider.route_runtime import (
 from core.model_provider.route_registry import (
     validate_model_route_task_contracts,
 )
+from core.selfcheck.runtime_diagnostics import (
+    bind_selfcheck_runtime_diagnostics_port,
+    clear_selfcheck_runtime_diagnostics_port,
+)
 from core.task_runtime import start_task_runtime, stop_task_runtime
 
 
@@ -48,6 +52,7 @@ _chat_adapter: NewAPIChatCompletionAdapter | None = None
 _decision_adapter: ClassifierDecisionModelAdapter | None = None
 _catalog_adapter: RegistryModelCatalogAdapter | None = None
 _task_adapter: RouteTaskModelAdapter | None = None
+_selfcheck_adapter: object | None = None
 
 
 class OptionalCodexCredentialStatusAdapter:
@@ -69,13 +74,14 @@ class OptionalCodexCredentialStatusAdapter:
 
 def start_model_runtime() -> None:
     global _catalog_adapter, _chat_adapter, _decision_adapter, _route_adapter
-    global _task_adapter
+    global _selfcheck_adapter, _task_adapter
     adapters = (
         _route_adapter,
         _task_adapter,
         _chat_adapter,
         _decision_adapter,
         _catalog_adapter,
+        _selfcheck_adapter,
     )
     if all(adapter is not None for adapter in adapters):
         return
@@ -91,6 +97,7 @@ def start_model_runtime() -> None:
     from nanobot_kt.codex_admin_adapter import KtCodexAdminAdapter
     from bootstrap.media_tool_runtime import bind_media_tool_runtime
     from bootstrap.news_search_runtime import bind_news_search_runtime
+    from bootstrap.selfcheck_runtime import RuntimeSelfcheckDiagnosticsAdapter
 
     validate_model_route_task_contracts()
     try:
@@ -120,6 +127,8 @@ def start_model_runtime() -> None:
         start_chat_completion_runtime(chat_adapter)
         start_decision_model_runtime(decision_adapter)
         start_model_catalog_runtime(catalog_adapter)
+        selfcheck_adapter = RuntimeSelfcheckDiagnosticsAdapter()
+        bind_selfcheck_runtime_diagnostics_port(selfcheck_adapter)
     except Exception:
         from bootstrap.media_tool_runtime import clear_media_tool_runtime
         from bootstrap.news_search_runtime import clear_news_search_runtime
@@ -134,20 +143,23 @@ def start_model_runtime() -> None:
         stop_model_preset_resolver_runtime()
         clear_news_search_runtime()
         clear_media_tool_runtime()
+        clear_selfcheck_runtime_diagnostics_port()
         raise
     _route_adapter = route_adapter
     _task_adapter = task_adapter
     _chat_adapter = chat_adapter
     _decision_adapter = decision_adapter
     _catalog_adapter = catalog_adapter
+    _selfcheck_adapter = selfcheck_adapter
 
 
 def stop_model_runtime() -> None:
     global _catalog_adapter, _chat_adapter, _decision_adapter, _route_adapter
-    global _task_adapter
+    global _selfcheck_adapter, _task_adapter
     from bootstrap.media_tool_runtime import clear_media_tool_runtime
     from bootstrap.news_search_runtime import clear_news_search_runtime
 
+    clear_selfcheck_runtime_diagnostics_port()
     stop_model_catalog_runtime()
     stop_decision_model_runtime()
     stop_chat_completion_runtime()
@@ -163,6 +175,7 @@ def stop_model_runtime() -> None:
     _catalog_adapter = None
     _route_adapter = None
     _task_adapter = None
+    _selfcheck_adapter = None
 
 
 __all__ = ["start_model_runtime", "stop_model_runtime"]

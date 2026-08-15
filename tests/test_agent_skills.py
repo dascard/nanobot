@@ -561,7 +561,7 @@ def test_kt_adapter_disables_upstream_skill_discovery(monkeypatch):
     assert "skills_registry" not in agent.session.extra
 
 
-def test_skill_bridge_lazily_exposes_retrieved_catalog_schema_and_plan_isolation(
+def test_skill_bridge_keeps_schema_stable_and_isolates_query_lock_and_plan_mode(
     db_session,
 ):
     base_plan = build_tool_plan(
@@ -593,9 +593,50 @@ def test_skill_bridge_lazily_exposes_retrieved_catalog_schema_and_plan_isolation
         for item in binding.tool_plan.sent_tool_schemas
         if item["function"]["name"] == "skill"
     )
-    assert skill_schema["function"]["parameters"]["properties"]["name"]["enum"] == [
-        "schedule-task",
-    ]
+    assert "enum" not in skill_schema["function"]["parameters"]["properties"]["name"]
+    other_binding = build_skill_bridge_binding(
+        db=db_session,
+        tool_plan=base_plan,
+        project_context="existing project context",
+        platform="qq",
+        runtime_chat_type="private",
+        is_group=False,
+        owner_id="u1",
+        agent_id="nanobot",
+        session_id="private-u1",
+        query="请生成今天的 AI 日报",
+    )
+    other_skill_schema = next(
+        item
+        for item in other_binding.tool_plan.sent_tool_schemas
+        if item["function"]["name"] == "skill"
+    )
+    assert other_binding.lock is not None
+    assert [entry.name for entry in other_binding.lock.entries] == ["ai-daily"]
+    assert other_skill_schema == skill_schema
+    unmatched_binding = build_skill_bridge_binding(
+        db=db_session,
+        tool_plan=base_plan,
+        project_context="existing project context",
+        platform="qq",
+        runtime_chat_type="private",
+        is_group=False,
+        owner_id="u1",
+        agent_id="nanobot",
+        session_id="private-u1",
+        query="你好，介绍一下你自己",
+    )
+    unmatched_skill_schema = next(
+        item
+        for item in unmatched_binding.tool_plan.sent_tool_schemas
+        if item["function"]["name"] == "skill"
+    )
+    assert unmatched_binding.lock is not None
+    assert unmatched_binding.lock.entries == ()
+    assert unmatched_binding.tool_plan.can_execute("skill")
+    assert unmatched_binding.project_context == "existing project context"
+    assert unmatched_binding.runtime_attributes
+    assert unmatched_skill_schema == skill_schema
     assert '<skill_catalog trust="untrusted_routing_metadata">' in binding.project_context
     assert "# AI 日报与资讯聚合" not in binding.project_context
     assert "ai-daily" not in binding.project_context

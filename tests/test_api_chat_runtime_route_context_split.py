@@ -70,6 +70,18 @@ def _services(
         calls.setdefault("persona", []).append((user_id, current_user_input, recent_messages))
         return SimpleNamespace(context=persona_context, debug=persona_debug or {"persona": "ok"})
 
+    def build_group_prompt_event(
+        *,
+        sender_name: str,
+        content: str,
+        event_time: str,
+        message_id: str,
+    ) -> str:
+        calls.setdefault("group_prompt_event", []).append(
+            (sender_name, content, event_time, message_id)
+        )
+        return f"群事件:{sender_name}:{message_id}:{content}"
+
     class Logger:
         def info(self, message: str, *args: Any) -> None:
             calls.setdefault("info", []).append(message % args if args else message)
@@ -85,6 +97,7 @@ def _services(
         chat_request_platform=platform,
         build_runtime_payload=chat_runtime_facade.build_chat_runtime_payload,
         build_persona_context=build_persona_context,
+        build_group_prompt_event=build_group_prompt_event,
         logger=Logger(),
     )
 
@@ -155,7 +168,17 @@ def test_build_chat_runtime_route_context_applies_group_persona_gate():
         [{"role": "user", "content": "上一轮"}],
     )]
     assert context.safe_user_input == "群聊问题 files=1"
-    assert context.enriched_query == "<user_input>\n群聊问题 files=1\n</user_input>"
+    assert context.enriched_query == (
+        "<user_input>\n"
+        "群事件:用户:m-runtime-route:群聊问题 files=1\n"
+        "</user_input>"
+    )
+    assert context.prompt_event_content == (
+        "群事件:用户:m-runtime-route:群聊问题 files=1"
+    )
+    assert calls["group_prompt_event"] == [
+        ("用户", "群聊问题 files=1", "", "m-runtime-route")
+    ]
     assert context.bridge_meta["chat_type"] == "group"
     assert context.bridge_meta["stream"] is True
     assert context.bridge_meta["runtime_preset"] == "full"

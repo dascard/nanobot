@@ -50,7 +50,7 @@ class ApplicationModuleDependencies:
     stop_model_runtime: SyncAction
     init_prompt_runtimes: Callable[[object], None]
     mark_prompt_runtime_ready: SyncAction
-    start_schedulers: Callable[[bool, object], object | None]
+    start_schedulers: Callable[[bool, object, object], object | None]
     stop_schedulers: StopResource
     init_new_api_session: AsyncStartResource
     shutdown_new_api_session: AsyncStopResource
@@ -398,18 +398,28 @@ class _DeliveryOutboundModule(_BuiltinModule):
         ))
         self._dependencies = dependencies
         self._handles: object | None = None
+        self._application: object | None = None
 
     async def _start(self, runtime_context: ModuleRuntimeContext) -> None:
         logger = runtime_context.logger
         if logger is None:
             raise RuntimeError("delivery.outbound 缺少 logger")
+        application = runtime_context.application
+        if application is None:
+            raise RuntimeError("delivery.outbound 缺少 application")
         self._handles = self._dependencies.start_schedulers(
             runtime_context.testing,
             logger,
+            application,
         )
+        self._application = application
+        application.state.scheduler_handles = self._handles
 
     async def _stop(self) -> None:
         errors: list[BaseException] = []
+        if self._application is not None:
+            self._application.state.scheduler_handles = None
+            self._application = None
         try:
             self._dependencies.stop_schedulers(self._handles)
         except BaseException as exc:

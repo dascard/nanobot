@@ -7,6 +7,18 @@ from core.database import ChatLog, Persona
 from fastapi import BackgroundTasks
 
 
+@pytest.fixture(autouse=True)
+def _enable_model_paths_for_api_tests(monkeypatch):
+    """本模块验证既有 API 模型路径，显式关闭默认仅入库策略。"""
+
+    for target in (
+        "api.routes.is_database_only_enabled",
+        "app.group_ingress.service.is_database_only_enabled",
+        "api.group_utility_routes.is_database_only_enabled",
+    ):
+        monkeypatch.setattr(target, lambda *_args, **_kwargs: False)
+
+
 def _private_decision(
     *,
     action: str = "reply_now",
@@ -354,7 +366,10 @@ def test_proxy_chat(client, db_session):
         # 验证 bridge.handle_message 被调用
         mock_bridge.handle_message.assert_awaited_once()
         called_query = mock_bridge.handle_message.await_args.args[0]
-        assert called_query == "<user_input>\nhello proxy\n</user_input>"
+        assert called_query.startswith("<user_input>\n[时间]")
+        assert called_query.endswith(
+            "\n[用户名]未知用户\n[发言内容]hello proxy\n</user_input>"
+        )
         _, kwargs = mock_bridge.handle_message.await_args
         assert kwargs["metadata"]["history_header"].startswith(
             "<conversation_context>"
@@ -457,6 +472,40 @@ def test_proxy_chat_passes_client_platform_to_bridge(client, monkeypatch):
     assert response.status_code == 200
     _, kwargs = mock_bridge.handle_message.await_args
     assert kwargs["metadata"]["platform"] == "web"
+
+
+def test_proxy_chat_routes_to_session_agent(client, db_session, monkeypatch):
+    from unittest.mock import AsyncMock, patch
+
+    from core.database import ChatStreamConfig
+
+    _fast_private_reply(monkeypatch)
+    db_session.add(ChatStreamConfig(
+        chat_stream_id="qq:agent-route-user:private",
+        database_only=0,
+        agent_id="pabot",
+    ))
+    db_session.commit()
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(return_value="PAbot 回复")
+
+    with patch("api.routes.get_bridge", return_value=mock_bridge) as get_bridge:
+        response = client.post(
+            "/api/v1/chat",
+            json={
+                "user_id": "agent-route-user",
+                "session_id": "private_agent-route-user",
+                "query": "执行专业研究",
+                "client_meta": {
+                    "platform": "qq",
+                    "chat_type": "private",
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answer"] == "PAbot 回复"
+    get_bridge.assert_called_once_with("pabot", entrypoint="chat")
 
 
 def test_proxy_chat_releases_db_transaction_before_bridge(client, db_session, monkeypatch):

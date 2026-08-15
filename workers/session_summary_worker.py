@@ -173,15 +173,32 @@ async def run_forever_async(
     interval: float = 10.0,
     stop_event: Any | None = None,
 ) -> None:
+    from core.selfcheck.heartbeat import record_worker_cycle_with_factory
+
     resolved_owner = _resolved_owner(owner)
+    heartbeat_mode = "embedded" if stop_event is not None else "external"
     logger.info("session summary worker async loop started interval=%ss", interval)
     while stop_event is None or not stop_event.is_set():
+        stats = {"processed": 0, "done": 0, "failed": 0, "recovered": 0}
+        cycle_success = False
+        error_code = ""
         try:
             stats = await run_once_async(owner=resolved_owner, limit=limit)
+            cycle_success = True
             if stats.get("processed"):
                 logger.info("session summary worker processed: %s", stats)
         except Exception as exc:
+            error_code = "session_summary_cycle_failed"
             logger.exception("session summary worker loop error: %s", exc)
+        record_worker_cycle_with_factory(
+            SessionLocal,
+            worker_id="session-summary-worker",
+            instance_id=resolved_owner,
+            mode=heartbeat_mode,
+            success=cycle_success,
+            error_code=error_code,
+            metadata=stats,
+        )
         remaining = max(1.0, float(interval or 10.0))
         while remaining > 0 and (stop_event is None or not stop_event.is_set()):
             step = min(1.0, remaining)

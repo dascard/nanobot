@@ -70,6 +70,7 @@ def build_group_recent_context(
             content=content,
             timestamp=row.created_at,
             message_id=row.message_id or "",
+            content_has_speaker_prefix=(row.role == "ambient"),
         )
         if blocks and total + len(block) > max_total:
             break

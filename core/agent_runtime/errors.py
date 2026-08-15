@@ -19,6 +19,12 @@ class AgentRuntimeStateError(AgentRuntimeError):
     code = "agent_runtime_invalid_state"
 
 
+class AgentRuntimeNotFoundError(AgentRuntimeStateError):
+    """请求的 Agent 身份未注册。"""
+
+    code = "agent_runtime_not_found"
+
+
 class AgentRuntimeCapabilityError(AgentRuntimeError):
     """底层 Runtime 不具备端口要求的能力。"""
 

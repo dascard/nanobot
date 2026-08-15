@@ -85,6 +85,8 @@ class PromptRuntimeInput:
     effort_constraint: str
     trace_id: str
     run_id: str
+    agent_id: str = "nanobot"
+    agent_profile: str = ""
     session_guidance: str = field(default="", repr=False)
     session_guidance_chat_stream_id: str = ""
     session_guidance_resolution_status: str = "not_requested"
@@ -182,6 +184,8 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         bot_id=input.bot_id,
         bot_name=input.bot_name,
         bot_aliases=input.bot_aliases,
+        agent_id=input.agent_id,
+        agent_profile=input.agent_profile,
         user_input=input.user_input,
         persona_text=input.persona_text,
         session_guidance=input.session_guidance,
@@ -270,6 +274,7 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
     cache_context = attach_prompt_prefix_cache_context(
         build_llm_cache_context(input.session_id, context_debug),
         prompt_plan.prefix_cache_manifest,
+        flow_sections=prompt_plan.flow_sections,
     )
     meta_update = {
         "prompt_engine": "prompt",

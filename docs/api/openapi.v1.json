@@ -1849,6 +1849,28 @@
       },
       "ConfigUpdate": {
         "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "database_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database Only"
+          },
           "enable_expression_learning": {
             "anyOf": [
               {
@@ -1954,6 +1976,17 @@
       },
       "ConfigUpsert": {
         "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
           "chat_type": {
             "enum": [
               "group",
@@ -1961,6 +1994,17 @@
             ],
             "title": "Chat Type",
             "type": "string"
+          },
+          "database_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database Only"
           },
           "enable_expression_learning": {
             "anyOf": [
@@ -7348,6 +7392,7 @@
         "type": "object"
       },
       "RagDebugQueryRequest": {
+        "additionalProperties": false,
         "properties": {
           "filters": {
             "additionalProperties": true,
@@ -7368,6 +7413,16 @@
           },
           "source_type": {
             "default": "all",
+            "enum": [
+              "memory",
+              "memory_digest",
+              "session_summary",
+              "group_memory",
+              "sticker",
+              "knowledge",
+              "group_analysis",
+              "all"
+            ],
             "title": "Source Type",
             "type": "string"
           }
@@ -8881,6 +8936,576 @@
           "target_id"
         ],
         "title": "ScheduledTaskCreate",
+        "type": "object"
+      },
+      "SelfcheckCapabilitiesResponse": {
+        "properties": {
+          "coverage": {
+            "$ref": "#/components/schemas/SelfcheckCoverageResponse"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SelfcheckCapabilityResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "registry": {
+            "$ref": "#/components/schemas/SelfcheckRegistryResponse"
+          }
+        },
+        "required": [
+          "registry",
+          "coverage",
+          "items"
+        ],
+        "title": "SelfcheckCapabilitiesResponse",
+        "type": "object"
+      },
+      "SelfcheckCapabilityResponse": {
+        "properties": {
+          "attributes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Attributes",
+            "type": "object"
+          },
+          "capability_id": {
+            "title": "Capability Id",
+            "type": "string"
+          },
+          "coverage_policy": {
+            "title": "Coverage Policy",
+            "type": "string"
+          },
+          "coverage_status": {
+            "title": "Coverage Status",
+            "type": "string"
+          },
+          "criticality": {
+            "title": "Criticality",
+            "type": "string"
+          },
+          "exemption_reason": {
+            "title": "Exemption Reason",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lifecycle": {
+            "title": "Lifecycle",
+            "type": "string"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "probe_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Probe Ids",
+            "type": "array"
+          },
+          "related_operation_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Related Operation Ids",
+            "type": "array"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "verification_suite_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Verification Suite Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "capability_id",
+          "kind",
+          "source_id",
+          "label",
+          "owner",
+          "criticality",
+          "lifecycle",
+          "coverage_policy",
+          "coverage_status",
+          "probe_ids",
+          "verification_suite_ids",
+          "related_operation_ids",
+          "exemption_reason",
+          "attributes"
+        ],
+        "title": "SelfcheckCapabilityResponse",
+        "type": "object"
+      },
+      "SelfcheckCoverageKindResponse": {
+        "properties": {
+          "covered": {
+            "title": "Covered",
+            "type": "integer"
+          },
+          "exempted": {
+            "title": "Exempted",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unverified": {
+            "title": "Unverified",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "covered",
+          "unverified",
+          "exempted"
+        ],
+        "title": "SelfcheckCoverageKindResponse",
+        "type": "object"
+      },
+      "SelfcheckCoverageResponse": {
+        "properties": {
+          "by_kind": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SelfcheckCoverageKindResponse"
+            },
+            "title": "By Kind",
+            "type": "object"
+          },
+          "covered": {
+            "title": "Covered",
+            "type": "integer"
+          },
+          "exempted": {
+            "title": "Exempted",
+            "type": "integer"
+          },
+          "required_unverified": {
+            "title": "Required Unverified",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unverified": {
+            "title": "Unverified",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "covered",
+          "unverified",
+          "exempted",
+          "required_unverified",
+          "by_kind"
+        ],
+        "title": "SelfcheckCoverageResponse",
+        "type": "object"
+      },
+      "SelfcheckProbeCatalogResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SelfcheckProbeResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "registry": {
+            "$ref": "#/components/schemas/SelfcheckRegistryResponse"
+          }
+        },
+        "required": [
+          "registry",
+          "items"
+        ],
+        "title": "SelfcheckProbeCatalogResponse",
+        "type": "object"
+      },
+      "SelfcheckProbeResponse": {
+        "properties": {
+          "capability_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capability Kinds",
+            "type": "array"
+          },
+          "capability_source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capability Source Ids",
+            "type": "array"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "destructive": {
+            "title": "Destructive",
+            "type": "boolean"
+          },
+          "environments": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Environments",
+            "type": "array"
+          },
+          "executor_key": {
+            "title": "Executor Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "string"
+          },
+          "requires_model": {
+            "title": "Requires Model",
+            "type": "boolean"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "title": "Timeout Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "check_id",
+          "category",
+          "label",
+          "level",
+          "severity",
+          "executor_key",
+          "timeout_seconds",
+          "environments",
+          "capability_kinds",
+          "capability_source_ids",
+          "destructive",
+          "requires_model"
+        ],
+        "title": "SelfcheckProbeResponse",
+        "type": "object"
+      },
+      "SelfcheckRegistryResponse": {
+        "properties": {
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "generation",
+          "sha256"
+        ],
+        "title": "SelfcheckRegistryResponse",
+        "type": "object"
+      },
+      "SelfcheckResultResponse": {
+        "properties": {
+          "capability_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capability Ids",
+            "type": "array"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "completed_at": {
+            "format": "date-time",
+            "title": "Completed At",
+            "type": "string"
+          },
+          "detail_code": {
+            "title": "Detail Code",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "level": {
+            "title": "Level",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "title": "Metrics",
+            "type": "object"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check_id",
+          "category",
+          "status",
+          "severity",
+          "level",
+          "duration_ms",
+          "detail_code",
+          "message",
+          "capability_ids",
+          "metrics",
+          "evidence",
+          "started_at",
+          "completed_at"
+        ],
+        "title": "SelfcheckResultResponse",
+        "type": "object"
+      },
+      "SelfcheckRunListItemResponse": {
+        "properties": {
+          "capability_registry_sha256": {
+            "title": "Capability Registry Sha256",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "probe_registry_sha256": {
+            "title": "Probe Registry Sha256",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Summary",
+            "type": "object"
+          },
+          "trigger": {
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "trigger",
+          "environment",
+          "status",
+          "capability_registry_sha256",
+          "probe_registry_sha256",
+          "summary",
+          "started_at",
+          "completed_at"
+        ],
+        "title": "SelfcheckRunListItemResponse",
+        "type": "object"
+      },
+      "SelfcheckRunListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SelfcheckRunListItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "SelfcheckRunListResponse",
+        "type": "object"
+      },
+      "SelfcheckRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_model_checks": {
+            "default": false,
+            "title": "Allow Model Checks",
+            "type": "boolean"
+          },
+          "check_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Ids"
+          },
+          "trigger": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "predeploy"
+            ],
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "title": "SelfcheckRunRequest",
+        "type": "object"
+      },
+      "SelfcheckRunResponse": {
+        "properties": {
+          "capability_registry_sha256": {
+            "title": "Capability Registry Sha256",
+            "type": "string"
+          },
+          "completed_at": {
+            "format": "date-time",
+            "title": "Completed At",
+            "type": "string"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "probe_registry_sha256": {
+            "title": "Probe Registry Sha256",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SelfcheckResultResponse"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Summary",
+            "type": "object"
+          },
+          "trigger": {
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "trigger",
+          "environment",
+          "status",
+          "capability_registry_sha256",
+          "probe_registry_sha256",
+          "summary",
+          "results",
+          "started_at",
+          "completed_at"
+        ],
+        "title": "SelfcheckRunResponse",
         "type": "object"
       },
       "SemanticIndexBackfillRequest": {
@@ -11466,6 +12091,62 @@
         "summary": "Place Run Evidence Legal Hold",
         "tags": [
           "admin-run-evidence"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/agent-runtimes": {
+      "get": {
+        "description": "返回当前进程已冻结的可选 Agent，不暴露路径或凭据。",
+        "operationId": "get_api_v1_admin_agent_runtimes",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Agent Runtimes",
+        "tags": [
+          "admin-runtime"
         ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"
@@ -29624,6 +30305,390 @@
           }
         },
         "summary": "Set Workspace Quota",
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/self-check/capabilities": {
+      "get": {
+        "operationId": "get_api_v1_admin_self_check_capabilities",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfcheckCapabilitiesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "管理员鉴权失败"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "依赖服务不可用"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Selfcheck Capabilities",
+        "tags": [
+          "admin-self-check"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/self-check/probes": {
+      "get": {
+        "operationId": "get_api_v1_admin_self_check_probes",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfcheckProbeCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "管理员鉴权失败"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Selfcheck Probes",
+        "tags": [
+          "admin-self-check"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/self-check/runs": {
+      "get": {
+        "operationId": "get_api_v1_admin_self_check_runs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfcheckRunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "管理员鉴权失败"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "List Selfcheck Runs",
+        "tags": [
+          "admin-self-check"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "limit"
+      },
+      "post": {
+        "operationId": "post_api_v1_admin_self_check_runs",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfcheckRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfcheckRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "管理员鉴权失败"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "请求参数校验失败"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "依赖服务不可用"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Create Selfcheck Run",
+        "tags": [
+          "admin-self-check"
+        ],
+        "x-nanobot-contract-lifecycle": "compatibility",
+        "x-nanobot-pagination": "none"
+      }
+    },
+    "/api/v1/admin/self-check/runs/{run_id}": {
+      "get": {
+        "operationId": "get_api_v1_admin_self_check_runs_run_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfcheckRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "管理员鉴权失败"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "目标资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "稳定错误响应"
+          }
+        },
+        "summary": "Get Selfcheck Run",
+        "tags": [
+          "admin-self-check"
+        ],
         "x-nanobot-contract-lifecycle": "compatibility",
         "x-nanobot-pagination": "none"
       }

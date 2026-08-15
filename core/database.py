@@ -100,6 +100,8 @@ from core.db.models import (
     ScheduledTaskStepAttempt,
     SemanticIndexItem,
     SemanticIndexJob,
+    SelfcheckResultRow,
+    SelfcheckRunRow,
     SensitiveData,
     SessionSummaryJob,
     SessionGoalEventRow,
@@ -126,6 +128,7 @@ from core.db.models import (
     WorkspaceMaintenanceState,
     WorkspaceQuotaBinding,
     WorkspaceRuntimeQuotaBinding,
+    WorkerHeartbeat,
 )
 from core.db.session import (
     DB_DIR,
@@ -264,6 +267,8 @@ __all__ = [
     "ScheduledTaskStepAttempt",
     "SemanticIndexItem",
     "SemanticIndexJob",
+    "SelfcheckResultRow",
+    "SelfcheckRunRow",
     "SensitiveData",
     "SessionLocal",
     "SessionSummaryJob",
@@ -291,6 +296,7 @@ __all__ = [
     "WorkspaceMaintenanceState",
     "WorkspaceQuotaBinding",
     "WorkspaceRuntimeQuotaBinding",
+    "WorkerHeartbeat",
     "_text_sql_is_proven_read_only",
     "configure_sqlite_connection",
     "engine",

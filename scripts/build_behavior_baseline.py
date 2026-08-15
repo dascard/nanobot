@@ -118,6 +118,9 @@ AGENT_HARNESS_PROACTIVE_TRIGGER_REGISTRY_BASELINE_SHA256 = (
 SESSION_SUMMARY_TRANSPORT_REGISTRY_BASELINE_SHA256 = (
     "a4aba568bf2609133ca4a7d9bebaeb60608e4f1ab10c654b82c1e40cb237321e"
 )
+SELFCHECK_RUNTIME_REGISTRY_BASELINE_SHA256 = (
+    "32a3a5edc6d4075007c19fd0720d2ce117425bd056fb58da01231ebea88148a2"
+)
 
 SNAPSHOT_CLASSIFICATIONS = {
     "agent_runtime": "preserve",
@@ -1628,13 +1631,28 @@ def _manifest(
                 "before_sha256": (
                     SESSION_SUMMARY_TRANSPORT_REGISTRY_BASELINE_SHA256
                 ),
-                "after_sha256": _sha256_file(
-                    snapshot_paths["runtime_registries"]
+                "after_sha256": (
+                    SELFCHECK_RUNTIME_REGISTRY_BASELINE_SHA256
                 ),
                 "reason": (
                     "把 Session Summary 的 Task Runtime 数组上限改为传输层"
                     "有界护栏，允许大型群聊参与者与关键词集合进入应用层的"
                     "继承审计和局部压缩；业务层 7/8 项义务预算保持不变。"
+                ),
+            },
+            {
+                "id": "system_selfcheck_runtime_registry",
+                "snapshot_id": "runtime_registries",
+                "stage": "系统自检",
+                "before_sha256": (
+                    SELFCHECK_RUNTIME_REGISTRY_BASELINE_SHA256
+                ),
+                "after_sha256": _sha256_file(
+                    snapshot_paths["runtime_registries"]
+                ),
+                "reason": (
+                    "登记周期确定性自检、执行间隔和付费模型 Canary 三项受管"
+                    "设置；周期自检默认启用，模型 Canary 默认关闭且只能显式开启。"
                 ),
             },
         ],

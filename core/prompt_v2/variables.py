@@ -38,6 +38,8 @@ _GLOBAL_VARIABLES: tuple[VariableDef, ...] = (
     VariableDef("sender_name", "global", "当前发送者名称", "张三"),
     VariableDef("bot_name", "global", "机器人当前名称", "七濑"),
     VariableDef("bot_aliases", "global", "机器人别名列表", "小七\\nbot"),
+    VariableDef("agent_id", "global", "当前注册 Agent 的稳定 ID", "nanobot"),
+    VariableDef("agent_profile", "global", "当前注册 Agent 的受信职责说明", "通用对话 Agent"),
     VariableDef("current_time", "global", "当前北京时间", "2026-05-23 10:30:00 CST"),
     VariableDef("timezone", "global", "当前时区", "Asia/Shanghai"),
     VariableDef("messages_text", "global", "工具运行时注入的消息文本", "[12:00] [10001]: 示例消息"),
@@ -69,6 +71,8 @@ _STABLE_PREFIX_VARIABLE_NAMES = frozenset({
     "bot_aliases",
     "chat_type",
     "platform",
+    "agent_id",
+    "agent_profile",
 })
 
 _MEMORY_DIGEST_VARIABLES: tuple[VariableDef, ...] = (

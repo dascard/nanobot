@@ -30,9 +30,11 @@ class SchedulerHandles:
     proactive_outreach: ThreadHandle | None = None
     chat_delivery: ThreadHandle | None = None
     group_learning: ThreadHandle | None = None
+    selfcheck: ThreadHandle | None = None
 
     def stop_all(self) -> None:
         for handle in (
+            self.selfcheck,
             self.digest,
             self.scheduled_tasks,
             self.session_summary,
@@ -115,7 +117,30 @@ def group_learning_worker_scheduler(stop_event: threading.Event) -> None:
     worker_logger.info("Group learning scheduler stopped.")
 
 
-def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandles:
+def selfcheck_watchdog_scheduler(
+    stop_event: threading.Event,
+    application: object,
+) -> None:
+    from workers.selfcheck_watchdog import run_until_stopped
+
+    worker_logger = logging.getLogger("nanobot.selfcheck.watchdog")
+    worker_logger.info("Selfcheck watchdog started.")
+    try:
+        run_until_stopped(stop_event, app=application)
+    except Exception as exc:
+        worker_logger.exception(
+            "Selfcheck watchdog stopped unexpectedly: %s",
+            exc,
+        )
+    worker_logger.info("Selfcheck watchdog stopped.")
+
+
+def start_schedulers(
+    *,
+    testing: bool,
+    logger: logging.Logger,
+    application: object | None = None,
+) -> SchedulerHandles:
     """启动后台调度器；测试模式只返回空 handles。"""
     if testing:
         logger.info("NANOBOT_TESTING=1: skipped scheduler startup.")
@@ -181,5 +206,19 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
     logger.info(
         "Group learning scheduler initialized with empty-by-default whitelist."
     )
+
+    if application is not None:
+        handles.selfcheck = _start_thread(
+            name="selfcheck-watchdog",
+            target=lambda stop_event: selfcheck_watchdog_scheduler(
+                stop_event,
+                application,
+            ),
+        )
+        logger.info("Selfcheck watchdog initialized with hot runtime settings.")
+    else:
+        logger.warning(
+            "Selfcheck watchdog was not started because application is unavailable."
+        )
 
     return handles

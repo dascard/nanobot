@@ -16,6 +16,16 @@ from sqlalchemy.orm import sessionmaker
 from tests.sqlite_test_utils import install_base_schema
 
 
+@pytest.fixture(autouse=True)
+def _enable_model_path_for_chat_idempotency_tests(monkeypatch):
+    """本模块验证模型与幂等路径，显式关闭默认仅入库策略。"""
+
+    monkeypatch.setattr(
+        "api.routes.is_database_only_enabled",
+        lambda *_args, **_kwargs: False,
+    )
+
+
 class FatalClaimLifecycleError(BaseException):
     pass
 
@@ -4263,7 +4273,7 @@ async def test_proxy_chat_acquired_stream_cold_body_starts_no_renewal_and_close_
             private_timing_meta=None,
             guardrail_status=None,
             classifier_ran=False,
-            persist_req=object(),
+            persist_req=SimpleNamespace(),
         )
 
     monkeypatch.setattr(
@@ -4409,7 +4419,7 @@ async def test_proxy_chat_stream_renews_during_prebridge_then_pauses_until_cold_
             private_timing_meta=None,
             guardrail_status=None,
             classifier_ran=False,
-            persist_req=object(),
+            persist_req=SimpleNamespace(),
         )
 
     monkeypatch.setattr(routes, "acquire_inbound_claim", short_acquire, raising=False)

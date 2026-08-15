@@ -1,4 +1,5 @@
 import { Badge, Card, MiniStat } from '../../components/ui'
+import { runStatusTone } from './statusTone'
 
 
 const KIND_LABELS = {
@@ -18,13 +19,6 @@ const KIND_LABELS = {
   subagent: 'Subagent',
   task: 'Task',
   tool: 'Tool',
-}
-
-function statusTone(status) {
-  if (status === 'succeeded') return 'emerald'
-  if (['failed', 'ambiguous', 'cancelled', 'timed_out'].includes(status)) return 'red'
-  if (status === 'running') return 'blue'
-  return 'slate'
 }
 
 function formatDuration(value) {
@@ -69,6 +63,7 @@ function Timeline({ viewer }) {
         {spans.map(span => {
           const left = Math.min(99, Math.max(0, Number(span.offset_ms || 0) / maxEnd * 100))
           const width = Math.max(0.6, Math.min(100 - left, Number(span.duration_ms || 0) / maxEnd * 100))
+          const tone = runStatusTone(span.status)
           return (
             <div key={span.span_id} className="grid min-w-[760px] grid-cols-[90px_210px_90px_1fr_80px] items-center gap-2 border-b border-slate-800/60 px-3 py-2 text-xs">
               <Badge tone="slate">{KIND_LABELS[span.kind] || span.kind}</Badge>
@@ -76,10 +71,10 @@ function Timeline({ viewer }) {
                 <div className="truncate text-slate-200" title={span.name}>{span.name}</div>
                 <div className="truncate font-mono text-[10px] text-slate-600" title={span.span_id}>{span.span_id}</div>
               </div>
-              <Badge tone={statusTone(span.status)}>{span.status}</Badge>
+              <Badge tone={runStatusTone(span.status)}>{span.status}</Badge>
               <div className="relative h-5 overflow-hidden rounded bg-slate-950">
                 <div
-                  className={`absolute top-1 h-3 rounded ${span.status === 'succeeded' ? 'bg-emerald-500/60' : span.status === 'running' ? 'bg-blue-500/60' : 'bg-red-500/60'}`}
+                  className={`absolute top-1 h-3 rounded ${tone === 'emerald' ? 'bg-emerald-500/60' : tone === 'blue' ? 'bg-blue-500/60' : tone === 'amber' ? 'bg-amber-500/60' : tone === 'red' ? 'bg-red-500/60' : 'bg-slate-500/60'}`}
                   style={{ left: `${left}%`, width: `${width}%` }}
                   title={`+${formatDuration(span.offset_ms)} / ${formatDuration(span.duration_ms)}`}
                 />
@@ -118,7 +113,7 @@ function DagView({ viewer }) {
           <div key={node.id} className="flex min-w-0 items-center gap-2 rounded border border-slate-800 bg-slate-950 px-2 py-1.5" style={{ marginLeft: `${Math.min(depthOf(node.id), 6) * 12}px` }}>
             <Badge tone="slate">{KIND_LABELS[node.kind] || node.kind}</Badge>
             <span className="min-w-0 flex-1 truncate text-xs text-slate-300" title={node.name}>{node.name}</span>
-            <Badge tone={statusTone(node.status)}>{node.status}</Badge>
+            <Badge tone={runStatusTone(node.status)}>{node.status}</Badge>
           </div>
         ))}
       </div>
@@ -282,7 +277,7 @@ function EvidencePanel({ viewer }) {
           {recoveries.length === 0 && <p className="text-xs text-slate-600">没有 Checkpoint、恢复操作或副作用回执。</p>}
           {recoveries.map(item => (
             <div key={item.span_id} className="rounded border border-slate-800 bg-slate-950 p-2 text-xs">
-              <div className="flex gap-2"><Badge tone={statusTone(item.status)}>{item.kind}</Badge><span className="min-w-0 flex-1 truncate text-slate-300">{item.name}</span></div>
+              <div className="flex gap-2"><Badge tone={runStatusTone(item.status)}>{item.kind}</Badge><span className="min-w-0 flex-1 truncate text-slate-300">{item.name}</span></div>
               <div className="mt-1 text-[10px] text-slate-600">{formatTime(item.started_at)} · {item.attributes.boundary || item.attributes.operation_kind || item.attributes.state || '-'}</div>
             </div>
           ))}
@@ -336,7 +331,7 @@ export function RunViewer({ viewer }) {
         <p className="mt-1 text-xs text-slate-500">此视图从数据库证据离线重建，不调用模型、不恢复任务、不执行工具。</p>
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <MiniStat label="状态" value={summary.status || '-'} tone={statusTone(summary.status)} />
+        <MiniStat label="状态" value={summary.status || '-'} tone={runStatusTone(summary.status)} />
         <MiniStat label="总耗时" value={formatDuration(summary.duration_ms)} />
         <MiniStat label="Span" value={summary.span_count || 0} />
         <MiniStat label="失败点" value={summary.failed_span_count || 0} tone={summary.failed_span_count ? 'red' : 'emerald'} />

@@ -139,6 +139,12 @@ def test_openapi_has_stable_global_contracts_and_typed_first_slice():
             _success_schema(operation)
 
     assert len(operation_ids) == len(set(operation_ids))
+    assert {
+        "/api/v1/admin/self-check/capabilities",
+        "/api/v1/admin/self-check/probes",
+        "/api/v1/admin/self-check/runs",
+        "/api/v1/admin/self-check/runs/{run_id}",
+    } <= set(schema["paths"])
 
     for descriptor in ADMIN_ENDPOINT_CONTRACT_REGISTRY.registry_snapshot:
         operation = _operation(

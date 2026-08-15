@@ -23,8 +23,13 @@ def resolve_reply_route_plans(
     default_api_key: str,
     session_id: str = "",
     preferred_profile_id: str = "",
+    runtime_kind: str = "kt",
 ) -> list[ReplyRoutePlan]:
     """优先解析 Route Binding；未绑定时返回旧 Route 的兼容计划。"""
+
+    normalized_runtime_kind = str(runtime_kind or "").strip().lower()
+    if normalized_runtime_kind not in {"native", "kt"}:
+        raise ValueError("runtime_kind 必须是 native 或 kt")
 
     from core.model_provider.preset_config import resolve_route_binding_candidates
 
@@ -63,7 +68,19 @@ def resolve_reply_route_plans(
                 f"{identity}: KT Driver {provider.driver_type} 未接入"
             )
             continue
-        if not provider.runtime_available:
+        if (
+            normalized_runtime_kind == "native"
+            and provider.driver_type != "openai"
+        ):
+            unavailable.append(
+                f"{identity}: Native Runtime 暂不支持 "
+                f"{provider.driver_type} Driver"
+            )
+            continue
+        if (
+            normalized_runtime_kind == "kt"
+            and not provider.runtime_available
+        ):
             unavailable.append(
                 f"{identity}: {provider.runtime_unavailable_reason}"
             )
@@ -177,6 +194,8 @@ def resolve_gateway_reply_route_plans(
     default_api_key: str,
     session_id: str,
     gateway_binding_id: str,
+    runtime_kind: str = "kt",
+    configured_profile_id: str = "",
 ) -> list[ReplyRoutePlan]:
     """按 Gateway 当前生效 Profile 解析已验证的 reply 候选。"""
 
@@ -186,9 +205,11 @@ def resolve_gateway_reply_route_plans(
         default_base_url=default_base_url,
         default_api_key=default_api_key,
         session_id=session_id,
-        preferred_profile_id=active_gateway_model_profile(
-            gateway_binding_id
+        preferred_profile_id=(
+            str(configured_profile_id or "").strip()
+            or active_gateway_model_profile(gateway_binding_id)
         ),
+        runtime_kind=runtime_kind,
     )
 
 

@@ -216,7 +216,7 @@ async def test_prompt_template_resolution_reports_mixed_sources_by_flow_node(
     default_dir = tmp_path / "defaults"
     runtime_dir = tmp_path / "runtime"
     shutil.copytree(repo_root / "prompts.v2.default", default_dir)
-    shutil.copytree(repo_root / "data" / "prompts_v2", runtime_dir)
+    shutil.copytree(default_dir, runtime_dir)
     (runtime_dir / "chat" / "branch_private.md").unlink()
     monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
@@ -391,13 +391,16 @@ async def test_prompt_cache_prefix_keeps_sender_context_after_history(
         "runtime_context"
     ]["message_indexes"][0]
 
-    assert section_order.index("group_context") < section_order.index(
-        "conversation_context_header"
-    )
     assert section_order.index("conversation_context_header") < (
         section_order.index("history_messages")
     )
     assert section_order.index("history_messages") < section_order.index(
+        "group_context"
+    )
+    assert section_order.index("group_context") < section_order.index(
+        "project_context"
+    )
+    assert section_order.index("project_context") < section_order.index(
         "persona_reference"
     )
     assert section_order.index("persona_reference") < section_order.index(
@@ -1223,10 +1226,10 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
         "system",
         "system",
         "system",
-        "user",
         "system",
         "user",
         "assistant",
+        "user",
         "user",
         "system",
         "user",
@@ -1394,7 +1397,7 @@ async def test_prompt_v2_compiles_private_plan_and_keeps_rules_separate():
 
 
 @pytest.mark.asyncio
-async def test_prompt_v2_places_group_profile_before_history_messages():
+async def test_prompt_v2_places_group_profile_after_history_messages():
     from core.prompt_v2.compiler import compile_prompt_plan
     from core.prompt_v2.schema import PromptCompileRequest
 
@@ -1423,13 +1426,13 @@ async def test_prompt_v2_places_group_profile_before_history_messages():
     history_idx = next(i for i, c in enumerate(contents) if "UNIQUE_HISTORY_MESSAGE" in c)
     profile_idx = next(i for i, c in enumerate(contents) if "[GroupProfileContext]" in c)
 
-    assert profile_idx < header_idx < history_idx
+    assert header_idx < history_idx < profile_idx
     assert sum("[GroupProfileContext]" in c for c in contents) == 1
     assert "[GroupProfileContext]" not in contents[header_idx]
 
 
 @pytest.mark.asyncio
-async def test_prompt_v2_places_group_memory_context_before_history_messages():
+async def test_prompt_v2_places_group_memory_context_after_history_messages():
     from core.prompt_v2.compiler import compile_prompt_plan
     from core.prompt_v2.schema import PromptCompileRequest
 
@@ -1461,7 +1464,7 @@ async def test_prompt_v2_places_group_memory_context_before_history_messages():
         if 'selected_count=\\"1\\"' in c
     )
 
-    assert memory_idx < header_idx < history_idx
+    assert header_idx < history_idx < memory_idx
     assert sum('selected_count=\\"1\\"' in c for c in contents) == 1
     assert "<group_memory_context" not in contents[header_idx]
     assert "[GroupProfileContext]" not in contents[memory_idx]

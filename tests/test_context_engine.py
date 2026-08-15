@@ -339,6 +339,48 @@ async def test_canonical_compiler_emits_separate_context_layers():
     assert plan.context_manifest["request_prompt_sha256"] == plan.prompt_sha256
 
 
+@pytest.mark.asyncio
+async def test_canonical_compiler_compacts_large_group_history_provenance():
+    from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    source_ids = list(range(1, 121))
+    plan = await compile_prompt_plan(PromptCompileRequest(
+        chat_type="group",
+        platform="qq",
+        session_id="group-oversized-provenance",
+        group_id="oversized-provenance",
+        user_id="u1",
+        current_message_id="m-current",
+        user_input="现在的问题",
+        history_messages=[
+            {"role": "user", "content": "近期群聊原文"},
+        ],
+        debug={
+            "context_debug": {
+                "group_recent_source_ids": source_ids,
+                "rolling_summary_recent_raw_source_ids": source_ids,
+            }
+        },
+    ), strict_audit=True)
+
+    history_entry = next(
+        entry
+        for entry in plan.context_manifest["entries"]
+        if entry["entry_id"] == "history_messages"
+    )
+    refs = history_entry["source_refs"]
+    assert len(refs) == 64
+    assert refs[:31] == [f"chat_log:{item}" for item in source_ids[:31]]
+    assert refs[-31:] == [f"chat_log:{item}" for item in source_ids[-31:]]
+    assert "source_refs:count:120" in refs
+    digest_refs = [
+        ref for ref in refs if ref.startswith("source_refs:sha256:")
+    ]
+    assert len(digest_refs) == 1
+    assert len(digest_refs[0]) == len("source_refs:sha256:") + 64
+
+
 def test_structured_context_keeps_summary_out_of_recent_conversation_header(
     db_session,
 ):

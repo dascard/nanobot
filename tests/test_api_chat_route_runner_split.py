@@ -2164,7 +2164,7 @@ def test_parent_chat_route_delegates_bridge_runner_and_keeps_fastapi_boundary():
     assert "chat_route_runner.ColdChatStreamingBody" in source
     assert "chat_route_runner.run_non_streaming_chat_response" in source
     assert "HTTPException(" in source
-    assert "bridge = get_bridge()" in source
+    assert "bridge = _resolve_chat_agent_gateway(db_preparation.agent_id)" in source
     assert "async def _stream_chat" not in source
     assert "async def _do_chat" not in source
     assert "async def runner" not in source

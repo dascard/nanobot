@@ -160,6 +160,8 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         assert detail.json()["content"] == "你叫 {{ character_name }}"
         assert {item["name"] for item in detail.json()["variables"]} == {
             "character_name",
+            "agent_id",
+            "agent_profile",
             "name_hint",
             "alias_names",
             "chat_type",

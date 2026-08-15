@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { NavLink, useParams } from 'react-router-dom'
 
 import { api } from '../../api'
-import { Card, JsonBlock, MiniStat, Spinner } from '../../components/ui'
+import { Badge, Card, JsonBlock, MiniStat, Spinner } from '../../components/ui'
 import { LLMApiRequestLogsBlock } from '../../components/TraceView'
 import { RunViewer } from './RunViewer'
+import { runStatusTone } from './statusTone'
 
 function formatApiError(e, fallback = '请求失败') {
   return e?.response?.data?.detail || e?.message || fallback
@@ -56,7 +57,7 @@ export function AgentRunDetailPage() {
       <h1 className="text-xl font-semibold mb-4">运行详情</h1>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <MiniStat label="run_id" value={r.run_id || ''} />
-        <MiniStat label="status" value={r.status || ''} tone={r.status === 'success' ? 'emerald' : r.status === 'error' ? 'red' : 'slate'} />
+        <MiniStat label="status" value={r.status || ''} tone={runStatusTone(r.status)} />
         <MiniStat label="延迟" value={r.latency_ms ? `${r.latency_ms}ms` : '-'} />
         <MiniStat label="trace_id" value={(r.trace_id || '').slice(0, 16)} />
         <MiniStat label="prompt_key" value={r.prompt_key || '-'} />
@@ -94,7 +95,7 @@ export function AgentRunDetailPage() {
               {detail.tool_calls.map(tc => (
                 <tr key={tc.tool_call_id} className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer" onClick={() => setToolDetail(toolDetail?.tool_call_id === tc.tool_call_id ? null : tc)}>
                   <td className="py-2 px-3 text-slate-200">{tc.tool_name}</td>
-                  <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${tc.status === 'success' ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{tc.status}</span></td>
+                  <td className="py-2 px-3"><Badge tone={runStatusTone(tc.status)}>{tc.status}</Badge></td>
                   <td className="py-2 px-3 text-slate-400">{tc.latency_ms ? `${tc.latency_ms}ms` : '-'}</td>
                   <td className="py-2 px-3 text-xs text-slate-500">{tc.started_at || '-'}</td>
                 </tr>

@@ -63,6 +63,7 @@ _SPEC_FIELDS = frozenset(
         "allowed-tools",
     }
 )
+_KNOWN_SKILL_MEDIA_TYPES = MappingProxyType({".md": "text/markdown"})
 
 
 class SkillContractError(ValueError):
@@ -195,7 +196,11 @@ class SkillBundleFile:
             raise SkillContractError("单个 Skill 资源超过大小上限")
         media_type = str(self.media_type or "").strip().lower()
         if not media_type:
-            media_type = mimetypes.guess_type(normalized)[0] or "application/octet-stream"
+            media_type = (
+                _KNOWN_SKILL_MEDIA_TYPES.get(parsed.suffix.lower())
+                or mimetypes.guess_type(normalized)[0]
+                or "application/octet-stream"
+            )
         if len(media_type) > 128 or "/" not in media_type:
             raise SkillContractError("Skill 资源 media_type 无效")
         object.__setattr__(self, "relative_path", normalized)

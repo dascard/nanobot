@@ -9,12 +9,16 @@ from collections.abc import Callable
 from functools import partial
 from uuid import uuid4
 from datetime import datetime
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 from zoneinfo import ZoneInfo
 
 from nanobot_kt.output import BufferedOutput
+from nanobot_kt.bridge_pool_lifecycle import (
+    BridgeLifecycleState,
+    BridgePoolLifecycleMixin,
+    BridgeUnavailableError,
+)
 from nanobot_kt.bridge_runtime_support import (
     bind_bridge_runtime_correlation,
     bind_native_recovery_model_plan,
@@ -187,6 +191,11 @@ class NanobotBridge(MessageContractBridgeMixin):
         creature_path: str = "creatures/nanobot",
         *,
         runtime_kind: AgentRuntimeKind | str = AgentRuntimeKind.KT,
+        agent_id: str = "",
+        agent_profile: str = "",
+        allowed_tool_names: frozenset[str] | None = None,
+        allow_dynamic_tools: bool = False,
+        model_profile_id: str = "",
         runtime_plugin_manager_factory: (
             Callable[[str], RuntimePluginManager] | None
         ) = None,
@@ -199,7 +208,21 @@ class NanobotBridge(MessageContractBridgeMixin):
         self._output = BufferedOutput()
         self._agent: Any | None = None
         self._runtime: AgentRuntimePort | None = None
-        self._agent_id = Path(creature_path).name or "agent"
+        self._agent_id = (
+            str(agent_id or "").strip() or Path(creature_path).name or "agent"
+        )
+        self._agent_profile = str(agent_profile or "").strip()
+        self._allowed_tool_names = (
+            None
+            if allowed_tool_names is None
+            else frozenset(
+                str(name or "").strip()
+                for name in allowed_tool_names
+                if str(name or "").strip()
+            )
+        )
+        self._allow_dynamic_tools = bool(allow_dynamic_tools)
+        self._model_profile_id = str(model_profile_id or "").strip()
         self._runtime_name = self._agent_id
         self._native_completion_port: ReplyRouteChatCompletionAdapter | None = None
         self._memory_runtime: Any = None
@@ -609,6 +632,35 @@ class NanobotBridge(MessageContractBridgeMixin):
             )
         return "fail_fast"
 
+    def _restrict_agent_tool_plan(self, tool_plan):
+        """按 creature 的冻结 allowlist 只减不增地收窄请求工具。"""
+
+        allowed_policy = getattr(self, "_allowed_tool_names", None)
+        if allowed_policy is None:
+            return tool_plan
+        from core.tool_plan import (
+            get_additional_tool_schemas,
+            restrict_tool_plan,
+        )
+
+        allowed_tool_names = set(allowed_policy)
+        if bool(getattr(self, "_allow_dynamic_tools", False)):
+            for schema in get_additional_tool_schemas():
+                function = schema.get("function")
+                if not isinstance(function, dict):
+                    continue
+                name = str(function.get("name") or "").strip()
+                if name:
+                    allowed_tool_names.add(name)
+        return restrict_tool_plan(
+            tool_plan,
+            allowed_tool_names,
+            disabled_reason=(
+                "Agent "
+                f"{bridge_agent_id(self)} 的冻结工具策略未授权"
+            ),
+        )
+
     def _build_prompt_runtime_input(
         self,
         context: PromptRuntimeAssemblyContext,
@@ -655,6 +707,8 @@ class NanobotBridge(MessageContractBridgeMixin):
             bot_id=str(meta.get("bot_id") or ""),
             bot_name=str(meta.get("bot_name") or meta.get("character_name") or ""),
             bot_aliases=list(meta.get("bot_aliases") or []),
+            agent_id=str(getattr(self, "_agent_id", "") or "nanobot"),
+            agent_profile=str(getattr(self, "_agent_profile", "") or ""),
             user_input=context.query,
             persona_text=context.persona_text or "无已存储画像",
             session_guidance=context.session_guidance,
@@ -1709,6 +1763,7 @@ class NanobotBridge(MessageContractBridgeMixin):
                     agent=self._agent, cleanup_registrar=request_scope.bind_async_cleanup,
                 )
                 tool_plan = trigger_policy.restrict_tool_plan(extension_binding.tool_plan)
+                tool_plan = self._restrict_agent_tool_plan(tool_plan)
                 meta["project_context"] = extension_binding.project_context
                 run_meta.update(extension_binding.run_meta_update)
                 decision_recorded = record_runtime_tool_decision(
@@ -1986,6 +2041,10 @@ class NanobotBridge(MessageContractBridgeMixin):
                     session_id=session_id,
                     gateway_binding_id=str(
                         meta.get("gateway_binding_id") or ""
+                    ),
+                    runtime_kind=getattr(self, "runtime_kind", AgentRuntimeKind.KT).value,
+                    configured_profile_id=str(
+                        getattr(self, "_model_profile_id", "") or ""
                     ),
                 )
                 route_plan = route_plans[0]
@@ -2356,40 +2415,46 @@ class NanobotBridge(MessageContractBridgeMixin):
         return self._agent
 
 
-class BridgeLifecycleState(str, Enum):
-    """Bridge 与全局 Runtime 共用的显式生命周期状态。"""
-
-    NEW = "new"
-    STARTING = "starting"
-    RUNNING = "running"
-    STOPPING = "stopping"
-    STOPPED = "stopped"
-
-
-class BridgeUnavailableError(RuntimeError):
-    """Bridge 尚未就绪或已进入关闭流程。"""
-
-
-class NanobotBridgePool(MessageContractBridgeMixin):
+class NanobotBridgePool(
+    MessageContractBridgeMixin,
+    BridgePoolLifecycleMixin,
+):
     """按会话隔离并固定 Agent Runtime，避免跨 Runtime 隐式重放。"""
 
     def __init__(
         self,
         creature_path: str = "creatures/nanobot",
         *,
+        agent_id: str = "",
+        agent_profile: str = "",
+        allowed_tool_names: frozenset[str] | None = None,
+        allow_dynamic_tools: bool = False,
+        model_profile_id: str = "",
         selection_policy: AgentRuntimeSelectionPolicy | None = None,
         bridge_factory: Callable[[AgentRuntimeKind], NanobotBridge] | None = None,
     ):
         self.creature_path = creature_path
-        # 直接构造 Pool 的旧调用仍保持 KT 行为；生产 Composition Root 必须
-        # 显式注入 Native-default 策略，避免测试夹具和兼容调用被暗中改写。
+        self.agent_id = (
+            str(agent_id or "").strip() or Path(creature_path).name or "agent"
+        )
+        self.agent_profile = str(agent_profile or "").strip()
+        self.allowed_tool_names = allowed_tool_names
+        self.allow_dynamic_tools = bool(allow_dynamic_tools)
+        self.model_profile_id = str(model_profile_id or "").strip()
+        # 旧调用保持 KT；生产 Composition Root 显式注入 Native-default 策略。
         if selection_policy is None:
             selection_policy = compatibility_runtime_selection_policy()
         self._selection_policy = selection_policy
+        self.default_runtime_kind = selection_policy.default_kind
         self._bridge_factory = bridge_factory or partial(
             build_child_bridge,
             NanobotBridge,
             self.creature_path,
+            agent_id=str(agent_id or "").strip(),
+            agent_profile=self.agent_profile,
+            allowed_tool_names=self.allowed_tool_names,
+            allow_dynamic_tools=self.allow_dynamic_tools,
+            model_profile_id=self.model_profile_id,
         )
         self._bridges: dict[str, NanobotBridge] = {}
         self._bridge_runtime_kinds: dict[str, AgentRuntimeKind] = {}
@@ -2405,142 +2470,6 @@ class NanobotBridgePool(MessageContractBridgeMixin):
 
     def create_isolated_bridge(self) -> NanobotBridge:
         return self._bridge_factory(self._selection_policy.default_kind)
-
-    async def start(self) -> None:
-        async with self._create_lock:
-            if self._lifecycle_state is BridgeLifecycleState.RUNNING:
-                return
-            if self._lifecycle_state is not BridgeLifecycleState.NEW:
-                raise BridgeUnavailableError(
-                    f"BridgePool 无法从 {self._lifecycle_state.value} 状态启动"
-                )
-            self._lifecycle_state = BridgeLifecycleState.STARTING
-            self._lifecycle_state = BridgeLifecycleState.RUNNING
-        logger.info("[NanobotBridgePool] started")
-
-    @property
-    def lifecycle_state(self) -> BridgeLifecycleState:
-        return self._lifecycle_state
-
-    @property
-    def _tool_registry_info(self) -> dict:
-        """从第一个 child bridge 获取工具注册表信息。"""
-        for b in self._bridges.values():
-            info = getattr(b, "_tool_registry_info", {})
-            if info and info.get("kt_loaded"):
-                return info
-        return {}
-
-    @property
-    def bridge_count(self) -> int:
-        return len(self._bridges)
-
-    async def ensure_registry_probe(self):
-        """确保至少有一个 child bridge 提供 registry 信息。"""
-        if not self._tool_registry_info.get("kt_loaded"):
-            await self._get_bridge("_admin_registry_probe")
-
-    async def stop(self) -> None:
-        async with self._stop_lock:
-            bridges: list[NanobotBridge] = []
-            try:
-                import time as _t
-
-                async with self._create_lock:
-                    if self._lifecycle_state is BridgeLifecycleState.STOPPED:
-                        return
-                    if self._lifecycle_state is BridgeLifecycleState.NEW:
-                        self._lifecycle_state = BridgeLifecycleState.STOPPED
-                        return
-                    if self._lifecycle_state is not BridgeLifecycleState.RUNNING:
-                        raise BridgeUnavailableError(
-                            f"BridgePool 无法从 {self._lifecycle_state.value} 状态关闭"
-                        )
-                    self._lifecycle_state = BridgeLifecycleState.STOPPING
-
-                deadline = _t.monotonic() + max(
-                    0.0, float(self.BRIDGE_STOP_TIMEOUT_SECONDS)
-                )
-                forced = False
-                while True:
-                    async with self._create_lock:
-                        inflight = dict(self._bridge_inflight)
-                        if not inflight:
-                            bridges = list(self._bridges.values())
-                            self._bridges.clear()
-                            self._bridge_runtime_kinds.clear()
-                            self._last_runtime_kinds.clear()
-                            self._bridge_last_used.clear()
-                            self._bridge_inflight.clear()
-                            break
-                    if _t.monotonic() >= deadline:
-                        # inflight 长时间未归零（在途请求卡死）——不再无限等待，
-                        # 强制回收所有 bridge，避免 stop 永久挂起阻塞进程关闭。
-                        logger.warning(
-                            "[BridgePool] stop inflight timeout after %.1fs, forcing shutdown: %s",
-                            float(self.BRIDGE_STOP_TIMEOUT_SECONDS),
-                            inflight,
-                        )
-                        async with self._create_lock:
-                            bridges = list(self._bridges.values())
-                            self._bridges.clear()
-                            self._bridge_runtime_kinds.clear()
-                            self._last_runtime_kinds.clear()
-                            self._bridge_last_used.clear()
-                            self._bridge_inflight.clear()
-                        forced = True
-                        break
-                    logger.debug(
-                        "[BridgePool] waiting for inflight requests before stop: %s",
-                        inflight,
-                    )
-                    await asyncio.sleep(0.01)
-
-                if bridges:
-                    await asyncio.gather(
-                        *(bridge.stop() for bridge in bridges), return_exceptions=True
-                    )
-                if self._stop_tasks:
-                    await asyncio.gather(
-                        *list(self._stop_tasks), return_exceptions=True
-                    )
-                if forced:
-                    logger.info(
-                        "[NanobotBridgePool] stopped (forced after inflight timeout)"
-                    )
-                else:
-                    logger.info("[NanobotBridgePool] stopped")
-            finally:
-                async with self._create_lock:
-                    self._lifecycle_state = BridgeLifecycleState.STOPPED
-
-    def _session_key(self, user_id: str = "", session_id: str = "") -> str:
-        sid = str(session_id or "").strip()
-        if sid:
-            return sid
-        uid = str(user_id or "").strip()
-        return f"user:{uid}" if uid else "_default"
-
-    def _track_stop_task(self, bridge: NanobotBridge, key: str) -> asyncio.Task:
-        task = asyncio.create_task(bridge.stop(), name=f"bridge-stop:{key}")
-        self._stop_tasks.add(task)
-
-        def _done(done: asyncio.Task) -> None:
-            self._stop_tasks.discard(done)
-            try:
-                done.result()
-            except asyncio.CancelledError:
-                logger.debug("[BridgePool] stop task cancelled for session=%s", key)
-            except Exception as exc:
-                logger.warning(
-                    "[BridgePool] stop task failed for session=%s: %s",
-                    key,
-                    exc,
-                    exc_info=True,
-                )
-
-        task.add_done_callback(_done)
-        return task
 
     async def _get_or_create_bridge_locked(
         self,
@@ -2597,24 +2526,14 @@ class NanobotBridgePool(MessageContractBridgeMixin):
     async def _acquire_bridge(
         self,
         key: str,
-        selection: AgentRuntimeSelection,
+        selection: AgentRuntimeSelection | None = None,
     ) -> NanobotBridge:
+        if selection is None:
+            selection = self._selection_policy.select(session_id=key)
         async with self._create_lock:
             bridge = await self._get_or_create_bridge_locked(key, selection)
             self._bridge_inflight[key] = self._bridge_inflight.get(key, 0) + 1
             return bridge
-
-    async def _release_bridge(self, key: str) -> None:
-        import time as _t
-
-        async with self._create_lock:
-            count = self._bridge_inflight.get(key, 0)
-            if count <= 1:
-                self._bridge_inflight.pop(key, None)
-                if key in self._bridges:
-                    self._bridge_last_used[key] = _t.time()
-            else:
-                self._bridge_inflight[key] = count - 1
 
     async def handle_message(
         self,
@@ -2677,6 +2596,7 @@ class NanobotBridgePool(MessageContractBridgeMixin):
 
 # Module-level singleton (initialized by server.py lifespan)
 _bridge: Optional["NanobotBridgePool"] = None
+_agent_runtime_manager: Any | None = None
 _bridge_lifecycle_state = BridgeLifecycleState.NEW
 _bridge_lifecycle_lock = asyncio.Lock()
 
@@ -2701,12 +2621,27 @@ def get_bridge() -> NanobotBridgePool:
     return _bridge
 
 
+def get_agent_runtime_manager():
+    """返回已启动的多 Agent Pool 所有者。"""
+
+    manager = _agent_runtime_manager
+    if (
+        _bridge_lifecycle_state is not BridgeLifecycleState.RUNNING
+        or manager is None
+    ):
+        raise BridgeUnavailableError(
+            f"多 Agent Runtime 当前不可用: {_bridge_lifecycle_state.value}"
+        )
+    return manager
+
+
 async def init_bridge(
     *,
     selection_policy: AgentRuntimeSelectionPolicy | None = None,
+    agent_ids: tuple[str, ...] = ("nanobot",),
 ) -> NanobotBridgePool:
     """Initialize and start the global bridge. Called from server.py lifespan."""
-    global _bridge, _bridge_lifecycle_state
+    global _agent_runtime_manager, _bridge, _bridge_lifecycle_state
     async with _bridge_lifecycle_lock:
         if (
             _bridge_lifecycle_state is BridgeLifecycleState.RUNNING
@@ -2720,6 +2655,13 @@ async def init_bridge(
                 raise BridgeUnavailableError(
                     "全局 Bridge 已用不同 Runtime 策略启动；修改策略需要重启"
                 )
+            if (
+                _agent_runtime_manager is not None
+                and tuple(agent_ids) != _agent_runtime_manager.agent_ids
+            ):
+                raise BridgeUnavailableError(
+                    "全局 Bridge 已用不同 Agent 注册集启动；修改注册集需要重启"
+                )
             return _bridge
         if _bridge_lifecycle_state in {
             BridgeLifecycleState.STARTING,
@@ -2730,29 +2672,44 @@ async def init_bridge(
             )
 
         _bridge_lifecycle_state = BridgeLifecycleState.STARTING
-        candidate = NanobotBridgePool(selection_policy=selection_policy)
+        resolved_policy = (
+            selection_policy or compatibility_runtime_selection_policy()
+        )
+        from nanobot_kt.agent_catalog import load_creature_agent_specs
+        from nanobot_kt.multi_agent_runtime import NanobotAgentRuntimeManager
+
+        candidate_manager = NanobotAgentRuntimeManager(
+            load_creature_agent_specs(agent_ids),
+            selection_policy=resolved_policy,
+        )
         try:
-            await candidate.start()
+            await candidate_manager.start()
         except BaseException:
             _bridge = None
+            _agent_runtime_manager = None
             _bridge_lifecycle_state = BridgeLifecycleState.STOPPED
             raise
-        _bridge = candidate
+        _agent_runtime_manager = candidate_manager
+        _bridge = candidate_manager.default_pool
         _bridge_lifecycle_state = BridgeLifecycleState.RUNNING
-        return candidate
+        return _bridge
 
 
 async def shutdown_bridge() -> None:
     """Shutdown the global bridge. Called from server.py lifespan."""
-    global _bridge, _bridge_lifecycle_state
+    global _agent_runtime_manager, _bridge, _bridge_lifecycle_state
     async with _bridge_lifecycle_lock:
         if _bridge_lifecycle_state is BridgeLifecycleState.STOPPED:
             return
         _bridge_lifecycle_state = BridgeLifecycleState.STOPPING
         current = _bridge
+        manager = _agent_runtime_manager
         try:
-            if current is not None:
+            if manager is not None:
+                await manager.stop()
+            elif current is not None:
                 await current.stop()
         finally:
             _bridge = None
+            _agent_runtime_manager = None
             _bridge_lifecycle_state = BridgeLifecycleState.STOPPED

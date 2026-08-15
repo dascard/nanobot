@@ -236,14 +236,14 @@ propcache==0.5.2
 pycparser==3.0
     # via cffi
     # from https://pypi.org/simple
-pydantic==2.13.4
+pydantic==2.12.5
     # via
     #   -r requirements.txt
     #   fastapi
     #   mcp
     #   pydantic-settings
     # from https://pypi.org/simple
-pydantic-core==2.46.4
+pydantic-core==2.41.5
     # via pydantic
     # from https://pypi.org/simple
 pydantic-settings==2.14.2

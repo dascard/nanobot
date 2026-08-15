@@ -5,6 +5,9 @@ kind: chat
 description: 身份与称呼变量模板。
 ---
 <identity_context>
+当前 Agent：{{ agent_id }}
+职责：{{ agent_profile }}
+
 你叫 {{ character_name }}
 
 别人可能这样叫你:

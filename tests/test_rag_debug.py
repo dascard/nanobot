@@ -803,6 +803,176 @@ def test_rag_debug_group_analysis_exposes_bundle_trace(client, monkeypatch):
     assert stages["final_candidates"][0]["candidate_id"].startswith("bundle:")
 
 
+def test_rag_debug_group_analysis_loads_real_group_logs(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import ChatLog
+    import core.semantic.provider_factory as provider_factory
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(
+        provider_factory,
+        "get_reranker_provider",
+        lambda: DebugRerankerProvider(),
+    )
+    now = _local_now()
+    db_session.add_all([
+        ChatLog(
+            user_id="group_4242",
+            session_id="group_4242",
+            sender_name="甲",
+            role="ambient",
+            content="本地模型部署需要先检查显存容量",
+            created_at=now - timedelta(minutes=3),
+        ),
+        ChatLog(
+            user_id="group_4242",
+            session_id="group_4242",
+            sender_name="乙",
+            role="ambient",
+            content="量化参数可以从 q4_k_m 开始测试",
+            created_at=now - timedelta(minutes=2),
+        ),
+        ChatLog(
+            user_id="group_4242",
+            session_id="group_4242",
+            sender_name="丙",
+            role="ambient",
+            content="部署后还要验证真实推理延迟",
+            created_at=now - timedelta(minutes=1),
+        ),
+    ])
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/admin/rag/debug/query",
+        headers=_auth_header(),
+        json={
+            "source_type": "group_analysis",
+            "query": "本地模型部署量化",
+            "filters": {
+                "group_id": "4242",
+                "window_hours": 24,
+                "message_limit": 100,
+                "bundle_size": 1,
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()["response"]
+    assert payload["context"]["group_id"] == "group_4242"
+    assert payload["context"]["message_source"] == "database"
+    assert payload["stages"]["stats_logs"]["total_messages"] == 3
+    assert payload["stages"]["final_candidates"]
+
+
+def test_rag_debug_group_sources_require_group_context(client, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(client._transport, "raise_server_exceptions", False)
+
+    for source_type in ("group_memory", "group_analysis"):
+        response = client.post(
+            "/api/v1/admin/rag/debug/query",
+            headers=_auth_header(),
+            json={"source_type": source_type, "query": "检查群上下文"},
+        )
+
+        assert response.status_code == 422, (source_type, response.text)
+
+
+def test_rag_debug_rejects_unknown_source_type(client, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    response = client.post(
+        "/api/v1/admin/rag/debug/query",
+        headers=_auth_header(),
+        json={"source_type": "unknown_source", "query": "不应进入 stub"},
+    )
+
+    assert response.status_code == 422, response.text
+
+
+def test_rag_debug_all_aggregates_real_source_results(client, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    def fake_response(source_type):
+        candidate = {
+            "candidate_id": f"{source_type}:1",
+            "source_type": source_type,
+            "title": source_type,
+            "text": source_type,
+            "final_score": 0.8,
+        }
+        return {
+            "query": "聚合测试",
+            "source_type": source_type,
+            "stages": {
+                "reranker_input_pairs": [],
+                "final_candidates": [candidate],
+            },
+            "score_breakdown": {
+                "degraded": False,
+                "fallback_reason": "",
+                "latency_ms": 1,
+            },
+            "candidates": [candidate],
+        }
+
+    monkeypatch.setattr(
+        "api.admin.rag_routes._build_memory_debug_response",
+        lambda body, db, latency_ms: fake_response("memory"),
+    )
+    monkeypatch.setattr(
+        "api.admin.rag_routes._build_group_memory_debug_response",
+        lambda body, db, latency_ms: fake_response("group_memory"),
+    )
+    monkeypatch.setattr(
+        "api.admin.rag_routes._build_sticker_debug_response",
+        lambda body, db, latency_ms: fake_response("sticker"),
+    )
+    monkeypatch.setattr(
+        "api.admin.rag_routes._build_knowledge_debug_response",
+        lambda body, db, latency_ms: fake_response("knowledge"),
+    )
+    monkeypatch.setattr(
+        "api.admin.rag_routes._build_group_analysis_debug_response",
+        lambda body, db, latency_ms: fake_response("group_analysis"),
+    )
+
+    response = client.post(
+        "/api/v1/admin/rag/debug/query",
+        headers=_auth_header(),
+        json={
+            "source_type": "all",
+            "query": "聚合测试",
+            "limit": 10,
+            "filters": {"group_id": "4242"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()["response"]
+    assert payload["score_breakdown"]["fallback_reason"] != "rag_debug_stub"
+    assert payload["score_breakdown"]["overall_status"] == "passed"
+    assert set(payload["source_results"]) == {
+        "memory",
+        "group_memory",
+        "sticker",
+        "knowledge",
+        "group_analysis",
+    }
+    assert {item["source_type"] for item in payload["candidates"]} == {
+        "memory",
+        "group_memory",
+        "sticker",
+        "knowledge",
+        "group_analysis",
+    }
+
+
 def test_rag_debug_group_memory_uses_retrieval_service_not_stub(client, db_session, monkeypatch):
     from core.database import GroupMemory
 

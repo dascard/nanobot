@@ -168,10 +168,13 @@ def _manual_case_path(case_id: str) -> Path:
 
 
 def _dir_writable(path: Path) -> bool:
-    if path.exists():
-        return path.is_dir() and os.access(path, os.W_OK)
-    parent = path.parent if path.parent != path else Path(".")
-    return parent.exists() and os.access(parent, os.W_OK)
+    candidate = path
+    while not candidate.exists():
+        parent = candidate.parent
+        if parent == candidate:
+            return False
+        candidate = parent
+    return candidate.is_dir() and os.access(candidate, os.W_OK)
 
 
 def _open_readonly_session(db_path: Path) -> Session:
